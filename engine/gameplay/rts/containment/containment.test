@@ -5,6 +5,9 @@
 #include <optional>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.spatial.components.attitude;
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.containment.systems.boarding_system;
 import engine.gameplay.rts.containment.systems.unloading_system;
@@ -35,6 +38,7 @@ struct Airfield
 	NavigationGrid &grid{world.EmplaceResource<NavigationGrid>()};
 	ExitRequests &exits{world.EmplaceResource<ExitRequests>()};
 	DropExits &dropExits{world.EmplaceResource<DropExits>()};
+	PlacedExits &placedExits{world.EmplaceResource<PlacedExits>()};
 	RiderExits &riderExits{world.EmplaceResource<RiderExits>()};
 	IntentExits &intentExits{world.EmplaceResource<IntentExits>()};
 	Relationships &relationships{world.EmplaceResource<Relationships>(1u)};
@@ -60,6 +64,7 @@ struct Airfield
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Transport>();
 		world.RegisterComponent<GarrisonPoints>();
 		world.RegisterComponent<TransportFirePoints>();
@@ -73,8 +78,16 @@ struct Airfield
 		world.RegisterComponent<AttackTarget>();
 		world.RegisterComponent<Armament>();
 		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<UnderConstruction>();
 		world.RegisterComponent<CargoSize>();
+		world.RegisterComponent<Garrison>();
 		world.RegisterComponent<Descent>();
+		world.RegisterComponent<FloorLift>();
+		world.RegisterComponent<DropHoming>();
+		world.RegisterComponent<Attitude>();
 		world.FinalizeComponents();
 
 		LocomotorDefinition rotor;

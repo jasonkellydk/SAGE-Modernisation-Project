@@ -1,0 +1,269 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationModels
+#include <boost/test/included/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.models.model_entry;
+import games.generalszh.presentation.models.model_library;
+import Assets.Identity;
+import Assets.Models;
+
+using namespace generalszh::presentation;
+
+namespace
+{
+// A unit with a hull, two numbered muzzle flashes on their own bones, a headlight, a right tread, a hidden antenna and
+// two loaded missiles (the first with a fin hanging below its bone), each part one submesh on its HLOD attachment.
+Assets::ModelAsset TestUnit()
+{
+	Assets::ModelAssetDesc description;
+	description.name = "unit";
+	const std::array<std::pair<const char *, std::uint32_t>, 9> parts{{{"HULL", 0}, {"MUZZLEFX01", 1}, {"MUZZLEFX02", 2}, {"HEADLIGHTL", 0},
+		{"TREADSR", 0}, {"ANTENNA", 0}, {"MISSILE01", 3}, {"FIN", 5}, {"MISSILE02", 4}}};
+	description.materials.push_back({"paint", ""});
+	for (std::size_t part = 0; part < parts.size(); ++part)
+	{
+		for (int corner = 0; corner < 3; ++corner)
+		{
+			description.vertices.push_back({{static_cast<float>(part), static_cast<float>(corner), 0.0f}});
+			description.indices.push_back(static_cast<std::uint32_t>(description.indices.size()));
+		}
+		description.submeshes.push_back({static_cast<std::uint32_t>(part * 3), 3, 0, parts[part].first});
+		description.rig.attachments.push_back({std::string("UNIT.") + parts[part].first, parts[part].second, 0});
+	}
+	description.rig.skeleton_name = "UNIT";
+	description.rig.bones = {{"ROOT"}, {"MUZZLEFX01", 0}, {"MUZZLEFX02", 0}, {"MISSILE01", 0}, {"MISSILE02", 0}, {"FINBONE", 3}};
+	return Assets::ModelAsset({Assets::AssetType::Model, "unit.w3d"}, std::move(description));
+}
+
+ModelEntry BoundUnit(std::vector<std::string> shown = {})
+{
+	ObjectModel look;
+	look.model = "unit";
+	look.muzzleFlashes = {"MUZZLEFX"};
+	look.hidden = {"ANTENNA"};
+	look.shown = std::move(shown);
+	look.projectileSlots = 1;
+	look.projectileBones[0] = "MISSILE";
+	ModelEntry model = DescribeModel(look);
+	const Assets::ModelAsset asset = TestUnit();
+	std::string error, animationError;
+	BOOST_REQUIRE_MESSAGE(BindModel(model, asset, nullptr, error, animationError), error);
+	return model;
+}
+
+std::vector<std::string> Shown(const ModelEntry &model, const ObjectInstance &instance)
+{
+	std::vector<std::string> shown;
+	for (std::size_t part = 0; part < model.partNames.size(); ++part)
+		if (PartShown(model, part, instance))
+			shown.push_back(model.partNames[part]);
+	return shown;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(model_entry)
+
+// Legacy parity (W3DModelDraw: hideAllMuzzleFlashes / the muzzle flash sub-objects shown while their barrel fires,
+// hideAllHeadlights by day, the condition state's HideSubObject, doHideShowProjectileObjects hiding a slot's fired
+// projectiles and every sub-object below their bones; W3DTankDraw's TREADSR the right tread): at rest by day the flashes,
+// the headlight and the antenna are hidden, the rest shows.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_units_parts_show_by_its_state)
+{
+	const ModelEntry model = BoundUnit();
+	BOOST_REQUIRE_EQUAL(model.partNames.size(), 9u);
+	BOOST_TEST(model.partTread[4] == 2u);
+	BOOST_TEST(model.partMuzzle[1] == 1u); // barrel 1: its bone is the first of the MUZZLEFX01, 02... family
+	BOOST_TEST(model.partMuzzle[2] == 2u);
+	ObjectInstance instance;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "TREADSR", "MISSILE01", "FIN", "MISSILE02"}));
+	// Firing barrel 2 only (its bit): its flash alone shows.
+	instance.muzzleFlash = true;
+	instance.flashBarrels = 0b10;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "MUZZLEFX02", "TREADSR", "MISSILE01", "FIN", "MISSILE02"}));
+	// Firing with no barrel named: every flash.
+	instance.flashBarrels = 0;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "MUZZLEFX01", "MUZZLEFX02", "TREADSR", "MISSILE01", "FIN", "MISSILE02"}));
+	// At night the headlight shows; one missile fired hides it and the fin below its bone.
+	instance.muzzleFlash = false;
+	instance.night = true;
+	instance.projectilesHidden[0] = 1;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "HEADLIGHTL", "TREADSR", "MISSILE02"}));
+	// Its collision shape has a mesh per part, each on its part's bone.
+	BOOST_REQUIRE_EQUAL(model.collision.meshes.size(), 9u);
+	BOOST_TEST(model.collisionBones[7] == 5u);
+}
+
+// W3DModelDraw::handleClientRecoil (every draw, after doHideShowSubObjs applied the state's ShowSubObject): each barrel's
+// flash on its bone is hidden unless its recoil is RECOIL_START, so a state that shows a flash sub-object (and the
+// antenna) still flashes only while firing; the antenna it shows stays shown.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shown_muzzle_flash_still_shows_only_while_firing)
+{
+	const ModelEntry model = BoundUnit({"MUZZLEFX01", "ANTENNA"});
+	BOOST_TEST(model.partMuzzle[1] == 1u);
+	ObjectInstance instance;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "TREADSR", "ANTENNA", "MISSILE01", "FIN", "MISSILE02"}));
+	instance.muzzleFlash = true;
+	instance.flashBarrels = 0b01;
+	BOOST_TEST((Shown(model, instance) == std::vector<std::string>{"HULL", "MUZZLEFX01", "TREADSR", "ANTENNA", "MISSILE01", "FIN", "MISSILE02"}));
+}
+
+// W3DDirectionalShadows' Collect_Object: muzzle flashes never cast the shadow, even while firing.
+BOOST_AUTO_TEST_CASE(legacy_parity_muzzle_flashes_cast_no_shadow)
+{
+	const ModelEntry model = BoundUnit();
+	ObjectInstance instance;
+	instance.muzzleFlash = true;
+	BOOST_TEST(PartShown(model, 1, instance));
+	BOOST_TEST(!PartCastsShadow(model, 1, instance));
+	BOOST_TEST(PartCastsShadow(model, 0, instance));
+}
+
+
+namespace
+{
+// Three square cards facing +x (y and z in [-2, 2]) at x = 0 in their own spaces: HULL on the root, TURRET on a bone 5
+// forward, MUZZLEFX01 3 back on its bone at the root (so 3 in front of the hull).
+Assets::ModelAsset PickUnit()
+{
+	Assets::ModelAssetDesc description;
+	description.name = "pickunit";
+	description.materials.push_back({"paint", ""});
+	const std::array<std::pair<const char *, float>, 3> parts{{{"HULL", 0.0f}, {"TURRET", 0.0f}, {"MUZZLEFX01", -3.0f}}};
+	for (std::size_t part = 0; part < parts.size(); ++part)
+	{
+		const auto first = static_cast<std::uint32_t>(description.vertices.size());
+		for (const auto [y, z] : std::array<std::pair<float, float>, 4>{{{-2, -2}, {2, -2}, {2, 2}, {-2, 2}}})
+			description.vertices.push_back({{parts[part].second, y, z}});
+		const auto index = static_cast<std::uint32_t>(description.indices.size());
+		for (const std::uint32_t corner : {0u, 1u, 2u, 0u, 2u, 3u})
+			description.indices.push_back(first + corner);
+		description.submeshes.push_back({index, 6, 0, parts[part].first});
+	}
+	description.rig.skeleton_name = "PICKUNIT";
+	description.rig.bones = {{"ROOT"}, {"TURRET", 0, {5, 0, 0}}, {"MUZZLEFX01", 0}};
+	description.rig.attachments = {{"PICKUNIT.HULL", 0, 0}, {"PICKUNIT.TURRET", 1, 0}, {"PICKUNIT.MUZZLEFX01", 2, 0}};
+	return Assets::ModelAsset({Assets::AssetType::Model, "pickunit.w3d"}, std::move(description));
+}
+
+ModelEntry BoundPickUnit(std::vector<std::string> hidden = {})
+{
+	ObjectModel look;
+	look.model = "pickunit";
+	look.muzzleFlashes = {"MUZZLEFX"};
+	look.hidden = std::move(hidden);
+	ModelEntry model = DescribeModel(look);
+	const Assets::ModelAsset asset = PickUnit();
+	std::string error, animationError;
+	BOOST_REQUIRE_MESSAGE(BindModel(model, asset, nullptr, error, animationError), error);
+	return model;
+}
+
+// A ray along +x from the origin, 200 long, at an instance placed 100 along x: the fraction of the nearest hit.
+std::optional<float> Picked(ModelEntry &model, const ObjectInstance &instance)
+{
+	Graphics::ModelRayCaster ray{{0.0f, 0.0f, 0.0f}, {200.0f, 0.0f, 0.0f}};
+	bool failed = false;
+	if (!CastInstanceRay(model, instance, ray, failed))
+		return std::nullopt;
+	return ray.end.x / 200.0f;
+}
+
+ObjectInstance PlacedAt100()
+{
+	ObjectInstance instance;
+	instance.world = {1, 0, 0, 100, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+	return instance;
+}
+}
+
+// Legacy parity (W3DView::pickDrawable -> RTS3DScene::castRay -> W3DHierarchyRenderObject::Cast_Ray ->
+// W3DMeshRenderObject::Cast_Ray): the pick meets the nearest mesh as drawn, each mesh at its bone's pose in the object's
+// transform (the hull at 100, the turret on its bone at 105, the flash at 97); a muzzle flash not firing is hidden
+// (hideAllMuzzleFlashes) and so is passed through, a firing one is met; a hidden sub-object (HideSubObject) is passed
+// through to what lies behind it; beside the object nothing is met. Fractions of the 200-long ray, to 1e-5 (float).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pick_meets_the_nearest_mesh_as_drawn)
+{
+	const auto within = [](std::optional<float> value, float expected) { return value && std::abs(*value - expected) <= 1e-5f; };
+	ModelEntry model = BoundPickUnit();
+	ObjectInstance instance = PlacedAt100();
+	BOOST_TEST(within(Picked(model, instance), 0.5f));
+	instance.muzzleFlash = true;
+	BOOST_TEST(within(Picked(model, instance), 0.485f));
+	ModelEntry hullless = BoundPickUnit({"HULL"});
+	ObjectInstance still = PlacedAt100();
+	BOOST_TEST(within(Picked(hullless, still), 0.525f));
+	ObjectInstance aside = PlacedAt100();
+	aside.world[7] = 10.0f; // 10 along y: the ray passes beside it
+	BOOST_TEST(!Picked(model, aside).has_value());
+}
+
+// W3DModelDraw::handleWeaponFireFX plays a weapon's fire FX at m_renderObject->Get_Bone_Transform(m_fxBone): the bone as
+// drawn, the turret turned. A tank whose turret bone sits 2 forward and 1 up, its FireFX bone 5 further forward on the
+// turret, its turret turned a quarter left, standing at (100, 200) facing a quarter left: the bone is 5 left of the
+// turret in the model, at (2, 5, 1); in the world (95, 202, 1), turned a half turn.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_fx_bone_is_where_the_drawn_turret_holds_it)
+{
+	Assets::ModelAssetDesc description;
+	description.name = "tank";
+	description.materials.push_back({"paint", ""});
+	for (int corner = 0; corner < 3; ++corner)
+	{
+		description.vertices.push_back({{static_cast<float>(corner), 0.0f, 0.0f}});
+		description.indices.push_back(static_cast<std::uint32_t>(corner));
+	}
+	description.submeshes.push_back({0, 3, 0, "HULL"});
+	description.rig.attachments.push_back({"TANK.HULL", 0, 0});
+	description.rig.skeleton_name = "TANK";
+	description.rig.bones = {{"ROOT"}, {"TURRET", 0, {2.0f, 0.0f, 1.0f}}, {"FIREFX01", 1, {5.0f, 0.0f, 0.0f}}};
+	const Assets::ModelAsset asset({Assets::AssetType::Model, "tank.w3d"}, std::move(description));
+	ObjectModel look;
+	look.model = "tank";
+	look.turret = "TURRET";
+	ModelEntry model = DescribeModel(look);
+	std::string error, animationError;
+	BOOST_REQUIRE_MESSAGE(BindModel(model, asset, nullptr, error, animationError), error);
+	ObjectInstance instance;
+	instance.world = {0, -1, 0, 100, 1, 0, 0, 200, 0, 0, 1, 0, 0, 0, 0, 1};
+	instance.turret = std::numbers::pi_v<float> / 2.0f;
+	const auto place = InstanceBoneOf(model, instance, "FireFX01");
+	BOOST_TEST_REQUIRE(place.has_value());
+	BOOST_TEST(place->at[0] == 95.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(place->at[1] == 202.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(place->at[2] == 1.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(std::fabs(place->yaw) == std::numbers::pi_v<float>, boost::test_tools::tolerance(1e-4f));
+	// At rest (the turret straight): 7 ahead of the tank, which faces +y.
+	instance.turret = 0.0f;
+	const auto rest = InstanceBoneOf(model, instance, "FIREFX01");
+	BOOST_TEST_REQUIRE(rest.has_value());
+	BOOST_TEST(rest->at[0] == 100.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(rest->at[1] == 207.0f, boost::test_tools::tolerance(1e-4f));
+	// No such bone: nothing.
+	BOOST_TEST(!InstanceBoneOf(model, instance, "NOSUCHBONE").has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// W3DModelDraw keeps each condition state's AnimationMode with its state (ModelConditionInfo::m_mode): the strategy
+// centre's door draws one clip ABStrategy_A2 as its closed default (ONCE_BACKWARDS), opening (ONCE) and closing
+// (ONCE_BACKWARDS from the last frame) states. Looks sharing a model and clip but not how it plays are kept apart, so
+// the opening plays forwards and the closed door stays at its first frame; the same look twice shares one entry.
+BOOST_AUTO_TEST_CASE(legacy_parity_looks_sharing_a_clip_keep_their_own_animation_mode)
+{
+	ObjectModel closed;
+	closed.model = "ABStrategy_A2";
+	closed.animation = "ABStrategy_A2.ABStrategy_A2";
+	closed.animationMode = ObjectAnimationMode::OnceBackwards;
+	ObjectModel opening = closed;
+	opening.animationMode = ObjectAnimationMode::Once;
+	ObjectModel idle = closed;
+	idle.repeat = true;
+	BOOST_TEST(ModelKey(closed) != ModelKey(opening));
+	BOOST_TEST(ModelKey(closed) != ModelKey(idle));
+	BOOST_TEST(ModelKey(closed) == ModelKey(ObjectModel(closed)));
+	ObjectModel still;
+	still.model = "ABStrategy";
+	ObjectModel stillLoop = still;
+	stillLoop.animationMode = ObjectAnimationMode::Loop; // no clip: how it would play does not matter
+	BOOST_TEST(ModelKey(still) == ModelKey(stillLoop));
+}

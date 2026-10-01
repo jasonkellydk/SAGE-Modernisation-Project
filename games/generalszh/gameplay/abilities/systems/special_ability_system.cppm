@@ -56,6 +56,7 @@ struct AbilityEvent
 		Notice,         // an AbilityNotice (`cue`, `success`)
 		Eva,            // an EVA cue for `player`
 		Infiltration,   // Radar::tryInfiltrationEvent for `player` at the target
+		Detect,         // LoseStealthOnTrigger: the unit's StealthUpdate::markAsDetected
 	};
 	ecs::Entity unit;
 	ecs::Entity target;
@@ -506,7 +507,13 @@ inline bool HandlePacking(Env &env, Unit &unit, AbilitySlot &slot)
 		}
 		return false;
 	}
-	// LoseStealthOnTrigger's markAsDetected before the trigger is not ported (no ported ability has it on).
+	// LoseStealthOnTrigger: in the last PreTriggerUnstealthTime of its packing or unpacking it is revealed, each frame.
+	if (slot.Option(ability_option::LoseStealthOnTrigger) && slot.animTicks < slot.preTriggerUnstealthTicks)
+	{
+		AbilityEvent detect;
+		detect.kind = AbilityEvent::Kind::Detect;
+		Emit(env, unit, slot, detect);
+	}
 	return true;
 }
 
@@ -678,6 +685,12 @@ inline void Trigger(Env &env, Unit &unit, AbilitySlot &slot)
 	case AbilityKind::TimedCharges:
 	case AbilityKind::BoobyTrap:
 	case AbilityKind::RemoteCharges:
+	case AbilityKind::DisguiseAsVehicle:
+	case AbilityKind::HackerDisableBuilding:
+	case AbilityKind::BlackLotusDisableVehicle:
+	case AbilityKind::BlackLotusStealCash:
+	case AbilityKind::LaserGuidedMissiles:
+	case AbilityKind::HelixNapalmBomb:
 	{
 		AbilityEvent effect;
 		effect.kind = AbilityEvent::Kind::Effect;
@@ -687,6 +700,14 @@ inline void Trigger(Env &env, Unit &unit, AbilitySlot &slot)
 	}
 	default:
 		break;
+	}
+	// LoseStealthOnTrigger: it is revealed as it triggers (markAsDetected), unless it set its remote charges off.
+	const bool detonating = slot.kind == AbilityKind::RemoteCharges && slot.target == ecs::Entity{} && !HasPosition(slot);
+	if (slot.Option(ability_option::LoseStealthOnTrigger) && !detonating)
+	{
+		AbilityEvent detect;
+		detect.kind = AbilityEvent::Kind::Detect;
+		Emit(env, unit, slot, detect);
 	}
 }
 

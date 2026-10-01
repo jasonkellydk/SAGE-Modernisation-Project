@@ -45,8 +45,24 @@ struct Aggression
 	bool attackBuildings{false};
 	std::int8_t attitude{attitude::Normal};
 	bool acquireStealthed{false}; // AutoAcquireEnemiesWhenIdle Stealthed: it looks for victims while stealthed too
-	std::uint8_t reserved[5]{};   // no padding: checkpoints hold its bytes
+	// The mood check's state (AIUpdateInterface): whether the targeting system last saw it idle (so it notices it entering
+	// idle, AIIdleState::onEnter) and m_randomlyOffsetMoodCheck (its next look is moved by up to half a check either way).
+	std::uint8_t moodFlags{0};
+	std::uint8_t reserved[4]{}; // no padding: checkpoints hold its bytes
 };
+
+namespace mood_flag
+{
+inline constexpr std::uint8_t SeenIdle = 1u << 0;
+inline constexpr std::uint8_t OffsetNext = 1u << 1;
+}
+
+// AIUpdateInterface::wakeUpAndAttemptToTarget: an idle unit looks now, its next look after that randomly offset.
+inline void WakeToTarget(Aggression &aggression, std::uint64_t tick) noexcept
+{
+	aggression.nextScan = tick;
+	aggression.moodFlags |= mood_flag::OffsetNext;
+}
 }
 
 export namespace ecs
@@ -55,7 +71,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Aggression>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.aggression";
-	static constexpr std::uint32_t Version = 6;
+	static constexpr std::uint32_t Version = 7;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Aggression &value, StateHasher &hasher) noexcept
 	{
@@ -69,6 +85,7 @@ struct ComponentTraits<engine::gameplay::Aggression>
 			(std::uint64_t{value.area} << 32) | (std::uint64_t{value.prioritySet} << 16));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.vision.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(static_cast<std::int64_t>(value.attitude)));
+		hasher.AppendU64(value.moodFlags);
 	}
 };
 }

@@ -52,8 +52,16 @@ void Session::SaveResources(engine::core::serialization::ByteWriter &writer) con
 	m_hulkLifetime.Save(writer);
 	m_world.Resource<gameplay::AreaActivity>().Save(writer);
 	m_world.Resource<gameplay::TemporaryWeaponFires>().Save(writer);
+	m_world.Resource<gameplay::HistoricDamage>().Save(writer);
 	m_world.Resource<domain::RetaliationModes>().Save(writer);
 	m_world.Resource<domain::BattlePlanPlayers>().Save(writer);
+	m_world.Resource<domain::DeferredOrders>().Save(writer);
+	m_world.Resource<domain::WaterChanges>().Save(writer);
+	m_world.Resource<domain::MusicProgress>().Save(writer);
+	m_world.Resource<domain::MapSceneryRules>().Save(writer);
+	m_world.Resource<domain::SceneryClearings>().Save(writer);
+	m_world.Resource<gameplay::GoalCells>().Save(writer);
+	m_ground.SaveWater(writer);
 	writer.U32(m_ground.ActiveBoundary());
 	m_scripts->SaveState(writer);
 }
@@ -67,7 +75,7 @@ bool Session::LoadResources(engine::core::serialization::ByteReader &reader)
 	m_tick = *tick;
 	m_random = std::bit_cast<Engine::Math::RandomStream>(*random);
 	return m_templates.Load(reader) && m_roster.Load(reader) && m_names.Load(reader) && m_manifest.Load(reader) &&
-		m_relationships.Load(reader) && m_shots.Load(reader) && m_money.Load(reader) && m_upgrades.Load(reader) && m_sciences.Load(reader) && m_outcome.Load(reader) && m_aiPlayers.Load(reader) && m_objectIds.Load(reader) && m_ranks.Load(reader) && m_sharedPowerTimers.Load(reader) && m_bounties.Load(reader) && m_world.Resource<gameplay::PlayerEnergy>().Load(reader) && m_world.Resource<gameplay::ShroudMap>().Load(reader) && m_scriptRecords.Load(reader) && m_world.Resource<gameplay::AttackPriorities>().Load(reader) && m_world.Resource<domain::AttackSquads>().Load(reader) && m_world.Resource<domain::SoloPlay>().Load(reader) && m_world.Resource<domain::ScoreKeepers>().Load(reader) && m_commandBarOverrides.Load(reader) && m_buildableOverrides.Load(reader) && m_hulkLifetime.Load(reader) && m_world.Resource<gameplay::AreaActivity>().Load(reader) && m_world.Resource<gameplay::TemporaryWeaponFires>().Load(reader) && m_world.Resource<domain::RetaliationModes>().Load(reader) && m_world.Resource<domain::BattlePlanPlayers>().Load(reader) && [&] {
+		m_relationships.Load(reader) && m_shots.Load(reader) && m_money.Load(reader) && m_upgrades.Load(reader) && m_sciences.Load(reader) && m_outcome.Load(reader) && m_aiPlayers.Load(reader) && m_objectIds.Load(reader) && m_ranks.Load(reader) && m_sharedPowerTimers.Load(reader) && m_bounties.Load(reader) && m_world.Resource<gameplay::PlayerEnergy>().Load(reader) && m_world.Resource<gameplay::ShroudMap>().Load(reader) && m_scriptRecords.Load(reader) && m_world.Resource<gameplay::AttackPriorities>().Load(reader) && m_world.Resource<domain::AttackSquads>().Load(reader) && m_world.Resource<domain::SoloPlay>().Load(reader) && m_world.Resource<domain::ScoreKeepers>().Load(reader) && m_commandBarOverrides.Load(reader) && m_buildableOverrides.Load(reader) && m_hulkLifetime.Load(reader) && m_world.Resource<gameplay::AreaActivity>().Load(reader) && m_world.Resource<gameplay::TemporaryWeaponFires>().Load(reader) && m_world.Resource<gameplay::HistoricDamage>().Load(reader) && m_world.Resource<domain::RetaliationModes>().Load(reader) && m_world.Resource<domain::BattlePlanPlayers>().Load(reader) && m_world.Resource<domain::DeferredOrders>().Load(reader) && m_world.Resource<domain::WaterChanges>().Load(reader) && m_world.Resource<domain::MusicProgress>().Load(reader) && m_world.Resource<domain::MapSceneryRules>().Load(reader) && m_world.Resource<domain::SceneryClearings>().Load(reader) && m_world.Resource<gameplay::GoalCells>().Load(reader) && m_ground.LoadWater(reader) && [&] {
 		const auto boundary = reader.U32();
 		if (boundary)
 			m_ground.SetActiveBoundary(*boundary);

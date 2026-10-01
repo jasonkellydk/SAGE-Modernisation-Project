@@ -1,0 +1,87 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+import games.generalszh.presentation.objects.systems.projectile_stream_systems;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(projectile_streams)
+
+// ProjectileStreamUpdate.cpp (addProjectile, getAllPoints) and W3DProjectileStreamDraw.cpp (doDrawModule): a toxin tractor's
+// five stream shots in flight, the first three at one target and the last two at another, are two lines (the ring's holes
+// at each change of target): 2 + 1 segments, oldest first; with MaxSegments 3 only the newest three points of the ring (the
+// hole before the fourth counting) are drawn: one segment. A shot of another weapon draws nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stream_breaks_where_its_target_changes)
+{
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::ProjectileFlight>();
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PresentationFrame>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LaserFrame>();
+	auto &streams = world.EmplaceResource<WeaponStreams>();
+	streams.byWeapon.push_back(generalszh::content::StreamLook{"EXToxinStream.tga", 1.5f, 1.0f, 0.5f, 0});
+	streams.byWeapon.push_back(std::nullopt);
+	const ecs::Entity tractor = world.Create();
+	world.Destroy(tractor); // gone: its stream still draws till its projectiles land (a living one unseen would not)
+	const ecs::Entity first = world.Create(), second = world.Create();
+	world.Destroy(first);
+	world.Destroy(second); // the targets need only be told apart
+	const auto fly = [&](std::uint64_t tick, ecs::Entity target, int x, std::uint32_t weapon = 0) {
+		const ecs::Entity projectile = world.Create();
+		world.Add<gp::ProjectileFlight>(projectile);
+		world.Add<gp::Transform>(projectile);
+		gp::ProjectileFlight &flight = *world.Get<gp::ProjectileFlight>(projectile);
+		flight.shot.source = tractor;
+		flight.shot.target = target;
+		flight.shot.weapon = weapon;
+		flight.shot.fireTick = tick;
+		world.Get<gp::Transform>(projectile)->position = {Fixed::FromInt(x), Fixed{}, Fixed::FromInt(5)};
+	};
+	fly(1, first, 10);
+	fly(2, first, 20);
+	fly(3, first, 30);
+	fly(4, second, 40);
+	fly(5, second, 50);
+	fly(3, first, 99, 1);
+	ProjectileStreamSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t frame = 0;
+	const auto run = [&] {
+		world.Resource<LaserFrame>().beams.clear();
+		scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+		return world.Resource<LaserFrame>().beams;
+	};
+	const auto beams = run();
+	BOOST_TEST_REQUIRE(beams.size() == 3u);
+	BOOST_TEST(beams[0].start[0] == 10.0f);
+	BOOST_TEST(beams[0].end[0] == 20.0f);
+	BOOST_TEST(beams[1].end[0] == 30.0f);
+	BOOST_TEST(beams[2].start[0] == 40.0f);
+	BOOST_TEST(beams[2].end[0] == 50.0f);
+	BOOST_TEST(beams[0].width == 1.5f);
+	BOOST_TEST(beams[0].uvScale == 1.0f);
+	world.Resource<WeaponStreams>().byWeapon[0]->maxSegments = 3;
+	const auto newest = run();
+	BOOST_TEST_REQUIRE(newest.size() == 1u);
+	BOOST_TEST(newest[0].start[0] == 40.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -157,7 +157,8 @@ struct TerrainPixelInput
         color.rgb *= (ambient + (illumination - ambient) *
             DirectionalVisibility(input.world_position)) / illumination;
     }
-    else if (TerrainFeatures.x > 0.5)
+    // The cloud layer multiplies whatever lit the terrain (TerrainShader2Stage's cloud pass: D3DBLEND_DESTCOLOR).
+    if (TerrainFeatures.x > 0.5)
     {
         color.rgb *= TerrainCloudTexture().SampleLevel(TerrainCloudSampler(),
             input.cloud_uv, 0.0).rgb;

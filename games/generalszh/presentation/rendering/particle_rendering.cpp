@@ -15,6 +15,7 @@ module;
 module games.generalszh.presentation.rendering.particle_rendering;
 
 import Graphics.Scene.Particles.Renderer;
+import games.generalszh.presentation.effects.heat_haze;
 import Graphics.Scene.Beams;
 import Graphics.Frame.SceneRenderers;
 import Graphics.Scene.Views.View;
@@ -207,8 +208,11 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 	for (std::size_t index = 0; index < particles.ParticleCount(); ++index)
 	{
 		const auto &definition = particles.DefinitionOf(index);
-		if (definition.kind != engine::effects::ParticleKind::Particle && definition.kind != engine::effects::ParticleKind::Volume)
-			continue; // drawables, streaks and smudges draw elsewhere
+		// Drawables and streaks draw elsewhere, smudge systems as heat haze (or not at all); the INI's SMUDGE type
+		// draws as particles, as the original never reads it.
+		if (definition.kind == engine::effects::ParticleKind::Drawable || definition.kind == engine::effects::ParticleKind::Streak ||
+			IsHeatHaze(definition))
+			continue;
 		const Graphics::ParticleEmitterFlags flags = FlagsFor(definition);
 		auto [it, inserted] = state.groups.try_emplace({definition.texture, static_cast<std::uint32_t>(flags)});
 		State::Group &group = it->second;
@@ -297,14 +301,14 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 		beam.uv_scale = laser.uvScale;
 		beam.uv_offset = laser.uvOffset;
 		beam.material = state.BeamMaterialFor(std::string(laser.texture));
-		beam.flags = Graphics::BeamFlags::Enabled | Graphics::BeamFlags::Additive;
+		beam.flags = Graphics::BeamFlags::Enabled | (laser.additive ? Graphics::BeamFlags::Additive : Graphics::BeamFlags::None);
 		beam.pipeline = beams.Pipeline_For_Flags(beam.flags);
 		if (const Graphics::BeamHandle handle = beams.Create(beam); handle.Is_Valid())
 			state.streakBeams.push_back(handle);
 	}
 	const auto systems = particles.Systems();
 	for (std::size_t index = 0; index < particles.ParticleCount(); ++index)
-		if (particles.DefinitionOf(index).kind == engine::effects::ParticleKind::Streak)
+		if (particles.DefinitionOf(index).kind == engine::effects::ParticleKind::Streak && !IsHeatHaze(particles.DefinitionOf(index)))
 			state.streakParticles.emplace_back(systems[index], static_cast<std::uint32_t>(index));
 	std::stable_sort(state.streakParticles.begin(), state.streakParticles.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
 	const auto at = [&](std::uint32_t i) {

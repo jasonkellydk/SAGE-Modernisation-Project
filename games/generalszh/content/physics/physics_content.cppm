@@ -54,6 +54,8 @@ std::optional<engine::gameplay::PhysicsBody> ReadObjectPhysics(const ObjectDefin
 		body.aerodynamicFriction = step.PerTick(*friction);
 	if (const auto factor = fixed("PitchRollYawFactor"))
 		body.rateFactor = *factor;
+	if (const auto offset = fixed("CenterOfMassOffset"))
+		body.centerOfMassOffset = *offset;
 	if (const auto resistance = fixed("ShockResistance"))
 		body.shockResistance = *resistance;
 	// ShockMax*: radians per frame.

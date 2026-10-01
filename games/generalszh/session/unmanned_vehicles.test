@@ -4,10 +4,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+import games.generalszh.gameplay.containment.components.rider_change;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
 import games.generalszh.session.session;
 import games.generalszh.gameplay.scripts.algorithms.object_counting;
 import engine.gameplay.common.identity.components.captured;
@@ -46,6 +49,13 @@ import games.generalszh.gameplay.crates.algorithms.hijacking;
 import engine.gameplay.common.spatial.components.off_map;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.commands.game_commands;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.construction.components.under_construction;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import games.generalszh.gameplay.crates.components.pilot_seeker;
 
 // Vehicles whose pilot Jarmen Kell snipes (DAMAGE_KILLPILOT), infantry taking them over, and terrorists making car
 // bombs of them, on a shipped skirmish map.
@@ -465,6 +475,332 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_hijacker_takes_a_vehicle_and_leaves_it_when
 	BOOST_TEST(!world.IsAlive(one.other));
 	BOOST_TEST(world.Get<gp::TeamMember>(one.technical)->team == america);
 	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// GameLogic::onResumeConstruction / onDoRepair (Core/GameEngine/Source/GameLogic/System/GameLogicDispatch.cpp) ->
+// AIGroup::groupResumeConstruction / groupRepair -> DozerAIUpdate::privateResumeConstruction / privateRepair
+// (GeneralsMD/.../Object/Update/AIUpdate/DozerAIUpdate.cpp) with ActionManager::canResumeConstructionOf and
+// canRepairObject: a power plant its dozer left unfinished is taken up by another dozer the tick the order comes in (a
+// build task: it becomes the plant's builder), and the first, ordered too, is refused (the builder is alive at work on it);
+// a hurt finished plant gets a dozer's repair task, a whole one none; a unit with no dozer's AI does nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_dozers_resume_and_repair_structures_on_their_players_orders)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity first = game.Place("AmericaVehicleDozer", match->At(200, -150), {}, america);
+	const ecs::Entity second = game.Place("AmericaVehicleDozer", match->At(260, -150), {}, america);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(320, -150), {}, america);
+	const ecs::Entity finished = game.Place("AmericaPowerPlant", match->At(-200, -350), {}, america);
+	BOOST_TEST_REQUIRE(world.IsAlive(finished));
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	const auto send = [&](const commands::GameCommand &command) {
+		auto envelope = commands::Encode(command);
+		envelope.player = 0;
+		game.Tick(std::span(&envelope, 1));
+	};
+	send(commands::BuildStructure{first, "AmericaPowerPlant", match->At(200, -350), 0});
+	ecs::Entity plant;
+	if (const auto *task = world.Get<gp::Builder>(first))
+		plant = task->target;
+	BOOST_TEST_REQUIRE(world.IsAlive(plant));
+	BOOST_TEST_REQUIRE(world.Has<gp::UnderConstruction>(plant));
+	send(commands::Stop{{first}}); // abandoned: waits to be resumed
+	BOOST_TEST(!world.Has<gp::Builder>(first));
+	BOOST_TEST((world.Get<gp::UnderConstruction>(plant)->builder == first));
+	send(commands::ResumeConstruction{{second}, plant});
+	BOOST_TEST_REQUIRE(world.Has<gp::Builder>(second));
+	BOOST_TEST((world.Get<gp::Builder>(second)->target == plant));
+	BOOST_TEST(world.Get<gp::Builder>(second)->repair == 0u);
+	BOOST_TEST((world.Get<gp::UnderConstruction>(plant)->builder == second));
+	send(commands::ResumeConstruction{{first, humvee}, plant});
+	BOOST_TEST(!world.Has<gp::Builder>(first)); // its builder is at work on it
+	BOOST_TEST(!world.Has<gp::Builder>(humvee));
+	// Repairs: not while whole; hurt, a repair task.
+	send(commands::Repair{{first}, finished});
+	BOOST_TEST(!world.Has<gp::Builder>(first));
+	world.Get<gp::Health>(finished)->current = world.Get<gp::Health>(finished)->maximum / Fixed::FromInt(2);
+	send(commands::Repair{{first, humvee}, finished});
+	BOOST_TEST_REQUIRE(world.Has<gp::Builder>(first));
+	BOOST_TEST((world.Get<gp::Builder>(first)->target == finished));
+	BOOST_TEST(world.Get<gp::Builder>(first)->repair == 1u);
+	BOOST_TEST(!world.Has<gp::Builder>(humvee));
+}
+
+// GameLogic::onGetHealed -> AIGroup::groupGetHealed -> AIUpdateInterface::privateGetHealed (GeneralsMD/.../Object/
+// Update/AIUpdate.cpp): ActionManager::canGetHealedAt (an ally's HEAL_PAD, the infantry hurt), then aiEnter: a hurt
+// ranger ordered to its player's barracks sets out into it the tick the order comes in; a whole one does not.
+BOOST_AUTO_TEST_CASE(legacy_parity_hurt_infantry_ordered_to_a_heal_pad_goes_in)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(-200, -350), {}, america);
+	const ecs::Entity hurt = game.Place("AmericaInfantryRanger", match->At(-100, -200), {}, america);
+	const ecs::Entity whole = game.Place("AmericaInfantryRanger", match->At(-60, -200), {}, america);
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	world.Get<gp::Health>(hurt)->current = world.Get<gp::Health>(hurt)->maximum / Fixed::FromInt(2);
+	auto envelope = commands::Encode(commands::GetHealed{{hurt, whole}, barracks});
+	envelope.player = 0;
+	game.Tick(std::span(&envelope, 1));
+	BOOST_TEST_REQUIRE(world.Has<gp::Boarding>(hurt));
+	BOOST_TEST((world.Get<gp::Boarding>(hurt)->transport == barracks));
+	BOOST_TEST(!world.Has<gp::Boarding>(whole));
+}
+
+// ActionManager::canDoSpecialPowerAtObject's SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK (canDisableVehicleViaHacking),
+// SPECIAL_BLACKLOTUS_STEAL_CASH_HACK (canStealCashViaHacking) and SPECIAL_HACKER_DISABLE_BUILDING (an enemy's CAPTURABLE
+// structure): a Black Lotus may hack an enemy Humvee but not an enemy aircraft nor one of its own player's; steal from an
+// enemy supply centre (CASH_GENERATOR, CAPTURABLE) but not from a power plant; a hacker may disable the power plant.
+BOOST_AUTO_TEST_CASE(legacy_parity_black_lotus_and_hackers_hack_what_the_original_lets_them)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity lotus = game.Place("ChinaInfantryBlackLotus", match->At(0, -200), {}, china);
+	const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(20, -200), {}, china);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(60, -200), {}, america);
+	const ecs::Entity ownTank = game.Place("ChinaTankBattleMaster", match->At(0, -160), {}, china);
+	const ecs::Entity raptor = game.Place("AmericaJetRaptor", match->At(0, -240), {}, america);
+	const ecs::Entity centre = game.Place("AmericaSupplyCenter", match->At(0, -350), {}, america);
+	const ecs::Entity plant = game.Place("AmericaPowerPlant", match->At(120, -300), {}, america);
+	for (int tick = 0; tick < 10; ++tick)
+		game.Tick();
+	const auto power = [&](std::string_view name) { return *shell.game.powers.Template(name); };
+	const std::uint32_t vehicleHack = power("SpecialAbilityBlackLotusDisableVehicleHack");
+	const std::uint32_t cashHack = power("SpecialAbilityBlackLotusStealCashHack");
+	const std::uint32_t buildingHack = power("SpecialAbilityHackerDisableBuilding");
+	auto &gameWorld = game.Game();
+	BOOST_TEST(gameplay::CanTargetWithPower(gameWorld, lotus, vehicleHack, humvee));
+	BOOST_TEST(!gameplay::CanTargetWithPower(gameWorld, lotus, vehicleHack, raptor)); // an AIRCRAFT
+	BOOST_TEST(!gameplay::CanTargetWithPower(gameWorld, lotus, vehicleHack, ownTank));
+	BOOST_TEST(gameplay::CanTargetWithPower(gameWorld, lotus, cashHack, centre));
+	BOOST_TEST(!gameplay::CanTargetWithPower(gameWorld, lotus, cashHack, plant)); // no CASH_GENERATOR
+	BOOST_TEST(gameplay::CanTargetWithPower(gameWorld, hacker, buildingHack, plant));
+	BOOST_TEST(!gameplay::CanTargetWithPower(gameWorld, hacker, buildingHack, humvee)); // no STRUCTURE
+}
+
+// JetAIUpdate::privateEnter / doLandingCommand (GeneralsMD/.../Object/Update/AIUpdate/JetAIUpdate.cpp) through
+// GameLogic::onEnter: an airborne Raptor of America's ordered into its player's airfield with a space free reserves that
+// space (the airfield its producer now) and turns back to land (RETURNING_FOR_LANDING); a grounded one's order does
+// nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_ordered_into_its_players_airfield_turns_back_to_land)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity airfield = game.Place("AmericaAirfield", match->At(-300, -400), {}, america);
+	const ecs::Entity raptor = game.Place("AmericaJetRaptor", match->At(200, -200), {}, america);
+	BOOST_TEST_REQUIRE(world.Has<gp::Airfield>(airfield));
+	BOOST_TEST_REQUIRE(world.Has<gp::Jet>(raptor));
+	game.Tick();
+	const auto send = [&] {
+		auto envelope = commands::Encode(commands::Enter{{raptor}, airfield});
+		envelope.player = 0;
+		game.Tick(std::span(&envelope, 1));
+	};
+	// On the ground: nothing (canEnterObject: not above the terrain).
+	world.Get<gp::Jet>(raptor)->state = gp::JetState::Parked;
+	world.Get<gp::Jet>(raptor)->airfield = {};
+	send();
+	BOOST_TEST((world.Get<gp::Jet>(raptor)->airfield == ecs::Entity{}));
+	// Flying.
+	world.Get<gp::Jet>(raptor)->state = gp::JetState::Flying;
+	world.Get<gp::Transform>(raptor)->position.z = game.Game().ground.At(world.Get<gp::Transform>(raptor)->position.XY()) + Fixed::FromInt(100);
+	send();
+	BOOST_TEST((world.Get<gp::Jet>(raptor)->airfield == airfield));
+	BOOST_TEST(world.Get<gp::Jet>(raptor)->space == 0u);
+	BOOST_TEST((world.Get<gp::Jet>(raptor)->state == gp::JetState::Returning));
+}
+
+// Legacy parity (ParkingPlaceBehavior::setHealee / resetWakeFrame / update, JetAIUpdate's setHealee each update): a
+// damaged Raptor parked in its AmericaAirfield space (HealAmountPerSecond 10) becomes a healee. The next heal comes 6
+// frames later (HEAL_RATE_FRAMES), then one every 6 frames, each 6 x 10 / 30 = 2 health. Taking off ends it.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_airfield_repairs_its_parked_jets)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity airfield = game.Place("AmericaAirfield", match->At(-300, -400), {}, america);
+	const ecs::Entity raptor = game.Place("AmericaJetRaptor", match->At(-300, -400), {}, america);
+	BOOST_TEST_REQUIRE(world.Has<gp::Airfield>(airfield));
+	game.Tick();
+	{
+		auto &jet = *world.Get<gp::Jet>(raptor);
+		jet.airfield = airfield;
+		jet.space = 0;
+		jet.state = gp::JetState::Parked;
+		world.Get<gp::Transform>(raptor)->position = world.Get<gp::Airfield>(airfield)->spaces[0].parking;
+		world.Get<gp::Health>(raptor)->current = world.Get<gp::Health>(raptor)->maximum / Fixed::FromInt(2);
+	}
+	const Fixed half = world.Get<gp::Health>(raptor)->current;
+	const std::uint64_t parked = game.CurrentTick() + 1; // the first update that sees it parked
+	std::vector<std::uint64_t> heals;
+	Fixed last = half;
+	for (int tick = 0; tick < 40 && heals.size() < 4; ++tick)
+	{
+		game.Tick();
+		BOOST_TEST_REQUIRE((world.Get<gp::Jet>(raptor)->state == gp::JetState::Parked));
+		const Fixed now = world.Get<gp::Health>(raptor)->current;
+		if (now != last)
+		{
+			BOOST_TEST((now == last + Fixed::FromInt(2)));
+			heals.push_back(game.CurrentTick());
+			last = now;
+		}
+	}
+	BOOST_TEST_REQUIRE(heals.size() == 4u);
+	BOOST_TEST(heals[0] == parked + 6);
+	for (std::size_t index = 1; index < heals.size(); ++index)
+		BOOST_TEST(heals[index] == heals[index - 1] + 6);
+}
+
+// Legacy parity (ActiveBody::attemptDamage, DAMAGE_KILLPILOT on a rider-change container): Jarmen Kell's pilot shot
+// at a standing Combat Bike throws its rider off (aiEvacuateInstantly) and kills him (Object::kill), the kill Jarmen's
+// (scoreTheKill: he gains the rider's experience value); at a moving bike it kills the bike itself, again his.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_kill_on_a_combat_bike)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", match->At(0, -300), {}, match->Team(game, 0));
+	const ecs::Entity standing = game.Place("GLAVehicleCombatBike", match->At(150, -300), {}, match->Team(game, 1));
+	const ecs::Entity moving = game.Place("GLAVehicleCombatBike", match->At(-150, -300), {}, match->Team(game, 1));
+	game.Tick(); // their initial riders get on
+	const auto aboard = world.Resource<gp::CargoManifest>().Aboard(standing);
+	BOOST_TEST_REQUIRE(aboard.size() == 1u);
+	const ecs::Entity rider = aboard.front();
+	generalszh::gameplay::OrderMove(game.Game(), moving, match->At(-600, -300), true, true);
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE((world.Get<gp::MoveOrder>(moving)->mode != gp::MoveMode::Idle));
+	const std::int32_t points = world.Get<gp::Experience>(jarmen)->points;
+	Snipe(game, jarmen, standing);
+	game.Tick();
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Aboard(standing).empty());
+	game.Tick(); // the kill (Object::kill) is carried out with the next deaths
+	BOOST_TEST((!world.IsAlive(rider) || world.Get<gp::Dying>(rider) != nullptr));
+	BOOST_TEST(world.Get<gp::Experience>(jarmen)->points > points);
+	const std::int32_t after = world.Get<gp::Experience>(jarmen)->points;
+	Snipe(game, jarmen, moving);
+	game.Tick();
+	game.Tick();
+	BOOST_TEST((!world.IsAlive(moving) || world.Get<gp::Dying>(moving) != nullptr));
+	BOOST_TEST(world.Get<gp::Experience>(jarmen)->points > after);
+}
+
+// Legacy parity (RiderChangeContain::isValidContainerFor with no capacity check, onContaining's aiEvacuateInstantly and
+// onRemoving under m_containing): Jarmen Kell ordered onto a Combat Bike that carries its Rebel gets on; the Rebel is
+// thrown off alive, Jarmen rides it, and the bike is not scuttled.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_new_rider_throws_the_old_one_off_a_combat_bike)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity bike = game.Place("GLAVehicleCombatBike", match->At(150, -300), {}, match->Team(game, 0));
+	const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", match->At(120, -300), {}, match->Team(game, 0));
+	game.Tick();
+	const auto &manifest = world.Resource<gp::CargoManifest>();
+	BOOST_TEST_REQUIRE(manifest.Aboard(bike).size() == 1u);
+	const ecs::Entity rebel = manifest.Aboard(bike).front();
+	generalszh::gameplay::OrderBoard(game.Game(), jarmen, bike, true);
+	bool rode = false;
+	for (int tick = 0; tick < 300 && !rode; ++tick)
+	{
+		game.Tick();
+		const auto aboard = manifest.Aboard(bike);
+		rode = aboard.size() == 1u && aboard.front() == jarmen;
+	}
+	BOOST_TEST_REQUIRE(rode);
+	BOOST_TEST(world.IsAlive(rebel));
+	BOOST_TEST(world.Get<gp::Passenger>(rebel) == nullptr);
+	BOOST_TEST(world.Get<generalszh::gameplay::RiderChange>(bike)->scuttledTick == 0u);
+	BOOST_TEST(world.IsAlive(bike));
+}
+
+// ActionManager::canEnterObject for a pilot (its VeterancyCrateCollide, IsPilot) and aiEnter through GameLogic::onEnter,
+// then VeterancyCrateCollide::onCollide: a human player's pilot ordered into its player's Crusader goes for it and, on
+// reaching it, gives it its veterancy and is gone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_human_players_pilot_ordered_into_its_vehicle_climbs_in)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity pilot = game.Place("AmericaInfantryPilot", match->At(200, -200), {}, america);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", match->At(280, -200), {}, america);
+	BOOST_TEST_REQUIRE(world.IsAlive(pilot));
+	world.Get<gp::Experience>(pilot)->level = 1;
+	for (int tick = 0; tick < 60; ++tick)
+		game.Tick();
+	BOOST_TEST(world.IsAlive(pilot)); // a human's pilot looks for none by itself
+	BOOST_TEST(world.Get<gp::Experience>(tank)->level == 0u);
+	auto envelope = commands::Encode(commands::Enter{{pilot}, tank});
+	envelope.player = 0;
+	game.Tick(std::span(&envelope, 1));
+	BOOST_TEST_REQUIRE(world.Has<generalszh::gameplay::PilotSeeker>(pilot));
+	BOOST_TEST((world.Get<generalszh::gameplay::PilotSeeker>(pilot)->goal == tank));
+	const std::uint64_t ordered = game.CurrentTick();
+	std::optional<std::uint64_t> joined;
+	for (int tick = 0; tick < 300 && !joined; ++tick)
+	{
+		game.Tick();
+		if (world.Get<gp::Experience>(tank)->level == 1u)
+			joined = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(joined.has_value());
+	BOOST_TEST_MESSAGE("joined " << (*joined - ordered) << " ticks after the order");
+	BOOST_TEST(*joined - ordered == 58u); // pinned: the walk over 80 is this port's locomotion and pathing
+
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(pilot));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

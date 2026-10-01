@@ -18,21 +18,22 @@ export namespace engine::gameplay
 namespace retime_detail
 {
 template<typename Slot>
-void Retime(Slot &slot, std::uint32_t weapon, const WeaponCatalog &weapons, std::uint32_t conditions, std::uint64_t tick, Engine::Math::RandomStream &random)
+bool Retime(Slot &slot, std::uint32_t weapon, const WeaponCatalog &weapons, std::uint32_t conditions, std::uint64_t tick, Engine::Math::RandomStream &random)
 {
 	if (weapon == WeaponCatalog::None || slot.readyTick == OutOfAmmo || tick >= slot.readyTick)
-		return;
+		return false;
 	const WeaponDefinition &definition = weapons.At(weapon);
 	const WeaponBonus bonus = weapons.Bonus(definition, conditions);
 	if (slot.reloading)
 	{
 		slot.readyTick = tick + std::max<std::uint64_t>(BonusDelay(definition.clipReload, bonus), 1);
-		return;
+		return true;
 	}
 	const std::uint64_t spread = definition.delayMax > definition.delayMin ? definition.delayMax - definition.delayMin : 0;
 	const std::uint64_t delay = definition.delayMin +
 		(spread == 0 ? 0 : static_cast<std::uint64_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(spread))));
 	slot.readyTick = tick + std::max<std::uint64_t>(BonusDelay(delay, bonus), 1);
+	return true;
 }
 }
 
@@ -56,6 +57,19 @@ struct WeaponBonusRetimeSystem
 				continue;
 			auto random = Engine::Math::Stream(seed, {tick, entities[row].index, entities[row].generation});
 			Armament &armament = armaments[row];
+			if (!sets.empty() && sets[row].sharedReload != 0)
+			{
+				// Shared (WeaponSet::weaponSetOnWeaponBonusChange, PRIMARY to TERTIARY): each weapon re-timed holds them all,
+				// reloading (retail sets RELOADING_CLIP whichever wait it was), so the next is re-timed from that.
+				WeaponSlots &set = sets[row];
+				StoreSlot(set.slots[set.current], armament);
+				for (std::size_t slot = 0; slot < WeaponSlotCount; ++slot)
+					if (retime_detail::Retime(set.slots[slot], set.slots[slot].weapon, weapons, conditions[row].Effective(), tick, random))
+						ShareReloadTime(set, set.slots[slot].readyTick, true);
+				armament.readyTick = set.slots[set.current].readyTick;
+				armament.reloading = set.slots[set.current].reloading;
+				continue;
+			}
 			retime_detail::Retime(armament, armament.weapon, weapons, conditions[row].Effective(), tick, random);
 			if (sets.empty())
 				continue;

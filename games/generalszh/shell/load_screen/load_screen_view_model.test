@@ -1,0 +1,195 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.load_screen.load_screen_kind;
+import games.generalszh.shell.load_screen.shell_game_load_screen_view_model;
+import games.generalszh.shell.load_screen.mission_load_screen_view_model;
+import games.generalszh.shell.load_screen.multiplayer_load_screen_view_model;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(load_screen_view_model)
+
+// Legacy parity (GameLogic.cpp GameLogic::getLoadScreen): the shell map and replays load behind the shell's screen, a
+// mission behind the single-player or challenge screen, a saved single-player game behind the shell's, skirmish and LAN
+// behind the multiplayer screen; no game, no screen.
+BOOST_AUTO_TEST_CASE(legacy_parity_each_game_loads_behind_its_screen)
+{
+	BOOST_TEST((LoadScreenFor(LoadGameMode::Shell, false, false) == LoadScreenKind::ShellGame));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::Replay, false, false) == LoadScreenKind::ShellGame));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::SinglePlayer, false, false) == LoadScreenKind::SinglePlayer));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::SinglePlayer, true, false) == LoadScreenKind::Challenge));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::SinglePlayer, true, true) == LoadScreenKind::ShellGame));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::SinglePlayer, false, true) == LoadScreenKind::ShellGame));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::Skirmish, false, false) == LoadScreenKind::MultiPlayer));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::Lan, false, true) == LoadScreenKind::MultiPlayer));
+	BOOST_TEST((LoadScreenFor(LoadGameMode::None, false, false) == LoadScreenKind::None));
+	// GameLogic.cpp's LOAD_PROGRESS_* stops.
+	BOOST_TEST(load_progress::PostLoadMap == 2);
+	BOOST_TEST(load_progress::PostSideListInit == 12);
+	BOOST_TEST(load_progress::PostScriptEngineNewMap == 14);
+	BOOST_TEST(load_progress::PostPathfinderNewMap == 21);
+	BOOST_TEST(load_progress::LoopAllTheObjects == 21);
+	BOOST_TEST(load_progress::PostInitialNetworkBuildings == 90);
+	BOOST_TEST(load_progress::PostPreloadAssets == 91);
+	BOOST_TEST(load_progress::PostStartingCamera2 == 93);
+}
+
+// Legacy parity (LoadScreen.cpp ShellGameLoadScreen::init / update): the game's first load (the shell map after the
+// intro) shows "TitleScreen" with StaticTextLegal; later loads keep the layout's picture and hide the legal text; the bar
+// follows the load.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_first_shell_load_shows_the_title_screen)
+{
+	ShellGameLoadScreenViewModel screen;
+	screen.Init(true);
+	BOOST_TEST(screen.titleImage.Get() == "TitleScreen");
+	BOOST_TEST(screen.legalShown.Get());
+	BOOST_TEST(screen.progressShown.Get());
+	BOOST_TEST(screen.progress.Get() == 0);
+	screen.Update(load_progress::PostPreloadAssets);
+	BOOST_TEST(screen.progress.Get() == 91);
+	screen.Init(false);
+	BOOST_TEST(screen.titleImage.Get().empty());
+	BOOST_TEST(!screen.legalShown.Get());
+	BOOST_TEST(screen.progress.Get() == 0);
+}
+
+// Legacy parity (LoadScreen.cpp SinglePlayerLoadScreen::init / update, EA source): a USA mission's movie brings the
+// side's background and blue bar; every frameCount / 30 frames the bar steps from (-29 + 30) / 1.3 = 0 to 30 / 1.3 = 23
+// percent; the load then shows (percent + 30) / 1.3, truncated: 0 -> 23, 21 -> 39, 80 -> 84, 100 -> 100.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missions_bar_climbs_with_its_movie_then_its_load)
+{
+	BOOST_TEST(MissionLoadPercent(0) == 23);
+	BOOST_TEST(MissionLoadPercent(21) == 39);
+	BOOST_TEST(MissionLoadPercent(80) == 84);
+	BOOST_TEST(MissionLoadPercent(100) == 100);
+	BOOST_TEST((MissionLoadLookFor("usa") == MissionLoadLook{"MissionLoad_USA", "LoadingBar_ProgressCenter2"}));
+	BOOST_TEST((MissionLoadLookFor("GLA") == MissionLoadLook{"MissionLoad_GLA", "LoadingBar_ProgressCenter3"}));
+	BOOST_TEST((MissionLoadLookFor("China") == MissionLoadLook{"MissionLoad_China", "LoadingBar_ProgressCenter1"}));
+	BOOST_TEST((MissionLoadLookFor("Training") == MissionLoadLook{}));
+
+	MissionLoadScreenViewModel screen;
+	screen.Init(false);
+	BOOST_TEST(!screen.percentShown.Get());
+	BOOST_TEST((screen.percentText.Get() == u"0%"));
+	screen.StartMovie("USA", 600); // a step every 20 frames
+	BOOST_TEST(screen.look.Get().background == "MissionLoad_USA");
+	BOOST_TEST(screen.movieShown.Get());
+	std::vector<int> steps;
+	for (int frame = 1; frame < 600; ++frame)
+	{
+		const int before = screen.progress.Get();
+		screen.MovieFrame(frame);
+		if (screen.progress.Get() != before)
+			steps.push_back(frame);
+	}
+	// 29 steps reach 0 at frame 580; the bar moves on the steps whose truncated percent changes.
+	BOOST_TEST(steps.size() == 23u);
+	BOOST_TEST(screen.progress.Get() == 23);
+	BOOST_TEST(steps.front() == 20); // step -28: 2 / 1.3 = 1
+	BOOST_TEST(steps.back() == 580); // step 0: 30 / 1.3 = 23
+	screen.EndMovie();
+	BOOST_TEST(!screen.movieShown.Get());
+	screen.Update(load_progress::PostLoadMap);
+	BOOST_TEST(screen.progress.Get() == 24);
+	BOOST_TEST((screen.percentText.Get() == u"24%"));
+
+	// A challenge mission keeps the layout's look, and its movie's last frame once the movie is over.
+	screen.Init(true);
+	screen.StartMovie("USA", 600);
+	BOOST_TEST((screen.look.Get() == MissionLoadLook{}));
+	screen.EndMovie();
+	BOOST_TEST(screen.movieShown.Get());
+}
+
+// Legacy parity (LoadScreen.cpp MultiPlayerLoadScreen::init, GameInfo.cpp GameSlot::getApparent*, SkirmishGameOptionsMenu
+// updateMapStartSpots): the local player's general (a base faction: its logo and display name), one row per player in
+// slot order, a random choice of an enemy shown as Random in the random colour, the local player resolved, a computer
+// player without a bar, each player's number on its apparent start spot; the local player's bar follows the load.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_skirmish_load_screen_shows_the_players_as_chosen)
+{
+	MultiplayerLoadScreenSetup game;
+	game.factions = {{"FactionCivilian", u"Civilian", "", "", false, "", ""},
+		{"FactionObserver", u"Observer", "", "", false, "", ""},
+		{"FactionAmerica", u"USA", "GUI:BioFeatures_USA", "Load_USA", false, "", ""},
+		{"FactionChina", u"China", "GUI:BioFeatures_China", "Load_China", false, "", ""},
+		{"FactionAmericaAirForceGeneral", u"USA Air Force General", "GUI:BioFeatures_AF", "Load_USA", true, "SAAirGeneral_L", "GUI:BioNameEntry_Pos3"}};
+	game.observerTemplate = 1;
+	game.colors = {0xFFDDE20D, 0xFFFF0000, 0xFF0000FF};
+	game.text = [](std::string_view label) { return u"[" + std::u16string(label.begin(), label.end()) + u"]"; };
+	game.imageKnown = [](std::string_view name) { return name != "LoadingBar_ProgressCenter-1"; };
+	SetupMap map;
+	map.players = 4;
+	map.preview = "maps/x/x.tga";
+	map.starts = {{1000, 1000}, {9000, 1000}, {1000, 9000}, {9000, 9000}};
+	game.map = &map;
+	// Slot 0: the human, USA, colour 2, spot 3. Slot 2: a hard computer player, everything random, resolved to China,
+	// colour 1, spot 0.
+	game.chosen.slots[0].SetState(setup::SlotState::Player, u"Jason");
+	game.chosen.slots[0].playerTemplate = 2;
+	game.chosen.slots[0].color = 2;
+	game.chosen.slots[0].startPos = 3;
+	game.chosen.slots[2].SetState(setup::SlotState::HardAI);
+	game.playerTemplate = {2, -1, 3, -1, -1, -1, -1, -1};
+	game.color = {2, -1, 1, -1, -1, -1, -1, -1};
+	game.startPos = {3, -1, 0, -1, -1, -1, -1, -1};
+	game.names[0] = u"Jason";
+	game.names[2] = u"Hard Army";
+
+	MultiplayerLoadScreenViewModel screen;
+	screen.Init(game);
+	BOOST_TEST(screen.localPortrait.Get() == "SAFactionLogoLg_US");
+	BOOST_TEST((screen.localName.Get() == u"USA"));
+	BOOST_TEST((screen.localFeatures.Get() == u"[GUI:BioFeatures_USA]"));
+	BOOST_TEST(screen.music.Get() == "Load_USA");
+	BOOST_TEST(screen.rows[0].shown.Get());
+	BOOST_TEST((screen.rows[0].name.Get() == u"Jason"));
+	BOOST_TEST((screen.rows[0].side.Get() == u"USA"));
+	BOOST_TEST(screen.rows[0].color.Get() == 0xFF0000FFu);
+	BOOST_TEST(screen.rows[0].barImage.Get() == "LoadingBar_ProgressCenter2");
+	BOOST_TEST(screen.rows[0].barShown.Get());
+	BOOST_TEST((screen.rows[0].team.Get() == u"[Team:0]"));
+	BOOST_TEST(screen.rows[1].shown.Get());
+	BOOST_TEST((screen.rows[1].name.Get() == u"Hard Army"));
+	BOOST_TEST((screen.rows[1].side.Get() == u"[GUI:Random]"));
+	BOOST_TEST(screen.rows[1].color.Get() == LoadScreenNeutralColor);
+	BOOST_TEST(screen.rows[1].barImage.Get() == "LoadingBar_Progress");
+	BOOST_TEST(!screen.rows[1].barShown.Get());
+	for (std::size_t row = 2; row < 8; ++row)
+		BOOST_TEST(!screen.rows[row].shown.Get());
+	BOOST_TEST(screen.preview.Get().known);
+	BOOST_TEST(screen.preview.Get().supplies.empty());
+	BOOST_TEST(screen.startShown[3].Get());
+	BOOST_TEST(!screen.startShown[4].Get());
+	BOOST_TEST((screen.startText[3].Get() == u"[NUMBER:1]"));
+	BOOST_TEST(screen.startText[0].Get().empty()); // the enemy's random spot stays hidden
+	screen.Update(load_progress::PostPreloadAssets);
+	BOOST_TEST(screen.rows[0].progress.Get() == 91);
+	screen.Update(load_progress::Done); // past 100: no progress
+	BOOST_TEST(screen.rows[0].progress.Get() == 91);
+
+	// On the same team the computer player shows as resolved; a general's faction shows its general.
+	game.chosen.slots[0].team = 0;
+	game.chosen.slots[2].team = 0;
+	game.playerTemplate[0] = 4;
+	game.chosen.slots[0].playerTemplate = 4;
+	screen.Init(game);
+	BOOST_TEST((screen.rows[1].side.Get() == u"China"));
+	BOOST_TEST(screen.rows[1].color.Get() == 0xFFFF0000u);
+	BOOST_TEST((screen.startText[0].Get() == u"[NUMBER:3]"));
+	BOOST_TEST(screen.localPortrait.Get() == "SAAirGeneral_L");
+	BOOST_TEST((screen.localName.Get() == u"[GUI:BioNameEntry_Pos3]"));
+	BOOST_TEST((screen.rows[0].team.Get() == u"[Team:1]"));
+
+	// Multiplayer.ini without ShowRandom*: an enemy's random choices show as resolved.
+	game.chosen.slots[2].team = 1;
+	game.showRandomTemplate = game.showRandomColor = game.showRandomStart = false;
+	screen.Init(game);
+	BOOST_TEST((screen.rows[1].side.Get() == u"China"));
+	BOOST_TEST(screen.rows[1].color.Get() == 0xFFFF0000u);
+	BOOST_TEST((screen.startText[0].Get() == u"[NUMBER:3]"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -322,6 +322,8 @@ export struct WNDWindow final
 	int clock_percent = 0;
 	bool clock_remaining = false;
 	Graphics::Color2D clock_color{};
+	// A push button's overlay image, drawn over it (GadgetButtonDrawOverlayImage: a rank chevron); none: nothing.
+	ImageRef overlay_image{};
 	Rect authored_region{};
 	Rect screen_region{};
 	std::array<WNDDrawState, 3> draw_states{};
@@ -341,6 +343,9 @@ export struct WNDWindow final
 	std::vector<std::uint32_t> entry_colors; // each row's text colour, 0xRRGGBBAA (none, or 0: the list's own)
 	std::vector<std::vector<WNDListImage>> entry_images; // images in a list's cells, by row then column
 	std::optional<WNDPicture> picture; // shown letterboxed instead of the window's own look (a map preview)
+	// WinInstanceData::setVideoBuffer: a movie's frame drawn stretched over the window after its own look, before its
+	// children (W3DGameWinDefaultDraw).
+	std::optional<ImageRef> video;
 	int selected = -1;
 	int list_top = 0;
 	int hovered_entry = -1;
@@ -1100,6 +1105,7 @@ private:
 		control.entries = window.entries.data();
 		control.entry_count = window.entries.size();
 		control.picture = window.picture ? &*window.picture : nullptr;
+		control.video = window.video ? &*window.video : nullptr;
 		control.region = window.screen_region;
 		control.entry_colors = window.entry_colors.data();
 		control.entry_color_count = window.entry_colors.size();
@@ -1131,14 +1137,17 @@ private:
 		control.list_columns = window.list_columns;
 		control.checked = window.checked || window.visual_state == VisualState::Selected;
 		control.image_style = window.image_style;
+		control.push_image_draw = window.type == WindowType::User && window.draw_callback == "W3DGadgetPushButtonImageDraw";
 		control.overlay_states = Has_Flag(window.flags, WindowFlag::UseOverlayStates);
 		control.enabled = state_index != 1;
 		control.always_color = Has_Flag(window.flags, WindowFlag::AlwaysColor);
 		control.not_ready = Has_Flag(window.flags, WindowFlag::NotReady);
+		control.flashing = Has_Flag(window.flags, WindowFlag::Flashing);
 		control.clock = window.clock;
 		control.clock_percent = window.clock_percent;
 		control.clock_remaining = window.clock_remaining;
 		control.clock_color = window.clock_color;
+		control.overlay_image = window.overlay_image;
 		control.highlighted_overlay = &document->m_highlighted_overlay;
 		control.pushed_overlay = &document->m_pushed_overlay;
 		control.wrap_centered = window.wrap_centered;
@@ -1151,7 +1160,7 @@ private:
 		if (!Render_Control(draw_list, control))
 			return false;
 		// Image-drawn gadgets (the original's W3DGadget*ImageDraw) draw no border outline.
-		if (Has_Flag(window.flags, WindowFlag::Border) && !window.image_style
+		if (Has_Flag(window.flags, WindowFlag::Border) && !window.image_style && !control.push_image_draw
 			&& state.cells[0].border_color.alpha > 0.0f
 			&& !draw_list.Add_Outline(rectangle, 1.0f, state.cells[0].border_color))
 			return false;

@@ -53,7 +53,7 @@ struct BoardingSystem
 			}
 			out.push_back({entities[row], boardings[row].transport, false, boardings[row].touchOnly != 0});
 			if (!near && !moves.empty())
-				moves[row] = MoveToPoint(transport->position.XY());
+				moves[row] = MoveToPoint(transport->position.XY(), GoalClaim::None); // AIEnterState: no adjusting, no claim
 		}
 	}
 };

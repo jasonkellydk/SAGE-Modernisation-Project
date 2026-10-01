@@ -32,6 +32,9 @@ struct CratePickup
 		Level,   // a veterancy level
 		Unit,    // free units (MiscAudio CrateFreeUnit)
 		CarBomb, // a vehicle made a car bomb (its FX only)
+		Sabotage, // a building sabotaged (the saboteur's ExecuteFX on it and its ExecuteAnimation only)
+		Heal,     // everything of the player's healed (MiscAudio CrateHeal where the collector is)
+		Shroud,   // the map revealed to the player (MiscAudio CrateShroud on the collector)
 	};
 	ecs::Entity picker;
 	Kind kind{Kind::Money};

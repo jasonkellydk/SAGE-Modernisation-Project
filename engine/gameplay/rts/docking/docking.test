@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 
+import engine.gameplay.rts.containment.components.cargo_size;
 import engine.gameplay.rts.docking.systems.dock_system;
 import engine.gameplay.rts.movement.systems.movement_system;
 import engine.ecs.core.world;
@@ -28,8 +29,11 @@ struct Base
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Docking>();
 		world.RegisterComponent<Dock>();
+		world.RegisterComponent<DockLook>();
+		world.RegisterComponent<CargoSize>();
 		world.FinalizeComponents();
 		terrain.width = terrain.height = 2;
 		terrain.cellSize = Fixed::FromInt(4000);

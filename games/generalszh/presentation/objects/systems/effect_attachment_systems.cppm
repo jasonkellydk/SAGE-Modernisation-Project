@@ -63,7 +63,7 @@ inline bool Start(std::vector<AttachedSystem> &systems, std::span<const content:
 			return false;
 		// A bone the model does not have: the object's origin, as the original.
 		if (pose.found)
-			placed[index] = {0, pose.position, pose.yaw};
+			placed[index] = {0, pose.position, pose.yaw, static_cast<std::int32_t>(index)};
 	}
 	for (std::size_t index = 0; index < bones.size(); ++index)
 		if (const auto *definition = particles.content->particles.Find(bones[index].system))
@@ -172,7 +172,7 @@ struct ExhaustSampleSystem
 		for (std::size_t row = 0; row < missiles.size(); ++row)
 		{
 			const engine::gameplay::MissileFlight &missile = missiles[row];
-			const ExhaustState state{missile.shot.weapon, missile.exhaustLit ? 1u : 0u};
+			const ExhaustState state{missile.shot.weapon, missile.exhaustLit ? 1u : 0u, missile.shot.veterancy};
 			if (ExhaustState *known = states.Get(entities[row]))
 				*known = state;
 			else
@@ -222,7 +222,7 @@ struct ExhaustSystem
 					particles.world->Move(emission->id, at);
 				return;
 			}
-			const std::string_view name = exhausts.Of(state->weapon);
+			const std::string_view name = exhausts.Of(state->weapon, state->veterancy);
 			const auto *definition = name.empty() ? nullptr : particles.content->particles.Find(name);
 			if (definition == nullptr)
 				return;
@@ -458,8 +458,19 @@ struct EffectAttachmentSystem
 					Remove(*particles.world, emission->systems);
 					emission->look = Start(emission->systems, bones, object, model, poses, particles) ? object.look : ConditionEmission::NoLook;
 				}
-				for (const AttachedSystem &attached : emission->systems)
+				// AnimatedParticleSysBoneClientUpdate / ParticlesAttachedToAnimatedBones (updateBonesForClientParticleSystems):
+				// each at its bone as the model animates now.
+				const bool animated = looks->animatedParticleBones && poses.animated && !model.empty();
+				for (AttachedSystem &attached : emission->systems)
+				{
+					if (animated && attached.bone >= 0 && static_cast<std::size_t>(attached.bone) < bones.size())
+						if (const BoneLookup now = poses.animated(object.look, object.animationSeconds, object.animationStart, bones[attached.bone].bone); now.found)
+						{
+							attached.local = now.position;
+							attached.yaw = now.yaw;
+						}
 					particles.world->Move(attached.id, Place(object, attached));
+				}
 			}
 			else if (!bones.empty())
 				commands.Add<ConditionEmission>(object.entity, ConditionEmission{}); // starts next frame
@@ -612,11 +623,13 @@ struct FxPlaybackSystem
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Write<FxEmission>>;
 	using Resources = ecs::Resources<ecs::Read<TerrainHeightHandle>, ecs::Write<ParticleWorldHandle>, ecs::Write<FxRequests>, ecs::Write<SoundRequests>,
-		ecs::Write<ShakeRequests>, ecs::Write<PresentationRandom>, ecs::Write<EffectStats>, ecs::Write<LightPulses>, ecs::Write<ScorchMarks>>;
+		ecs::Write<ShakeRequests>, ecs::Write<PresentationRandom>, ecs::Write<EffectStats>, ecs::Write<LightPulses>, ecs::Write<ScorchMarks>,
+		ecs::Write<Tracers>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
 		ParticleWorldHandle &particles = context.Write<ParticleWorldHandle>();
+		Tracers &tracers = context.Write<Tracers>();
 		auto &pulses = context.Write<LightPulses>().live;
 		auto &scorches = context.Write<ScorchMarks>();
 		FxRequests &requests = context.Write<FxRequests>();
@@ -642,7 +655,7 @@ struct FxPlaybackSystem
 				if (request.fx.empty())
 					continue;
 			}
-			stats.fxPlayed += PlayFx(*particles.content, *particles.world, random, ground, request, sounds, shakes, &attached, &pulses, 0, &scorches) ? 1u : 0u;
+			stats.fxPlayed += PlayFx(*particles.content, *particles.world, random, ground, request, sounds, shakes, &attached, &pulses, 0, &scorches, &tracers) ? 1u : 0u;
 			if (attached.empty())
 				continue;
 			std::vector<AttachedSystem> *systems = nullptr;

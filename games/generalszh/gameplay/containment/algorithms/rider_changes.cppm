@@ -3,6 +3,8 @@ import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 export import games.generalszh.gameplay.containment.components.rider_change;
+import engine.gameplay.rts.stealth.systems.stealth_system;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
 import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
 import games.generalszh.content.objects.object_status;
 import games.generalszh.content.objects.model_conditions;
@@ -16,16 +18,21 @@ import engine.gameplay.rts.veterancy.components.experience;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.death.components.dying;
 import engine.gameplay.rts.containment.resources.cargo_manifest;
+import games.generalszh.gameplay.upgrades.components.command_set_override;
+import games.generalszh.gameplay.orders.algorithms.wander_orders;
 
 // RiderChangeContain, after the tick, for the riders its bikes took in and let out this tick, in order:
 //   onContaining: the rider's own model condition, weapon set flag and object status go on the bike (those of the
-//   rider it showed before off), and the rider's veterancy passes to the bike (setVeterancyLevel), the rider starting
-//   over (setExperienceAndLevel 0);
+//   rider it showed before off), its command set becomes the bike's (setCommandSetStringOverride) and the bike moves on
+//   its locomotor set (chooseLocomotorSet: the Terrorist's SET_SLUGGISH), and the rider's veterancy passes to the bike
+//   (setVeterancyLevel), the rider starting over (setExperienceAndLevel 0);
 //   onRemoving, the bike alive: those come off again, the bike's veterancy goes back to the rider and the bike starts
 //   over; then the bike is scuttled so nobody else can use it: UNSELECTABLE, its ScuttleStatus model condition, IMMOBILE
 //   unless it moves, and ScuttleDelay on it dies TOPPLED (update: kill(DAMAGE_UNRESISTABLE, DEATH_TOPPLED), here its
 //   lifetime).
-// (A dead bike's rider is deleted by the death system; a stealthed bike's markAsDetected on a new rider is not kept.)
+//   a new rider getting on a bike that has one throws the old one off first (aiEvacuateInstantly: its onRemoving, the
+//   bike not scuttled while it takes the new one, m_containing); a stealthed bike taking a rider is marked detected.
+// (A dead bike's rider is deleted by the death system.)
 export namespace generalszh::gameplay
 {
 namespace rider_change_detail
@@ -77,10 +84,44 @@ inline void ApplyRiderChanges(GameWorld &game)
 		{
 			if (index == RiderChange::None)
 				continue;
+			// RiderChangeContain::onContaining: its rider before this one is thrown off (onRemoving with m_containing: the
+			// bike keeps going, its veterancy back to that rider).
+			const auto aboard = game.manifest.Aboard(bike);
+			const std::vector<ecs::Entity> others(aboard.begin(), aboard.end());
+			for (const ecs::Entity old : others)
+			{
+				if (old == move.rider)
+					continue;
+				TakeOutNow(game, bike, old);
+				change = world.Get<RiderChange>(bike);
+				if (const auto *oldRef = world.Get<gp::DefinitionRef>(old))
+					for (std::uint32_t slot = 0; slot < change->count; ++slot)
+						if (change->definitions[slot] == oldRef->index)
+							Show(game, bike, *change, slot, false);
+				PlaceAtVeterancy(game, old, LevelOf(game, bike), true);
+				PlaceAtVeterancy(game, bike, 0, true);
+				change = world.Get<RiderChange>(bike);
+				change->current = RiderChange::None;
+			}
+			// A stealthed bike is found out as it takes a rider (StealthUpdate::markAsDetected).
+			if (auto *stealth = world.Get<gp::Stealth>(bike); stealth != nullptr && stealth->Has(gp::stealth_flag::Stealthed))
+				gp::MarkAsDetected(*stealth, gp::stealth_detail::RulesOf(*stealth, world.Get<gp::StealthRider>(bike)), game.tick, 0);
 			if (change->current != RiderChange::None && change->current != index)
 				Show(game, bike, *change, change->current, false);
 			Show(game, bike, *change, index, true);
 			change->current = index;
+			if (const std::uint32_t set = change->commandSets[index]; set != RiderChange::None)
+			{
+				if (auto *swapped = world.Get<CommandSetOverride>(bike))
+					swapped->id = set;
+				else
+				{
+					world.Add<CommandSetOverride>(bike);
+					world.Get<CommandSetOverride>(bike)->id = set;
+				}
+			}
+			ChooseLocomotorSet(game, bike, change->locomotorSets[index]);
+			change = world.Get<RiderChange>(bike); // adding a component may have moved it
 			PlaceAtVeterancy(game, bike, LevelOf(game, move.rider), true);
 			PlaceAtVeterancy(game, move.rider, 0, true);
 			continue;

@@ -148,7 +148,7 @@ inline void ApplyGunshipEvents(GameWorld &game)
 		case GunshipOrder::GattlingAttack:
 			if (gattling != ecs::Entity{})
 			{
-				OrderAttack(game, gattling, event.target);
+				OrderAttack(game, gattling, event.target, 0, engine::gameplay::CommandSource::Ai);
 				AiCommanded(game, gattling);
 			}
 			break;

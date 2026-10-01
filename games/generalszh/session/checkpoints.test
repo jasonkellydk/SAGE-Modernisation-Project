@@ -1,0 +1,238 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <set>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.combat.components.cleanup_hazard;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.common.spatial.resources.spatial_index;
+import engine.gameplay.rts.stealth.components.undetected_defector;
+import engine.gameplay.common.identity.components.team_member;
+import games.generalszh.gameplay.powers.components.spy_vision;
+import engine.gameplay.rts.vision.components.vision;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.gameplay.common.identity.components.definition_ref;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.teams.resources.team_roster;
+import engine.gameplay.rts.combat.components.countermeasures;
+import engine.gameplay.common.identity.components.producer;
+import engine.gameplay.common.lifetime.components.lifetime;
+import engine.gameplay.common.weapons.components.weapon_slots;
+import engine.gameplay.rts.combat.components.projectile;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.rts.stealth.components.stealth_detector;
+import engine.gameplay.rts.mines.components.minefield;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import games.generalszh.gameplay.combat.components.cooldown_creation;
+import engine.gameplay.rts.combat.components.deploy;
+import games.generalszh.gameplay.powers.components.launcher_door;
+import games.generalszh.gameplay.powers.components.particle_cannon;
+import games.generalszh.gameplay.powers.components.spectre_gunship;
+import games.generalszh.gameplay.sciences.algorithms.general_ranks;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.physics.components.physics_body;
+import Engine.Core.Math.FixedPresentation;
+import engine.gameplay.rts.combat.components.neutron_flight;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.effects.components.radius_decal;
+import games.generalszh.gameplay.effects.resources.radius_decal_looks;
+import engine.gameplay.rts.delivery.components.delivery;
+import engine.gameplay.rts.combat.algorithms.attack_goal;
+import engine.gameplay.rts.combat.resources.garrison_kills;
+import games.generalszh.content.containment.transport_content;
+import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
+import games.generalszh.content.combat.weapon_bonus_content;
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.common.spatial.components.targetable;
+import engine.gameplay.rts.production.components.production_doors;
+import games.generalszh.gameplay.powers.algorithms.power_trigger;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
+import engine.gameplay.rts.navigation.definitions.pathfind_cell;
+import engine.gameplay.rts.combat.components.turret;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.rts.combat.components.missile;
+import engine.gameplay.rts.combat.components.firing_tracker;
+import engine.gameplay.rts.lifecycle.resources.kill_requests;
+import games.generalszh.gameplay.containment.components.rider_change;
+import engine.gameplay.rts.death.components.height_die;
+import engine.gameplay.common.spatial.components.body_extent;
+import games.generalszh.content.objects.object_status;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.common.status.components.status_damage;
+import engine.gameplay.rts.combat.components.auto_fire;
+import engine.gameplay.common.status.components.disabled;
+import games.generalszh.gameplay.combat.components.checkpoint;
+import engine.gameplay.common.identity.resources.relationships;
+
+// CheckpointUpdate (AmericaCheckpoint) on the live shell map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(checkpoints)
+
+// Legacy parity (CheckpointUpdate::update / checkForAlliesAndEnemies; AmericaCheckpoint: BOX 3 x 26, VisionRange 100):
+// alone, its gate stays as it is (neither door condition); an ally within reach opens it on the next tick
+// (DOOR_1_OPENING), its minor radius falling 0.333 a tick while above zero: 79 ticks from 26 to -0.307 (the original's
+// float steps; fixed point lands within 0.001); an enemy beside it shuts it (DOOR_1_CLOSING) and the radius climbs
+// back, 79 ticks to 26. Its bounding circle (the partition's) follows the radius. One and four workers agree; a
+// checkpoint taken mid-swing plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_checkpoint_opens_for_allies_and_shuts_for_enemies)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	session::Session four(shell.map->level, shell.game, session::SessionOptions{42, 4, {}});
+	std::unique_ptr<session::Session> restored;
+	const auto step = [&] {
+		game.Tick();
+		four.Tick();
+		if (restored)
+			restored->Tick();
+	};
+	step();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	// A spot with nothing but neutrals within 300 of it.
+	const std::uint32_t americaPlayer = game.Teams().TeamAt(america).owner;
+	std::optional<FixedVector2> quiet;
+	for (int x = 200; x < 3000 && !quiet; x += 100)
+		for (int y = 200; y < 3000 && !quiet; y += 100)
+		{
+			const FixedVector2 at = low + FixedVector2{Fixed::FromInt(x), Fixed::FromInt(y)};
+			bool empty = at.x < high.x - Fixed::FromInt(200) && at.y < high.y - Fixed::FromInt(200);
+			game.World().Resource<gp::SpatialIndex>().ForEachWithin(at, Fixed::FromInt(300), [&](const gp::SpatialEntry &entry) {
+				empty = empty && game.World().Resource<gp::Relationships>().Between(america, americaPlayer, entry.team, entry.player) == gp::Relationship::Neutral;
+			});
+			if (empty)
+				quiet = at;
+		}
+	BOOST_TEST_REQUIRE(quiet.has_value());
+	const FixedVector2 site = *quiet;
+	const auto place = [&](const char *name, FixedVector2 at, std::uint32_t team) {
+		const ecs::Entity made = game.Place(name, at, {}, team);
+		BOOST_TEST((four.Place(name, at, {}, team) == made));
+		if (restored)
+			BOOST_TEST((restored->Place(name, at, {}, team) == made));
+		return made;
+	};
+	const ecs::Entity gate = place("AmericaCheckpoint", site, america);
+	auto &world = game.World();
+	BOOST_TEST_REQUIRE(world.Has<gameplay::Checkpoint>(gate));
+	const auto state = [&] { return *world.Get<gameplay::Checkpoint>(gate); };
+	const auto opening = [&] { return world.Get<gp::Appearance>(gate)->Test(content::ModelConditionBit("DOOR_1_OPENING")); };
+	const auto closing = [&] { return world.Get<gp::Appearance>(gate)->Test(content::ModelConditionBit("DOOR_1_CLOSING")); };
+	for (int tick = 0; tick < 10; ++tick)
+		step();
+	BOOST_TEST((state().gate == gameplay::CheckpointGate::None));
+	BOOST_TEST((state().minorRadius == Fixed::FromInt(26)));
+	BOOST_TEST((!opening() && !closing()));
+	place("AmericaInfantryRanger", site + FixedVector2{Fixed::FromInt(60), Fixed{}}, america);
+	const std::uint64_t allied = game.CurrentTick();
+	std::uint64_t opened = 0, stopped = 0;
+	for (int tick = 0; tick < 120 && stopped == 0; ++tick)
+	{
+		const Fixed before = state().minorRadius;
+		step();
+		if (opened == 0 && state().gate == gameplay::CheckpointGate::Opening)
+			opened = game.CurrentTick();
+		if (opened != 0 && state().minorRadius == before)
+			stopped = game.CurrentTick();
+		if (tick == 40)
+			restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game.Checkpoint());
+	}
+	BOOST_TEST(opened == allied + 1);
+	BOOST_TEST(opening());
+	BOOST_TEST(!closing());
+	// Falling on its opening tick and each after it: 79 steps, the 80th tick finds it at or below zero.
+	BOOST_TEST(stopped == opened + 79);
+	BOOST_TEST((Engine::Math::Abs(state().minorRadius - Fixed::FromRatio(-307, 1000)) <= Fixed::FromRatio(1, 1000)));
+	BOOST_TEST((Engine::Math::Abs(world.Get<gp::Targetable>(gate)->radius - Engine::Math::Length(FixedVector2{Fixed::FromInt(3), state().minorRadius})) <= Fixed::FromRatio(1, 1000)));
+	place("GLATankScorpion", site + FixedVector2{Fixed{}, Fixed::FromInt(80)}, gla);
+	const std::uint64_t threatened = game.CurrentTick();
+	std::uint64_t shut = 0, full = 0;
+	for (int tick = 0; tick < 120 && full == 0; ++tick)
+	{
+		const Fixed before = state().minorRadius;
+		step();
+		if (shut == 0 && state().gate == gameplay::CheckpointGate::Closing)
+			shut = game.CurrentTick();
+		if (shut != 0 && state().minorRadius == before)
+			full = game.CurrentTick();
+	}
+	BOOST_TEST(shut == threatened + 1);
+	BOOST_TEST(closing());
+	BOOST_TEST(!opening());
+	BOOST_TEST(full == shut + 79);
+	BOOST_TEST((Engine::Math::Abs(state().minorRadius - Fixed::FromInt(26)) <= Fixed::FromRatio(1, 1000)));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

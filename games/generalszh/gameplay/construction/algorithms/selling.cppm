@@ -96,7 +96,7 @@ inline bool BeginSale(GameWorld &game, ecs::Entity building)
 	world.Add<gp::Sale>(building);
 	world.Get<gp::Sale>(building)->since = game.tick;
 	// BaseRegenerateUpdate stops for good.
-	if (auto *regen = world.Get<gp::SelfHealing>(building); regen != nullptr && regen->onlyWhenStanding != 0)
+	if (auto *regen = world.Get<gp::SelfHealing>(building); regen != nullptr && regen->WaitsWhileNotStanding())
 		regen->waiting = 1;
 	RefundProduction(game, building);
 	// onSelling: a player's last tunnel (TakeAll hands a networked one's riders to the rest of its network) or a

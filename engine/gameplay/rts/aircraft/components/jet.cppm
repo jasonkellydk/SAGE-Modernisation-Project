@@ -47,13 +47,16 @@ struct Jet
 	Engine::Math::Fixed lift;       // share of the runway rolled before lifting off
 	Engine::Math::FixedVector2 goal; // where it is taxiing or flying to in this state
 	std::uint32_t leg{0};            // within a state: which stretch of the way
-	std::uint32_t reserved{0};
+	std::uint32_t route{0};          // TaxiToParking on a flight deck: 0 from landing (its taxi points), 1 from the hangar (its creation points)
 	std::uint64_t takeoffPauseTicks{0}; // TakeoffPause
 	std::uint64_t takeoffAt{0};         // the pause's end, once its countdown started
 	// The appearance bit shown while its afterburners burn (the game's JETAFTERBURNER; none: not shown).
 	static constexpr std::uint32_t NoAfterburner = 0xFFFFFFFFu;
 	std::uint32_t afterburnerBit{NoAfterburner};
-	std::uint32_t reserved2{0};
+	// An order its airfield passed it (a flight deck's launch or recall): Scramble, off the ground as soon as it may;
+	// Recall, back to land (aiEnter its airfield).
+	static constexpr std::uint32_t NoOrder = 0, Scramble = 1, Recall = 2;
+	std::uint32_t order{NoOrder};
 	// MinHeight: out of plain flight (or on the ground) it is drawn at least this high above the terrain (its gear).
 	Engine::Math::Fixed minHeight;
 	// Where its airfield stood (while it had one), and what circling a dead airfield costs it a tick
@@ -74,7 +77,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Jet>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.jet";
-	static constexpr std::uint32_t Version = 2;
+	static constexpr std::uint32_t Version = 3;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Jet &value, StateHasher &hasher) noexcept
 	{
@@ -98,9 +101,11 @@ struct ComponentTraits<engine::gameplay::Jet>
 		hasher.AppendU64(static_cast<std::uint64_t>(value.goal.x.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.goal.y.Raw()));
 		hasher.AppendU64(value.leg);
+		hasher.AppendU64(value.route);
 		hasher.AppendU64(value.takeoffPauseTicks);
 		hasher.AppendU64(value.takeoffAt);
 		hasher.AppendU64(value.afterburnerBit);
+		hasher.AppendU64(value.order);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.minHeight.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.home.x.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.home.y.Raw()));

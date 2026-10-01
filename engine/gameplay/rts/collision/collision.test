@@ -74,9 +74,12 @@ struct Road
 		target.RegisterComponent<Locomotion>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
 		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
 		target.RegisterComponent<OffMap>();
 		target.RegisterComponent<DefinitionRef>();
+		target.RegisterComponent<BoundingVolume>();
 		target.FinalizeComponents();
 	}
 
@@ -149,6 +152,34 @@ BOOST_AUTO_TEST_CASE(a_tank_squishes_enemy_infantry_in_its_path_and_spares_the_r
 	BOOST_TEST(!IsDead(*road.world.Get<Health>(ally)));
 	BOOST_TEST(!IsDead(*road.world.Get<Health>(behind)));
 	BOOST_TEST(!IsDead(*road.world.Get<Health>(beside)));
+}
+
+// PartitionData::collidesWith (PartitionManager.cpp): "invariant for all geometries: first do z collision check" -- a
+// crusher meets only what its height range overlaps (its top at or over the other's bottom, its bottom at or under the
+// other's top), so SquishCollide::onCollide never hears of a ranger hanging under its parachute over a Technical. The
+// same ranger on the ground, and one whose feet are just at the tank's top, are run over.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crusher_meets_only_what_its_height_overlaps)
+{
+	Road road(1);
+	const auto volume = [&](ecs::Entity entity, int above) {
+		road.world.Add<BoundingVolume>(entity);
+		road.world.Get<BoundingVolume>(entity)->above = Fixed::FromInt(above);
+	};
+	volume(road.Tank(0, 100, 100, 1), 10);
+	const ecs::Entity aloft = road.Body(1, 108, 100, 0, true);
+	road.world.Get<Transform>(aloft)->position.z = Fixed::FromInt(70); // under its parachute
+	volume(aloft, 12);
+	volume(road.Tank(0, 100, 300, 1), 10);
+	const ecs::Entity grounded = road.Body(1, 108, 300, 0, true);
+	volume(grounded, 12);
+	volume(road.Tank(0, 100, 500, 1), 10);
+	const ecs::Entity touching = road.Body(1, 108, 500, 0, true);
+	road.world.Get<Transform>(touching)->position.z = Fixed::FromInt(10); // its bottom at the tank's top
+	volume(touching, 12);
+	road.Step();
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(aloft)));
+	BOOST_TEST(IsDead(*road.world.Get<Health>(grounded)));
+	BOOST_TEST(IsDead(*road.world.Get<Health>(touching)));
 }
 
 BOOST_AUTO_TEST_CASE(crushing_goes_by_level)

@@ -20,6 +20,8 @@ enum class EvaCue : std::uint8_t
 	BuildingBeingStolen, // SpecialAbilityUpdate::startPreparation: an infantry capture begins (the building's owner)
 	BuildingStolen,      // SpecialAbilityUpdate::triggerAbilityEffect: a building captured (its owner till then)
 	VehicleStolen,       // ConvertToHijackedVehicleCrateCollide::executeCrateBehavior: a vehicle hijacked (its owner till then)
+	BuildingSabotaged,   // Sabotage*CrateCollide::executeCrateBehavior: a building sabotaged (its owner)
+	CashStolen,          // SabotageSupplyCenter / SupplyDropzoneCrateCollide: cash stolen from its owner
 };
 
 enum class EvaWeapon : std::uint8_t

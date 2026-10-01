@@ -65,6 +65,36 @@ inline std::array<float, 4> Color(const engine::config::Node *node)
 }
 }
 
+// W3DProjectileStreamDraw: the textured line through a weapon's projectiles in flight (additive): Texture, Width, TileFactor
+// (tiles a segment), ScrollRate (its texture scrolled that much each drawn frame), MaxSegments (the newest drawn; 0: all).
+struct StreamLook
+{
+	std::string texture;
+	float width{0.0f};
+	float tileFactor{0.0f};
+	float scrollRate{0.0f};
+	std::uint32_t maxSegments{0};
+};
+
+inline std::optional<StreamLook> ReadStreamLook(const ObjectDefinition &object)
+{
+	using namespace laser_detail;
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr || module.type != "W3DProjectileStreamDraw")
+			continue;
+		const auto find = [&](std::string_view key) { return module.block->Find(key); };
+		StreamLook look;
+		look.texture = std::string(Text(find("Texture")));
+		look.width = Number(find("Width"), 0.0f);
+		look.tileFactor = Number(find("TileFactor"), 0.0f);
+		look.scrollRate = Number(find("ScrollRate"), 0.0f);
+		look.maxSegments = static_cast<std::uint32_t>(std::max(0.0f, Number(find("MaxSegments"), 0.0f)));
+		return look;
+	}
+	return std::nullopt;
+}
+
 inline std::optional<LaserLook> ReadLaserLook(const ObjectDefinition &object)
 {
 	using namespace laser_detail;

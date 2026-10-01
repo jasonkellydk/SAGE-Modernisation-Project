@@ -7,6 +7,7 @@
 import games.generalszh.content.ini.zero_hour_grammar;
 import games.generalszh.content.loading.content_loader;
 import games.generalszh.content.control_bar.command_catalog;
+import games.generalszh.content.global.radius_decal;
 import games.generalszh.content.control_bar.control_bar_scheme;
 import games.generalszh.content.install.install_mount;
 
@@ -43,6 +44,11 @@ BOOST_AUTO_TEST_CASE(command_sets_keep_their_buttons_by_slot)
 	BOOST_TEST(worker->object == "GLAInfantryWorker");
 	BOOST_TEST(worker->buttonImage == "SUWorker");
 	BOOST_TEST((catalog.Button("Command_Sell")->command == ButtonCommand::Sell));
+	// RadiusCursorType (ControlBar.cpp's CommandButton field table, by TheRadiusCursorNames).
+	BOOST_TEST(catalog.Button("Command_DaisyCutter")->radiusCursor == RadiusCursorIndex("DAISYCUTTER"));
+	BOOST_TEST(catalog.Button("Command_SpectreGunship")->radiusCursor == RadiusCursorIndex("SPECTREGUNSHIP"));
+	BOOST_TEST(catalog.Button("Command_Guard")->radiusCursor == radius_cursor::GuardArea);
+	BOOST_TEST(catalog.Button("Command_Sell")->radiusCursor == radius_cursor::None);
 }
 
 // ControlBarSchemeManager::setControlBarSchemeByPlayer: the GLA side's scheme (the largest laid out), its backdrop art
@@ -73,6 +79,39 @@ BOOST_AUTO_TEST_CASE(a_side_picks_its_control_bar_scheme)
 	BOOST_TEST(gla->buildUpClockColor[3] == 160);
 	BOOST_TEST_REQUIRE(schemes.ForSide("") != nullptr);
 	BOOST_TEST(schemes.ForSide("")->side == "Observer");
+}
+
+// Legacy parity (ControlBarScheme::init -> ControlBar::updateUpDownImages / setUpDownImages, updateRightHUDImage): the
+// America scheme's minimise button shows its ToggleButtonDown images at the bar's default stage and its ToggleButtonUp
+// ones minimised, never its MinMaxButton images; its right HUD image is its RightHUDImage.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scheme_dresses_the_minimise_button_by_the_bars_stage)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const ControlBarSchemes schemes = BindControlBarSchemes(loader.Load({"Data/INI/Default/ControlBarScheme", "Data/INI/ControlBarScheme"}));
+	const ControlBarSchemeContent *america = schemes.ForSide("America");
+	BOOST_TEST_REQUIRE(america != nullptr);
+	const auto shown = america->MinimizeButtonImages(false);
+	BOOST_TEST(shown.enabled == america->Image("ToggleButtonDownOn"));
+	BOOST_TEST(shown.hilite == america->Image("ToggleButtonDownIn"));
+	BOOST_TEST(shown.hiliteSelected == america->Image("ToggleButtonDownPushed"));
+	BOOST_TEST(shown.enabled == "AmericaProMinimize");
+	BOOST_TEST(shown.hilite == "AmericaProMinimizeH");
+	BOOST_TEST(shown.hiliteSelected == "AmericaProMinimizeP");
+	const auto minimised = america->MinimizeButtonImages(true);
+	BOOST_TEST(minimised.enabled == "AmericaProMaximize");
+	BOOST_TEST(minimised.hilite == "AmericaProMaximizeH");
+	BOOST_TEST(minimised.hiliteSelected == "AmericaProMaximizeP");
+	BOOST_TEST(shown.enabled != america->Image("MinMaxButtonEnable"));
+	BOOST_TEST(america->RightHudImage() == "AmericaProLogo");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -5,6 +5,7 @@
 
 import games.generalszh.session.setup.game_setup;
 import games.generalszh.session.setup.match_plan;
+import games.generalszh.session.setup.replay_body;
 
 using namespace generalszh::session::setup;
 
@@ -125,6 +126,47 @@ BOOST_AUTO_TEST_CASE(a_match_plan_round_trips)
 	const std::vector<std::byte> cut(bytes.begin(), bytes.begin() + 10);
 	engine::core::serialization::ByteReader damaged(cut);
 	BOOST_TEST(!ReadMatchPlan(damaged).has_value());
+}
+
+// A replay's game after its header (RecorderClass::startRecording: difficulty, original game mode, rank points, max FPS;
+// then this port's plan and recorded ticks) reads back as written; an original's GameMessage stream (no ZHREPLAY) or a
+// cut file reads as none.
+BOOST_AUTO_TEST_CASE(a_replay_body_round_trips)
+{
+	using namespace generalszh::session::setup;
+	ReplayBody body;
+	body.difficulty = 2;
+	body.originalGameMode = 3;
+	body.rankPoints = 0;
+	body.maxFps = 30;
+	body.plan.setup.map = "Maps\\Tournament Desert\\Tournament Desert.map";
+	body.plan.setup.seed = 77;
+	body.recording.endTick = 500;
+	body.recording.ticks.push_back({12, {{0x1234u, 0u, {std::byte{1}, std::byte{2}}}, {0x99u, 1u, {}}}});
+	body.recording.ticks.push_back({400, {{0x55u, 0u, {std::byte{3}}}}});
+	body.recording.hashes = {{99, 0xAAu}, {199, 0xBBu}};
+	engine::core::serialization::ByteWriter writer;
+	WriteReplayBody(writer, body);
+	const std::vector<std::byte> bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	const auto read = ReadReplayBody(reader);
+	BOOST_TEST_REQUIRE(read.has_value());
+	BOOST_TEST(read->difficulty == 2);
+	BOOST_TEST(read->originalGameMode == 3);
+	BOOST_TEST(read->maxFps == 30);
+	BOOST_TEST(read->plan.setup.map == body.plan.setup.map);
+	BOOST_TEST(read->plan.setup.seed == 77);
+	BOOST_TEST(read->recording.endTick == 500u);
+	BOOST_TEST_REQUIRE(read->recording.ticks.size() == 2u);
+	BOOST_TEST((read->recording.ticks[0].commands == body.recording.ticks[0].commands));
+	BOOST_TEST(read->recording.ticks[1].tick == 400u);
+	BOOST_TEST((read->recording.hashes == body.recording.hashes));
+	const std::vector<std::byte> original(bytes.begin(), bytes.begin() + 16); // the four ints, then GameMessages
+	engine::core::serialization::ByteReader legacy(original);
+	BOOST_TEST(!ReadReplayBody(legacy).has_value());
+	const std::vector<std::byte> cut(bytes.begin(), bytes.end() - 5);
+	engine::core::serialization::ByteReader damaged(cut);
+	BOOST_TEST(!ReadReplayBody(damaged).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

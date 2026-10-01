@@ -51,6 +51,25 @@ inline std::int64_t CountPlayerObjects(const GameWorld &game, std::uint32_t play
 	bool ignoreUnderConstruction = true)
 {
 	std::int64_t total = 0;
+	if (types.empty())
+		return total;
+	// Whether a definition is (equivalent to) one of the types, worked out once per definition met: -1 not yet. The
+	// types' templates are found once (EquivalentTypes, with each name looked up once).
+	std::vector<std::int8_t> matches(game.templates.DefinitionCount(), -1);
+	const auto &objects = game.templates.Content().objects;
+	std::vector<const content::ObjectDefinition *> typeObjects;
+	typeObjects.reserve(types.size());
+	for (const std::string &type : types)
+		typeObjects.push_back(objects.Find(type));
+	const auto equivalent = [&](const std::string &name, const content::ObjectDefinition *object, std::size_t type) {
+		if (name == types[type])
+			return true;
+		const content::ObjectDefinition *other = typeObjects[type];
+		if (object == nullptr || other == nullptr)
+			return false;
+		return object->reskinnedFrom == types[type] || other->reskinnedFrom == name ||
+			(!object->reskinnedFrom.empty() && object->reskinnedFrom == other->reskinnedFrom);
+	};
 	for (std::uint32_t team = 0; team < game.roster.TeamCount(); ++team)
 	{
 		const auto &record = game.roster.TeamAt(team);
@@ -61,20 +80,24 @@ inline std::int64_t CountPlayerObjects(const GameWorld &game, std::uint32_t play
 			if (!game.world.IsAlive(member))
 				continue;
 			const auto *ref = game.world.Get<engine::gameplay::DefinitionRef>(member);
-			if (ref == nullptr)
+			if (ref == nullptr || ref->index >= matches.size())
 				continue;
-			const std::string &name = game.templates.DefinitionAt(ref->index).name;
-			for (const std::string &type : types)
+			std::int8_t &match = matches[ref->index];
+			if (match < 0)
 			{
-				if (!EquivalentTypes(game, name, type))
-					continue;
-				if (ignoreDead && (game.world.Get<engine::gameplay::Dying>(member) != nullptr || game.world.Get<engine::gameplay::InactiveBody>(member) != nullptr))
-					continue;
-				if (ignoreUnderConstruction && game.world.Get<engine::gameplay::UnderConstruction>(member) != nullptr)
-					continue;
-				++total;
-				break;
+				const std::string &name = game.templates.DefinitionAt(ref->index).name;
+				const content::ObjectDefinition *object = game.templates.CatalogEntryOf(ref->index);
+				match = 0;
+				for (std::size_t type = 0; type < types.size() && match == 0; ++type)
+					match = equivalent(name, object, type) ? 1 : 0;
 			}
+			if (match == 0)
+				continue;
+			if (ignoreDead && (game.world.Get<engine::gameplay::Dying>(member) != nullptr || game.world.Get<engine::gameplay::InactiveBody>(member) != nullptr))
+				continue;
+			if (ignoreUnderConstruction && game.world.Get<engine::gameplay::UnderConstruction>(member) != nullptr)
+				continue;
+			++total;
 		}
 	}
 	return total;

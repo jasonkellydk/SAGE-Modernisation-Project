@@ -1,0 +1,321 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.bounding_volume;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.movement.components.move_away;
+import engine.gameplay.rts.blocking.components.blocked_state;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.common.identity.components.owner;
+import Engine.Core.Math.FixedPresentation;
+
+// Ground units meeting each other on Twilight Flame (AIUpdate.cpp processCollision / blockedBy, AIPathfind.cpp
+// checkForMovement / moveAllies / getMoveAwayFromPath, EA's Zero Hour source): what happens when one is in another's way.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ScriptFile> scripts;
+	std::optional<session::setup::SkirmishLevel> skirmish;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		const auto bytes = files.Read("Maps/Twilight Flame/Twilight Flame.map");
+		auto read = engine::level::generals_map::Read(*bytes);
+		int spots = 0;
+		for (const auto &marker : read->level.markers)
+			spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+		const auto templateOf = [&](std::string_view name) {
+			for (std::size_t index = 0; index < game.playerTemplates.templates.size(); ++index)
+				if (game.playerTemplates.templates[index].name == name)
+					return static_cast<int>(index);
+			return -1;
+		};
+		session::setup::GameSetup setup;
+		setup.seed = 1234;
+		setup.startingCash = 10000;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+		setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+		setup.slots[1].playerTemplate = templateOf("FactionGLA");
+		setup.slots[1].startPos = 1;
+		auto file = engine::level::generals_map::ReadScriptFile(*files.Read("Data/Scripts/SkirmishScripts.scb"));
+		scripts = std::move(*file);
+		skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, game.playerTemplates, spots, &*scripts);
+		loaded = true;
+	}
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{77, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish->players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// The same match on one worker and on four, and (once `restore` is called) one restored from a checkpoint of the first.
+struct Matches
+{
+	Install &shell;
+	session::Session one;
+	session::Session four;
+	std::unique_ptr<session::Session> restored;
+	FixedVector2 open;
+
+	explicit Matches(Install &install) :
+		shell(install), one(install.skirmish->level, install.game, install.Options(1)), four(install.skirmish->level, install.game, install.Options(4))
+	{
+		Tick();
+		for (const auto &marker : shell.skirmish->level.markers)
+			if (marker.name == "Player_1_Start")
+				open = marker.position.XY() + FixedVector2{Fixed::FromInt(-150), Fixed::FromInt(-150)};
+	}
+	void Tick()
+	{
+		one.Tick();
+		four.Tick();
+		if (restored)
+			restored->Tick();
+	}
+	void Restore() { restored = session::Session::Restore(shell.skirmish->level, shell.game, shell.Options(1), one.Checkpoint()); }
+	ecs::Entity Place(const char *name, FixedVector2 at, std::size_t player)
+	{
+		const auto team = *one.Teams().FindTeam(shell.skirmish->players[player].team);
+		const ecs::Entity made = one.Place(name, at, {}, team);
+		BOOST_TEST((four.Place(name, at, {}, team) == made));
+		return made;
+	}
+	void Move(ecs::Entity unit, FixedVector2 to)
+	{
+		const std::uint32_t player = one.World().Get<gp::Owner>(unit)->player;
+		gameplay::ApplyCommand(one.Game(), player, commands::MoveTo{{unit}, to});
+		gameplay::ApplyCommand(four.Game(), player, commands::MoveTo{{unit}, to});
+		if (restored)
+			gameplay::ApplyCommand(restored->Game(), player, commands::MoveTo{{unit}, to});
+	}
+	FixedVector2 At(ecs::Entity unit) { return one.World().Get<gp::Transform>(unit)->position.XY(); }
+	float Distance(ecs::Entity a, ecs::Entity b) { return Engine::Math::ToFloat(Engine::Math::Distance(At(a), At(b))); }
+	float Reach(ecs::Entity a, ecs::Entity b)
+	{
+		return Engine::Math::ToFloat(one.World().Get<gp::BoundingVolume>(a)->circleRadius + one.World().Get<gp::BoundingVolume>(b)->circleRadius);
+	}
+	bool Idle(ecs::Entity unit) { return one.World().Get<gp::MoveOrder>(unit)->mode == gp::MoveMode::Idle && !one.World().Has<gp::MoveAway>(unit); }
+	void Agree()
+	{
+		BOOST_TEST((four.StateHash() == one.StateHash()));
+		BOOST_TEST_REQUIRE(restored != nullptr);
+		BOOST_TEST((restored->StateHash() == one.StateHash()));
+	}
+};
+
+FixedVector2 Offset(FixedVector2 at, int x, int y) { return at + FixedVector2{Fixed::FromInt(x), Fixed::FromInt(y)}; }
+}
+
+BOOST_AUTO_TEST_SUITE(unit_blocking)
+
+// A Crusader sent straight through an allied Crusader standing at its own goal (UNIT_PRESENT_FIXED): the route search
+// weighs the ally (checkForMovement: a cell an ally stands fixed in costs 42 more and blocks the route by an ally, so
+// moveAllies asks it to make way); the mover reaches its goal and never drives through the ally (their centres never
+// nearer than 3/4 of their two radii, the collision's blocking holding it back where they touch).
+BOOST_AUTO_TEST_CASE(a_unit_does_not_drive_through_an_ally_standing_in_its_way)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	Matches match(shell);
+	const ecs::Entity standing = match.Place("AmericaTankCrusader", Offset(match.open, 0, 0), 0);
+	const ecs::Entity mover = match.Place("AmericaTankCrusader", Offset(match.open, -120, 0), 0);
+	// The one in the way walks to where it stands, so it holds its goal there.
+	match.Move(standing, Offset(match.open, 10, 0));
+	for (int tick = 0; tick < 90; ++tick)
+		match.Tick();
+	BOOST_TEST_REQUIRE(match.Idle(standing));
+	match.Move(mover, Offset(match.open, 120, 0));
+	match.Restore();
+	float nearest = 1e9f;
+	int arrived = -1;
+	bool madeWay = false;
+	for (int tick = 1; tick <= 600 && arrived < 0; ++tick)
+	{
+		match.Tick();
+		nearest = std::min(nearest, match.Distance(mover, standing));
+		madeWay = madeWay || match.one.World().Has<gp::MoveAway>(standing);
+		if (match.Idle(mover))
+			arrived = tick;
+	}
+	BOOST_TEST_MESSAGE("arrived at tick " << arrived << ", nearest " << nearest << " of reach " << match.Reach(mover, standing) << ", ally made way: " << madeWay);
+	BOOST_TEST(arrived > 0);
+	BOOST_TEST(nearest >= match.Reach(mover, standing) * 0.75f);
+	match.Agree();
+}
+
+// A Crusader sent straight through an enemy Crusader standing at its goal: the enemy's cells are closed to the route
+// (checkForMovement: enemyFixed, a Crusader not crushing a Crusader), so it goes round; it never drives through.
+BOOST_AUTO_TEST_CASE(a_unit_goes_round_an_enemy_standing_in_its_way)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Matches match(shell);
+	const ecs::Entity enemy = match.Place("GLATankScorpion", Offset(match.open, 0, 0), 1);
+	const ecs::Entity mover = match.Place("AmericaVehicleHumvee", Offset(match.open, -120, 0), 0);
+	match.Move(enemy, Offset(match.open, 10, 0));
+	for (int tick = 0; tick < 90; ++tick)
+		match.Tick();
+	match.Move(mover, Offset(match.open, 120, 0));
+	match.Restore();
+	float nearest = 1e9f;
+	int arrived = -1;
+	for (int tick = 1; tick <= 600 && arrived < 0; ++tick)
+	{
+		match.Tick();
+		if (match.one.World().IsAlive(enemy) && match.one.World().IsAlive(mover))
+			nearest = std::min(nearest, match.Distance(mover, enemy));
+		if (match.one.World().IsAlive(mover) && match.Idle(mover))
+			arrived = tick;
+	}
+	BOOST_TEST_MESSAGE("arrived at tick " << arrived << ", nearest " << nearest);
+	BOOST_TEST(arrived > 0);
+	BOOST_TEST(nearest >= match.Reach(mover, enemy) * 0.75f);
+	match.Agree();
+}
+
+// A Humvee sent through an allied Ranger standing at its goal: the Ranger's cells cost the route 42 more
+// (checkForMovement's allyFixedCount) and break the straight line (isLinePassable), so the Humvee goes round it, or, where
+// the route still crosses it, the Ranger makes way (moveAllies, or processCollision: infantry in a vehicle's way); either
+// way the Humvee reaches its goal and never drives through it.
+BOOST_AUTO_TEST_CASE(infantry_makes_way_for_a_vehicle)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Matches match(shell);
+	const ecs::Entity ranger = match.Place("AmericaInfantryRanger", Offset(match.open, 0, 0), 0);
+	const ecs::Entity humvee = match.Place("AmericaVehicleHumvee", Offset(match.open, -120, 0), 0);
+	match.Move(ranger, Offset(match.open, 5, 0));
+	for (int tick = 0; tick < 90; ++tick)
+		match.Tick();
+	match.Move(humvee, Offset(match.open, 120, 0));
+	match.Restore();
+	int madeWay = -1, arrived = -1;
+	float nearest = 1e9f;
+	for (int tick = 1; tick <= 600 && arrived < 0; ++tick)
+	{
+		match.Tick();
+		nearest = std::min(nearest, match.Distance(humvee, ranger));
+		if (madeWay < 0 && match.one.World().Has<gp::MoveAway>(ranger))
+			madeWay = tick;
+		if (match.Idle(humvee))
+			arrived = tick;
+	}
+	BOOST_TEST_MESSAGE("ranger made way at tick " << madeWay << ", humvee arrived at tick " << arrived << ", nearest " << nearest);
+	BOOST_TEST(arrived > 0);
+	BOOST_TEST(nearest >= match.Reach(humvee, ranger) * 0.75f);
+	match.Agree();
+}
+
+// Two Humvees sent at each other head on: blocked by each other, both facing their ways, the lower path priority makes
+// way (processCollision's deadlock: aiMoveAwayFromUnit); both reach their goals and neither drives through the other.
+BOOST_AUTO_TEST_CASE(units_meeting_head_on_get_past_each_other)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Matches match(shell);
+	const ecs::Entity east = match.Place("AmericaVehicleHumvee", Offset(match.open, -100, 0), 0);
+	const ecs::Entity west = match.Place("AmericaVehicleHumvee", Offset(match.open, 100, 0), 0);
+	for (int tick = 0; tick < 30; ++tick)
+		match.Tick();
+	match.Move(east, Offset(match.open, 100, 0));
+	match.Move(west, Offset(match.open, -100, 0));
+	match.Restore();
+	int eastArrived = -1, westArrived = -1;
+	float nearest = 1e9f;
+	for (int tick = 1; tick <= 900 && (eastArrived < 0 || westArrived < 0); ++tick)
+	{
+		match.Tick();
+		nearest = std::min(nearest, match.Distance(east, west));
+		if (eastArrived < 0 && match.Idle(east))
+			eastArrived = tick;
+		if (westArrived < 0 && match.Idle(west))
+			westArrived = tick;
+	}
+	BOOST_TEST_MESSAGE("east arrived at tick " << eastArrived << ", west at " << westArrived << ", nearest " << nearest << " of reach "
+											   << match.Reach(east, west));
+	BOOST_TEST(eastArrived > 0);
+	BOOST_TEST(westArrived > 0);
+	BOOST_TEST(nearest >= match.Reach(east, west) * 0.75f);
+	match.Agree();
+}
+
+// Two Crusaders standing on one spot (within half a cell, neither moving): each idle one is ordered by its own AI to a
+// spot it may stand on (processCollision's not-moving branch: adjustToPossibleDestination, aiMoveToPosition), the
+// collisions of the tick after they meet giving the order at its end; its goal moved off the other's claim, they step
+// apart.
+BOOST_AUTO_TEST_CASE(legacy_parity_idle_units_on_one_spot_step_apart)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Matches match(shell);
+	const ecs::Entity first = match.Place("AmericaTankCrusader", Offset(match.open, 0, 0), 0);
+	const ecs::Entity second = match.Place("AmericaTankCrusader", Offset(match.open, 1, 0), 0);
+	match.Restore();
+	match.Tick();
+	// The tick they first stand together: both ordered.
+	BOOST_TEST((match.one.World().Get<gp::MoveOrder>(first)->mode == gp::MoveMode::Point));
+	BOOST_TEST((match.one.World().Get<gp::MoveOrder>(second)->mode == gp::MoveMode::Point));
+	for (int tick = 0; tick < 150; ++tick)
+		match.Tick();
+	BOOST_TEST_MESSAGE("apart by " << match.Distance(first, second));
+	BOOST_TEST(match.Distance(first, second) >= 5.0f);
+	match.Agree();
+}
+
+BOOST_AUTO_TEST_SUITE_END()

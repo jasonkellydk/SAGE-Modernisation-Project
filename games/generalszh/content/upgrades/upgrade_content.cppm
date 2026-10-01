@@ -4,6 +4,7 @@ import std;
 export import engine.gameplay.rts.upgrades.definitions.upgrade_trigger;
 export import engine.gameplay.common.health.algorithms.max_health;
 export import games.generalszh.content.objects.object_definition;
+import games.generalszh.content.healing.healing_content;
 
 // Zero Hour's upgrades: "Upgrade" blocks (the original's UpgradeCenter, one
 // bit each in the order they are defined, after the three veterancy
@@ -123,6 +124,7 @@ enum class UpgradeEffectKind : std::uint32_t
 	Countermeasures, // CountermeasuresBehavior (an upgrade mux): its flares are ready to use
 	CostModifier,   // CostModifierUpgrade: its player's builds of EffectKindOf cost Percentage more (CostToBuild)
 	ReplaceObject,  // ReplaceObjectUpgrade: it is deleted and ReplaceObject made in its place, as if just built
+	AutoHeal,       // AutoHealBehavior (an upgrade mux): it heals from its next update (`ordinal`: its area program, or with SelfHeal its self program)
 };
 
 struct UpgradeEffectContent
@@ -142,6 +144,7 @@ struct UpgradeEffectContent
 	std::string science;                // GrantScienceUpgrade: GrantScience
 	bool disableProof{false};           // RadarUpgrade: DisableProof (radar kept short of power)
 	std::uint32_t ordinal{0};           // SubObjectsUpgrade: which of the object's SubObjectsUpgrade modules (ReadPartOverrideSets)
+	static constexpr std::uint32_t SelfHeal = 0x80000000u; // AutoHeal: set on the ordinal of a self heal (its n-th self program)
 	KindOfMask kinds{};                 // CostModifierUpgrade: EffectKindOf
 	std::int64_t share{0};              // CostModifierUpgrade: Percentage, in hundredths of a percent
 	std::string replacement;            // ReplaceObjectUpgrade: ReplaceObject
@@ -244,6 +247,22 @@ inline std::vector<ObjectUpgradeContent> ReadObjectUpgrades(const ObjectDefiniti
 			effect.kind = UpgradeEffectKind::Minefield;
 		else if (type == "CountermeasuresBehavior")
 			effect.kind = UpgradeEffectKind::Countermeasures;
+		else if (type == "AutoHealBehavior")
+		{
+			// AutoHealBehavior::upgradeImplementation: wakes now. Which of its heals: itself, or its n-th area program
+			// (ReadObjectHealing's order).
+			effect.kind = UpgradeEffectKind::AutoHeal;
+			const bool others = AutoHealsOthers(*module.block);
+			std::uint32_t ordinal = 0;
+			for (const ModuleEntry &other : object.modules)
+			{
+				if (&other == &module)
+					break;
+				if (other.slot == ModuleSlot::Behavior && other.block != nullptr && other.type == "AutoHealBehavior" && AutoHealsOthers(*other.block) == others)
+					++ordinal;
+			}
+			effect.ordinal = others ? ordinal : (ordinal | UpgradeEffectContent::SelfHeal);
+		}
 		else if (type == "ReplaceObjectUpgrade")
 		{
 			effect.kind = UpgradeEffectKind::ReplaceObject;

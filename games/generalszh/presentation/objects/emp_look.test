@@ -320,6 +320,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_disabled_things_are_tinted_dark_grey)
 	world.RegisterComponent<SelectionFlash>();
 	world.FinalizeComponents();
 	world.EmplaceResource<PresentationFrame>().seconds = 1.0f / 30.0f;
+	world.EmplaceResource<LookCatalog>();
 	const auto make = [&](std::uint32_t mask) {
 		const ecs::Entity entity = world.Create();
 		world.Add<gp::DefinitionRef>(entity);
@@ -363,6 +364,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_things_gaining_subdual_damage_are_tinted_blue
 	world.RegisterComponent<SelectionFlash>();
 	world.FinalizeComponents();
 	world.EmplaceResource<PresentationFrame>().seconds = 1.0f / 30.0f;
+	world.EmplaceResource<LookCatalog>();
 	const ecs::Entity tank = world.Create();
 	world.Add<gp::DefinitionRef>(tank);
 	world.Add<gp::Disabled>(tank);

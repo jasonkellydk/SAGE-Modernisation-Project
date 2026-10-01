@@ -20,6 +20,8 @@ struct SpatialEntry
 	std::uint32_t classes{0};
 	std::uint64_t clearTo{~std::uint64_t{0}}; // the players it is clear to through the shroud (ObjectShroud)
 	std::uint32_t team{0xFFFFFFFFu};          // its team (TeamMember; none: Relationships::NoTeam)
+	std::uint32_t disguiseTeam{0xFFFFFFFFu};  // disguised (target_class::Disguised): as whose default team
+	std::int32_t disguisePlayer{-1};          // and player (Targetable)
 };
 
 class SpatialIndex
@@ -45,39 +47,16 @@ public:
 	// Replaces the contents; `entries` may come in any order.
 	void Rebuild(std::vector<SpatialEntry> entries)
 	{
-		m_entries = std::move(entries);
-		m_cells.resize(m_entries.size());
-		m_largestRadius = {};
-		for (const SpatialEntry &entry : m_entries)
-			m_largestRadius = std::max(m_largestRadius, entry.radius);
-		for (std::size_t index = 0; index < m_entries.size(); ++index)
-			m_cells[index] = CellOf(m_entries[index].position.XY());
-		// Sorted by cell, entity breaking ties: deterministic whatever the gather order.
-		std::vector<std::size_t> order(m_entries.size());
-		for (std::size_t index = 0; index < order.size(); ++index)
-			order[index] = index;
-		std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-			if (m_cells[a] != m_cells[b])
-				return m_cells[a] < m_cells[b];
-			if (m_entries[a].entity.index != m_entries[b].entity.index)
-				return m_entries[a].entity.index < m_entries[b].entity.index;
-			return m_entries[a].entity.generation < m_entries[b].entity.generation;
-		});
-		std::vector<SpatialEntry> sorted;
-		sorted.reserve(m_entries.size());
-		std::fill(m_cellBegin.begin(), m_cellBegin.end(), 0u);
-		for (const std::size_t index : order)
-		{
-			sorted.push_back(m_entries[index]);
-			++m_cellBegin[m_cells[index] + 1];
-		}
-		for (std::size_t cell = 1; cell < m_cellBegin.size(); ++cell)
-			m_cellBegin[cell] += m_cellBegin[cell - 1];
-		m_entries = std::move(sorted);
-		m_byEntity.resize(m_entries.size());
-		for (std::uint32_t index = 0; index < m_entries.size(); ++index)
-			m_byEntity[index] = {Key(m_entries[index].entity), index};
-		std::sort(m_byEntity.begin(), m_byEntity.end());
+		m_gathered = std::move(entries);
+		RebuildGathered();
+	}
+	// The same, `fill(entries)` appending them to the index's own (reused) buffer: no allocation once warm.
+	template<typename Fill>
+	void RebuildWith(Fill &&fill)
+	{
+		m_gathered.clear();
+		fill(m_gathered);
+		RebuildGathered();
 	}
 
 	// This tick's entry for an entity, or null when it is not targetable.
@@ -126,7 +105,82 @@ private:
 	Engine::Math::Fixed m_largestRadius;
 	std::vector<std::uint32_t> m_cellBegin{0, 0};
 	std::vector<SpatialEntry> m_entries;
-	std::vector<std::uint32_t> m_cells;
+	// Rebuild's working buffers, kept for the next tick.
+	struct SortKey
+	{
+		std::uint64_t key; // cell above the entity index (an entity index is unique among the live)
+		std::uint32_t at;  // in m_gathered
+	};
+	std::vector<SpatialEntry> m_gathered;
+	std::vector<SortKey> m_order;
+	std::vector<SortKey> m_orderScratch;
+	std::vector<std::uint32_t> m_counts;
+
+	// Stable LSD radix sort of m_order by its key's low `bits` bits, 11 bits a pass (keys are small: a few passes over
+	// a thousand entries instead of a comparison sort).
+	void RadixSort(unsigned bits)
+	{
+		constexpr unsigned Digit = 11;
+		constexpr std::size_t Buckets = std::size_t{1} << Digit;
+		m_orderScratch.resize(m_order.size());
+		m_counts.resize(Buckets);
+		for (unsigned shift = 0; shift < bits; shift += Digit)
+		{
+			std::fill(m_counts.begin(), m_counts.end(), 0u);
+			for (const SortKey &item : m_order)
+				++m_counts[(item.key >> shift) & (Buckets - 1)];
+			std::uint32_t sum = 0;
+			for (std::uint32_t &count : m_counts)
+			{
+				const std::uint32_t here = count;
+				count = sum;
+				sum += here;
+			}
+			for (const SortKey &item : m_order)
+				m_orderScratch[m_counts[(item.key >> shift) & (Buckets - 1)]++] = item;
+			m_order.swap(m_orderScratch);
+		}
+	}
+
+	// Sorted by cell, entity breaking ties: deterministic whatever the gather order (entity indices are unique among
+	// the live, so index order is the original's (index, generation) order).
+	void RebuildGathered()
+	{
+		const std::size_t count = m_gathered.size();
+		m_largestRadius = {};
+		std::uint32_t maxIndex = 0;
+		for (const SpatialEntry &entry : m_gathered)
+		{
+			m_largestRadius = std::max(m_largestRadius, entry.radius);
+			maxIndex = std::max(maxIndex, entry.entity.index);
+		}
+		const unsigned indexBits = static_cast<unsigned>(std::bit_width(maxIndex));
+		const unsigned cellBits = static_cast<unsigned>(std::bit_width(static_cast<std::uint64_t>(m_cellBegin.size())));
+		m_order.resize(count);
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const SpatialEntry &entry = m_gathered[index];
+			m_order[index] = {(static_cast<std::uint64_t>(CellOf(entry.position.XY())) << indexBits) | entry.entity.index, static_cast<std::uint32_t>(index)};
+		}
+		RadixSort(indexBits + cellBits);
+		std::fill(m_cellBegin.begin(), m_cellBegin.end(), 0u);
+		m_entries.resize(count);
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const SortKey &key = m_order[index];
+			m_entries[index] = m_gathered[key.at];
+			++m_cellBegin[static_cast<std::size_t>(key.key >> indexBits) + 1];
+		}
+		for (std::size_t cell = 1; cell < m_cellBegin.size(); ++cell)
+			m_cellBegin[cell] += m_cellBegin[cell - 1];
+		// By entity: the same radix sort on the index alone.
+		for (std::size_t index = 0; index < count; ++index)
+			m_order[index] = {m_entries[index].entity.index, static_cast<std::uint32_t>(index)};
+		RadixSort(indexBits);
+		m_byEntity.resize(count);
+		for (std::size_t index = 0; index < count; ++index)
+			m_byEntity[index] = {Key(m_entries[m_order[index].at].entity), m_order[index].at};
+	}
 };
 }
 

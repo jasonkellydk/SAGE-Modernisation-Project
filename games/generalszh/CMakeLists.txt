@@ -35,7 +35,7 @@ endif()
 # (objects as drawn, and as effects and sound read them). Plain data.
 engine_add_module_library(generalszh_presentation_frame
 	MODULES
-		presentation/effects/light_pulses.cppm presentation/effects/scorch_marks.cppm presentation/objects/resources/object_instance.cppm presentation/objects/resources/object_frame.cppm
+		presentation/effects/light_pulses.cppm presentation/effects/tracers.cppm presentation/effects/scorch_marks.cppm presentation/objects/resources/object_instance.cppm presentation/objects/resources/look_models.cppm presentation/objects/resources/object_frame.cppm
 		presentation/objects/components/track_marks.cppm
 	DEPENDS engine_ecs engine_gameplay_appearance)
 
@@ -45,10 +45,22 @@ if(GENERALSZH_BUILD_GAME)
 		MODULES hud/control_bar_view.cppm hud/generals_powers_view.cppm hud/shortcut_bar_view.cppm
 		DEPENDS generalszh_hud generals_ui_wnd)
 	engine_add_module_library(generalszh_shell_views
-		MODULES shell/main_menu/main_menu_view.cppm shell/options/options_view.cppm shell/replay/replay_menu_view.cppm shell/dialog/message_box_view.cppm shell/save_load/save_load_view.cppm shell/skirmish/skirmish_view.cppm shell/lan/lan_view.cppm shell/challenge/challenge_view.cppm shell/quit_menu/quit_menu_view.cppm shell/score/score_screen_view.cppm
+		MODULES shell/main_menu/main_menu_view.cppm shell/options/options_view.cppm shell/replay/replay_menu_view.cppm shell/dialog/message_box_view.cppm shell/save_load/save_load_view.cppm shell/skirmish/skirmish_view.cppm shell/lan/lan_view.cppm shell/challenge/challenge_view.cppm shell/quit_menu/quit_menu_view.cppm shell/score/score_screen_view.cppm shell/load_screen/load_screen_view.cppm
 		DEPENDS generalszh_shell generals_ui_wnd
-		TESTS shell/main_menu/main_menu_view.test shell/options/options_view.test shell/dialog/message_box_view.test
+		TESTS shell/main_menu/main_menu_view.test shell/options/options_view.test shell/dialog/message_box_view.test shell/load_screen/load_screen_view.test
 		TEST_DEPENDS generalszh_content_install)
+	# The looks' models as presentation data: each look's model entry (parts, turned bones, animation, collision shape),
+	# the library of them and the system that loads them (drawing, picking and effects read it).
+	engine_add_module_library(generalszh_presentation_models
+		MODULES
+			presentation/models/model_entry.cppm
+			presentation/models/model_library.cppm
+			presentation/models/model_library_system.cppm
+			presentation/models/pointer_pick_system.cppm
+			presentation/models/fire_fx_bone_system.cppm
+			presentation/models/scenery_clearing_system.cppm
+		DEPENDS generals_graphics generals_assets generalszh_presentation_frame generalszh_presentation_objects generalszh_presentation_interaction engine_ecs
+		TESTS presentation/models/model_entry.test)
 	# Presentation rendering: adapters from the client world to the graphics renderers.
 	engine_add_module_library(generalszh_presentation_rendering
 		MODULES
@@ -57,8 +69,13 @@ if(GENERALSZH_BUILD_GAME)
 			presentation/rendering/terrain_rendering.cppm
 			presentation/rendering/water_rendering.cppm
 			presentation/rendering/particle_rendering.cppm
+			presentation/rendering/tracer_rendering.cppm
 			presentation/rendering/model_bones.cppm
-		DEPENDS generals_graphics generals_assets engine_level engine_level_presentation engine_effects_particles generalszh_content generalszh_presentation_frame)
+			presentation/rendering/shroud_pixels.cppm
+			presentation/rendering/infantry_lighting.cppm
+		DEPENDS generals_graphics generals_assets engine_level engine_level_presentation engine_effects_particles generalszh_content generalszh_presentation_frame generalszh_presentation_models
+			engine_gameplay_vision generalszh_presentation_effects
+		TESTS presentation/rendering/shroud_pixels.test presentation/rendering/infantry_lighting.test)
 	target_sources(generalszh_presentation_rendering PRIVATE
 		presentation/rendering/object_rendering.cpp
 		presentation/rendering/water_rendering.cpp
@@ -132,12 +149,18 @@ engine_add_module_library(generalszh_content
 		content/powers/special_ability_content.cppm
 		content/fire/fire_content.cppm
 		content/stealth/stealth_content.cppm
+		content/vision/dynamic_clearing_content.cppm
+		content/effects/bone_fx_content.cppm
 		content/topple/topple_content.cppm
 		content/production/production_content.cppm
 		content/models/model_rigs.cppm
 		content/aircraft/aircraft_content.cppm
 		content/global/game_data.cppm
 		content/global/language_fonts.cppm
+		content/global/radius_decal.cppm
+		content/railroad/railroad_content.cppm
+		content/containment/combat_drop_content.cppm
+		content/containment/railed_transport_content.cppm
 		content/global/in_game_ui.cppm
 		content/global/mouse.cppm
 		content/ai/ai_data.cppm
@@ -154,7 +177,7 @@ engine_add_module_library(generalszh_content
 		content/slaves/slaved_content.cppm
 		content/horde/horde_content.cppm
 		content/harvesting/harvest_content.cppm
-	DEPENDS engine_core_text engine_config engine_filesystem generalszh_content_install engine_gameplay_movement engine_gameplay_health engine_gameplay_weapons engine_gameplay_combat engine_gameplay_containment engine_gameplay_death engine_gameplay_physics engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_upgrades engine_gameplay_slaves engine_gameplay_horde engine_gameplay_veterancy engine_gameplay_harvesting engine_gameplay_parachute
+	DEPENDS engine_core_text engine_config engine_filesystem engine_gameplay_vision generalszh_content_install engine_gameplay_movement engine_gameplay_health engine_gameplay_weapons engine_gameplay_combat engine_gameplay_containment engine_gameplay_death engine_gameplay_physics engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_upgrades engine_gameplay_slaves engine_gameplay_horde engine_gameplay_veterancy engine_gameplay_harvesting engine_gameplay_parachute
 	TESTS content/objects/object_catalog.test content/water/water_settings.test content/combat/combat_catalog.test content/images/mapped_image_files.test content/powers/special_powers.test content/objects/model_states.test content/healing/healing_content.test content/models/model_rigs.test content/stealth/stealth_content.test content/fire/fire_content.test content/death/death_content.test content/production/production_content.test content/global/game_data.test content/global/player_templates.test content/maps/map_cache.test content/upgrades/upgrade_content.test content/control_bar/command_catalog.test content/ai/ai_data.test
 	TEST_DEPENDS generalszh_content_install engine_level)
 if(TARGET generalszh_content_tests)
@@ -181,7 +204,8 @@ endif()
 # A game's setup before it starts (GameInfo): slots, map, options and their options string.
 engine_add_module_library(generalszh_session_setup
 	MODULES session/setup/game_setup.cppm session/setup/script_qualify.cppm session/setup/skirmish_level.cppm session/setup/match_plan.cppm
-	DEPENDS engine_core_text engine_core_serialization generalszh_content engine_level
+		session/setup/replay_body.cppm
+	DEPENDS engine_core_text engine_core_serialization generalszh_content engine_level engine_net
 	TESTS session/setup/game_setup.test)
 
 # The LAN lobby (LANAPI): the original's datagrams and its lobby, over an injected link.
@@ -213,10 +237,15 @@ engine_add_module_library(generalszh_shell
 		shell/score/score_screen_view_model.cppm
 		shell/score/battle_honors.cppm
 		shell/intro/intro_sequence.cppm
+		shell/intro/load_screen_bitmap.cppm
+		shell/load_screen/load_screen_kind.cppm
+		shell/load_screen/shell_game_load_screen_view_model.cppm
+		shell/load_screen/mission_load_screen_view_model.cppm
+		shell/load_screen/multiplayer_load_screen_view_model.cppm
 	DEPENDS engine_gui_mvvm engine_config engine_core_text generalszh_session_setup generalszh_network_lan
 	TESTS shell/main_menu/main_menu_view_model.test shell/options/options_view_model.test shell/credits/credits_view_model.test
 		shell/replay/replay_menu_view_model.test shell/save_load/save_load_view_model.test shell/skirmish/skirmish_view_model.test shell/lan/lan_view_model.test shell/challenge/challenge_view_model.test shell/quit_menu/quit_menu_view_model.test shell/score/score_screen_view_model.test
-		shell/score/battle_honors.test shell/intro/intro_sequence.test
+		shell/score/battle_honors.test shell/intro/intro_sequence.test shell/intro/load_screen_bitmap.test shell/load_screen/load_screen_view_model.test
 	TEST_DEPENDS generalszh_content_install)
 
 if(BUILD_TESTING)
@@ -302,6 +331,12 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/lifecycle/algorithms/retire_now.cppm
 		gameplay/mines/components/minefield_generator.cppm
 		gameplay/mines/algorithms/minefields.cppm
+		gameplay/mines/components/mine_clearer.cppm
+		gameplay/mines/systems/mine_clearing_detail_system.cppm
+		gameplay/mines/algorithms/mine_clearing.cppm
+		gameplay/construction/components/builder_boredom.cppm
+		gameplay/construction/systems/builder_boredom_system.cppm
+		gameplay/construction/algorithms/builder_boredom.cppm
 		gameplay/ai/components/tunnel_guard.cppm
 		gameplay/ai/components/guard.cppm
 		gameplay/containment/components/scripted_evacuation.cppm
@@ -324,6 +359,17 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/economy/components/warehouse_crippling.cppm
 		gameplay/combat/components/battle_bus.cppm
 		gameplay/combat/components/weapon_bonus_pulse.cppm
+		gameplay/creation/components/ocl_timer.cppm
+		gameplay/effects/resources/effect_cues.cppm
+		gameplay/combat/components/enemy_near.cppm
+		gameplay/combat/components/checkpoint.cppm
+		gameplay/containment/components/railed_transport.cppm
+		gameplay/containment/systems/railed_transport_systems.cppm
+		gameplay/containment/algorithms/railed_transports.cppm
+		gameplay/containment/algorithms/transport_riders.cppm
+		gameplay/powers/components/leaflet_drop.cppm
+		gameplay/combat/components/firestorm.cppm
+		gameplay/containment/components/assault_transport.cppm
 		gameplay/abilities/components/special_abilities.cppm
 		gameplay/abilities/components/special_object.cppm
 		gameplay/abilities/components/sticky_bomb.cppm
@@ -342,6 +388,7 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/bridges/algorithms/bridges.cppm
 		gameplay/hacking/resources/hack_cues.cppm
 		gameplay/hacking/algorithms/hack_orders.cppm
+		gameplay/hacking/algorithms/hack_effects.cppm
 		gameplay/hacking/systems/internet_hack_system.cppm
 		gameplay/hacking/algorithms/hack_events.cppm
 		gameplay/battleplans/resources/battle_plan_players.cppm
@@ -357,6 +404,51 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/combat/algorithms/battle_bus.cppm
 		gameplay/combat/systems/weapon_bonus_pulse_system.cppm
 		gameplay/combat/algorithms/weapon_bonus_pulses.cppm
+		gameplay/creation/systems/ocl_timer_system.cppm
+		gameplay/effects/components/bone_fx.cppm
+		gameplay/effects/systems/bone_fx_system.cppm
+		gameplay/effects/algorithms/bone_fx_effects.cppm
+		gameplay/effects/components/radius_decal.cppm
+		gameplay/effects/resources/radius_decal_looks.cppm
+		gameplay/effects/algorithms/radius_decals.cppm
+		gameplay/effects/systems/radius_decal_system.cppm
+		gameplay/beacons/resources/beacons.cppm
+		gameplay/combat_drop/components/combat_drop.cppm
+		gameplay/aircraft/components/airfield_healing.cppm
+		gameplay/flight_deck/components/flight_deck.cppm
+		gameplay/flight_deck/systems/flight_deck_systems.cppm
+		gameplay/aircraft/systems/airfield_heal_system.cppm
+		gameplay/flight_deck/algorithms/flight_decks.cppm
+		gameplay/combat_drop/resources/deferred_orders.cppm
+		gameplay/combat_drop/algorithms/combat_drop_orders.cppm
+		gameplay/combat_drop/algorithms/rappel_landings.cppm
+		gameplay/combat_drop/systems/combat_drop_systems.cppm
+		gameplay/beacons/algorithms/beacons.cppm
+		gameplay/railroad/components/railcar.cppm
+		gameplay/railroad/resources/rail_network.cppm
+		gameplay/railroad/algorithms/railroad_motion.cppm
+		gameplay/railroad/algorithms/railroad_carriages.cppm
+		gameplay/railroad/systems/railroad_system.cppm
+		gameplay/railroad/systems/railroad_collision_system.cppm
+		gameplay/creation/algorithms/ocl_timers.cppm
+		gameplay/containment/systems/assault_transport_system.cppm
+		gameplay/containment/algorithms/assault_transports.cppm
+		gameplay/combat/algorithms/neutron_blasts.cppm
+		gameplay/combat/algorithms/bunker_busters.cppm
+		gameplay/combat/systems/enemy_near_system.cppm
+		gameplay/combat/systems/checkpoint_system.cppm
+		gameplay/powers/algorithms/leaflet_drops.cppm
+		gameplay/combat/systems/firestorm_system.cppm
+		gameplay/combat/algorithms/firestorms.cppm
+		gameplay/stealth/algorithms/disguises.cppm
+		gameplay/stealth/algorithms/supply_stealth.cppm
+		gameplay/stealth/components/supply_stealth_grant.cppm
+		gameplay/stealth/systems/supply_stealth_grant_system.cppm
+		gameplay/movement/algorithms/goal_claim_rules.cppm
+		gameplay/movement/systems/destination_adjust_system.cppm
+		gameplay/movement/systems/move_away_system.cppm
+		gameplay/movement/algorithms/unit_settles.cppm
+		gameplay/movement/systems/goal_claim_system.cppm
 		gameplay/abilities/algorithms/special_ability_update.cppm
 		gameplay/abilities/components/command_button_hunt.cppm
 		gameplay/abilities/systems/command_button_hunt_system.cppm
@@ -368,6 +460,7 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/combat/components/cleanup_hazard.cppm
 		gameplay/combat/algorithms/flares.cppm
 		gameplay/combat/algorithms/object_flown_launches.cppm
+		gameplay/powers/algorithms/visible_payloads.cppm
 		gameplay/powers/resources/spy_vision_catalog.cppm
 		gameplay/powers/components/launcher_door.cppm
 		gameplay/powers/algorithms/launcher_doors.cppm
@@ -386,6 +479,7 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/ai/components/mob_member.cppm
 		gameplay/ai/systems/mob_member_system.cppm
 		gameplay/ai/algorithms/mobs.cppm
+		gameplay/ai/algorithms/slave_orders.cppm
 		gameplay/ai/resources/retaliation_modes.cppm
 		gameplay/ai/algorithms/retaliation.cppm
 		gameplay/combat/resources/cooldown_creation_catalog.cppm
@@ -421,6 +515,7 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/construction/algorithms/selling.cppm
 		gameplay/construction/algorithms/build_legality.cppm
 		gameplay/construction/algorithms/building.cppm
+		gameplay/construction/algorithms/construction_cancel.cppm
 		gameplay/construction/components/rebuild_hole.cppm
 		gameplay/construction/algorithms/rebuild_holes.cppm
 		gameplay/production/algorithms/build_cost.cppm
@@ -429,6 +524,21 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/world/algorithms/difficulty_bonuses.cppm
 		gameplay/world/algorithms/level_setup.cppm
 		gameplay/world/algorithms/navigation_setup.cppm
+		gameplay/world/resources/water_changes.cppm
+		gameplay/world/resources/map_scenery.cppm
+		gameplay/combat/algorithms/shot_creation_lists.cppm
+		gameplay/production/algorithms/production_completion.cppm
+		gameplay/fire/algorithms/fire_embers.cppm
+		gameplay/spawning/algorithms/spawn_completion.cppm
+		gameplay/crates/algorithms/crate_pickup_step.cppm
+		gameplay/mines/algorithms/minefield_deaths.cppm
+		gameplay/topple/algorithms/topple_stumps.cppm
+		gameplay/upgrades/algorithms/upgrade_creations.cppm
+		gameplay/death/algorithms/death_aftermath.cppm
+		gameplay/scripts/algorithms/value_groups.cppm
+		gameplay/world/resources/music_progress.cppm
+		gameplay/world/resources/match_rules.cppm
+		gameplay/world/algorithms/water_levels.cppm
 		gameplay/world/algorithms/starting_objects.cppm
 		gameplay/appearance/components/steering_look.cppm
 		gameplay/appearance/components/building_extensions.cppm
@@ -451,7 +561,8 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/teams/systems/tech_building_system.cppm
 		gameplay/crates/algorithms/crate_rules.cppm
 		gameplay/crates/algorithms/car_bombs.cppm
-	DEPENDS generalszh_content generalszh_commands engine_level engine_gameplay_movement engine_gameplay_teams engine_gameplay_identity engine_gameplay_combat engine_gameplay_containment engine_gameplay_delivery engine_gameplay_lifecycle engine_gameplay_appearance engine_gameplay_death engine_gameplay_physics engine_gameplay_lifetime engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_propaganda engine_gameplay_mines engine_gameplay_emp engine_gameplay_collision engine_gameplay_production engine_gameplay_aircraft engine_gameplay_upgrades engine_gameplay_slaves engine_gameplay_status engine_gameplay_veterancy engine_gameplay_horde engine_gameplay_harvesting engine_gameplay_docking engine_gameplay_loadout engine_gameplay_sciences engine_gameplay_powers engine_gameplay_parachute engine_gameplay_match engine_gameplay_radar engine_gameplay_vision engine_gameplay_areas)
+		gameplay/crates/algorithms/sabotage.cppm
+	DEPENDS generalszh_content generalszh_commands engine_level engine_gameplay_movement engine_gameplay_teams engine_gameplay_identity engine_gameplay_combat engine_gameplay_containment engine_gameplay_delivery engine_gameplay_lifecycle engine_gameplay_appearance engine_gameplay_death engine_gameplay_physics engine_gameplay_lifetime engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_propaganda engine_gameplay_mines engine_gameplay_emp engine_gameplay_collision engine_gameplay_blocking engine_gameplay_production engine_gameplay_aircraft engine_gameplay_upgrades engine_gameplay_slaves engine_gameplay_status engine_gameplay_veterancy engine_gameplay_horde engine_gameplay_harvesting engine_gameplay_docking engine_gameplay_loadout engine_gameplay_sciences engine_gameplay_powers engine_gameplay_parachute engine_gameplay_match engine_gameplay_radar engine_gameplay_vision engine_gameplay_areas)
 
 # Presentation: what the player sees and hears of the game (never read by
 # the simulation). Audio: the game's sound content and files on the engine mixer.
@@ -476,6 +587,7 @@ engine_add_module_library(generalszh_presentation_effects
 		presentation/effects/effects_content.cppm
 		presentation/effects/fx_playback.cppm
 		presentation/effects/damage_effects.cppm
+		presentation/effects/heat_haze.cppm
 		presentation/animation/tread_roll.cppm
 	DEPENDS engine_effects_particles generalszh_content generalszh_presentation_frame
 	TESTS presentation/effects/effects_content.test presentation/animation/tread_roll.test
@@ -487,16 +599,75 @@ endif()
 # Session: the composition root that owns the world, systems, scheduler and scripts.
 engine_add_module_library(generalszh_session
 	MODULES session/session_view.cppm session/script_bridge.cppm session/session.cppm session/lockstep_session.cppm
-	DEPENDS generalszh_gameplay generalszh_content generalszh_scripting engine_gameplay_movement engine_gameplay_teams engine_gameplay_identity engine_gameplay_combat engine_gameplay_containment engine_gameplay_delivery engine_gameplay_lifecycle engine_gameplay_death engine_gameplay_physics engine_gameplay_lifetime engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_propaganda engine_gameplay_mines engine_gameplay_emp engine_gameplay_collision engine_gameplay_production engine_gameplay_economy engine_gameplay_aircraft generalszh_commands engine_net engine_gameplay_match
-	TESTS session/session.test session/skirmish_start.test session/research.test session/lockstep.test session/crates.test session/create_modules.test session/object_looks.test session/team_states.test session/cash_powers.test session/special_abilities.test session/bridges.test session/unmanned_vehicles.test session/retaliation.test session/object_status.test session/tunnel_guards.test session/script_objects.test session/reinforcements.test session/guards.test session/attacks.test
+		session/composition/lifecycle.cppm
+		session/composition/spatial.cppm
+		session/composition/identity.cppm
+		session/composition/powers.cppm
+		session/composition/death.cppm
+		session/composition/containment.cppm
+		session/composition/radar.cppm
+		session/composition/vision.cppm
+		session/composition/health.cppm
+		session/composition/construction.cppm
+		session/composition/abilities.cppm
+		session/composition/ai.cppm
+		session/composition/combat.cppm
+		session/composition/appearance.cppm
+		session/composition/scripts.cppm
+		session/composition/world.cppm
+		session/composition/movement.cppm
+		session/composition/status.cppm
+		session/composition/production.cppm
+		session/composition/navigation.cppm
+		session/composition/poison.cppm
+		session/composition/bridges.cppm
+		session/composition/hacking.cppm
+		session/composition/battleplans.cppm
+		session/composition/crates.cppm
+		session/composition/economy.cppm
+		session/composition/stealth.cppm
+		session/composition/creation.cppm
+		session/composition/effects.cppm
+		session/composition/railroad.cppm
+		session/composition/combat_drop.cppm
+		session/composition/flight_deck.cppm
+		session/composition/aircraft.cppm
+		session/composition/weapons.cppm
+		session/composition/upgrades.cppm
+		session/composition/veterancy.cppm
+		session/composition/horde.cppm
+		session/composition/slaves.cppm
+		session/composition/parachute.cppm
+		session/composition/match.cppm
+		session/composition/collision.cppm
+		session/composition/teams.cppm
+		session/composition/delivery.cppm
+		session/composition/physics.cppm
+		session/composition/lifetime.cppm
+		session/composition/healing.cppm
+		session/composition/fire.cppm
+		session/composition/propaganda.cppm
+		session/composition/mines.cppm
+		session/composition/emp.cppm
+		session/composition/tick_events.cppm
+		session/composition/simulation_setup.cppm
+		session/composition/simulation.cppm
+		session/composition/areas.cppm
+		session/composition/topple.cppm
+		session/composition/blocking.cppm
+		session/composition/docking.cppm
+		session/composition/harvesting.cppm
+		session/composition/loadout.cppm
+	DEPENDS generalszh_gameplay generalszh_content generalszh_scripting engine_gameplay_movement engine_gameplay_teams engine_gameplay_identity engine_gameplay_combat engine_gameplay_containment engine_gameplay_delivery engine_gameplay_lifecycle engine_gameplay_death engine_gameplay_physics engine_gameplay_lifetime engine_gameplay_healing engine_gameplay_poison engine_gameplay_construction engine_gameplay_construction_work engine_gameplay_fire engine_gameplay_stealth engine_gameplay_topple engine_gameplay_propaganda engine_gameplay_mines engine_gameplay_emp engine_gameplay_collision engine_gameplay_blocking engine_gameplay_production engine_gameplay_economy engine_gameplay_aircraft generalszh_commands engine_net engine_gameplay_match
+	TESTS session/session.test session/railroad.test session/combat_drop.test session/soak.test session/flight_deck.test session/campaign_scan.test session/water_levels.test session/waypoint_powers.test session/music_progress.test session/checkpoints.test session/payload_strikes.test session/railed_transport.test session/garrison_exits.test session/skirmish_start.test session/research.test session/lockstep.test session/crates.test session/create_modules.test session/object_looks.test session/team_states.test session/cash_powers.test session/special_abilities.test session/bridges.test session/unmanned_vehicles.test session/retaliation.test session/object_status.test session/tunnel_guards.test session/script_objects.test session/reinforcements.test session/guards.test session/attacks.test session/drones.test session/movement.test session/unit_blocking.test
 	TEST_DEPENDS generalszh_content_install engine_level generalszh_session_setup generalszh_hud)
 target_sources(generalszh_session PRIVATE session/session_checkpoint.cpp session/client_match.cpp)
 set_source_files_properties(session/session_checkpoint.cpp session/client_match.cpp PROPERTIES LANGUAGE CXX)
 # The in-game interface (the original's ControlBar and InGameUI) as headless view models over the session's view.
 engine_add_module_library(generalszh_hud
-	MODULES hud/control_bar_state.cppm hud/control_bar_view_model.cppm hud/generals_powers.cppm hud/superweapon_timers.cppm hud/shortcut_bar.cppm hud/match_record.cppm
+	MODULES hud/science_buttons.cppm hud/idle_workers.cppm hud/control_bar_state.cppm hud/control_bar_portrait.cppm hud/control_bar_view_model.cppm hud/generals_powers.cppm hud/superweapon_timers.cppm hud/shortcut_bar.cppm hud/match_record.cppm
 	DEPENDS generalszh_session engine_gui_mvvm generalszh_commands engine_gameplay_sciences engine_gameplay_powers generalszh_presentation_hud generalszh_shell
-	TESTS hud/control_bar_view_model.test hud/generals_powers.test hud/superweapon_timers.test hud/shortcut_bar.test hud/match_record.test
+	TESTS hud/control_bar_view_model.test hud/control_bar_portrait.test hud/control_bar_multi_select.test hud/idle_workers.test hud/generals_powers.test hud/superweapon_timers.test hud/shortcut_bar.test hud/match_record.test
 	TEST_DEPENDS generalszh_content_install engine_level generalszh_session_setup)
 
 # Presentation objects: look state on the simulation's own entities (side-table
@@ -532,6 +703,10 @@ engine_add_module_library(generalszh_presentation_objects
 		presentation/objects/systems/harvest_presentation_systems.cppm
 		presentation/objects/resources/world_animations.cppm
 		presentation/objects/resources/breeze.cppm
+		presentation/objects/resources/cloud_layer.cppm
+		presentation/objects/resources/detail_settings.cppm
+		presentation/objects/algorithms/cloud_drift.cppm
+		presentation/objects/systems/cloud_drift_system.cppm
 		presentation/objects/resources/dynamic_lights.cppm
 		presentation/objects/algorithms/track_laying.cppm
 		presentation/objects/systems/track_mark_systems.cppm
@@ -541,29 +716,48 @@ engine_add_module_library(generalszh_presentation_objects
 		presentation/objects/components/tree_bend.cppm
 		presentation/objects/algorithms/tree_bending.cppm
 		presentation/objects/systems/tree_bend_systems.cppm
+		presentation/objects/resources/scenery.cppm
+		presentation/objects/algorithms/scenery_setup.cppm
+		presentation/objects/systems/scenery_systems.cppm
 		presentation/objects/algorithms/debris_animation.cppm
 		presentation/objects/systems/debris_systems.cppm
 		presentation/objects/systems/dynamic_light_systems.cppm
+		presentation/objects/systems/tracer_systems.cppm
 		presentation/objects/systems/promotion_presentation_systems.cppm
 		presentation/objects/systems/crate_presentation_systems.cppm
 		presentation/objects/systems/cash_presentation_systems.cppm
 		presentation/objects/algorithms/vehicle_motion_setup.cppm
 		presentation/objects/algorithms/look_setup.cppm
+		presentation/objects/algorithms/look_models.cppm
 		presentation/objects/algorithms/presentation_schedule.cppm
 		presentation/objects/algorithms/tick_effects.cppm
 		presentation/objects/resources/placement_ghosts.cppm
 		presentation/objects/systems/placement_ghost_system.cppm
+		presentation/objects/resources/rally_point_markers.cppm
+		presentation/objects/systems/rally_point_marker_system.cppm
+		presentation/objects/resources/move_hints.cppm
+		presentation/objects/systems/move_hint_system.cppm
+		presentation/objects/resources/radius_cursor.cppm
+		presentation/objects/systems/radius_cursor_system.cppm
+		presentation/objects/systems/radius_decal_view_system.cppm
+		presentation/objects/systems/rope_view_systems.cppm
 		presentation/objects/components/uplink_effects.cppm
+		presentation/objects/components/beacon_look.cppm
 		presentation/objects/algorithms/laser_beams.cppm
+		presentation/objects/algorithms/draw_bones.cppm
 		presentation/objects/systems/uplink_systems.cppm
+		presentation/objects/systems/projectile_stream_systems.cppm
+		presentation/objects/systems/firestorm_presentation_systems.cppm
+		presentation/objects/systems/bone_fx_presentation_systems.cppm
 	DEPENDS generalszh_presentation_effects generalszh_presentation_frame generalszh_session generalszh_content engine_ecs generalszh_presentation_interaction
-	TESTS presentation/objects/vehicle_motion.test presentation/objects/emp_look.test presentation/objects/part_looks.test presentation/objects/flash_phases.test presentation/objects/object_icons.test presentation/objects/uplink_effects.test
-	TEST_DEPENDS generalszh_content_install engine_level generalszh_session_setup)
+	TESTS presentation/objects/vehicle_motion.test presentation/objects/emp_look.test presentation/objects/part_looks.test presentation/objects/flash_phases.test presentation/objects/object_icons.test presentation/objects/uplink_effects.test presentation/objects/projectile_streams.test presentation/objects/fire_effects.test presentation/objects/radius_cursor.test presentation/objects/rope_views.test presentation/objects/infantry_states.test presentation/objects/construction_scaffold.test presentation/objects/rally_point_marker.test presentation/objects/move_hints.test presentation/objects/detail_settings.test presentation/objects/cloud_layer.test presentation/objects/scenery.test
+	TEST_DEPENDS generalszh_content_install engine_level generalszh_session_setup generalszh_presentation_models)
 
 # Presentation hud: the in-game interface's own drawing geometry (the original's W3D control bar draws), in pixels.
 engine_add_module_library(generalszh_presentation_hud
 	MODULES
 		presentation/hud/algorithms/power_bar.cppm
+		presentation/hud/algorithms/experience_bar.cppm
 		presentation/hud/resources/in_game_messages.cppm
 		presentation/hud/algorithms/message_list.cppm
 		presentation/hud/resources/eva_state.cppm
@@ -578,10 +772,30 @@ engine_add_module_library(generalszh_presentation_hud
 		presentation/hud/algorithms/screen_fade_steps.cppm
 		presentation/hud/resources/named_timers.cppm
 		presentation/hud/algorithms/named_timer_lines.cppm
+		presentation/hud/resources/cameo_flashes.cppm
+		presentation/hud/algorithms/cameo_flash_steps.cppm
+		presentation/hud/resources/cinematic_text.cppm
+		presentation/hud/algorithms/cinematic_text_layout.cppm
+		presentation/hud/resources/popup_message.cppm
+		presentation/hud/algorithms/popup_message_layout.cppm
+		presentation/hud/algorithms/control_bar_timers.cppm
 	DEPENDS engine_ecs generalszh_content engine_gameplay_powers
-	TESTS presentation/hud/power_bar.test presentation/hud/message_list.test presentation/hud/eva_queue.test presentation/hud/radar_event_rules.test presentation/hud/radar_display.test
+	TESTS presentation/hud/power_bar.test presentation/hud/experience_bar.test presentation/hud/message_list.test presentation/hud/eva_queue.test presentation/hud/radar_event_rules.test presentation/hud/radar_display.test
 		presentation/hud/military_caption.test presentation/hud/screen_fade.test
-		presentation/hud/named_timers.test)
+		presentation/hud/named_timers.test presentation/hud/script_interface.test)
+
+# Presentation camera: what scripts do to the view beyond moving it (the original's camera shakers and the motion blur
+# filter's timing), as resources and free functions the host applies to its camera.
+engine_add_module_library(generalszh_presentation_camera
+	MODULES
+		presentation/camera/resources/camera_shakers.cppm
+		presentation/camera/algorithms/camera_shaking.cppm
+		presentation/camera/resources/view_filter.cppm
+		presentation/camera/algorithms/motion_blur_steps.cppm
+		presentation/camera/algorithms/selection_focus.cppm
+		presentation/camera/algorithms/camera_slave.cppm
+	DEPENDS engine_ecs
+	TESTS presentation/camera/camera_effects.test)
 
 # Presentation interaction: the player's selection and orders (the original's
 # SelectionTranslator / CommandTranslator), as rules, side tables and systems.
@@ -594,6 +808,7 @@ engine_add_module_library(generalszh_presentation_interaction
 		presentation/interaction/resources/build_placement.cppm
 		presentation/interaction/systems/build_placement_system.cppm
 		presentation/interaction/algorithms/selection_setup.cppm
+		presentation/interaction/algorithms/rule_queries.cppm
 	DEPENDS engine_ecs generalszh_session generalszh_commands engine_gameplay_spatial engine_gameplay_identity engine_gameplay_health engine_gameplay_weapons engine_gameplay_slaves
 	TESTS presentation/interaction/interaction.test)
 
@@ -608,12 +823,41 @@ if(TARGET generalszh_presentation_audio)
 			presentation/audio/algorithms/audio_schedule.cppm
 		DEPENDS generalszh_presentation_audio generalszh_presentation_objects engine_audio engine_ecs
 		TESTS presentation/audio/audio_systems.test)
+	# Presentation scripted: what the local player's scripts set for their presentation (ScriptEngine's client-side
+	# actions), applied to the presentation's resources and side tables.
+	engine_add_module_library(generalszh_presentation_scripted
+		MODULES
+			presentation/scripted/resources/scripted_presentation.cppm
+			presentation/scripted/algorithms/client_script_effects.cppm
+			presentation/scripted/algorithms/camera_script_effects.cppm
+		DEPENDS generalszh_presentation_objects generalszh_presentation_hud generalszh_presentation_audio generalszh_presentation_sound generalszh_presentation_interaction generalszh_presentation_camera engine_camera generalszh_scripting generalszh_session engine_core_serialization
+		TESTS presentation/scripted/scripted_presentation.test)
 	# The in-game messages' once-a-tick system (it plays their sound).
 	engine_add_module_library(generalszh_presentation_hud_messages
-		MODULES presentation/hud/systems/in_game_message_system.cppm presentation/hud/systems/eva_system.cppm presentation/hud/systems/production_presentation_system.cppm presentation/hud/systems/radar_event_system.cppm presentation/hud/systems/overcharge_notice_system.cppm presentation/hud/systems/rally_notice_system.cppm presentation/hud/systems/military_caption_system.cppm presentation/hud/systems/screen_fade_system.cppm
+		MODULES presentation/hud/systems/in_game_message_system.cppm presentation/hud/systems/eva_system.cppm presentation/hud/systems/production_presentation_system.cppm presentation/hud/systems/radar_event_system.cppm presentation/hud/systems/overcharge_notice_system.cppm presentation/hud/systems/rally_notice_system.cppm presentation/hud/systems/military_caption_system.cppm presentation/hud/systems/screen_fade_system.cppm presentation/hud/systems/beacon_system.cppm
 		DEPENDS generalszh_presentation_hud generalszh_presentation_sound engine_gameplay_match engine_gameplay_identity generalszh_gameplay engine_gameplay_economy engine_gameplay_production engine_gameplay_status engine_gameplay_construction
-		TESTS presentation/hud/eva_system.test
+		TESTS presentation/hud/eva_system.test presentation/hud/beacon_system.test
 		TEST_DEPENDS generalszh_content_install engine_level generalszh_session_setup generalszh_commands)
+	# The interface's overlay as drawn this frame (InGameUI::postDraw, each Drawable's UI): the frame packet and its
+	# extraction from the world.
+	engine_add_module_library(generalszh_presentation_overlay
+		MODULES
+			presentation/hud/resources/in_game_overlay.cppm
+			presentation/hud/algorithms/overlay_extract.cppm
+		DEPENDS generalszh_hud generalszh_presentation_hud generalszh_presentation_objects generalszh_presentation_interaction generalszh_session generalszh_content engine_ecs
+		TESTS presentation/hud/overlay_extract.test)
+	# The presentation's composition root: per domain, which resources the presentation keeps in the simulation's
+	# world, what goes with an object that goes, and which systems run once a tick and once a frame.
+	if(TARGET generalszh_presentation_models)
+		engine_add_module_library(generalszh_presentation_composition
+			MODULES
+				presentation/composition/objects.cppm
+				presentation/composition/hud.cppm
+				presentation/composition/interaction.cppm
+				presentation/composition/audio.cppm
+				presentation/composition/schedules.cppm
+			DEPENDS generalszh_presentation_overlay generalszh_presentation_models generalszh_presentation_objects generalszh_presentation_effects generalszh_presentation_hud generalszh_presentation_hud_messages generalszh_presentation_camera generalszh_presentation_audio generalszh_presentation_sound generalszh_presentation_interaction generalszh_content engine_gameplay_teams engine_effects_particles generalszh_session engine_ecs)
+	endif()
 endif()
 
 # Every C++ target may `import std;` (see engine/cmake/std_module.cmake).

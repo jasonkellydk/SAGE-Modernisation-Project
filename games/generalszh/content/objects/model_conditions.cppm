@@ -41,6 +41,7 @@ namespace model_condition
 inline constexpr std::uint32_t Damaged = ModelConditionBit("DAMAGED");
 inline constexpr std::uint32_t ReallyDamaged = ModelConditionBit("REALLYDAMAGED");
 inline constexpr std::uint32_t Parachuting = ModelConditionBit("PARACHUTING");
+inline constexpr std::uint32_t Rappelling = ModelConditionBit("RAPPELLING");
 inline constexpr std::uint32_t Attacking = ModelConditionBit("ATTACKING");
 inline constexpr std::uint32_t FiringA = ModelConditionBit("FIRING_A");
 inline constexpr std::uint32_t BetweenFiringShotsA = ModelConditionBit("BETWEEN_FIRING_SHOTS_A");

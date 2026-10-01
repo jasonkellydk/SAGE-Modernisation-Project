@@ -160,6 +160,19 @@ struct AbilityFeedbackSystem
 		for (const ecs::Entity hijacker : notices.hijacks)
 			if (lookup.IsAlive(hijacker))
 				play("HijackDriver", hijacker);
+		// CrateCollide::doSabotageFeedbackFX: its MiscAudio sound at the building, and the building flashes as selected.
+		for (const ga::AbilityNotices::Sabotage &sabotage : notices.sabotages)
+		{
+			using Sound = ga::AbilityNotices::Sabotage::Sound;
+			if (!lookup.IsAlive(sabotage.building))
+				continue;
+			const std::string_view field = sabotage.sound == Sound::ResetTimer ? "SabotageResetTimeBuilding"
+				: sabotage.sound == Sound::Withdraw ? "MoneyWithdrawSound" : "SabotageShutDownBuilding";
+			if (const auto found = content.miscAudio.find(field); found != content.miscAudio.end())
+				play(found->second, sabotage.building);
+			const auto *owner = lookup.Get<gp::Owner>(sabotage.building);
+			Flash(flashes, added, sabotage.building, OwnFlashColor(catalog, owner != nullptr ? owner->player : 0u));
+		}
 		for (const ecs::Entity defector : notices.defected)
 		{
 			if (!lookup.IsAlive(defector))

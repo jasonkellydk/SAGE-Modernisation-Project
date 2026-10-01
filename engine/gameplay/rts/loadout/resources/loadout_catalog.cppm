@@ -2,6 +2,9 @@ export module engine.gameplay.rts.loadout.resources.loadout_catalog;
 import std;
 
 import engine.ecs.system.system;
+export import engine.ecs.system.chunk_outputs;
+export import engine.ecs.core.entity;
+export import engine.gameplay.common.weapons.components.weapon_slots;
 
 // Per definition (DefinitionRef::index): its weapon sets (the condition bits
 // each is for, and its PRIMARY, SECONDARY, TERTIARY weapons: WeaponCatalog
@@ -19,6 +22,8 @@ struct WeaponSetEntry
 	std::array<std::uint32_t, 3> weapons{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
 	// WeaponLockSharedAcrossSets: taking this set keeps a weapon lock (else it is released).
 	bool lockShared{false};
+	// Its AutoChooseSources and PreferredAgainst per slot.
+	SlotRules rules;
 };
 
 struct ArmorSetEntry
@@ -31,6 +36,12 @@ struct DefinitionLoadout
 {
 	std::vector<WeaponSetEntry> weaponSets;
 	std::vector<ArmorSetEntry> armorSets;
+};
+
+// WeaponSet::updateWeaponSet on something without weapons yet: those whose flags now pick a set with a PRIMARY weapon,
+// for the game to arm (as it arms what it makes).
+struct LoadoutArmings : ecs::ChunkOutputs<ecs::Entity>
+{
 };
 
 struct LoadoutCatalog
@@ -67,6 +78,12 @@ std::uint16_t BestSet(const std::vector<Entry> &sets, std::uint32_t flags) noexc
 
 export namespace ecs
 {
+template<>
+struct ResourceTraits<engine::gameplay::LoadoutArmings>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.loadout_armings";
+};
+
 template<>
 struct ResourceTraits<engine::gameplay::LoadoutCatalog>
 {

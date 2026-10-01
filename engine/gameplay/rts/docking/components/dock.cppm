@@ -35,6 +35,10 @@ struct Dock
 	bool drawsIn{false};            // a boneless dock pulls a far mover in to touch it (KINDOF_SUPPLY_SOURCE)
 	bool crippled{false};           // gives no one a turn
 	bool open{true};                // turns movers away
+	// A dock that carries its movers off (RailedTransportDockUpdate::isClearToEnter: its container must have room for
+	// the mover): the slots it has free; a mover needing more waits for clearance. Others: unlimited.
+	std::uint32_t room{0xFFFFFFFFu};
+	std::uint32_t reserved{0}; // no padding: checkpoints hold its bytes
 };
 }
 
@@ -44,12 +48,13 @@ template<>
 struct ComponentTraits<engine::gameplay::Dock>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.dock";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Dock &value, StateHasher &hasher) noexcept
 	{
 		hasher.AppendU64((std::uint64_t{value.approachCount} << 32) | (std::uint64_t{value.approachPoints} << 24) | (value.dynamic ? 1u : 0u) |
 			(value.passthrough ? 2u : 0u) | (value.boneless ? 4u : 0u) | (value.drawsIn ? 8u : 0u) | (value.crippled ? 16u : 0u) | (value.open ? 32u : 0u));
+		hasher.AppendU64(value.room);
 		for (const auto point : {value.enter, value.action, value.exit})
 		{
 			hasher.AppendU64(static_cast<std::uint64_t>(point.x.Raw()));

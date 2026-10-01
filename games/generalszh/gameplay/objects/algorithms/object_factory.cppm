@@ -1,4 +1,19 @@
 export module games.generalszh.gameplay.objects.algorithms.object_factory;
+import games.generalszh.gameplay.aircraft.components.airfield_healing;
+import games.generalszh.gameplay.containment.components.railed_transport;
+import games.generalszh.gameplay.combat.components.checkpoint;
+import games.generalszh.gameplay.flight_deck.components.flight_deck;
+import engine.gameplay.rts.movement.components.floor_lift;
+import games.generalszh.gameplay.effects.components.bone_fx;
+import games.generalszh.gameplay.effects.components.radius_decal;
+import games.generalszh.gameplay.railroad.components.railcar;
+import engine.gameplay.common.spatial.components.dynamic_geometry;
+import engine.gameplay.rts.containment.components.drop_homing;
+import Engine.Core.Math.FixedRandom;
+import games.generalszh.gameplay.combat.components.enemy_near;
+import games.generalszh.gameplay.containment.components.assault_transport;
+import engine.gameplay.rts.slaves.components.spawn_points;
+import engine.gameplay.rts.vision.components.dynamic_clearing;
 import engine.gameplay.rts.death.components.height_die;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import engine.gameplay.common.identity.components.object_id;
@@ -6,6 +21,8 @@ export import engine.gameplay.common.identity.components.producer;
 import engine.gameplay.rts.docking.components.repair_dock;
 import engine.gameplay.rts.slaves.components.hive_body;
 import engine.gameplay.rts.combat.components.deploy;
+import engine.gameplay.rts.combat.resources.mood_ranges;
+import games.generalszh.gameplay.stealth.components.supply_stealth_grant;
 import games.generalszh.gameplay.combat.components.cooldown_creation;
 import engine.gameplay.rts.production.components.production_exit_gate;
 import engine.gameplay.common.identity.resources.object_ids;
@@ -13,6 +30,9 @@ import std;
 import engine.gameplay.common.health.components.second_life;
 import games.generalszh.gameplay.battleplans.algorithms.battle_plan_bonuses;
 import engine.gameplay.rts.collision.components.body_collision;
+import engine.gameplay.rts.blocking.components.blocking_unit;
+import engine.gameplay.rts.blocking.components.blocked_state;
+import engine.gameplay.rts.blocking.components.block_contact;
 import engine.gameplay.rts.movement.components.wanderer;
 import engine.gameplay.common.spatial.components.bounding_volume;
 import games.generalszh.gameplay.teams.components.tech_building;
@@ -36,6 +56,8 @@ import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
 import engine.gameplay.rts.veterancy.components.experience;
 import engine.gameplay.rts.horde.components.horde;
 import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.navigation.components.pathfind_goal;
+import engine.gameplay.rts.movement.components.move_goal;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.common.spatial.components.targetable;
@@ -74,6 +96,7 @@ import games.generalszh.content.lifetime.lifetime_content;
 import games.generalszh.content.healing.healing_content;
 import games.generalszh.content.fire.fire_content;
 import games.generalszh.content.stealth.stealth_content;
+import engine.gameplay.rts.stealth.components.stealth_rider;
 import games.generalszh.content.topple.topple_content;
 import games.generalszh.content.production.production_content;
 import engine.gameplay.rts.production.components.production_queue;
@@ -93,6 +116,8 @@ import games.generalszh.gameplay.abilities.components.command_button_hunt;
 import engine.gameplay.common.status.components.ai_activity;
 import engine.gameplay.common.areas.components.area_presence;
 import games.generalszh.gameplay.mines.components.minefield_generator;
+import games.generalszh.gameplay.mines.components.mine_clearer;
+import games.generalszh.gameplay.construction.components.builder_boredom;
 import engine.gameplay.common.health.components.health_floor;
 import engine.gameplay.common.health.components.subdual;
 import engine.gameplay.rts.combat.components.firing_tracker;
@@ -129,6 +154,7 @@ import games.generalszh.content.combat.loadout_content;
 import engine.gameplay.rts.harvesting.components.harvester;
 import engine.gameplay.rts.harvesting.components.resource_store;
 import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.rts.docking.components.dock_look;
 import engine.gameplay.rts.docking.components.docking;
 import games.generalszh.gameplay.world.algorithms.difficulty_bonuses;
 import games.generalszh.gameplay.ai.components.repulsion;
@@ -191,7 +217,9 @@ void AddCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		{"INFANTRY", gameplay::target_class::Infantry}, {"VEHICLE", gameplay::target_class::Vehicle}, {"AIRCRAFT", gameplay::target_class::Aircraft},
 		{"PROJECTILE", gameplay::target_class::Projectile}, {"MINE", gameplay::target_class::Mine},
 		{"SMALL_MISSILE", gameplay::target_class::SmallMissile}, {"BALLISTIC_MISSILE", gameplay::target_class::BallisticMissile},
-		{"UNATTACKABLE", gameplay::target_class::Unattackable}};
+		{"UNATTACKABLE", gameplay::target_class::Unattackable}, {"SHRUBBERY", gameplay::target_class::Shrubbery},
+		{"BOOBY_TRAP", gameplay::target_class::Trap}, {"DEMOTRAP", gameplay::target_class::Trap}, {"HERO", gameplay::target_class::Hero},
+		{"FS_BASE_DEFENSE", gameplay::target_class::BaseDefense}};
 	for (const auto &[kind, bit] : kinds)
 		if (object.Is(kind))
 			classes |= bit;
@@ -204,7 +232,7 @@ void AddCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		const bool sphere = object.geometry.shape == content::GeometryShape::Sphere;
 		world.Add<gameplay::BodyExtent>(entity);
 		*world.Get<gameplay::BodyExtent>(entity) = {sphere ? object.geometry.majorRadius : object.geometry.height, content::BoundingSphereRadius(object.geometry),
-			sphere ? Fixed{} : object.geometry.height / Fixed::FromInt(2)};
+			sphere ? Fixed{} : object.geometry.height / Fixed::FromInt(2), sphere ? object.geometry.majorRadius : Fixed{}};
 	}
 	world.Add<gameplay::Health>(entity);
 	*world.Get<gameplay::Health>(entity) = {combat.initialHealth > Fixed{} ? combat.initialHealth : *combat.maxHealth, *combat.maxHealth,
@@ -240,28 +268,32 @@ void AddCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 	// What can be hurt can be healed (by one area healer at a time), and may heal.
 	world.Add<gameplay::HealLock>(entity);
 	const content::ObjectHealing healing = content::ReadObjectHealing(object, game.step);
-	// Healers start at random phases so they do not all heal on one tick (as the original).
+	// Healers start at random phases so they do not all heal on one tick (as the original); dormant (upgrade-triggered)
+	// ones sleep until their upgrade, drawing nothing.
 	const auto phase = [&](std::uint64_t delay) {
 		return game.tick + static_cast<std::uint64_t>(Engine::Math::UniformInt(game.random, 1, static_cast<std::int64_t>(delay)));
 	};
+	// Each self-heal module is its own program (AutoHealBehavior's, including the veterancy heal every object inherits,
+	// then BaseRegenerateUpdate's): one does not replace another.
+	gameplay::SelfHealing self = healing.self;
+	for (std::uint32_t index = 0; index < self.count; ++index)
+		if (self.programs[index].dormant == 0)
+			self.programs[index].nextTick = phase(self.programs[index].delay);
 	// BaseRegenerateUpdate: once damage-free for BaseRegenDelay, every 3 frames 3 * max * BaseRegenHealthPercentPerSecond / 30
 	// (from its first frame, with no random phase).
-	if (!healing.self && game.templates.Content().gameData.baseRegenPerSecond > Fixed{} &&
+	if (game.templates.Content().gameData.baseRegenPerSecond > Fixed{} &&
 		std::any_of(object.modules.begin(), object.modules.end(), [](const content::ModuleEntry &module) { return module.type == "BaseRegenerateUpdate"; }))
 	{
 		constexpr std::uint64_t HealRate = 3;
 		const Fixed amount = Fixed::FromInt(HealRate) * world.Get<gameplay::Health>(entity)->maximum * game.templates.Content().gameData.baseRegenPerSecond /
 			Fixed::FromInt(static_cast<std::int64_t>(game.step.TicksPerSecond()));
-		world.Add<gameplay::SelfHealing>(entity);
 		// It regenerates while underpowered (BaseRegenerateUpdate::getDisabledTypesToProcess), not while held.
-		*world.Get<gameplay::SelfHealing>(entity) = {amount, HealRate, game.templates.Content().gameData.baseRegenDelayTicks, game.tick,
-			gameplay::disabled_type::Underpowered, 1};
+		self.Add({amount, HealRate, game.templates.Content().gameData.baseRegenDelayTicks, game.tick, gameplay::disabled_type::Underpowered, 1});
 	}
-	if (healing.self)
+	if (self.count > 0)
 	{
 		world.Add<gameplay::SelfHealing>(entity);
-		*world.Get<gameplay::SelfHealing>(entity) = *healing.self;
-		world.Get<gameplay::SelfHealing>(entity)->nextTick = phase(healing.self->delay);
+		*world.Get<gameplay::SelfHealing>(entity) = self;
 	}
 	if (healing.area.count > 0)
 	{
@@ -269,7 +301,8 @@ void AddCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		gameplay::AreaHealing &area = *world.Get<gameplay::AreaHealing>(entity);
 		area = healing.area;
 		for (std::uint32_t index = 0; index < area.count; ++index)
-			area.programs[index].nextTick = phase(area.programs[index].delay);
+			if ((area.programs[index].flags & gameplay::area_healing::Dormant) == 0)
+				area.programs[index].nextTick = phase(area.programs[index].delay);
 	}
 	if (const auto fire = content::ReadObjectFire(object, game.step))
 	{
@@ -351,8 +384,11 @@ void ArmCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 			const std::uint8_t bit = static_cast<std::uint8_t>(1u << index);
 			slot.aim = combat.altTurret && (combat.altTurretSlots & bit) != 0 ? gameplay::SlotAim::AltTurret
 				: combat.turret && (combat.turretSlots & bit) != 0 ? gameplay::SlotAim::Turret : gameplay::SlotAim::Body;
+			slot.sources = combat.slotRules.sources[index];
+			slot.preferred = combat.slotRules.preferred[index];
 		}
 		set.slots[0].barrels = world.Get<gameplay::Armament>(entity)->barrels;
+		set.sharedReload = combat.slotRules.sharedReload ? 1 : 0;
 		// The other slots' barrels from their own bones (validateWeaponBarrelInfo per slot).
 		if (const auto layout = game.templates.Content().launchLayouts.find(object.name); layout != game.templates.Content().launchLayouts.end())
 			for (std::size_t index = 1; index < gameplay::WeaponSlotCount; ++index)
@@ -378,11 +414,16 @@ void ArmCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		}
 	gameplay::Aggression aggression;
 	aggression.autoAcquire = combat.autoAcquire;
-	aggression.acquireStealthed = combat.acquireStealthed;
+	// canAutoAcquireWhileStealthed: AutoAcquireEnemiesWhenIdle Stealthed, or stealth a special power grants (GrantedBySpecialPower).
+	const auto stealthRules = content::ReadObjectStealth(object, game.step);
+	aggression.acquireStealthed = combat.acquireStealthed ||
+		(stealthRules && stealthRules->stealth.Option(gameplay::stealth_option::GrantedBySpecialPower));
 	aggression.attackBuildings = combat.attackBuildings;
 	aggression.scanInterval = combat.scanInterval;
-	// Spread the scans over the interval so they do not all land on one tick.
-	aggression.nextScan = game.tick + entity.index % std::max<std::uint64_t>(combat.scanInterval, 1);
+	// AIUpdateInterface::onObjectCreated: its AI starts idle (AIIdleState::onEnter, resetNextMoodCheckTime): its first
+	// look ForceIdleMSEC on, the one after randomly offset.
+	aggression.nextScan = game.tick + world.Resource<gameplay::MoodRanges>().forceIdleTicks;
+	aggression.moodFlags = gameplay::mood_flag::SeenIdle | gameplay::mood_flag::OffsetNext;
 	aggression.scanRange = std::max(object.visionRange, definition.attackRange);
 	aggression.vision = object.visionRange;
 	aggression.attitude = TeamAttitude(game, world.Get<gameplay::TeamMember>(entity)->team);
@@ -415,12 +456,26 @@ void ArmFromLoadout(GameWorld &game, ecs::Entity entity)
 	const auto *motion = world.Get<gameplay::Locomotion>(entity);
 	detail::ArmCombat(game, entity, object, combat, weapons[0], motion != nullptr ? &motion->locomotor : nullptr);
 	if (auto added = gameplay::EquipWeapons(*world.Get<gameplay::Armament>(entity), world.Get<gameplay::WeaponSlots>(entity), weapons, game.templates.weapons,
-			sets->weaponSets[best].lockShared))
+			sets->weaponSets[best].lockShared, sets->weaponSets[best].rules))
 	{
 		world.Add<gameplay::WeaponSlots>(entity);
 		*world.Get<gameplay::WeaponSlots>(entity) = *added;
 	}
 	loadout->weaponSet = best;
+}
+
+// The tick's LoadoutArmings: what was without weapons and now has a set to arm it with (a dozer taking up its
+// MINE_CLEARING_DETAIL set), armed as ArmFromLoadout.
+inline void ApplyLoadoutArmings(GameWorld &game)
+{
+	auto *armings = game.world.FindResource<gameplay::LoadoutArmings>();
+	if (armings == nullptr)
+		return;
+	std::vector<ecs::Entity> entities;
+	armings->AppendTo(entities);
+	armings->Reset(0);
+	for (const ecs::Entity entity : entities)
+		ArmFromLoadout(game, entity);
 }
 
 // Object::setProducer: what made `made` (none: nothing).
@@ -435,8 +490,24 @@ inline void SetProducer(GameWorld &game, ecs::Entity made, ecs::Entity producer)
 
 // Creates `type` (or one of its build variations, chosen at random as the
 // original) on `team`, named `name` for scripts. Invalid when unknown.
+namespace object_factory_detail
+{
+// GrantUpgradeCreate: a player upgrade for its player (addUpgrade complete), else the object's own (giveUpgrade).
+inline void GrantUpgrade(GameWorld &game, ecs::Entity entity, const std::string &name)
+{
+	const content::GameContent &content = game.templates.Content();
+	if (const auto upgrade = content.upgrades.Find(name))
+	{
+		if (content.upgrades.upgrades[*upgrade].player)
+			game.world.Resource<engine::gameplay::PlayerUpgrades>().Grant(game.world.Get<engine::gameplay::Owner>(entity)->player, *upgrade);
+		else
+			GiveObjectUpgrade(game, entity, name);
+	}
+}
+}
+
 ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 position, Engine::Math::TurnAngle facing, std::uint32_t team,
-	const std::string &name, bool completesTeam = true)
+	const std::string &name, bool completesTeam = true, bool underConstruction = false)
 {
 	const content::GameContent &content = game.templates.Content();
 	const content::ObjectDefinition *object = content.objects.Find(type);
@@ -470,11 +541,99 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	world.Add<gameplay::Vision>(entity);
 	{
 		gameplay::Vision &vision = *world.Get<gameplay::Vision>(entity);
-		vision.clearingRange = object->shroudClearingRange;
+		vision.clearingRange = object->ClearingRange();
 		vision.revealToAllRange = object->shroudRevealToAllRange;
 		vision.footprintRange = content::BoundingCircleRadius(object->geometry);
 		vision.revealToAll = object->Is("REVEAL_TO_ALL") ? 1u : 0u;
 	}
+	// EnemyNearUpdate: its first look a random 0 to ScanDelayTime ticks away (GameLogicRandomValue).
+	if (const std::uint32_t *scan = game.templates.EnemyNearOf(game.templates.Definition(*object)))
+	{
+		world.Add<EnemyNear>(entity);
+		world.Get<EnemyNear>(entity)->scanDelay = static_cast<std::uint32_t>(Engine::Math::UniformInt(game.random, 0, static_cast<std::int64_t>(*scan)));
+	}
+	// CheckpointUpdate's constructor: its gate as wide as its geometry's minor radius.
+	if (game.templates.CheckpointOf(game.templates.Definition(*object)))
+	{
+		world.Add<Checkpoint>(entity);
+		auto &gate = *world.Get<Checkpoint>(entity);
+		gate.minorRadius = gate.maxMinorRadius = object->geometry.minorRadius;
+	}
+	// SmartBombTargetHomingUpdate: told its spot as it is dropped, it steers on to it (CourseCorrectionScalar).
+	for (const content::ModuleEntry &module : object->modules)
+		if (module.block != nullptr && module.type == "SmartBombTargetHomingUpdate")
+		{
+			world.Add<gameplay::DropHoming>(entity);
+			// (0.99 unless given.)
+			world.Get<gameplay::DropHoming>(entity)->keep = Engine::Math::Fixed::FromRatio(99, 100);
+			if (const auto *scalar = module.block->Find("CourseCorrectionScalar"))
+				world.Get<gameplay::DropHoming>(entity)->keep = engine::config::values::ParseFixed(scalar->Value()).value_or(Engine::Math::Fixed::FromRatio(99, 100));
+			break;
+		}
+	// DynamicGeometryInfoUpdate (or a firestorm's): its size to change from InitialDelay (at least a tick) over TransitionTime
+	// (parseDurationUnsignedInt: milliseconds, rounded up), from its initial to its final height and radii.
+	for (const content::ModuleEntry &module : object->modules)
+		if (module.block != nullptr && (module.type == "DynamicGeometryInfoUpdate" || module.type == "FirestormDynamicGeometryInfoUpdate"))
+		{
+			engine::config::Diagnostics diagnostics;
+			engine::config::BindContext bind{diagnostics, game.step};
+			const auto fixed = [&](std::string_view key) {
+				const auto *node = module.block->Find(key);
+				return node != nullptr ? engine::config::values::ParseFixed(node->Value()).value_or(Engine::Math::Fixed{}) : Engine::Math::Fixed{};
+			};
+			const auto ticks = [&](std::string_view key, std::uint64_t fallback) {
+				const auto *node = module.block->Find(key);
+				return node != nullptr ? engine::config::ReadDurationTicks(*node, bind).value_or(fallback) : fallback;
+			};
+			gameplay::DynamicGeometry geometry;
+			geometry.delayLeft = static_cast<std::uint32_t>(std::max<std::uint64_t>(ticks("InitialDelay", 0), 1));
+			geometry.transitionTime = static_cast<std::uint32_t>(ticks("TransitionTime", 1));
+			if (const auto *node = module.block->Find("ReverseAtTransitionTime"))
+				geometry.reverse = engine::config::values::ParseBool(node->Value()).value_or(false) ? 1 : 0;
+			geometry.shape = object->geometry.shape == content::GeometryShape::Sphere ? gameplay::geometry_shape::Sphere
+				: object->geometry.shape == content::GeometryShape::Box ? gameplay::geometry_shape::Box : gameplay::geometry_shape::Cylinder;
+			geometry.initialHeight = fixed("InitialHeight");
+			geometry.initialMajor = fixed("InitialMajorRadius");
+			geometry.initialMinor = fixed("InitialMinorRadius");
+			geometry.finalHeight = fixed("FinalHeight");
+			geometry.finalMajor = fixed("FinalMajorRadius");
+			geometry.finalMinor = fixed("FinalMinorRadius");
+			geometry.height = object->geometry.height;
+			geometry.major = object->geometry.majorRadius;
+			geometry.minor = object->geometry.minorRadius;
+			world.Add<gameplay::DynamicGeometry>(entity);
+			*world.Get<gameplay::DynamicGeometry>(entity) = geometry;
+			if (module.type == "FirestormDynamicGeometryInfoUpdate")
+				world.Add<Firestorm>(entity);
+			break;
+		}
+	// LeafletDropBehavior: its leaflets to start on its first update.
+	if (game.templates.LeafletDropOf(game.templates.Definition(*object)) != nullptr)
+		world.Add<LeafletDrop>(entity);
+	// AssaultTransportAIUpdate: its riders fight around it (MembersGetHealedAtLifeRatio, 0 unless given).
+	for (const content::ModuleEntry &module : object->modules)
+		if (module.block != nullptr && module.type == "AssaultTransportAIUpdate")
+		{
+			world.Add<AssaultTransport>(entity);
+			AssaultTransport &assault = *world.Get<AssaultTransport>(entity);
+			assault.healAtLifeRatio = {};
+			if (const auto *ratio = module.block->Find("MembersGetHealedAtLifeRatio"))
+				assault.healAtLifeRatio = engine::config::values::ParseFixed(ratio->Value()).value_or(Engine::Math::Fixed{});
+			break;
+		}
+	// SpawnPointProductionExitUpdate: its places (its SpawnPoint bones, at most MAX_SPAWN_POINTS).
+	if (const auto *places = game.templates.SpawnPointsOf(game.templates.Definition(*object)))
+	{
+		world.Add<gameplay::SpawnPoints>(entity);
+		world.Get<gameplay::SpawnPoints>(entity)->count = static_cast<std::uint32_t>(std::min<std::size_t>(places->size(), gameplay::SpawnPoints::Capacity));
+	}
+	// DynamicShroudClearingRangeUpdate: its clearing range to swell and fade from the one it was made with.
+	if (const auto *clearings = world.FindResource<gameplay::DynamicClearingCatalog>())
+		if (const auto *how = clearings->Of(game.templates.Definition(*object)))
+		{
+			world.Add<gameplay::DynamicClearing>(entity);
+			*world.Get<gameplay::DynamicClearing>(entity) = gameplay::StartDynamicClearing(*how, object->ClearingRange(), game.tick);
+		}
 	// The partition cells it touches (its geometry), and how each player sees it through the shroud (ALWAYS_VISIBLE: clear).
 	world.Add<gameplay::PartitionFootprint>(entity);
 	{
@@ -651,6 +810,24 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	// GenerateMinefieldBehavior: its minefield, not yet laid.
 	if (content::ReadMinefieldGenerator(*object, game.templates.Content().gameData))
 		world.Add<MinefieldGenerator>(entity);
+	// DozerAIUpdate, WorkerAIUpdate: it clears mines (MINE_CLEARING_DETAIL) when not at work.
+	for (const content::ModuleEntry &module : object->modules)
+		if (module.block != nullptr && (module.type == "DozerAIUpdate" || module.type == "WorkerAIUpdate"))
+		{
+			world.Add<MineClearer>(entity);
+			// DozerPrimaryIdleState: BoredTime (ms, INI::parseDurationUnsignedInt: frames rounded up) and BoredRange, its idle
+			// stretch starting now (the state entered as it is made).
+			BuilderBoredom boredom{game.tick};
+			if (const auto *time = module.block->Find("BoredTime"))
+				if (const auto ms = engine::config::values::ParseFixed(time->Value()))
+					boredom.boredTicks = static_cast<std::uint64_t>(std::max<std::int64_t>(
+						(*ms * Fixed::FromInt(static_cast<std::int64_t>(game.step.TicksPerSecond())) / Fixed::FromInt(1000)).Ceil(), 0));
+			if (const auto *range = module.block->Find("BoredRange"))
+				boredom.boredRange = engine::config::values::ParseFixed(range->Value()).value_or(Fixed{});
+			world.Add<BuilderBoredom>(entity);
+			*world.Get<BuilderBoredom>(entity) = boredom;
+			break;
+		}
 	// MinefieldBehavior::onCollide: workers (infantry dozers) set off only mines that say so.
 	if (object->Is("INFANTRY") && object->Is("DOZER"))
 		world.Add<gameplay::MineSafe>(entity);
@@ -728,6 +905,18 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		world.Add<gameplay::CollideWeapon>(entity);
 		*world.Get<gameplay::CollideWeapon>(entity) = {game.templates.Weapon(collide->weapon), collide->requiresAflame ? std::uint8_t{1} : std::uint8_t{0},
 			collide->fireOnce ? std::uint8_t{1} : std::uint8_t{0}, 0, 0};
+	}
+	// RadiusDecalUpdate: an AttackNugget may lay its decal (none yet).
+	if (std::ranges::any_of(object->modules, [](const content::ModuleEntry &module) { return module.type == "RadiusDecalUpdate"; }))
+		world.Add<RadiusDecal>(entity);
+	// RailroadBehavior: a locomotive leads and sets off speeding up; a car coasts until something pulls it.
+	if (const RailroadConfig *rail = game.templates.RailroadOf(world.Get<gameplay::DefinitionRef>(entity)->index))
+	{
+		world.Add<Railcar>(entity);
+		Railcar &car = *world.Get<Railcar>(entity);
+		car.locomotive = rail->locomotive ? 1 : 0;
+		car.lead = car.locomotive;
+		car.state = rail->locomotive ? ConductorState::Accelerate : ConductorState::Coast;
 	}
 	// TechBuildingBehavior: CAPTURED while a playable side holds it; neutral once it dies.
 	if (std::any_of(object->modules.begin(), object->modules.end(), [](const content::ModuleEntry &module) { return module.type == "TechBuildingBehavior"; }))
@@ -857,6 +1046,18 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		response.otherCrashWeapon = game.templates.Weapon(text("VehicleCrashesIntoNonBuildingWeaponTemplate", "VehicleCrashesIntoNonBuildingWeapon"));
 		world.Add<gameplay::BodyCollision>(entity);
 		*world.Get<gameplay::BodyCollision>(entity) = response;
+		// A mobile unit's AI weighs the units it runs into (AIUpdateInterface::processCollision): what it is for the path
+		// priority, and what it keeps about being held up.
+		if (response.Has(gameplay::body_collision_flag::HasAI) && world.Get<gameplay::Locomotion>(entity) != nullptr)
+		{
+			gameplay::BlockingUnit unit;
+			unit.kinds = static_cast<std::uint8_t>((object->Is("INFANTRY") ? gameplay::blocking_kind::Infantry : 0u) |
+				(object->Is("VEHICLE") ? gameplay::blocking_kind::Vehicle : 0u) | (object->Is("DOZER") ? gameplay::blocking_kind::Dozer : 0u) | (object->Is("HARVESTER") ? gameplay::blocking_kind::Harvester : 0u) | (object->Is("NO_COLLIDE") ? gameplay::blocking_kind::NoCollide : 0u));
+			world.Add<gameplay::BlockingUnit>(entity);
+			*world.Get<gameplay::BlockingUnit>(entity) = unit;
+			world.Add<gameplay::BlockedState>(entity);
+			world.Add<gameplay::BlockContact>(entity);
+		}
 	}
 	// Infantry that any crusher squishes.
 	if (object->FindModule(content::ModuleSlot::Behavior) != nullptr)
@@ -882,8 +1083,35 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 					frame.facing + space.hangar.facing, frame.facing + space.parking.facing, space.runway, 0};
 		for (const auto &runway : layout->second.runways)
 			if (field.runwayCount < gameplay::Airfield::MaxRunways)
-				field.runways[field.runwayCount++] = {place(runway.start), place(runway.end)};
+			{
+				gameplay::RunwayPath &strip = field.runways[field.runwayCount++];
+				strip.start = place(runway.start);
+				strip.end = place(runway.end);
+				strip.landing = runway.landing ? 1u : 0u;
+				strip.landStart = place(runway.landStart);
+				strip.landEnd = place(runway.landEnd);
+				for (const auto &point : runway.taxi)
+					if (strip.taxiCount < gameplay::RunwayPath::MaxTaxi)
+						strip.taxi[strip.taxiCount++] = place(point);
+				for (const auto &point : runway.creation)
+					if (strip.creationCount < gameplay::RunwayPath::MaxCreation)
+						strip.creation[strip.creationCount++] = place(point.position);
+			}
+		field.deckHeight = layout->second.deckHeight;
+		field.frontRow = layout->second.frontRow ? 1u : 0u;
+		// ParkingPlaceBehavior HealAmountPerSecond: it repairs its parked jets.
+		for (const content::ModuleEntry &module : object->modules)
+			if (module.type == "ParkingPlaceBehavior" && module.block != nullptr)
+				if (const auto *heal = module.block->Find("HealAmountPerSecond"))
+					if (const Fixed perSecond = engine::config::values::ParseFixed(heal->Value()).value_or(Fixed{}); perSecond > Fixed{})
+					{
+						world.Add<AirfieldHealing>(entity);
+						world.Get<AirfieldHealing>(entity)->perSecond = perSecond;
+					}
 	}
+	// A flight deck (an aircraft carrier): its jets, launches and queue.
+	if (game.templates.FlightDeckOf(game.world.Get<gameplay::DefinitionRef>(entity)->index) != nullptr)
+		world.Add<FlightDeck>(entity);
 	// Crates: what runs into them may pick them up (their CrateCollide).
 	if (content::ReadCrateCollide(*object))
 		world.Add<Crate>(entity);
@@ -892,6 +1120,7 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	{
 		const content::DockLayout &source = layout->second;
 		world.Add<gameplay::Dock>(entity);
+		world.Add<gameplay::DockLook>(entity);
 		gameplay::Dock &dock = *world.Get<gameplay::Dock>(entity);
 		const auto &frame = *world.Get<gameplay::Transform>(entity);
 		const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
@@ -913,6 +1142,11 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		dock.majorRadius = object->geometry.majorRadius;
 		dock.passthrough = source.passthrough;
 		dock.drawsIn = source.drawsIn;
+		if (source.grantStealthTicks > 0)
+		{
+			world.Add<SupplyStealthGrant>(entity);
+			world.Get<SupplyStealthGrant>(entity)->deliveryTicks = source.grantStealthTicks;
+		}
 		if (source.warehouse)
 		{
 			world.Add<gameplay::ResourceStore>(entity);
@@ -923,8 +1157,22 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 			world.Add<gameplay::RepairDock>(entity);
 			world.Get<gameplay::RepairDock>(entity)->fullHealTicks = source.fullHealTicks;
 		}
-		else
+		else if (!source.railed)
 			world.Add<gameplay::ResourceDepot>(entity);
+	}
+	// RailedTransportAIUpdate::loadWaypointData: the paths whose <prefix>StartNN and <prefix>EndNN are both on the map,
+	// NN from 01 to 32 (kept in order; the original counted them but kept each at its own number).
+	if (const RailedTransportConfig *railed = game.templates.RailedTransportOf(world.Get<gameplay::DefinitionRef>(entity)->index))
+	{
+		world.Add<RailedTransport>(entity);
+		RailedTransport &ferry = *world.Get<RailedTransport>(entity);
+		for (std::size_t index = 0; index < RailedTransport::MaxPaths; ++index)
+		{
+			const std::uint32_t from = game.waypoints.Find(std::format("{}Start{:02}", railed->content.pathPrefix, index + 1));
+			const std::uint32_t to = game.waypoints.Find(std::format("{}End{:02}", railed->content.pathPrefix, index + 1));
+			if (from != gameplay::WaypointGraph::None && to != gameplay::WaypointGraph::None)
+				ferry.paths[ferry.pathCount++] = {from, to};
+		}
 	}
 	// MobMemberSlavedUpdate: no nexus until one spawns it (onEnslave); its count to its first look a random 0..20.
 	if (game.templates.MobMemberOf(world.Get<gameplay::DefinitionRef>(entity)->index) != nullptr)
@@ -982,6 +1230,9 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		// (Its drawn lift first: adding a component moves the entity, so before its Jet is written.)
 		if (jet->minHeight > Engine::Math::Fixed{} && world.Get<gameplay::DrawOffset>(entity) == nullptr)
 			world.Add<gameplay::DrawOffset>(entity);
+		// (Its floor: raised while it is a flight deck's.)
+		if (world.Get<gameplay::FloorLift>(entity) == nullptr)
+			world.Add<gameplay::FloorLift>(entity);
 		world.Add<gameplay::Jet>(entity);
 		gameplay::Jet &state = *world.Get<gameplay::Jet>(entity);
 		state.flight = jet->flight;
@@ -1034,6 +1285,7 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	{
 		world.Add<gameplay::ProductionQueue>(entity);
 		world.Get<gameplay::ProductionQueue>(entity)->capacity = production->capacity;
+		world.Get<gameplay::ProductionQueue>(entity)->runsWhileDisabled = production->runsWhileDisabled;
 		world.Add<gameplay::ProductionDoors>(entity);
 		gameplay::ProductionDoors &doors = *world.Get<gameplay::ProductionDoors>(entity);
 		doors.count = production->doors;
@@ -1069,6 +1321,11 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	{
 		world.Add<gameplay::Stealth>(entity);
 		*world.Get<gameplay::Stealth>(entity) = stealth->stealth;
+		// StealthUpdate's constructor: stealth allowed from its delay on (m_stealthAllowedFrame = now + StealthDelay).
+		world.Get<gameplay::Stealth>(entity)->allowedAt = game.tick + stealth->stealth.delay;
+		// UseRiderStealth: its rider's rules, found each tick (calcStealthOwner).
+		if (stealth->stealth.Option(gameplay::stealth_option::UseRiderStealth))
+			world.Add<gameplay::StealthRider>(entity);
 	}
 	// Stealth detectors scan at random phases, so they do not all scan on one tick (as the original).
 	if (auto detector = content::ReadObjectStealthDetector(*object, game.step))
@@ -1086,7 +1343,8 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 			world.Add<gameplay::AutoFire>(entity);
 			if (!world.Has<gameplay::WeaponBonusConditions>(entity))
 				world.Add<gameplay::WeaponBonusConditions>(entity);
-			*world.Get<gameplay::AutoFire>(entity) = {weapon, 0, game.tick + fire->initialDelay, fire->exclusiveDelay};
+			*world.Get<gameplay::AutoFire>(entity) = {weapon, 0, game.tick + fire->initialDelay, fire->exclusiveDelay,
+				game.tick + game.templates.weapons.At(weapon).suspendFxTicks};
 		}
 	}
 	if (const auto life = content::ReadObjectLifetime(*object, game.step))
@@ -1115,11 +1373,17 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		world.Add<gameplay::Transport>(entity);
 		*world.Get<gameplay::Transport>(entity) = {.definition = *transport,
 			.cruiseHeight = locomotor != nullptr ? locomotor->preferredHeight : Fixed{}};
+		if (const auto exit = content.transportExitBones.find(object->name); exit != content.transportExitBones.end())
+		{
+			world.Get<gameplay::Transport>(entity)->definition.exitBone = exit->second.position;
+			world.Get<gameplay::Transport>(entity)->definition.hasExitBone = 1;
+		}
 		// TransportContain InitialPayload (a Troop Crawler's Red Guards, a Combat Bike's Rebel): made on its first update.
 		// A RiderChangeContain's riders: what each one shows on it (its payload rider shown from the start).
 		if (const auto riders = content::ReadRiderChange(*object, game.step))
 		{
 			RiderChange change;
+			change.commandSets.fill(RiderChange::None);
 			change.definitions.fill(RiderChange::None);
 			change.conditions.fill(RiderChange::None);
 			change.statuses.fill(RiderChange::None);
@@ -1134,6 +1398,9 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 				change.conditions[slot] = bit == content::NoCondition ? RiderChange::None : bit;
 				change.weaponFlags[slot] = content::SetFlag(content::WeaponSetFlagNames, rider.weaponFlag);
 				change.statuses[slot] = content::ObjectStatusBit(rider.status);
+				// Its command set (setCommandSetStringOverride) and locomotor set (chooseLocomotorSet) on the bike.
+				change.commandSets[slot] = rider.commandSet.empty() ? RiderChange::None : game.templates.CommandSet(rider.commandSet);
+				change.locomotorSets[slot] = content::LocomotorSetIndex(rider.locomotorSet).value_or(0);
 			}
 			change.scuttleTicks = riders->scuttleTicks;
 			const std::uint32_t scuttle = content::ModelConditionBit(riders->scuttleCondition);
@@ -1156,6 +1423,15 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 							world.Add<InitialPayload>(entity);
 							*world.Get<InitialPayload>(entity) = {game.templates.Definition(*rider), static_cast<std::uint32_t>(count)};
 						}
+					}
+		// OverlordContain PayloadTemplateName (every shipped one names a single object: the Avenger's laser turret).
+		for (const content::ModuleEntry &module : object->modules)
+			if (module.type == "OverlordContain" && module.block != nullptr)
+				if (const auto *payload = module.block->Find("PayloadTemplateName"); payload != nullptr && !payload->values.empty())
+					if (const content::ObjectDefinition *rider = content.objects.Find(payload->Value(0)))
+					{
+						world.Add<InitialPayload>(entity);
+						*world.Get<InitialPayload>(entity) = {game.templates.Definition(*rider), 1u, 1u};
 					}
 	}
 	// A way into its player's tunnel network (TunnelContain: TunnelTracker::onTunnelCreated), holding MaxTunnelCapacity.
@@ -1188,10 +1464,15 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		Fixed diameter = content::BoundingCircleRadius(object->geometry) * Fixed::FromInt(2);
 		if (diameter > Fixed::FromInt(10) && diameter < Fixed::FromInt(20))
 			diameter = Fixed::FromInt(20);
-		const std::int64_t across = (diameter / Fixed::FromInt(10) + Fixed::FromRatio(3, 10)).Floor();
+		const std::int64_t across = std::max<std::int64_t>((diameter / Fixed::FromInt(10) + Fixed::FromRatio(3, 10)).Floor(), 1);
 		const auto reach = static_cast<std::uint8_t>(std::min<std::int64_t>(across / 2, 2));
+		// Centred in its cell when an odd number across, or capped.
+		const bool centered = (across & 1) != 0 || across / 2 > 2;
 		world.Add<gameplay::NavigationAgent>(entity);
-		*world.Get<gameplay::NavigationAgent>(entity) = {locomotor->surfaces, reach};
+		*world.Get<gameplay::NavigationAgent>(entity) = {locomotor->surfaces, reach, static_cast<std::uint8_t>(centered ? 1 : 0)};
+		// Its goal claims (AIUpdateInterface's m_pathfindGoalCell) and where its moves end.
+		world.Add<gameplay::PathfindGoal>(entity);
+		world.Add<gameplay::MoveGoal>(entity);
 	}
 	// Structures that stay put are obstacles on the grid (not small ones, mines, projectiles or bridge towers).
 	if (locomotor == nullptr && object->Is("STRUCTURE") && !object->geometry.small && !object->Is("MINE") && !object->Is("PROJECTILE") &&
@@ -1326,29 +1607,10 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		world.Add<SteeringLook>(entity);
 		world.Get<SteeringLook>(entity)->transitionTicks = *steering;
 	}
-	// Its create modules: a weapon locked in hand for good (LockWeaponCreate::onBuildComplete), a starting
-	// level when its player knows the science (VeterancyGainCreate::onCreate: never lower than it is).
+	// Its create modules as it is made (onCreate): a starting level when its player knows the science
+	// (VeterancyGainCreate: never lower than it is); GrantUpgradeCreate with ExemptStatus UNDER_CONSTRUCTION, when it is
+	// not being built. The rest waits for it to be built (CreateModulesBuildComplete).
 	const content::CreateModules creates = content::ReadCreateModules(*object);
-	if (creates.lockedSlot)
-		if (auto *armament = world.Get<gameplay::Armament>(entity))
-		{
-			if (!world.Has<gameplay::WeaponSlots>(entity))
-			{
-				world.Add<gameplay::WeaponSlots>(entity);
-				gameplay::WeaponSlot &primary = world.Get<gameplay::WeaponSlots>(entity)->slots[0];
-				primary.weapon = armament->weapon;
-				primary.clip = armament->clip;
-				primary.barrels = armament->barrels;
-				primary.aim = armament->turret ? gameplay::SlotAim::Turret : gameplay::SlotAim::Body;
-			}
-			gameplay::WeaponSlots &set = *world.Get<gameplay::WeaponSlots>(entity);
-			if (set.slots[*creates.lockedSlot].weapon != gameplay::WeaponCatalog::None)
-			{
-				gameplay::StoreSlot(set.slots[set.current], *armament);
-				set.locked = set.current = *creates.lockedSlot;
-				gameplay::LoadSlot(*armament, set.slots[set.current], set.slots[set.current].aim == gameplay::SlotAim::Turret);
-			}
-		}
 	for (const content::VeterancyGain &gain : creates.veterancyGains)
 	{
 		const std::uint32_t player = world.Get<gameplay::Owner>(entity)->player;
@@ -1358,15 +1620,10 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		if (world.Get<gameplay::Experience>(entity)->level < gain.level)
 			PlaceAtVeterancy(game, entity, gain.level);
 	}
-	// GrantUpgradeCreate (made complete: onCreate with ExemptStatus UNDER_CONSTRUCTION, as onBuildComplete).
-	for (const std::string &granted : creates.grantedUpgrades)
-		if (const auto upgrade = content.upgrades.Find(granted))
-		{
-			if (content.upgrades.upgrades[*upgrade].player)
-				world.Resource<gameplay::PlayerUpgrades>().Grant(world.Get<gameplay::Owner>(entity)->player, *upgrade);
-			else
-				GiveObjectUpgrade(game, entity, granted);
-		}
+	if (!underConstruction)
+		for (const content::GrantedUpgrade &granted : creates.grantedUpgrades)
+			if (granted.onCreate)
+				object_factory_detail::GrantUpgrade(game, entity, granted.upgrade);
 	// HeightDieUpdate.
 	for (const content::ModuleEntry &module : object->modules)
 		if (module.type == "HeightDieUpdate" && module.block != nullptr)
@@ -1404,6 +1661,11 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	// WeaponBonusUpdate: its first pulse on its first update.
 	if (game.templates.WeaponBonusPulseOf(game.templates.Definition(*object)) != nullptr && !world.Has<WeaponBonusPulse>(entity))
 		world.Add<WeaponBonusPulse>(entity);
+	if (game.templates.OclTimerOf(game.templates.Definition(*object)) != nullptr && !world.Has<OclTimer>(entity))
+		world.Add<OclTimer>(entity);
+	// BoneFXUpdate: its bone effects' timers.
+	if (game.templates.BoneFxOf(game.templates.Definition(*object)) != nullptr && !world.Has<BoneFx>(entity))
+		world.Add<BoneFx>(entity);
 	// BattleBusSlowDeathBehavior: driving, its first death to come.
 	if (game.templates.BattleBusOf(game.templates.Definition(*object)) != nullptr && !world.Has<BattleBus>(entity))
 		world.Add<BattleBus>(entity);
@@ -1415,5 +1677,44 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		InitBattlePlan(game, entity);
 	BattlePlanObjectCreated(game, entity);
 	return entity;
+}
+}
+
+export namespace generalszh::gameplay
+{
+// CreateModule::onBuildComplete as the original calls it: for objects placed with the map or as a player's start, units
+// a factory made, structures a dozer finished and ReplaceObjectUpgrade's replacements (never for what a creation list or
+// a script makes): LockWeaponCreate locks its slot in hand for good; GrantUpgradeCreate gives its upgrade.
+inline void CreateModulesBuildComplete(GameWorld &game, ecs::Entity entity)
+{
+	namespace gp = engine::gameplay;
+	auto &world = game.world;
+	const auto *ref = world.IsAlive(entity) ? world.Get<gp::DefinitionRef>(entity) : nullptr;
+	if (ref == nullptr)
+		return;
+	const content::CreateModules creates = content::ReadCreateModules(game.templates.DefinitionAt(ref->index));
+	if (creates.lockedSlot)
+		if (auto *armament = world.Get<gp::Armament>(entity))
+		{
+			if (!world.Has<gp::WeaponSlots>(entity))
+			{
+				world.Add<gp::WeaponSlots>(entity);
+				armament = world.Get<gp::Armament>(entity);
+				gp::WeaponSlot &primary = world.Get<gp::WeaponSlots>(entity)->slots[0];
+				primary.weapon = armament->weapon;
+				primary.clip = armament->clip;
+				primary.barrels = armament->barrels;
+				primary.aim = armament->turret ? gp::SlotAim::Turret : gp::SlotAim::Body;
+			}
+			gp::WeaponSlots &set = *world.Get<gp::WeaponSlots>(entity);
+			if (set.slots[*creates.lockedSlot].weapon != gp::WeaponCatalog::None)
+			{
+				gp::StoreSlot(set.slots[set.current], *armament);
+				set.locked = set.current = *creates.lockedSlot;
+				gp::LoadSlot(*armament, set.slots[set.current], set.slots[set.current].aim == gp::SlotAim::Turret);
+			}
+		}
+	for (const content::GrantedUpgrade &granted : creates.grantedUpgrades)
+		object_factory_detail::GrantUpgrade(game, entity, granted.upgrade);
 }
 }

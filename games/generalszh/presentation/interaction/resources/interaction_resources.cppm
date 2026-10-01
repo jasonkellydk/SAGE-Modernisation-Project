@@ -2,9 +2,11 @@ export module games.generalszh.presentation.interaction.resources.interaction_re
 import std;
 
 export import engine.ecs.core.entity;
+export import Engine.Core.Math.Fixed;
 export import games.generalszh.commands.game_commands;
 export import games.generalszh.content.objects.kind_of;
 export import games.generalszh.content.global.mouse;
+export import games.generalszh.content.crates.crate_content;
 import engine.ecs.system.system;
 
 // What the player's pointer did this frame, how the view projects the world,
@@ -35,6 +37,20 @@ struct PointerInput
 	float scrollX{0}, scrollY{0};
 };
 
+// What lies under the pointer this frame (W3DView::pickDrawable's cast into the scene): every drawn object the pick
+// ray meets on its geometry as drawn, nearest first (the fraction along the ray); at the pointer's pixel.
+struct PointerHit
+{
+	std::uint64_t key{0}; // the entity (index and generation)
+	float fraction{1.0f};
+};
+
+struct PointerHits
+{
+	float x{-1.0f}, y{-1.0f};
+	std::vector<PointerHit> hits;
+};
+
 // The camera as presentation projects with it (eye, its basis, the view plane's half extents at depth 1) and
 // the viewport in pixels.
 struct InteractionView
@@ -46,6 +62,7 @@ struct InteractionView
 	float halfWidth{1}, halfHeight{1};
 	float width{800}, height{600};
 	bool valid{false};
+	float farClip{1290.0f}; // the camera's far clip (W3D's Get_Depth): the pick ray reaches twice as far
 
 	// World to pixels; false behind the eye.
 	bool Project(float x, float y, float z, float &sx, float &sy) const noexcept
@@ -119,6 +136,8 @@ enum class GuiCommandKind : std::uint8_t
 	RallyPoint, // SET_RALLY_POINT: doSetRallyPointCommand
 	AttackMove, // ATTACK_MOVE: doAttackMoveCommand
 	FireWeapon, // FIRE_WEAPON: doFireWeaponCommand, or handleGuiCommand as a context command
+	PlaceBeacon, // PLACE_BEACON (GUICOMMANDMODE_PLACE_BEACON): doPlaceBeacon
+	CombatDrop,  // COMBATDROP: issueCombatDropCommand
 };
 
 struct GuiTargeting
@@ -142,6 +161,9 @@ struct GuiTargeting
 	// SPECIAL_POWER_FROM_SHORTCUT: the power's type; its source is the player's most ready object with it, as it stands
 	// each frame (CommandXlat's findMostReadyShortcutSpecialPowerOfType; none: no target is valid). Empty: not one.
 	std::string shortcutType;
+	// Its RadiusCursorType (the radius cursor following the pointer; 0 none) and its special power's RadiusCursorRadius.
+	std::uint8_t radiusCursor{0};
+	Engine::Math::Fixed powerCursorRadius;
 };
 
 // The selection box being dragged (for drawing), in pixels.
@@ -165,7 +187,92 @@ inline constexpr std::uint16_t IgnoredInGui = 1u << 8;     // KINDOF_IGNORED_IN_
 inline constexpr std::uint16_t Vehicle = 1u << 9;          // KINDOF_VEHICLE
 inline constexpr std::uint16_t Aircraft = 1u << 10;        // KINDOF_AIRCRAFT
 inline constexpr std::uint16_t RepairPad = 1u << 11;       // KINDOF_REPAIR_PAD
+inline constexpr std::uint16_t ClickThrough = 1u << 12;    // KINDOF_CLICK_THROUGH
+inline constexpr std::uint16_t Bridge = 1u << 13;          // KINDOF_BRIDGE
+inline constexpr std::uint16_t BridgeTower = 1u << 14;     // KINDOF_BRIDGE_TOWER
 }
+
+// W3DModelDraw's collision type (View.h PickType): what a pick may take it as.
+namespace pick_type
+{
+inline constexpr std::uint8_t Selectable = 1u << 0;      // PICK_TYPE_SELECTABLE
+inline constexpr std::uint8_t Shrubbery = 1u << 1;       // PICK_TYPE_SHRUBBERY
+inline constexpr std::uint8_t Mines = 1u << 2;           // PICK_TYPE_MINES
+inline constexpr std::uint8_t ForceAttackable = 1u << 3; // PICK_TYPE_FORCEATTACKABLE
+}
+
+// W3DModelDraw (as its render object is made): its collision type set from its KindOf in turn, each replacing the
+// one before (SELECTABLE, SHRUBBERY, MINE, FORCEATTACKABLE; CLICK_THROUGH: none); then, unless a bridge or bridge
+// tower, a dead object (and a structure's rubble) takes none: clicks go to the ground there.
+inline std::uint8_t PickTypes(std::uint16_t kinds, bool dead) noexcept
+{
+	std::uint8_t type = 0;
+	if ((kinds & select_kind::Selectable) != 0)
+		type = pick_type::Selectable;
+	if ((kinds & select_kind::Shrubbery) != 0)
+		type = pick_type::Shrubbery;
+	if ((kinds & select_kind::Mine) != 0)
+		type = pick_type::Mines;
+	if ((kinds & select_kind::ForceAttackable) != 0)
+		type = pick_type::ForceAttackable;
+	if ((kinds & select_kind::ClickThrough) != 0)
+		type = 0;
+	if ((kinds & (select_kind::Bridge | select_kind::BridgeTower)) == 0 && dead)
+		type = 0;
+	return type;
+}
+
+
+// A definition's contain module as ActionManager::canEnterObject asks it (ContainModuleInterface::isValidContainerFor,
+// isHealContain, isGarrisonable): none; a plain OpenContain (ParachuteContain too); TransportContain (and
+// InternetHackContain); HelixContain; OverlordContain; RiderChangeContain; MobNexusContain; GarrisonContain;
+// HealContain; TunnelContain; CaveContain.
+enum class ContainKind : std::uint8_t
+{
+	None,
+	Open,
+	Transport,
+	Helix,
+	Overlord,
+	RiderChange,
+	MobNexus,
+	Garrison,
+	Heal,
+	Tunnel,
+	Cave,
+};
+
+// The special powers context commands use (their SpecialPowerType): SPECIAL_INFANTRY_CAPTURE_BUILDING,
+// SPECIAL_BLACKLOTUS_CAPTURE_BUILDING, SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK, SPECIAL_BLACKLOTUS_STEAL_CASH_HACK and
+// SPECIAL_HACKER_DISABLE_BUILDING.
+enum class ContextPower : std::uint8_t
+{
+	None,
+	InfantryCapture,
+	BlackLotusCapture,
+	DisableVehicleHack,
+	StealCashHack,
+	DisableBuildingHack,
+};
+
+// A command set's GUI_COMMAND_SPECIAL_POWER button whose power a context command uses, in slot order: its power's type,
+// the power (its SpecialPower name) and the button's Options.
+struct ContextButton
+{
+	ContextPower power{ContextPower::None};
+	std::string specialPower;
+	std::uint32_t options{0};
+};
+
+// A saboteur's Sabotage*CrateCollide: what it sabotages and its CrateCollide's rules for what it may touch.
+struct SaboteurCollide
+{
+	content::SabotageKind kind{content::SabotageKind::PowerPlant};
+	content::KindOfMask required{};
+	content::KindOfMask forbidden{};
+	bool buildingPickup{false};
+	bool forbidOwner{false};
+};
 
 // Per definition (DefinitionRef::index): its kinds that matter to selection, and its pick volume (a sphere
 // of `radius` whose centre is `center` up from its position).
@@ -186,6 +293,24 @@ struct SelectionLook
 	bool carBombable{false};
 	// A hijacker's ConvertToHijackedVehicleCrateCollide (an index into SelectionCatalog::hijackers; NoCarBomber: none).
 	std::uint32_t hijacker{NoCarBomber};
+	// What context commands ask of it: whether it has an AI (AIUpdateInterface), its TransportSlotCount, its contain
+	// module (with OpenContain's AllowInsideKindOf (none given: any), ForbidInsideKindOf, AllowAlliesInside /
+	// AllowEnemiesInside / AllowNeutralInside), whether it is a Chinook (ChinookAIUpdate: supplying only while empty),
+	// whether it is a salvage crate (SalvageCrateCollide), its Sabotage*CrateCollides (`saboteurCount` of
+	// SelectionCatalog::saboteurs from `saboteur`), and its command set's context buttons (an index into
+	// SelectionCatalog::contextSets; NoCarBomber: none).
+	bool hasAi{false};
+	std::uint32_t transportSlots{0};
+	ContainKind contain{ContainKind::None};
+	bool anyInside{true};
+	content::KindOfMask allowInside{};
+	content::KindOfMask forbidInside{};
+	bool alliesInside{true}, enemiesInside{true}, neutralInside{true};
+	bool chinook{false};
+	bool salvageCrate{false};
+	std::uint32_t saboteur{0};
+	std::uint32_t saboteurCount{0};
+	std::uint32_t commandSet{NoCarBomber};
 };
 
 // A car bomber's collide kinds (RequiredKindOf, ForbiddenKindOf).
@@ -201,6 +326,16 @@ struct SelectionCatalog
 	std::vector<content::KindOfMask> kinds; // each definition's KindOf
 	std::vector<CarBomberKinds> carBombers;
 	std::vector<CarBomberKinds> hijackers; // each hijacker's collide kinds
+	std::vector<SaboteurCollide> saboteurs;
+	// Command sets' context buttons, by name (`contextSetNames`); the sets upgrades swap in, by their CommandSetOverride
+	// id (an index into contextSets; NoCarBomber: none); and each special power template's (by index) ContextPower.
+	std::vector<std::vector<ContextButton>> contextSets;
+	std::vector<std::string> contextSetNames;
+	std::vector<std::uint32_t> overrideSets;
+	std::vector<ContextPower> powers;
+	// The simulation's last tick (for the powers' readiness and the heal locks, as the original's client reads the logic
+	// frame).
+	std::uint64_t tick{0};
 
 	const SelectionLook *Of(std::uint32_t definition) const noexcept
 	{
@@ -224,6 +359,7 @@ struct PlayerOrders
 
 export namespace ecs
 {
+template<> struct ResourceTraits<generalszh::presentation::PointerHits> { static constexpr std::string_view StableName = "generalszh.presentation.pointer_hits"; };
 template<> struct ResourceTraits<generalszh::presentation::PointerInput> { static constexpr std::string_view StableName = "generalszh.presentation.pointer_input"; };
 template<> struct ResourceTraits<generalszh::presentation::InteractionView> { static constexpr std::string_view StableName = "generalszh.presentation.interaction_view"; };
 template<> struct ResourceTraits<generalszh::presentation::InteractionState> { static constexpr std::string_view StableName = "generalszh.presentation.interaction_state"; };

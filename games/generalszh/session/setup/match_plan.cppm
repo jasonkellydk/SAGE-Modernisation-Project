@@ -33,6 +33,11 @@ struct MatchPlan
 	int localSlot{0};            // a LAN game's: this machine's slot
 	std::uint32_t hostAddress{0}; // a LAN game's host (not this machine's: `hosting` false)
 	bool hosting{false};
+	// The scenery it was started with (ScenerySetup: trees on, fluff forced to props), once started: a replay places
+	// the map's objects as its game did, whatever this machine's detail now.
+	bool sceneryKnown{false};
+	bool useTrees{true};
+	bool forceFluffToProp{false};
 
 	bool SinglePlayer() const noexcept { return kind == MatchKind::Campaign || kind == MatchKind::Challenge; }
 	// Made from a setup (GAME_SKIRMISH, GAME_LAN).
@@ -78,6 +83,9 @@ inline void WriteMatchPlan(engine::core::serialization::ByteWriter &writer, cons
 	writer.U8(plan.difficulty);
 	writer.Text(plan.playerTemplate);
 	writer.I64(plan.rankPoints);
+	writer.Flag(plan.sceneryKnown);
+	writer.Flag(plan.useTrees);
+	writer.Flag(plan.forceFluffToProp);
 }
 
 inline std::optional<MatchPlan> ReadMatchPlan(engine::core::serialization::ByteReader &reader)
@@ -125,6 +133,9 @@ inline std::optional<MatchPlan> ReadMatchPlan(engine::core::serialization::ByteR
 	plan.difficulty = reader.U8().value_or(1);
 	plan.playerTemplate = reader.Text().value_or("");
 	plan.rankPoints = static_cast<std::int32_t>(reader.I64().value_or(0));
+	plan.sceneryKnown = reader.Flag().value_or(false);
+	plan.useTrees = reader.Flag().value_or(true);
+	plan.forceFluffToProp = reader.Flag().value_or(false);
 	if (reader.Failed() || plan.difficulty > 2)
 		return std::nullopt;
 	return plan;

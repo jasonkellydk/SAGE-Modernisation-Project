@@ -51,7 +51,7 @@ struct AreaHealingSystem
 			for (std::uint32_t index = 0; index < healing.count; ++index)
 			{
 				AreaHealProgram &healer = healing.programs[index];
-				if (tick < healer.nextTick || (healer.flags & area_healing::Spent) != 0)
+				if (tick < healer.nextTick || (healer.flags & (area_healing::Spent | area_healing::Dormant)) != 0)
 					continue;
 				const bool wholePlayer = (healer.flags & area_healing::WholePlayer) != 0;
 				const auto offer = [&](const SpatialEntry &entry) {

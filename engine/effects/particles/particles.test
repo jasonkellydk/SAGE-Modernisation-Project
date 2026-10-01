@@ -180,3 +180,54 @@ BOOST_AUTO_TEST_CASE(held_systems_pause_resume_and_trigger)
 		world.Step();
 	BOOST_TEST(!world.Alive(id));
 }
+
+// Legacy parity (ParticleSys.cpp ParticleSystem::createParticle, ParticleSystemManager::removeOldestParticles): with a
+// cap of 5, low-priority bursts of 4 fill to 6 (a particle is refused only once the count is above the cap, and none of
+// lower priority can make room); a CRITICAL system's burst of 4 then alternates: the first takes away the oldest
+// low-priority particle and is not made (the original's removal count never matches), the next is made, and so on: 2
+// made, the 2 oldest gone. ALWAYS_RENDER particles ignore the cap. A cap of 0 makes nothing else.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_particle_cap_takes_the_oldest_lower_priority_particles)
+{
+	Library library;
+	ParticleSystemDefinition low = Puff();
+	low.priority = ParticlePriority::WeaponExplosion;
+	low.systemLifetime = 2;
+	ParticleSystemDefinition critical = Puff();
+	critical.name = "Critical";
+	critical.priority = ParticlePriority::Critical;
+	critical.systemLifetime = 1;
+	critical.velocityOrtho[2] = {2, 2};
+	ParticleWorld world([&](std::string_view name) { return library.Find(name); });
+	world.SetMaxParticles(5);
+	world.Create(low, EmitterTransform::At(0, 0, 0));
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 4u);
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 6u);
+	const float third = world.Z()[2];
+	world.Create(critical, EmitterTransform::At(10, 0, 0));
+	world.Step();
+	BOOST_TEST(world.ParticleCount() == 6u);
+	std::size_t criticals = 0;
+	for (std::size_t particle = 0; particle < world.ParticleCount(); ++particle)
+		criticals += world.DefinitionOf(particle).priority == ParticlePriority::Critical ? 1u : 0u;
+	BOOST_TEST(criticals == 2u);
+	BOOST_TEST(world.X()[0] == 0.0f);
+	BOOST_TEST(std::fabs(world.Z()[0] - (third + 1.0f)) < 1e-4f); // the two oldest are gone: the third is first now
+	ParticleSystemDefinition always = Puff();
+	always.name = "Always";
+	always.priority = ParticlePriority::AlwaysRender;
+	always.systemLifetime = 1;
+	world.SetMaxParticles(0);
+	world.Create(always, EmitterTransform::At(20, 0, 0));
+	world.Create(low, EmitterTransform::At(30, 0, 0));
+	world.Step();
+	std::size_t shown = 0, lows = 0;
+	for (std::size_t particle = 0; particle < world.ParticleCount(); ++particle)
+	{
+		shown += world.DefinitionOf(particle).priority == ParticlePriority::AlwaysRender ? 1u : 0u;
+		lows += world.X()[particle] == 30.0f ? 1u : 0u;
+	}
+	BOOST_TEST(shown == 4u);
+	BOOST_TEST(lows == 0u);
+}

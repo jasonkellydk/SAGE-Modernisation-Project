@@ -11,6 +11,7 @@ import engine.gameplay.common.spatial.components.off_map;
 import engine.gameplay.common.identity.components.definition_ref;
 import Engine.Core.Math.FixedRandom;
 import engine.ecs.query.query;
+import engine.gameplay.rts.vision.resources.shroud_map;
 import games.generalszh.gameplay.score.algorithms.scoring;
 
 // placeNetworkBuildingsForPlayer: a skirmish or LAN player's start. Its
@@ -110,6 +111,7 @@ inline std::vector<ecs::Entity> PlaceStartingObjects(GameWorld &game, const cont
 		return made;
 	const Engine::Math::TurnAngle facing = Engine::Math::TurnFromDegrees(building->placementViewAngleDegrees);
 	const ecs::Entity yard = SpawnObject(game, faction.startingBuilding, start->XY(), facing, team, "");
+	CreateModulesBuildComplete(game, yard); // placeObjectAtPosition: onBuildComplete
 	OnBuildComplete(game, yard); // GameLogic::startNewGame: built
 	ScoreStructureComplete(game, yard, false); // onStructureConstructionComplete
 	if (!game.world.IsAlive(yard))
@@ -130,11 +132,29 @@ inline std::vector<ecs::Entity> PlaceStartingObjects(GameWorld &game, const cont
 		if (!spot)
 			continue; // "Could not find position"
 		const ecs::Entity entity = SpawnObject(game, unit, *spot, facing, team, "");
+		CreateModulesBuildComplete(game, entity); // placeObjectAtPosition: onBuildComplete
 		OnBuildComplete(game, entity);
 		ScoreUnitCreated(game, entity); // Player::onUnitCreated
 		if (game.world.IsAlive(entity))
 			made.push_back(entity);
 	}
 	return made;
+}
+
+// GameLogic::startNewGame for a game with seats (TheGameInfo: skirmish, LAN): each occupied seat's player sees the map at
+// once: an observer's revealed for good (revealMapForPlayerPermanently), any other's looked over once, fog where nobody
+// looks (revealMapForPlayer), unless MultiplayerSettings' UseShroud keeps it black until explored.
+inline void RevealSeatsAtStart(GameWorld &game, std::span<const std::uint32_t> players, std::span<const std::uint8_t> observers, bool useShroud)
+{
+	auto *shroud = game.world.FindResource<engine::gameplay::ShroudMap>();
+	if (shroud == nullptr)
+		return;
+	for (std::size_t index = 0; index < players.size(); ++index)
+	{
+		if (index < observers.size() && observers[index] != 0)
+			shroud->RevealAllPermanently(players[index]);
+		else if (!useShroud)
+			shroud->RevealAll(players[index]);
+	}
 }
 }

@@ -8,7 +8,9 @@ export import games.generalszh.content.objects.object_definition;
 //   player has ScienceRequired (or none is required);
 //   LockWeaponCreate: its SlotToLock (PRIMARY ...) locked in hand for good;
 //   GrantUpgradeCreate: its UpgradeToGrant given it (an object upgrade) or its
-//   player (a player upgrade) as it is made complete.
+//   player (a player upgrade) as it is built (onBuildComplete), and as it is
+//   made when ExemptStatus names UNDER_CONSTRUCTION and it is not being built
+//   (onCreate).
 export namespace generalszh::content
 {
 struct VeterancyGain
@@ -17,11 +19,16 @@ struct VeterancyGain
 	std::string science;    // empty: none required
 };
 
+struct GrantedUpgrade
+{
+	std::string upgrade;
+	bool onCreate{false}; // ExemptStatus UNDER_CONSTRUCTION
+};
 struct CreateModules
 {
 	std::vector<VeterancyGain> veterancyGains;
 	std::optional<std::uint8_t> lockedSlot;
-	std::vector<std::string> grantedUpgrades;
+	std::vector<GrantedUpgrade> grantedUpgrades;
 };
 
 inline CreateModules ReadCreateModules(const ObjectDefinition &object)
@@ -49,7 +56,13 @@ inline CreateModules ReadCreateModules(const ObjectDefinition &object)
 		else if (module.type == "GrantUpgradeCreate")
 		{
 			if (const auto *grant = module.block->Find("UpgradeToGrant"))
-				result.grantedUpgrades.emplace_back(grant->Value());
+			{
+				bool exempt = false;
+				if (const auto *status = module.block->Find("ExemptStatus"))
+					for (const std::string_view bit : status->values)
+						exempt = exempt || bit == "UNDER_CONSTRUCTION";
+				result.grantedUpgrades.push_back({std::string(grant->Value()), exempt});
+			}
 		}
 		else if (module.type == "LockWeaponCreate")
 		{

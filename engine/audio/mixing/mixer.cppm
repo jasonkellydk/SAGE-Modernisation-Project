@@ -58,6 +58,9 @@ public:
 	void SetMasterGain(float gain) { Send(MasterCommand{gain}); }
 	void SetListener(const Listener &listener) { Send(listener); }
 	void StopAll() { Send(StopAllCommand{}); }
+	// Holds a voice where it is (silent, not advancing, not finishing) until resumed (Miles AIL_stop_sample /
+	// AIL_resume_sample).
+	void Pause(VoiceId id, bool paused) { Send(PauseCommand{id, paused}); }
 
 	// Voices that ended since the last call (played out, stopped or dropped).
 	std::vector<VoiceId> TakeFinished()
@@ -124,7 +127,13 @@ private:
 	struct StopAllCommand
 	{
 	};
-	using Command = std::variant<StartCommand, StopCommand, PositionCommand, GainCommand, BusCommand, MasterCommand, Listener, StopAllCommand>;
+	struct PauseCommand
+	{
+		VoiceId id;
+		bool paused;
+	};
+	using Command =
+		std::variant<StartCommand, StopCommand, PositionCommand, GainCommand, BusCommand, MasterCommand, Listener, StopAllCommand, PauseCommand>;
 
 	struct Voice
 	{
@@ -135,6 +144,7 @@ private:
 		float envelope{1.0f};
 		float envelopeStep{0.0f};
 		bool stopping{false};
+		bool paused{false};
 		StereoGain lastGain{};
 	};
 
@@ -195,6 +205,11 @@ private:
 		for (auto &[id, voice] : m_voices)
 			Apply(StopCommand{id, 256});
 	}
+	void Apply(const PauseCommand &command)
+	{
+		if (const auto found = m_voices.find(command.id); found != m_voices.end())
+			found->second.paused = command.paused;
+	}
 
 	StereoGain TargetGain(const Voice &voice) const
 	{
@@ -208,6 +223,9 @@ private:
 	// Adds the voice's next `frames` into `out`; false once it has ended.
 	bool MixVoice(Voice &voice, std::span<float> out, std::size_t frames)
 	{
+		// Held: silent and where it was (a stopped one still fades out and goes).
+		if (voice.paused && !voice.stopping)
+			return true;
 		// Gains glide across the block so moving sounds and volume changes do not click.
 		const StereoGain target = TargetGain(voice);
 		const float step = 1.0f / static_cast<float>(std::max<std::size_t>(frames, 1));

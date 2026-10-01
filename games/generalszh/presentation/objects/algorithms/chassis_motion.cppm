@@ -280,6 +280,18 @@ inline ChassisPose StepThrust(ChassisState &state, const ChassisTuning &look, co
 	return pose;
 }
 
+// Drawable::handleWeaponFireFX's recoil: a shot fired toward `direction` (radians, absolute) by a body facing `facing`
+// kicks its acceleration pitch and roll rates by `amount` (WeaponRecoil) turned about from the shot's way, relative
+// to the body.
+inline void Recoil(ChassisState &state, float amount, float direction, float facing) noexcept
+{
+	if (amount == 0.0f)
+		return;
+	const float angle = direction - facing + chassis_detail::Pi;
+	state.accelPitchRate += amount * std::cos(angle);
+	state.accelRollRate += amount * std::sin(angle);
+}
+
 inline ChassisPose StepChassis(ChassisState &state, const ChassisTuning &look, const ChassisInput &in)
 {
 	switch (look.kind)

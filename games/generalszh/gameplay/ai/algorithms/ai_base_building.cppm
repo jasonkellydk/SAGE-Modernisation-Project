@@ -73,16 +73,22 @@ inline ecs::Entity Standing(const GameWorld &game, const AiBuildSlot &slot) { re
 
 // isLocationSafe: no enemy (not allied or neutral, alive, not hidden by stealth, not an insignificant building, not a
 // harvester or dozer) within SupplyCenterSafeRadius plus the structure's bounding circle, from bounding circles.
-inline bool IsLocationSafe(const GameWorld &game, std::uint32_t player, Engine::Math::FixedVector2 at, const content::ObjectDefinition &structure)
+// The things that make a spot unsafe for the player (isLocationSafe's filter, which does not depend on the spot): each
+// one's position and bounding circle. Gathered once for a whole look over the build list.
+struct SafetyThreat
+{
+	Engine::Math::FixedVector2 at;
+	Engine::Math::Fixed radius;
+};
+inline std::vector<SafetyThreat> GatherSafetyThreats(const GameWorld &game, std::uint32_t player)
 {
 	namespace gp = engine::gameplay;
 	using namespace ai_base_detail;
-	const Fixed radius = game.templates.Content().aiData.supplyCenterSafeRadius + content::BoundingSphereRadius(structure.geometry);
+	std::vector<SafetyThreat> threats;
 	const auto *relationships = game.world.FindResource<gp::Relationships>();
 	if (relationships == nullptr)
-		return true;
-	bool safe = true;
-	for (std::uint32_t team = 0; team < game.roster.TeamCount() && safe; ++team)
+		return threats;
+	for (std::uint32_t team = 0; team < game.roster.TeamCount(); ++team)
 	{
 		const auto &record = game.roster.TeamAt(team);
 		if (!relationships->Enemies(player, record.owner))
@@ -107,15 +113,28 @@ inline bool IsLocationSafe(const GameWorld &game, std::uint32_t player, Engine::
 				if (container && !garrisoned)
 					continue;
 			}
-			const Fixed reach = radius + content::BoundingSphereRadius(definition->geometry);
-			if (ai_detail::Squared(where->position.x - at.x, where->position.y - at.y) <= ai_detail::Squared(reach, Fixed{}))
-			{
-				safe = false;
-				break;
-			}
+			threats.push_back({where->position.XY(), content::BoundingSphereRadius(definition->geometry)});
 		}
 	}
-	return safe;
+	return threats;
+}
+
+// isLocationSafe: no enemy threat's bounding circle within SupplyCenterSafeRadius plus the structure's.
+inline bool IsLocationSafe(const GameWorld &game, const std::vector<SafetyThreat> &threats, Engine::Math::FixedVector2 at, const content::ObjectDefinition &structure)
+{
+	using Engine::Math::Fixed;
+	const Fixed radius = game.templates.Content().aiData.supplyCenterSafeRadius + content::BoundingSphereRadius(structure.geometry);
+	for (const SafetyThreat &threat : threats)
+	{
+		const Fixed reach = radius + threat.radius;
+		if (ai_detail::Squared(threat.at.x - at.x, threat.at.y - at.y) <= ai_detail::Squared(reach, Fixed{}))
+			return false;
+	}
+	return true;
+}
+inline bool IsLocationSafe(const GameWorld &game, std::uint32_t player, Engine::Math::FixedVector2 at, const content::ObjectDefinition &structure)
+{
+	return IsLocationSafe(game, GatherSafetyThreats(game, player), at, structure);
 }
 
 // findFactory: a factory of the build list's, the player's own, standing, not under construction or being sold, that
@@ -125,7 +144,8 @@ inline ecs::Entity FindFactory(GameWorld &game, AiPlayer &ai, const content::Obj
 {
 	namespace gp = engine::gameplay;
 	using namespace ai_base_detail;
-	const auto owned = OwnedObjects(game);
+	// What the player has, gathered only once a factory needs its prerequisites checked.
+	std::optional<std::vector<std::string_view>> owned;
 	ecs::Entity busy;
 	for (AiBuildSlot &slot : ai.buildList)
 	{
@@ -144,9 +164,15 @@ inline ecs::Entity FindFactory(GameWorld &game, AiPlayer &ai, const content::Obj
 			continue;
 		const content::ObjectDefinition *definition = DefinitionOf(game, factory);
 		const auto list = game.templates.Content().buildLists.find(definition->commandSet);
-		if (list == game.templates.Content().buildLists.end() || std::find(list->second.begin(), list->second.end(), thing.name) == list->second.end() ||
-			!PrerequisitesMet(owned, ai.player, thing))
+		if (list == game.templates.Content().buildLists.end() || std::find(list->second.begin(), list->second.end(), thing.name) == list->second.end())
 			continue;
+		if (!thing.prerequisiteObjects.empty())
+		{
+			if (!owned)
+				owned = OwnedKinds(game, ai.player);
+			if (!HasPrerequisiteObjects(*owned, thing))
+				continue;
+		}
 		if (queue->count == 0)
 			return factory;
 		if (busyOK)
@@ -350,6 +376,8 @@ inline void ProcessBaseBuilding(GameWorld &game, AiPlayer &ai)
 	AiBuildSlot *power = nullptr;
 	const content::ObjectDefinition *powerPlan = nullptr;
 	bool priority = false;
+	// The enemies' threats, gathered the first time a spot is judged (nothing in this look moves or kills anything).
+	std::optional<std::vector<SafetyThreat>> threats;
 	for (AiBuildSlot &slot : ai.buildList)
 	{
 		const content::ObjectDefinition *plan = content.objects.Find(slot.structure);
@@ -405,7 +433,9 @@ inline void ProcessBaseBuilding(GameWorld &game, AiPlayer &ai)
 		}
 		if (standing != ecs::Entity{})
 			continue;
-		if (!IsLocationSafe(game, ai.player, slot.location, *plan))
+		if (!threats)
+			threats = GatherSafetyThreats(game, ai.player);
+		if (!IsLocationSafe(game, *threats, slot.location, *plan))
 			continue;
 		if (slot.priorityBuild && !priority)
 		{
@@ -648,6 +678,15 @@ inline ecs::Entity FindSupplyCenter(GameWorld &game, AiPlayers &ais, AiPlayer &a
 			warehouses.push_back({entities[row], &boxes[row]});
 	});
 	std::sort(warehouses.begin(), warehouses.end(), [](const auto &a, const auto &b) { return a.first.index < b.first.index; });
+	// The player's cash generators on the map (where, and their bounding circles): gathered once, not per warehouse.
+	std::vector<std::pair<Engine::Math::FixedVector2, Fixed>> generators;
+	ai_detail::ForPlayerObjects(game, ai.player, [&](ecs::Entity mine) {
+		const content::ObjectDefinition *theirs = DefinitionOf(game, mine);
+		const auto *at = theirs != nullptr ? game.world.Get<gp::Transform>(mine) : nullptr;
+		if (at == nullptr || !theirs->Is("CASH_GENERATOR") || game.world.Get<gp::OffMap>(mine) != nullptr)
+			return;
+		generators.emplace_back(at->position.XY(), content::BoundingSphereRadius(theirs->geometry));
+	});
 	do
 	{
 		ecs::Entity best;
@@ -664,13 +703,8 @@ inline ecs::Entity FindSupplyCenter(GameWorld &game, AiPlayers &ais, AiPlayer &a
 				continue;
 			const Fixed reach = close + content::BoundingSphereRadius(definition->geometry);
 			bool haveOne = false;
-			ai_detail::ForPlayerObjects(game, ai.player, [&](ecs::Entity mine) {
-				const content::ObjectDefinition *theirs = DefinitionOf(game, mine);
-				const auto *at = theirs != nullptr ? game.world.Get<gp::Transform>(mine) : nullptr;
-				if (at == nullptr || !theirs->Is("CASH_GENERATOR") || game.world.Get<gp::OffMap>(mine) != nullptr)
-					return;
-				haveOne = haveOne || Engine::Math::Distance(at->position.XY(), where->position.XY()) <= reach + content::BoundingSphereRadius(theirs->geometry);
-			});
+			for (const auto &[at, own] : generators)
+				haveOne = haveOne || Engine::Math::Distance(at, where->position.XY()) <= reach + own;
 			if (haveOne)
 				continue;
 			const Fixed distance = Engine::Math::DistanceSquared(where->position.XY(), ai.baseCenter);
@@ -711,10 +745,18 @@ inline std::optional<Engine::Math::FixedVector2> WiggleForLegalSpot(GameWorld &g
 {
 	namespace gp = engine::gameplay;
 	using Engine::Math::Fixed;
-	const auto legal = [&](Engine::Math::FixedVector2 at, std::uint32_t options) { return CheckBuildLocation(game, plan, at, angle, {}, options) == LegalBuild::Ok; };
-	constexpr std::uint32_t full = build_check::ClearPath | build_check::TerrainRestrictions | build_check::NoObjectOverlap;
 	const Fixed cell = Fixed::FromInt(gp::PathfindCellSize);
 	const Fixed limit = Fixed::FromInt(2 * 20 * gp::PathfindCellSize);
+	// The things around the whole wiggle, gathered once: every spot tried lies within the limit of `location` on
+	// each axis, so a scene reaching that far diagonally plus the footprint and the supplies' border covers each check
+	// (a check without one gathers the whole map for every spot).
+	const Fixed border = game.templates.Content().gameData.supplyBuildBorder;
+	const BuildScene scene = GatherBuildScene(game, location,
+		limit * Fixed::FromInt(2) + FootprintRadius(FootprintOf(plan)) + std::max(border, Fixed{}) * Fixed::FromInt(2) + cell);
+	const auto legal = [&](Engine::Math::FixedVector2 at, std::uint32_t options) {
+		return CheckBuildLocation(game, plan, at, angle, {}, options, &scene) == LegalBuild::Ok;
+	};
+	constexpr std::uint32_t full = build_check::ClearPath | build_check::TerrainRestrictions | build_check::NoObjectOverlap;
 	for (Fixed step{}; step < limit; step = step + cell * Fixed::FromInt(2))
 	{
 		const Fixed half = step / Fixed::FromInt(2);

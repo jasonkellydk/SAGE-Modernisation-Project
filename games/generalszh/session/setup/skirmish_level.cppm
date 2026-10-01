@@ -3,6 +3,7 @@ import std;
 
 export import games.generalszh.session.setup.game_setup;
 export import games.generalszh.content.global.player_templates;
+export import games.generalszh.content.global.multiplayer_settings;
 export import engine.level.model.level;
 export import engine.level.adapters.generals_map.map_reader;
 import games.generalszh.session.setup.script_qualify;
@@ -26,6 +27,7 @@ struct SkirmishPlayer
 	std::string team;     // teamplayer<slot>
 	int playerTemplate{0};
 	int startPosition{0}; // 0-based: Player_<n+1>_Start
+	int color{-1};        // its MultiplayerColor (-1: none given, as without `colors`)
 	bool human{false};
 };
 
@@ -41,10 +43,14 @@ struct SkirmishLevel
 // difficulty (skirmishDifficulty: easy 0, normal 1, hard 2); its default team is that side's, qualified. The first
 // human takes the civilian side's scripts likewise (qualified "0": its start index is not read yet then).
 inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const GameSetup &setup, const content::PlayerTemplates &templates,
-	int mapStartPositions, const engine::level::generals_map::ScriptFile *skirmishScripts = nullptr)
+	int mapStartPositions, const engine::level::generals_map::ScriptFile *skirmishScripts = nullptr, const std::vector<content::MultiplayerColor> *colors = nullptr)
 {
 	SkirmishLevel out;
 	out.level = map;
+	// GameInfo's superweapon restriction (the setup's "limit superweapons"), for the match's rules.
+	out.level.properties.Set("superweaponRestriction", static_cast<std::int64_t>(setup.superweaponRestriction));
+	// GameInfo's starting cash, which each player starts with unless its template says otherwise (Player::init).
+	out.level.properties.Set("startingCash", static_cast<std::int64_t>(setup.startingCash));
 	auto &scenario = out.level.scenario;
 	// Keep the neutral side and civilians, with their teams.
 	std::vector<engine::level::Participant> kept;
@@ -86,12 +92,41 @@ inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const
 		if (slot.Occupied() && slot.startPos >= 0 && slot.startPos < mapStartPositions)
 			taken[static_cast<std::size_t>(slot.startPos)] = true;
 
+	// populateRandomSideAndColor's colours: each occupied slot's (an observer's too) in slot order, a random one drawn
+	// again until no slot has it (GameInfo::isColorTaken). Drawn from a stream of their own, so a setup's sides and
+	// spots come out as they did before colours were resolved.
+	std::array<int, MaxSlots> slotColors{};
+	for (int index = 0; index < MaxSlots; ++index)
+		slotColors[static_cast<std::size_t>(index)] = setup.slots[static_cast<std::size_t>(index)].color;
+	if (colors != nullptr && !colors->empty())
+	{
+		auto colorRandom = Engine::Math::Stream(static_cast<std::uint64_t>(static_cast<std::uint32_t>(setup.seed)), {0x5C1Au, 0xC0103u});
+		const int count = static_cast<int>(colors->size());
+		for (int index = 0; index < MaxSlots; ++index)
+		{
+			int &color = slotColors[static_cast<std::size_t>(index)];
+			if (!setup.slots[static_cast<std::size_t>(index)].Occupied() || (color >= 0 && color < count))
+				continue;
+			const auto taken = [&](int candidate) { return std::ranges::find(slotColors, candidate) != slotColors.end(); };
+			color = -1;
+			if (std::ranges::all_of(std::views::iota(0, count), taken))
+				continue; // every colour taken: the original would draw forever
+			while (color == -1)
+			{
+				const int candidate = static_cast<int>(Engine::Math::UniformInt(colorRandom, 0, count - 1));
+				if (!taken(candidate))
+					color = candidate;
+			}
+		}
+	}
+
 	for (int index = 0; index < MaxSlots; ++index)
 	{
 		const GameSlot &slot = setup.slots[static_cast<std::size_t>(index)];
 		if (!slot.Occupied() || slot.Observer())
 			continue;
 		SkirmishPlayer player;
+		player.color = colors != nullptr ? slotColors[static_cast<std::size_t>(index)] : -1;
 		player.slot = index;
 		player.name = "player" + std::to_string(index);
 		player.team = "teamplayer" + std::to_string(index);
@@ -140,8 +175,17 @@ inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const
 			side.properties.Set("playerFaction", info->name);
 		side.properties.Set("playerAllies", allies);
 		side.properties.Set("playerEnemies", enemies);
-		side.properties.Set("playerStartMoney", static_cast<std::int64_t>(setup.startingCash));
 		side.properties.Set("multiplayerStartIndex", static_cast<std::int64_t>(player.startPosition));
+		// startNewGame: the side's colours, its MultiplayerColor's day and night RGB (Player::initFromDict: | 0xff000000).
+		if (colors != nullptr && player.color >= 0 && player.color < static_cast<int>(colors->size()))
+		{
+			const content::MultiplayerColor &house = (*colors)[static_cast<std::size_t>(player.color)];
+			const auto argb = [](const engine::config::Rgb &rgb) {
+				return static_cast<std::int64_t>(0xFF000000u | (std::uint32_t{rgb.r} << 16) | (std::uint32_t{rgb.g} << 8) | std::uint32_t{rgb.b});
+			};
+			side.properties.Set("playerColor", argb(house.day));
+			side.properties.Set("playerNightColor", argb(house.night));
+		}
 		if (slot.AI())
 			side.properties.Set("skirmishDifficulty", static_cast<std::int64_t>(slot.state == SlotState::EasyAI ? 0 : slot.state == SlotState::MediumAI ? 1 : 2));
 		// Its side's skirmish scripts and teams (the map's skirmish side of the same side).
@@ -234,6 +278,8 @@ inline SkirmishLevel PrepareChallengeLevel(const engine::level::Level &map, int 
 {
 	SkirmishLevel out;
 	out.level = map;
+	// TheChallengeGameInfo's starting cash (Player::init).
+	out.level.properties.Set("startingCash", static_cast<std::int64_t>(startingCash));
 	auto random = Engine::Math::Stream(static_cast<std::uint64_t>(static_cast<std::uint32_t>(seed)), {0x5C1Au});
 	SkirmishPlayer player;
 	player.slot = 0;
@@ -250,7 +296,6 @@ inline SkirmishLevel PrepareChallengeLevel(const engine::level::Level &map, int 
 		side.properties.Set("playerFaction", info->name);
 	side.properties.Set("playerAllies", std::string{});
 	side.properties.Set("playerEnemies", std::string{});
-	side.properties.Set("playerStartMoney", static_cast<std::int64_t>(startingCash));
 	side.properties.Set("multiplayerStartIndex", static_cast<std::int64_t>(player.startPosition));
 	out.level.scenario.participants.push_back(std::move(side));
 	engine::level::Properties team;

@@ -43,6 +43,7 @@ struct HarvestEvent
 	std::int64_t amount{0};
 	std::uint32_t player{0};
 	Engine::Math::FixedVector3 position;
+	ecs::Entity depot; // Delivered: the supply centre that took it
 };
 
 struct HarvestEvents : ecs::ChunkOutputs<HarvestEvent>

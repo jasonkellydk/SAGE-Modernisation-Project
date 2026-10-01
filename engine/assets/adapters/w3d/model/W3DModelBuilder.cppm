@@ -113,6 +113,13 @@ void Apply_Shader_Settings(ModelMaterialDesc &material, const W3DShaderSettings 
 		material.render_mode = MaterialRenderMode::AlphaBlend;
 }
 
+// W3DMeshRenderObject::Load_W3D's is_alpha for a polygon's shader: it blends (DSTBLEND not ZERO or SRCBLEND not ONE)
+// without alpha test.
+bool Shader_Blends(const W3DShaderSettings &shader) noexcept
+{
+	return (shader.destination_blend != 0 || shader.source_blend != 1) && shader.alpha_test == 0;
+}
+
 void Add_Dependency(ModelAssetDesc &description, AssetType type, std::string_view name)
 {
 	if (name.empty())
@@ -143,7 +150,7 @@ void Append_Surface_Pass(ModelAssetDesc &description, const W3DParsedMesh &mesh,
 		// Keep authored face order, including noncontiguous material runs.
 		if (material_index != previous_material) {
 			description.submeshes.push_back({static_cast<std::uint32_t>(description.indices.size()), 0,
-				material_index, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty()});
+				material_index, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty(), mesh.header.attributes});
 			previous_material = material_index;
 		}
 		for (std::size_t corner = 0; corner < 3; ++corner) {
@@ -232,23 +239,60 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 				ModelBuilderDetail::Append_Surface_Pass(description, mesh, mesh.shader_pass_bindings[pass_index], vertex_base);
 				continue;
 			}
-			if (pass.vertex_material_index >= mesh.materials.vertex_materials.size())
-				continue;
-			ModelMaterialDesc material = mesh.materials.vertex_materials[pass.vertex_material_index].material;
-			if (pass.texture_index < mesh.materials.textures.size())
-				material.primary_texture = mesh.materials.textures[pass.texture_index].name;
-			if (pass.shader_index < mesh.materials.shaders.size())
-				ModelBuilderDetail::Apply_Shader_Settings(material, mesh.materials.shaders[pass.shader_index]);
-			material.surface.house_color = ModelBuilderDetail::House_Color(mesh.header.name, material.primary_texture);
-			description.submeshes.push_back({index_base, legacy_index_count,
-				static_cast<std::uint32_t>(description.materials.size()), mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty()});
-			description.materials.push_back(std::move(material));
+			// The pass's polygons in authored order, in runs that share a shader, a stage 0 texture and the vertex
+			// material of their first vertex: where the original's mesh drawing starts a new batch (ModelMeshDrawing::
+			// Draw_Base: Get_Shader(face), Peek_Material(triangle[0]), Peek_Texture(face)). A chunk with one entry names
+			// the pass's single one.
+			const std::size_t faces = mesh.triangles.size();
+			const auto face_shader = [&](std::size_t face) {
+				return pass.shader_ids.size() == faces && faces > 1 ? pass.shader_ids[face] : pass.shader_index;
+			};
+			const auto face_texture = [&](std::size_t face) {
+				return pass.texture_ids.size() == faces && faces > 1 ? pass.texture_ids[face] : pass.texture_index;
+			};
+			const auto face_material = [&](std::size_t face) {
+				const std::uint32_t vertex = mesh.triangles[face][0];
+				return pass.vertex_material_ids.size() == mesh.positions.size() && mesh.positions.size() > 1 && vertex < pass.vertex_material_ids.size()
+					? pass.vertex_material_ids[vertex] : pass.vertex_material_index;
+			};
+			std::vector<std::array<std::uint32_t, 4>> made; // (vertex material, shader, texture, material index) of this pass
+			for (std::size_t first = 0; first < faces;) {
+				const std::uint32_t vertex_material = face_material(first), shader = face_shader(first), texture = face_texture(first);
+				std::size_t end = first + 1;
+				while (end < faces && face_material(end) == vertex_material && face_shader(end) == shader && face_texture(end) == texture)
+					++end;
+				if (vertex_material < mesh.materials.vertex_materials.size()) {
+					std::uint32_t material_index = 0;
+					const auto found = std::find_if(made.begin(), made.end(), [&](const auto &entry) {
+						return entry[0] == vertex_material && entry[1] == shader && entry[2] == texture;
+					});
+					if (found != made.end())
+						material_index = (*found)[3];
+					else {
+						ModelMaterialDesc material = mesh.materials.vertex_materials[vertex_material].material;
+						if (texture < mesh.materials.textures.size())
+							material.primary_texture = mesh.materials.textures[texture].name;
+						if (shader < mesh.materials.shaders.size())
+							ModelBuilderDetail::Apply_Shader_Settings(material, mesh.materials.shaders[shader]);
+						material.surface.house_color = ModelBuilderDetail::House_Color(mesh.header.name, material.primary_texture);
+						material_index = static_cast<std::uint32_t>(description.materials.size());
+						description.materials.push_back(std::move(material));
+						made.push_back({vertex_material, shader, texture, material_index});
+					}
+					description.submeshes.push_back({index_base + static_cast<std::uint32_t>(first * 3), static_cast<std::uint32_t>((end - first) * 3),
+						material_index, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty(), mesh.header.attributes,
+						static_cast<std::uint8_t>(std::min<std::size_t>(pass_index, 255)),
+						shader < mesh.materials.shaders.size() && ModelBuilderDetail::Shader_Blends(mesh.materials.shaders[shader])});
+				}
+				first = end;
+			}
 		}
 	}
 	if (description.materials.size() == material_base)
 		description.materials.push_back({"default", {}, {}, {}, 1.0f, 1.0f, 0.0f, 0});
 	if (description.submeshes.size() == submesh_base)
-		description.submeshes.push_back({index_base, legacy_index_count, material_base, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty()});
+		description.submeshes.push_back({index_base, legacy_index_count, material_base, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty(),
+			mesh.header.attributes});
 
 	for (std::size_t material_index = material_base; material_index < description.materials.size(); ++material_index) {
 		ModelMaterialDesc &material = description.materials[material_index];

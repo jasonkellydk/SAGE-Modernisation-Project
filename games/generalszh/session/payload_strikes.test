@@ -1,0 +1,624 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.delivery.systems.delivery_system;
+import engine.gameplay.rts.combat.components.missile;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.common.status.components.disabled_until;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.attitude;
+import engine.gameplay.common.health.components.health;
+
+// DeliverPayloadAIUpdate (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/DeliverPayloadAIUpdate.cpp)
+// and ObjectCreationList.cpp's DeliverPayloadNugget::create on the shipped superweapons, fired by scripts on the live
+// shell map: the A10 strike's dive, strafing and visible missiles, the artillery barrage's held-back cannons and shells,
+// and the napalm strike's weapon delivery.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+using Engine::Math::FixedVector3;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+
+Fixed Distance3Squared(const FixedVector3 &a, const FixedVector3 &b)
+{
+	const FixedVector3 d = a - b;
+	return d.x * d.x + d.y * d.y + d.z * d.z;
+}
+
+// Three sessions in step: one worker, four workers, and (once taken) one restored from the first's checkpoint.
+struct Trio
+{
+	std::unique_ptr<session::Session> game, four, restored;
+
+	explicit Trio(ShellContent &shell)
+	{
+		game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+		four = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, 4, {}});
+		game->Tick();
+		four->Tick();
+	}
+	void Step()
+	{
+		for (session::Session *g : {game.get(), four.get(), restored.get()})
+			if (g != nullptr)
+				g->Tick();
+	}
+	void Restore(ShellContent &shell)
+	{
+		restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game->Checkpoint());
+	}
+	// Fires `power` from a new `building` of `team` at `site`, in both sessions, the tick after it is placed.
+	void Fire(ShellContent &shell, const std::string &building, const std::string &team, const std::string &power, FixedVector2 site, FixedVector2 target)
+	{
+		const std::uint32_t index = *shell.game.powers.Template(power);
+		for (session::Session *g : {game.get(), four.get()})
+		{
+			const ecs::Entity source = g->Place(building, site, {}, *g->Teams().FindTeam(team));
+			g->World().Get<gp::SpecialPowerTimers>(source)->Find(index)->availableOn = g->CurrentTick();
+			g->Tick();
+			gameplay::FireSpecialPower(g->Game(), source, power, target, true);
+		}
+	}
+	std::vector<ecs::Entity> Carriers() const
+	{
+		std::vector<ecs::Entity> out;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game->World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				out.push_back(entity);
+		});
+		std::sort(out.begin(), out.end(), [](ecs::Entity a, ecs::Entity b) { return a.index < b.index; });
+		return out;
+	}
+	void CheckAgree()
+	{
+		BOOST_TEST((four->StateHash() == game->StateHash()));
+		BOOST_TEST_REQUIRE(restored != nullptr);
+		BOOST_TEST((restored->StateHash() == game->StateHash()));
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(payload_strikes)
+
+// Legacy parity (DeliverPayloadAIUpdate::update's dive, deliverPayload, isCloseEnoughToTarget, DeliveringState::update's
+// visible payload, HeadOffMapState; DeliverPayloadNugget::create), SUPERWEAPON_A10ThunderboltMissileStrike1 from an
+// America command centre (one AmericaJetA10Thunderbolt: DiveStartDistance 500, DiveEndDistance 300, StrafingWeaponSlot
+// PRIMARY, DeliveryDistance 450, DropDelay 500 = 15 frames, 6 WeaponA bones, 2 a drop):
+//   the dive starts on the first frame its update finds it within 500 of the target (2D, from where it stood as its
+//   update ran) - PRECISE_Z_POS on for the target's height, the StartDive sound played there - and ends on the first
+//   within 300 (3D); every frame of the dive after the first (the last included) it plays StrafeWeaponFX at the strafe
+//   point (the target plus 0.67 of its flat heading scaled by the dive's progress x 100, on the ground) and fires its
+//   A10ThunderboltVulcan there whenever that is ready (DelayBetweenShots 60 ms: every second frame);
+//   close enough (within 450 inbound) it starts delivering: its missiles go two on the next frame, two 16 frames later
+//   and the last two 16 after that, each at its WeaponA bone (01 to 06) less one velocity, with the jet's velocity added
+//   to its own, flying for A10ThunderboltMissileWeapon at the target; 16 frames after the last it heads off the map.
+//   One and four workers agree, as does a checkpoint taken mid-dive.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_a10_strike_dives_strafes_and_fires_its_missiles)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	Trio trio(shell);
+	auto &world = trio.game->World();
+	auto &game = trio.game->Game();
+	const auto [low, high] = game.ground.Extent();
+	const FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const FixedVector2 site{low.x + Fixed::FromInt(300), target.y};
+	trio.Fire(shell, "AmericaCommandCenter", "teamPlyrAmerica", "SuperweaponA10ThunderboltMissileStrike", site, target);
+	const auto carriers = trio.Carriers();
+	BOOST_TEST_REQUIRE(carriers.size() == 1u);
+	const ecs::Entity jet = carriers.front();
+	const gp::Delivery start = *world.Get<gp::Delivery>(jet);
+	BOOST_TEST((start.dive == gp::DiveState::PreDive));
+	BOOST_TEST((start.diveStart == Fixed::FromInt(500)));
+	BOOST_TEST((start.diveEnd == Fixed::FromInt(300)));
+	BOOST_TEST(start.strafeSlot == 0u);
+	BOOST_TEST(start.visibleBones == 6);
+	BOOST_TEST(start.visiblePerDrop == 2);
+	BOOST_TEST(start.dropDelay == 15u);
+	BOOST_TEST(start.strafeEffect != gp::Delivery::NoEffect);
+	BOOST_TEST_REQUIRE(start.visibleRun < shell.game.powers.visibleRuns.size());
+	const content::VisibleRun &run = shell.game.powers.visibleRuns[start.visibleRun];
+	BOOST_TEST(run.payload == "A10ThunderboltMissile");
+	BOOST_TEST_REQUIRE(run.bones.size() == 6u);
+	for (const auto &bone : run.bones)
+		BOOST_TEST(bone.has_value());
+	const FixedVector3 aim{target.x, target.y, game.ground.At(target)};
+	BOOST_TEST((start.targetHeight == aim.z));
+	const std::uint32_t vulcan = world.Get<gp::Armament>(jet)->weapon;
+	const gp::WeaponDefinition &gun = world.Resource<gp::WeaponCatalog>().At(vulcan);
+
+	std::map<std::uint64_t, FixedVector3> began; // where its update found it, by tick
+	std::optional<std::uint64_t> diveStart, diveEnd, delivering, headOff;
+	std::vector<std::uint64_t> startCues, strafeCues, shotTicks;
+	std::vector<gp::Shot> shots;
+	std::vector<std::pair<std::uint64_t, std::int32_t>> drops;
+	std::vector<gp::VisibleDrop> dropRecords;
+	std::map<std::uint32_t, std::pair<gp::Transform, gp::MissileFlight>> missiles; // entity index -> as made
+	std::size_t detonated = 0;
+	const auto missileWeapon = [&] { return game.templates.Weapon("A10ThunderboltMissileWeapon|A10ThunderboltMissile"); };
+	for (int step = 0; step < 30 * 90 && world.IsAlive(jet); ++step)
+	{
+		trio.Step();
+		const std::uint64_t now = trio.game->CurrentTick();
+		if (!world.IsAlive(jet) || world.Get<gp::Delivery>(jet) == nullptr)
+			break;
+		const gp::Delivery &state = *world.Get<gp::Delivery>(jet);
+		began[now] = state.lastPosition;
+		if (!diveStart && state.dive == gp::DiveState::Diving)
+		{
+			diveStart = now;
+			BOOST_TEST(world.Get<gp::Locomotion>(jet)->preciseZ == 1u);
+			BOOST_TEST((world.Get<gp::Locomotion>(jet)->preciseHeight == aim.z));
+		}
+		if (diveStart && !diveEnd && state.dive == gp::DiveState::PostDive)
+		{
+			diveEnd = now;
+			BOOST_TEST(world.Get<gp::Locomotion>(jet)->preciseZ == 0u);
+		}
+		if (!delivering && state.phase == gp::DeliveryPhase::Delivering)
+			delivering = now;
+		if (!headOff && state.phase == gp::DeliveryPhase::HeadOffMap)
+			headOff = now;
+		world.Resource<gp::DeliveryCues>().ForEach([&](const gp::DeliveryCue &cue) {
+			if (cue.carrier == jet)
+				(cue.kind == gp::DeliveryCue::Kind::StartDive ? startCues : strafeCues).push_back(now);
+		});
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == jet && shot.weapon == vulcan)
+			{
+				shotTicks.push_back(now);
+				shots.push_back(shot);
+			}
+		});
+		world.Resource<gp::VisibleDrops>().ForEach([&](const gp::VisibleDrop &drop) {
+			if (drop.carrier != jet)
+				return;
+			drops.emplace_back(now, drop.index);
+			dropRecords.push_back(drop);
+			BOOST_TEST((drop.at == state.lastPosition));
+		});
+		ecs::Query<ecs::Read<gp::MissileFlight>, ecs::Read<gp::Transform>> flights(world);
+		flights.ForEachChunk([&](auto chunk) {
+			const auto flight = chunk.template Get<gp::MissileFlight>();
+			const auto placed = chunk.template Get<gp::Transform>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < flight.size(); ++row)
+				if (flight[row].shot.source == jet && !missiles.contains(entities[row].index))
+					missiles.emplace(entities[row].index, std::pair{placed[row], flight[row]});
+		});
+		world.Resource<gp::MissileDetonations>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == jet && shot.weapon == missileWeapon())
+				++detonated;
+		});
+		if (diveStart && !trio.restored && now == *diveStart + 5)
+			trio.Restore(shell);
+	}
+	// The dive.
+	BOOST_TEST_REQUIRE(diveStart.has_value());
+	BOOST_TEST_REQUIRE(diveEnd.has_value());
+	const auto flat = [&](std::uint64_t tick) { return Engine::Math::DistanceSquared(began.at(tick).XY(), target); };
+	BOOST_TEST((flat(*diveStart) <= Fixed::FromInt(500 * 500)));
+	BOOST_TEST((flat(*diveStart - 1) > Fixed::FromInt(500 * 500)));
+	BOOST_TEST((Distance3Squared(began.at(*diveEnd), aim) <= Fixed::FromInt(300 * 300)));
+	BOOST_TEST((Distance3Squared(began.at(*diveEnd - 1), aim) > Fixed::FromInt(300 * 300)));
+	BOOST_TEST((startCues == std::vector<std::uint64_t>{*diveStart}));
+	// Strafing: each frame after the first of the dive while not climbing 5 a frame; the gun whenever ready.
+	std::vector<std::uint64_t> expectedCues, expectedShots;
+	std::uint64_t ready = 0;
+	for (std::uint64_t tick = *diveStart + 1; tick <= *diveEnd; ++tick)
+		if ((began.at(tick) - began.at(tick - 1)).z < Fixed::FromInt(5))
+		{
+			expectedCues.push_back(tick);
+			if (tick >= ready)
+			{
+				expectedShots.push_back(tick);
+				ready = tick + std::max<std::uint64_t>(gun.delayMin, 1);
+			}
+		}
+	BOOST_TEST(expectedCues.size() > 10u);
+	BOOST_TEST((strafeCues == expectedCues));
+	BOOST_TEST((shotTicks == expectedShots));
+	BOOST_TEST(gun.delayMin == 2u);
+	for (std::size_t index = 0; index < shots.size() && index < shotTicks.size(); ++index)
+	{
+		const std::uint64_t tick = shotTicks[index];
+		const FixedVector3 velocity = began.at(tick) - began.at(tick - 1);
+		const FixedVector3 point = gp::DeliverySystem::StrafePoint(start, velocity,
+			Engine::Math::Length(began.at(tick) - aim), game.ground);
+		BOOST_TEST((shots[index].aim == point));
+	}
+	// The delivery: close enough within 450 inbound, missiles two at a time every 16 frames, off 16 after the last.
+	BOOST_TEST_REQUIRE(delivering.has_value());
+	BOOST_TEST((flat(*delivering) < Fixed::FromInt(450 * 450)));
+	BOOST_TEST((flat(*delivering - 1) >= Fixed::FromInt(450 * 450)));
+	const std::uint64_t c = *delivering;
+	BOOST_TEST((drops == std::vector<std::pair<std::uint64_t, std::int32_t>>{{c + 1, 1}, {c + 1, 2}, {c + 17, 3}, {c + 17, 4}, {c + 33, 5}, {c + 33, 6}}));
+	BOOST_TEST_REQUIRE(headOff.has_value());
+	BOOST_TEST(*headOff == c + 49);
+	// Each missile as made: its bone on the jet, one velocity back, the jet's velocity added to its own launch.
+	BOOST_TEST_REQUIRE(missiles.size() == 6u);
+	std::size_t matched = 0;
+	for (std::size_t each = 0; each < dropRecords.size(); ++each)
+	{
+		const gp::VisibleDrop &drop = dropRecords[each];
+		const std::uint64_t when = drops[each].first;
+		const FixedVector3 local = *run.bones[static_cast<std::size_t>(drop.index - 1)];
+		const Fixed cs = Engine::Math::Cos(drop.facing), sn = Engine::Math::Sin(drop.facing);
+		const FixedVector3 expected = drop.at + FixedVector3{local.x * cs - local.y * sn, local.x * sn + local.y * cs, local.z} - drop.velocity;
+		BOOST_TEST((drop.velocity == began.at(when) - began.at(when - 1)));
+		for (const auto &[index, made] : missiles)
+			if (made.first.position == expected)
+			{
+				++matched;
+				BOOST_TEST((made.second.shot.weapon == missileWeapon()));
+				BOOST_TEST((made.second.shot.aim == aim));
+				// Its own launch (InitialVelocity 30 a second: 1 a frame along the jet's heading) plus the jet's velocity.
+				const FixedVector3 own = made.second.velocity - drop.velocity;
+				BOOST_TEST((Engine::Math::Length(own) > Fixed::FromRatio(99, 100)));
+				BOOST_TEST((Engine::Math::Length(own) < Fixed::FromRatio(101, 100)));
+			}
+	}
+	BOOST_TEST(matched == 6u);
+	BOOST_TEST(detonated == 6u);
+	trio.CheckAgree();
+}
+
+// Legacy parity (DeliverPayloadNugget::create's DelayDeliveryMax: setDisabledUntil(DISABLED_DEFAULT, now +
+// GameLogicRandomValue(0, 3000 ms = 90 frames)); GameLogic's update gate (an AIUpdate runs only while HELD);
+// DeliveringState::update's visible payload; HeadOffMapState::onEnter's SelfDestructObject), SUPERWEAPON_ArtilleryBarrage1
+// from a China command centre: twelve ChinaArtilleryCannons (FormationSize 12), each held back up to 90 frames, its run
+// frozen while it is (no closeness test made), then flying in; the frame after it is first close enough (250) it lets its
+// one ChinaArtilleryBarrageShell go (flying for ArtilleryBarrageDamageWeapon at its target, from where it stood less one
+// velocity) and the frame after that, empty, it pops away (removed). One and four workers agree, and a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_artillery_barrage_holds_back_drops_its_shells_and_pops_away)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	Trio trio(shell);
+	auto &world = trio.game->World();
+	auto &game = trio.game->Game();
+	const auto [low, high] = game.ground.Extent();
+	const FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const FixedVector2 site{low.x + Fixed::FromInt(300), target.y};
+	const std::uint64_t fired = trio.game->CurrentTick() + 1;
+	trio.Fire(shell, "ChinaCommandCenter", "teamPlyrChina", "SuperweaponArtilleryBarrage", site, target);
+	const auto cannons = trio.Carriers();
+	BOOST_TEST_REQUIRE(cannons.size() == 12u);
+	std::map<std::uint32_t, std::uint64_t> until;
+	std::set<std::uint64_t> delays;
+	for (const ecs::Entity cannon : cannons)
+	{
+		const auto *mask = world.Get<gp::Disabled>(cannon);
+		const auto *timer = world.Get<gp::DisabledUntil>(cannon);
+		BOOST_TEST_REQUIRE(mask != nullptr);
+		BOOST_TEST_REQUIRE(timer != nullptr);
+		BOOST_TEST((mask->mask & gp::disabled_type::Default) != 0u);
+		const std::uint64_t end = timer->until[0];
+		BOOST_TEST(end >= fired);
+		BOOST_TEST(end <= fired + 90);
+		until[cannon.index] = end;
+		delays.insert(end);
+		const gp::Delivery &state = *world.Get<gp::Delivery>(cannon);
+		BOOST_TEST(state.selfDestruct == 1u);
+		BOOST_TEST(state.visibleBones == 1);
+		BOOST_TEST((state.dive == gp::DiveState::PostDive));
+	}
+	BOOST_TEST(delays.size() > 1u); // each its own random delay
+	std::map<std::uint32_t, std::uint64_t> delivering, dropped, gone;
+	std::map<std::uint32_t, std::uint64_t> firstTest;
+	std::size_t shells = 0;
+	for (int step = 0; step < 30 * 120 && gone.size() < cannons.size(); ++step)
+	{
+		trio.Step();
+		const std::uint64_t now = trio.game->CurrentTick();
+		world.Resource<gp::VisibleDrops>().ForEach([&](const gp::VisibleDrop &drop) {
+			dropped.emplace(drop.carrier.index, now);
+			BOOST_TEST(drop.index == 1);
+		});
+		for (const ecs::Entity cannon : cannons)
+		{
+			if (!world.IsAlive(cannon))
+			{
+				gone.emplace(cannon.index, now);
+				continue;
+			}
+			const gp::Delivery &state = *world.Get<gp::Delivery>(cannon);
+			const auto *mask = world.Get<gp::Disabled>(cannon);
+			const bool held = mask != nullptr && (mask->mask & gp::disabled_type::Default) != 0;
+			// Held back, its run does not move on: no closeness test yet.
+			if (held)
+				BOOST_TEST((state.previousDistance == Fixed{}));
+			if (!held && state.previousDistance != Fixed{} && !firstTest.contains(cannon.index))
+				firstTest.emplace(cannon.index, now);
+			if (state.phase == gp::DeliveryPhase::Delivering && !delivering.contains(cannon.index))
+				delivering.emplace(cannon.index, now);
+		}
+		ecs::Query<ecs::Read<gp::MissileFlight>, ecs::Read<gp::DefinitionRef>> flights(world);
+		if (step % 30 == 0 || gone.size() == cannons.size())
+		{
+			std::size_t count = 0;
+			flights.ForEachChunk([&](auto chunk) {
+				const auto flight = chunk.template Get<gp::MissileFlight>();
+				const auto refs = chunk.template Get<gp::DefinitionRef>();
+				for (std::size_t row = 0; row < flight.size(); ++row)
+					if (game.templates.DefinitionAt(refs[row].index).name == "ChinaArtilleryBarrageShell")
+					{
+						++count;
+						BOOST_TEST((flight[row].shot.weapon == game.templates.Weapon("ArtilleryBarrageDamageWeapon|ChinaArtilleryBarrageShell")));
+					}
+			});
+			shells = std::max(shells, count);
+		}
+		if (!trio.restored && delivering.size() >= 3)
+			trio.Restore(shell);
+	}
+	BOOST_TEST(gone.size() == cannons.size());
+	for (const ecs::Entity cannon : cannons)
+	{
+		BOOST_TEST_REQUIRE(delivering.contains(cannon.index));
+		BOOST_TEST_REQUIRE(firstTest.contains(cannon.index));
+		// Its first closeness test comes once it is let go (the frame its disable ends, or the next).
+		BOOST_TEST(firstTest[cannon.index] >= until[cannon.index]);
+		BOOST_TEST(firstTest[cannon.index] <= until[cannon.index] + 1);
+		BOOST_TEST(dropped[cannon.index] == delivering[cannon.index] + 1);
+		BOOST_TEST(gone[cannon.index] == delivering[cannon.index] + 2); // popped away (removed) the frame after its drop
+	}
+	BOOST_TEST(shells >= 1u);
+	trio.CheckAgree();
+}
+
+// Legacy parity (DeliveringState::update's FireWeapon: fireCurrentWeapon at the target plus DropOffset, the payload item
+// destroyed; DeliverPayloadNugget::create's formation and WeaponConvergenceFactor), SUPERWEAPON_NapalmStrike from a China
+// command centre: five ChinaJetMIGNapalmStrikers (35 apart, converging on the one target), each carrying one
+// NapalmMissile; the frame after one is first close enough (300) its NapalmMissileWeapon fires at the target, 10 below it
+// (DropOffset), from its launch bone, the carried missile removed; the frame after that, empty, it heads off the map.
+// One and four workers agree, and a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_napalm_strike_fires_its_payload_as_a_weapon)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	Trio trio(shell);
+	auto &world = trio.game->World();
+	auto &game = trio.game->Game();
+	const auto [low, high] = game.ground.Extent();
+	const FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const FixedVector2 site{low.x + Fixed::FromInt(300), target.y};
+	trio.Fire(shell, "ChinaCommandCenter", "teamPlyrChina", "SuperweaponNapalmStrike", site, target);
+	const auto jets = trio.Carriers();
+	BOOST_TEST_REQUIRE(jets.size() == 5u);
+	std::map<std::uint32_t, ecs::Entity> payloads;
+	for (const ecs::Entity jet : jets)
+	{
+		const gp::Delivery &state = *world.Get<gp::Delivery>(jet);
+		BOOST_TEST(state.fireWeapon == 1u);
+		BOOST_TEST((state.target == target)); // WeaponConvergenceFactor 1: all on the one spot
+		const auto aboard = game.manifest.Aboard(jet);
+		BOOST_TEST_REQUIRE(aboard.size() == 1u);
+		payloads[jet.index] = aboard.front();
+	}
+	const FixedVector3 aim{target.x, target.y, game.ground.At(target) - Fixed::FromInt(10)};
+	std::map<std::uint32_t, std::uint64_t> delivering, fired, removed, headOff;
+	for (int step = 0; step < 30 * 60 && headOff.size() < jets.size(); ++step)
+	{
+		trio.Step();
+		const std::uint64_t now = trio.game->CurrentTick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			for (const ecs::Entity jet : jets)
+				if (shot.source == jet)
+				{
+					BOOST_TEST(!fired.contains(jet.index));
+					fired.emplace(jet.index, now);
+					BOOST_TEST((shot.aim == aim));
+					BOOST_TEST((shot.weapon == world.Get<gp::Armament>(jet)->weapon));
+				}
+		});
+		for (const ecs::Entity jet : jets)
+		{
+			if (!removed.contains(jet.index) && !world.IsAlive(payloads[jet.index]))
+				removed.emplace(jet.index, now);
+			if (!world.IsAlive(jet))
+				continue;
+			const gp::Delivery &state = *world.Get<gp::Delivery>(jet);
+			if (state.phase == gp::DeliveryPhase::Delivering && !delivering.contains(jet.index))
+				delivering.emplace(jet.index, now);
+			if (state.phase == gp::DeliveryPhase::HeadOffMap && !headOff.contains(jet.index))
+				headOff.emplace(jet.index, now);
+		}
+		if (!trio.restored && delivering.size() >= 2)
+			trio.Restore(shell);
+	}
+	for (const ecs::Entity jet : jets)
+	{
+		BOOST_TEST_REQUIRE(delivering.contains(jet.index));
+		BOOST_TEST_REQUIRE(fired.contains(jet.index));
+		BOOST_TEST_REQUIRE(headOff.contains(jet.index));
+		BOOST_TEST(fired[jet.index] == delivering[jet.index] + 1);
+		BOOST_TEST(removed[jet.index] == delivering[jet.index] + 1);
+		BOOST_TEST(headOff[jet.index] == delivering[jet.index] + 2);
+	}
+	trio.CheckAgree();
+}
+
+// Legacy parity (TransportContain::onRemoving: ExitBone, OrientLikeContainerOnExit, KeepContainerVelocityOnExit,
+// ExitPitchRate; PhysicsBehavior::update's CenterOfMassOffset easing; DeliveringState::update's aiExit, which puts the
+// item at DropOffset plus DropVariance while it is still aboard, so onRemoving then moves it to the bone):
+// SUPERWEAPON_CarpetBomb's AmericaJetB52 (TransportContain ExitBone WeaponA01, OrientLikeContainerOnExit and
+// KeepContainerVelocityOnExit Yes, ExitPitchRate 30 degrees a second) drops 15 CarpetBombs (PhysicsBehavior
+// CenterOfMassOffset 2). Each comes out on its drop frame at the B52's WeaponA01 bone (turned with the B52), facing the
+// B52's way and level, with a pitch rate of 2 x 30 degrees a second = 2 degrees a frame. On its next frame it moves
+// sideways exactly as the B52 did (the motive force of the B52's velocity times its mass, from rest). It tips forward
+// ever more slowly and never past straight down. One and four workers agree, as does a checkpoint taken mid-run.
+// All 15 leave it: DeliveringState::update lets one out each DropDelay (9 frames after the one it drops on, so every
+// 10th) while isCloseEnoughToTarget holds, and the B52 never leaves DeliveryDistance 400 before the last: it slows to
+// its MinSpeed as it nears its goal (the target) and keeps near it, so the run ends in STATE_SUCCESS (its payload all
+// gone) and it heads off the map empty. Nothing of its own brings it down: each bomb goes off where it lands
+// (HeightDieUpdate, FireWeaponWhenDeadBehavior's CarpetBombWeapon, 300 in 50) and WeaponTemplate::dealDamageInternal
+// spares the B52 (source->getProducerID() == victim: DeliverPayloadNugget::create's payload->setProducer(transport))
+// and the other bombs (RadiusDamageAffects NOT_SIMILAR: WEAPON_DOESNT_AFFECT_SIMILAR, allies of an equivalent kind), so
+// the stick never goes off in a chain up to the B52. Were it destroyed with bombs still aboard, they would go with it
+// (OpenContain::onDelete; TransportContain DestroyRidersWhoAreNotFreeToExit), never dropped.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_b52s_carpet_bombs_leave_by_its_exit_bone_with_its_velocity)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto bone = shell.game.transportExitBones.find("AmericaJetB52");
+	BOOST_TEST_REQUIRE((bone != shell.game.transportExitBones.end()));
+	Trio trio(shell);
+	const auto [low, high] = trio.game->Game().ground.Extent();
+	(void)high;
+	const FixedVector2 site = low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(300)};
+	const FixedVector2 target = low + FixedVector2{Fixed::FromInt(900), Fixed::FromInt(900)};
+	const std::vector<ecs::Entity> before = trio.Carriers();
+	trio.Fire(shell, "AmericaJetB52", "teamPlyrAmerica", "SuperweaponCarpetBomb", site, target);
+	ecs::Entity b52;
+	for (int wait = 0; wait < 30 && !trio.game->World().IsAlive(b52); ++wait)
+	{
+		for (const ecs::Entity carrier : trio.Carriers())
+			if (std::find(before.begin(), before.end(), carrier) == before.end())
+				b52 = carrier;
+		if (!trio.game->World().IsAlive(b52))
+			trio.Step();
+	}
+	BOOST_TEST_REQUIRE(trio.game->World().IsAlive(b52));
+	ecs::World &world = trio.game->World();
+	const Fixed perTick = Fixed::FromInt(30) * Fixed::FromRaw(205887) / Fixed::FromInt(180) / Fixed::FromInt(30);
+	const auto pitchRate = static_cast<std::int32_t>(Engine::Math::TurnFromRadians(Fixed::FromInt(2) * perTick).units);
+	std::vector<ecs::Entity> aboard(world.Resource<gp::CargoManifest>().Aboard(b52).begin(), world.Resource<gp::CargoManifest>().Aboard(b52).end());
+	BOOST_TEST(aboard.size() == 15u);
+	struct Falling
+	{
+		ecs::Entity bomb;
+		FixedVector3 carrierStep;
+		std::int32_t lastPitch{0};
+		int frames{0};
+	};
+	std::vector<Falling> falling;
+	gp::Transform last = *world.Get<gp::Transform>(b52);
+	FixedVector3 lastStep{};
+	int dropped = 0;
+	for (int tick = 0; tick < 900 && (dropped < 15 || !falling.empty()); ++tick)
+	{
+		trio.Step();
+		if (tick == 200)
+			trio.Restore(shell);
+		// The ones that fell last frame: moved sideways as the B52 had; then tipping forward, never past straight down.
+		for (auto it = falling.begin(); it != falling.end();)
+		{
+			if (!world.IsAlive(it->bomb))
+			{
+				it = falling.erase(it);
+				continue;
+			}
+			const auto &body = *world.Get<gp::PhysicsBody>(it->bomb);
+			if (++it->frames == 1)
+			{
+				BOOST_TEST((body.velocity.x == it->carrierStep.x));
+				BOOST_TEST((body.velocity.y == it->carrierStep.y));
+			}
+			const auto pitch = static_cast<std::int32_t>(world.Get<gp::Attitude>(it->bomb)->pitch.units);
+			BOOST_TEST(pitch >= it->lastPitch);
+			BOOST_TEST(pitch <= 0x40000000);
+			it->lastPitch = pitch;
+			++it;
+		}
+		if (!world.IsAlive(b52))
+			break;
+		// Its own bombs never hurt it.
+		BOOST_TEST((world.Get<gp::Health>(b52)->current == world.Get<gp::Health>(b52)->maximum));
+		const gp::Transform &now = *world.Get<gp::Transform>(b52);
+		const auto &manifest = world.Resource<gp::CargoManifest>();
+		for (const ecs::Entity bomb : aboard)
+		{
+			const auto still = manifest.Aboard(b52);
+			if (std::find(still.begin(), still.end(), bomb) != still.end() || !world.IsAlive(bomb) ||
+				std::any_of(falling.begin(), falling.end(), [&](const Falling &f) { return f.bomb == bomb; }))
+				continue;
+			// Out this frame: at the bone, the B52's way, level, pitching at its rate.
+			const Fixed c = Engine::Math::Cos(now.facing), s = Engine::Math::Sin(now.facing);
+			const FixedVector3 local = bone->second.position;
+			const FixedVector3 expected = now.position + FixedVector3{local.x * c - local.y * s, local.x * s + local.y * c, local.z};
+			const gp::Transform &at = *world.Get<gp::Transform>(bomb);
+			BOOST_TEST((at.position == expected));
+			BOOST_TEST((at.facing == now.facing));
+			BOOST_TEST_REQUIRE(world.Get<gp::Attitude>(bomb) != nullptr);
+			BOOST_TEST(world.Get<gp::Attitude>(bomb)->pitch.units == 0u);
+			BOOST_TEST(world.Get<gp::PhysicsBody>(bomb)->pitchRate == pitchRate);
+			// The B52's velocity as its update ran (before it moved this frame): its last frame's step.
+			falling.push_back({bomb, lastStep});
+			++dropped;
+		}
+		std::erase_if(aboard, [&](ecs::Entity bomb) { return std::any_of(falling.begin(), falling.end(), [&](const Falling &f) { return f.bomb == bomb; }); });
+		lastStep = now.position - last.position;
+		last = now;
+	}
+	BOOST_TEST(dropped == 15);
+	// On out of the map empty, where it is cleaned up; whatever were still aboard would be destroyed with it.
+	for (int tick = 0; tick < 3000 && world.IsAlive(b52); ++tick)
+		trio.Step();
+	BOOST_TEST(!world.IsAlive(b52));
+	for (const ecs::Entity bomb : aboard)
+		BOOST_TEST(!world.IsAlive(bomb));
+	trio.CheckAgree();
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,6 +1,7 @@
 export module engine.gameplay.rts.aircraft.systems.jet_system;
 import std;
 
+export import engine.gameplay.rts.movement.components.floor_lift;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.components.countermeasures;
 export import engine.gameplay.rts.aircraft.components.jet;
@@ -26,13 +27,17 @@ export import Engine.Core.Math.FixedVector;
 // runway's start it pauses (JetPauseBeforeTakeoffState, as retail: while
 // another jet of its airfield taxies to take off it waits; then afterburners
 // on and TakeoffPause more ticks); its afterburners burn until it is flying.
+// On a flight deck (JetAIUpdate's DECK_HEIGHT_OFFSET paths): it stands on the deck (its floor raised by the deck's
+// height); only the front row takes off (one further back waits to be moved up); it comes in over the landing strip's
+// start from well behind it and lands along the strip, touching down at the deck's height, then rolls through the
+// runway's taxi points to its space; one new from the hangar comes out by the runway's creation points.
 export namespace engine::gameplay
 {
 struct JetSystem
 {
 	using Query = ecs::Query<ecs::Write<Jet>, ecs::Write<Locomotion>, ecs::Write<MoveOrder>, ecs::Write<Transform>, ecs::Optional<Aggression>,
 		ecs::OptionalWrite<AttackTarget>, ecs::OptionalWrite<Armament>, ecs::OptionalWrite<Appearance>, ecs::OptionalWrite<DrawOffset>, ecs::Optional<Health>,
-		ecs::OptionalWrite<Countermeasures>>;
+		ecs::OptionalWrite<Countermeasures>, ecs::OptionalWrite<FloorLift>>;
 	using Lookup = ecs::Lookup<ecs::Read<Airfield>, ecs::Read<Transform>>;
 	using Resources = ecs::Resources<ecs::Read<GroundHeight>, ecs::Write<JetDamage>>;
 
@@ -80,6 +85,7 @@ struct JetSystem
 			auto offsets = chunk.template Get<DrawOffset>();
 			const auto healths = chunk.template Get<Health>();
 			auto countermeasureRows = chunk.template Get<Countermeasures>();
+			auto lifts = chunk.template Get<FloorLift>();
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < jets.size(); ++row)
 			{
@@ -102,7 +108,29 @@ struct JetSystem
 					}
 				const auto along = runway.end.XY() - runway.start.XY();
 				const Fixed length = Engine::Math::Length(along);
-				const bool wantsToFly = (!aggressions.empty() && aggressions[row].stance == Stance::Hunt) || (target != nullptr && target->target.IsValid());
+				// Where it lands: a flight deck's own strip, else the runway.
+				const bool deck = field != nullptr && field->frontRow != 0;
+				const auto landStart = runway.landing != 0 ? runway.landStart.XY() : runway.start.XY();
+				const auto landEnd = runway.landing != 0 ? runway.landEnd.XY() : runway.end.XY();
+				const auto landAlong = landEnd - landStart;
+				const Fixed landLength = Engine::Math::Length(landAlong);
+				// Its floor: the deck while it is one of a flight deck's.
+				if (!lifts.empty())
+					lifts[row].height = field != nullptr ? field->deckHeight : Fixed{};
+				// Its way to its space once down or out of the hangar: on a flight deck through the runway's taxi points (landed)
+				// or creation points after the hangar (new), then its prep point and space; else the prep point and space.
+				std::array<Engine::Math::FixedVector2, RunwayPath::MaxTaxi + 2> taxiWay{};
+				std::uint32_t taxiWayCount = 0;
+				if (deck && jet.route == 0)
+					for (std::uint32_t point = 0; point < runway.taxiCount; ++point)
+						taxiWay[taxiWayCount++] = runway.taxi[point].XY();
+				if (deck && jet.route == 1)
+					for (std::uint32_t point = 1; point < runway.creationCount; ++point)
+						taxiWay[taxiWayCount++] = runway.creation[point].XY();
+				taxiWay[taxiWayCount++] = space.prep.XY();
+				taxiWay[taxiWayCount++] = space.parking.XY();
+				const bool wantsToFly = (!aggressions.empty() && aggressions[row].stance == Stance::Hunt) || (target != nullptr && target->target.IsValid()) ||
+					jet.order == Jet::Scramble;
 				const bool loaded = armament == nullptr || armament->readyTick != OutOfAmmo;
 				const auto enter = [&](JetState state) {
 					jet.state = state;
@@ -124,8 +152,12 @@ struct JetSystem
 				switch (jet.state)
 				{
 				case JetState::Parked:
+					if (jet.order == Jet::Recall)
+						jet.order = Jet::NoOrder; // down already
 					if (hasSpace && wantsToFly && loaded)
 					{
+						if (jet.order == Jet::Scramble)
+							jet.order = Jet::NoOrder;
 						enter(JetState::TaxiToPrep);
 						head(space.prep.XY(), jet.taxi);
 					}
@@ -135,6 +167,9 @@ struct JetSystem
 						enter(JetState::AwaitRunway);
 					break;
 				case JetState::AwaitRunway:
+					// A flight deck launches from its front row only.
+					if (deck && jet.space >= field->runwayCount)
+						break;
 					if (!inUse(jet.airfield, space.runway))
 					{
 						busy.push_back({jet.airfield, space.runway});
@@ -194,7 +229,13 @@ struct JetSystem
 					const bool busyInAir = (target != nullptr && target->target.IsValid()) || order.mode != MoveMode::Idle;
 					if (busyInAir)
 						jet.idleSince = tick;
-					const bool idleTooLong = jet.idleReturnTicks != 0 && tick >= jet.idleSince + jet.idleReturnTicks;
+					// JetAIUpdate::update: its first idle tick in the air arms m_returnToBaseFrame at that tick plus
+					// ReturnToBaseIdleTime; it heads home on that tick (a busy tick disarms it).
+					const bool idleTooLong = jet.idleReturnTicks != 0 && tick > jet.idleSince + jet.idleReturnTicks;
+					// Recalled by its airfield (aiEnter): back to land.
+					const bool recalled = jet.order == Jet::Recall;
+					if (recalled)
+						jet.order = Jet::NoOrder;
 					// Out of ammo with its airfield gone (and none to take it in): back to where it was.
 					if (!hasSpace && !loaded && jet.hasHome != 0)
 					{
@@ -205,11 +246,11 @@ struct JetSystem
 							*target = {};
 						break;
 					}
-					if (hasSpace && (!loaded || idleTooLong))
+					if (hasSpace && (!loaded || idleTooLong || recalled))
 					{
 						enter(JetState::Returning);
-						// In over the start of its runway, from well behind it.
-						head(runway.start.XY() - along - along / Fixed::FromInt(2), jet.flight);
+						// In over the start of its runway (its landing strip), from well behind it.
+						head(landStart - landAlong - landAlong / Fixed::FromInt(2), jet.flight);
 						order = MoveToPoint(jet.goal);
 						if (target != nullptr)
 							*target = {};
@@ -242,7 +283,7 @@ struct JetSystem
 				case JetState::Returning:
 					if (!hasSpace)
 						enter(JetState::Flying);
-					else if (arrived() || Engine::Math::DistanceSquared(transform.position.XY(), jet.goal) <= length * length)
+					else if (arrived() || Engine::Math::DistanceSquared(transform.position.XY(), jet.goal) <= landLength * landLength)
 						enter(JetState::AwaitLanding);
 					else
 						order = MoveToPoint(jet.goal);
@@ -257,34 +298,39 @@ struct JetSystem
 						busy.push_back({jet.airfield, space.runway});
 						enter(JetState::Landing);
 						// Down along the runway: aimed at its end (wings count as there from far off),
-						// touching down near its start.
+						// touching down near its start (a flight deck: on its deck).
 						LocomotorDefinition landing = jet.flight;
-						landing.preferredHeight = {};
-						head(runway.end.XY(), landing);
+						landing.preferredHeight = field->deckHeight;
+						head(landEnd, landing);
 						order = MoveToPoint(jet.goal);
 					}
 					else
-						order = MoveToPoint(runway.start.XY() - along - along); // circle out and try again
+						order = MoveToPoint(landStart - landAlong - landAlong); // circle out and try again
 					if (target != nullptr)
 						*target = {};
 					break;
 				case JetState::Landing:
 				{
-					// How far along the runway it is (negative: short of it).
-					const auto from = transform.position.XY() - runway.start.XY();
-					const Fixed covered = length > Fixed{} ? Engine::Math::Dot(from, along) / length : Fixed{};
+					// How far along the runway (its landing strip) it is (negative: short of it).
+					const auto from = transform.position.XY() - landStart;
+					const Fixed covered = landLength > Fixed{} ? Engine::Math::Dot(from, landAlong) / landLength : Fixed{};
 					if (!hasSpace)
 						enter(JetState::Flying);
-					else if (jet.leg == 0 && covered > Fixed{} - length / Fixed::FromInt(4))
+					else if (jet.leg == 0 && covered > Fixed{} - landLength / Fixed::FromInt(4))
 					{
 						// Touch down: on its wheels, braking, down the runway.
 						jet.leg = 1;
-						head(runway.end.XY(), jet.taxi);
+						head(landEnd, jet.taxi);
 					}
-					else if (jet.leg == 1 && covered >= length * Fixed::FromRatio(3, 4))
+					else if (jet.leg == 1 && covered >= landLength * Fixed::FromRatio(3, 4))
 					{
 						enter(JetState::TaxiToParking);
-						head(space.prep.XY(), jet.taxi);
+						jet.route = 0;
+						// Its way as a landed jet's: through the taxi points on a flight deck.
+						if (deck && runway.taxiCount > 0)
+							head(runway.taxi[0].XY(), jet.taxi);
+						else
+							head(space.prep.XY(), jet.taxi);
 						// Taxiing to its parking place: its flares reloaded at once (reloadCountermeasures).
 						if (!countermeasureRows.empty())
 							countermeasureRows[row].Reload();
@@ -296,10 +342,10 @@ struct JetSystem
 				case JetState::TaxiToParking:
 					if (arrived())
 					{
-						if (jet.leg == 0)
+						if (jet.leg + 1 < taxiWayCount)
 						{
-							jet.leg = 1;
-							head(space.parking.XY(), jet.taxi);
+							++jet.leg;
+							head(taxiWay[jet.leg], jet.taxi);
 						}
 						else
 						{
@@ -314,6 +360,7 @@ struct JetSystem
 						if (armament != nullptr && armament->readyTick == OutOfAmmo)
 						{
 							armament->clip = 0; // refilled on its next shot
+							armament->scatterUsed = 0;
 							armament->readyTick = tick;
 							armament->reloading = false;
 						}

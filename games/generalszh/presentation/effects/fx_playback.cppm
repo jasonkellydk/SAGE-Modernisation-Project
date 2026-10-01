@@ -1,4 +1,5 @@
 export module games.generalszh.presentation.effects.fx_playback;
+export import games.generalszh.presentation.effects.tracers;
 import std;
 
 export import games.generalszh.presentation.effects.effects_content;
@@ -30,6 +31,12 @@ struct FxRequest
 	std::uint8_t firedSlot{0}; // the weapon slot that fired (its FireFX bone)
 	// A scorch mark of this radius (SCORCH_1) left at `at` besides the FX (GameClient::addScorch: a blast's).
 	float scorchRadius{0.0f};
+	// A particle system started by name riding on `object` instead of an FX list (createParticleSystem, attachToObject).
+	std::string particleSystem;
+	// doFXPos's second point and its caller's speed a frame (a weapon's fire FX: where it aims, its WeaponSpeed).
+	bool hasSecondary{false};
+	std::array<float, 3> secondary{};
+	float speed{0.0f};
 };
 
 // A system started riding on the request's object: where, in its frame (unscaled, facing the request's yaw).
@@ -47,6 +54,7 @@ struct SoundRequest
 	std::array<float, 3> at{};
 	std::uint32_t owner{NoOwner}; // the player it is for (AudioEventRTS::setPlayerIndex); none: nobody's
 	bool positioned{true};        // false: heard without a position (a script's PLAY_SOUND_EFFECT)
+	std::optional<float> volume;  // AudioEventRTS::setVolume (none: its own)
 };
 
 struct ShakeRequest
@@ -101,8 +109,16 @@ inline void Particles(const EffectsContent &content, engine::effects::ParticleWo
 // Plays `request`; false when there is no such list.
 inline bool PlayFx(const EffectsContent &content, engine::effects::ParticleWorld &particles, std::mt19937 &random, const GroundHeightAt &ground,
 	const FxRequest &request, std::vector<SoundRequest> &sounds, std::vector<ShakeRequest> &shakes, std::vector<FxAttachment> *attached = nullptr,
-	std::vector<LightPulse> *lights = nullptr, int depth = 0, ScorchMarks *scorches = nullptr)
+	std::vector<LightPulse> *lights = nullptr, int depth = 0, ScorchMarks *scorches = nullptr, Tracers *tracers = nullptr)
 {
+	if (!request.particleSystem.empty())
+	{
+		ParticleNugget system;
+		system.system = request.particleSystem;
+		system.attachToObject = true;
+		fx_playback_detail::Particles(content, particles, random, ground, system, request, attached);
+		return true;
+	}
 	const FxList *list = request.fx.empty() ? nullptr : content.fx.Find(request.fx);
 	if (list == nullptr || depth > 4)
 		return false;
@@ -137,11 +153,20 @@ inline bool PlayFx(const EffectsContent &content, engine::effects::ParticleWorld
 						lights->push_back({request.at, n.color, 1.0f, 1.0f + radius, std::ceil(static_cast<float>(n.increaseMs) * 30.0f / 1000.0f),
 							std::ceil(static_cast<float>(n.decreaseMs) * 30.0f / 1000.0f), 0.0f});
 				}
+				else if constexpr (std::is_same_v<N, TracerNugget>)
+				{
+					// TracerFXNugget::doFXPos: at its Probability (the client's random), from where it played toward the second
+					// point (none: nothing); only the GenericTracer drawable (W3DTracerDraw) is drawn.
+					if (n.probability <= fx_playback_detail::Uniform(random, 0.0f, 1.0f))
+						return;
+					if (tracers != nullptr && request.hasSecondary && n.name == "GenericTracer")
+						MakeTracer(*tracers, request.at, request.secondary, n.speed, request.speed, n.decayAt, n.length, n.width, n.color);
+				}
 				else if constexpr (std::is_same_v<N, NestedFxNugget>)
 				{
 					FxRequest nested = request;
 					nested.fx = n.fx;
-					PlayFx(content, particles, random, ground, nested, sounds, shakes, attached, lights, depth + 1, scorches);
+					PlayFx(content, particles, random, ground, nested, sounds, shakes, attached, lights, depth + 1, scorches, tracers);
 				}
 			},
 			nugget);

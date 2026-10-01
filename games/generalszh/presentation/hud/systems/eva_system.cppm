@@ -95,6 +95,14 @@ struct EvaSystem
 					if (notice.player == viewer)
 						AskEva(eva, message("VEHICLESTOLEN"));
 					break;
+				case EvaCue::BuildingSabotaged:
+					if (notice.player == viewer)
+						AskEva(eva, message("BUILDINGSABOTAGED"));
+					break;
+				case EvaCue::CashStolen:
+					if (notice.player == viewer)
+						AskEva(eva, message("CASHSTOLEN"));
+					break;
 				case EvaCue::SuperweaponDetected:
 					if (const auto found = SuperweaponMessage(message("SUPERWEAPONDETECTED_OWN_PARTICLECANNON"), notice.weapon, Whose(relationships, viewer, notice.player)))
 						AskEva(eva, *found);

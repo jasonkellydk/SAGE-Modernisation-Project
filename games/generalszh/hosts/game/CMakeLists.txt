@@ -10,12 +10,29 @@ target_sources(generalszh PRIVATE FILE_SET CXX_MODULES FILES
 	world_animation_view.cppm
 	control_bar_layer.cppm
 	match_end_layer.cppm
+	popup_message_layer.cppm
+	cinematic_text_view.cppm
 	message_view.cppm
 	military_caption_view.cppm
 	named_timers_view.cppm
 	superweapon_timers_view.cppm
 	radar_minimap.cppm
 	movie_player.cppm
+	load_screen.cppm
+	load_screen_layer.cppm
+	window_scale.cppm
+	window_events.cppm
+	match_stage.cppm
+	match_flow.cppm
+	shell_requests.cppm
+	host_options.cppm
+	frame_draws.cppm
+	cursor_set.cppm
+	overlay_views.cppm
+	match_files.cppm
+	match_setup.cppm
+	match_results.cppm
+	pointer_input.cppm
 	setup_catalog_source.cppm
 	window_transitions_source.cppm
 	front_end.cppm)
@@ -28,11 +45,15 @@ target_link_libraries(generalszh PRIVATE
 	generalszh_hud_views
 	generalszh_presentation_hud
 	generalszh_presentation_hud_messages
+	generalszh_presentation_camera
 	generalszh_scripting
 	generalszh_session
 	generalszh_presentation_audio
 	generalszh_presentation_effects
 	generalszh_presentation_objects
+	generalszh_presentation_scripted
+	generalszh_presentation_composition
+	generalszh_presentation_overlay
 	generalszh_presentation_sound
 	generalszh_presentation_interaction
 	generalszh_presentation_rendering

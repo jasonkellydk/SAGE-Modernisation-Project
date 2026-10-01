@@ -30,6 +30,11 @@ struct GarrisonHits : ecs::ChunkOutputs<GarrisonHit>
 {
 };
 
+// The same from guided missiles (MissileAIUpdate::projectileHandleCollision), written by their flight.
+struct MissileGarrisonHits : ecs::ChunkOutputs<GarrisonHit>
+{
+};
+
 struct GarrisonKill
 {
 	ecs::Entity building;
@@ -53,6 +58,12 @@ template<>
 struct ResourceTraits<engine::gameplay::GarrisonHits>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.garrison_hits";
+};
+
+template<>
+struct ResourceTraits<engine::gameplay::MissileGarrisonHits>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.missile_garrison_hits";
 };
 
 template<>

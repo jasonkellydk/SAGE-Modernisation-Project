@@ -418,6 +418,71 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_looping_fire_sound_loops_once_while_firing)
 	BOOST_TEST(count("rapid") == 1);
 }
 
+// Legacy parity (RailroadGuideAIUpdate.cpp, RailroadBehavior::update: the conductor's ACCELERATE adds m_runningSound when
+// it is not playing; FindPosByPathDistance's station removes it): a locomotive's RunningSound loops once while it runs,
+// stops braking for a station and waiting there, starts afresh setting off; a car sounds none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_locomotive_runs_its_running_loop_while_it_runs)
+{
+	AudioContent content;
+	content.events.Define("Chug") = Sound("Chug", "chug", Bus::Effects, sound_control::Loop);
+	Mixer mixer{1000};
+	Tones library;
+	SoundPlayer player{mixer, library};
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<generalszh::gameplay::Railcar>();
+	RegisterSoundComponents(world);
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	DefinitionLooks engine, car;
+	engine.trainRunningSound = "Chug";
+	catalog.byDefinition = {engine, car};
+	catalog.known = {1, 1};
+	world.EmplaceResource<AudioState>();
+	world.EmplaceResource<AudioHandle>(AudioHandle{&content, &player, &mixer});
+	TrainSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto make = [&](std::uint32_t definition, bool locomotive) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<generalszh::gameplay::Railcar>(entity);
+		world.Get<generalszh::gameplay::Railcar>(entity)->locomotive = locomotive ? 1 : 0;
+		world.Get<generalszh::gameplay::Railcar>(entity)->state =
+			locomotive ? generalszh::gameplay::ConductorState::Accelerate : generalszh::gameplay::ConductorState::Coast;
+		return entity;
+	};
+	const ecs::Entity loco = make(0, true);
+	make(1, false);
+	std::uint64_t frame = 0;
+	const auto step = [&] {
+		std::vector<float> block(20);
+		mixer.Mix(block);
+		scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	};
+	const auto count = [&](std::string_view file) { return std::count(library.played.begin(), library.played.end(), file); };
+	for (int index = 0; index < 5; ++index)
+		step();
+	BOOST_TEST(count("chug") == 1);
+	const std::uint64_t handle = world.Side<TrainSoundLoop>().Get(loco)->handle;
+	BOOST_TEST(player.Playing(handle));
+	world.Get<generalszh::gameplay::Railcar>(loco)->state = generalszh::gameplay::ConductorState::ApplyBrakes;
+	step();
+	BOOST_TEST(!player.Playing(handle));
+	world.Get<generalszh::gameplay::Railcar>(loco)->state = generalszh::gameplay::ConductorState::WaitAtStation;
+	step();
+	BOOST_TEST(count("chug") == 1);
+	world.Get<generalszh::gameplay::Railcar>(loco)->state = generalszh::gameplay::ConductorState::Accelerate;
+	step();
+	BOOST_TEST(count("chug") == 2);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // GeneralsMD/Code/GameEngine/Source/GameLogic/AI/AIStates.cpp, AIInternalMoveToState::startMoveSound: with no start
@@ -543,6 +608,7 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_and_sound_schedules_compose_without_
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
 	world.RegisterComponent<engine::gameplay::Disabled>();
 	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
+	world.RegisterComponent<generalszh::gameplay::Railcar>();
 	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
 	world.RegisterComponent<engine::gameplay::MissileFlight>();
 	world.RegisterComponent<engine::gameplay::Targetable>();
@@ -557,53 +623,15 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_and_sound_schedules_compose_without_
 	RegisterSoundComponents(world);
 	world.FinalizeComponents();
 	ecs::SystemRegistry tick, frame;
-	MotionSampleSystem motion;
 	PoseSampleSystem pose;
-	DetectorPingSystem pings;
-	TreadRollSystem treads;
-	WheelRollSystem wheels;
-	MotionEmitterSystem emitters;
 	ObjectPresentationSystem objects;
-	EffectAttachmentSystem attachments;
 	DamageEffectSystem damage;
 	FireFxPlacementSystem fire;
-	FxPlaybackSystem fx;
-	ExhaustSampleSystem exhaustSample;
-	HitFxSystem hitFx;
-	MissileIgnitionSystem ignitions;
-	HarvestPresentationSystem harvest;
-	CratePresentationSystem crates;
-	CashPresentationSystem cash;
-	PromotionPresentationSystem promotions;
-	ChassisSystem chassis;
-	ExhaustSystem exhausts;
-	LaserSystem lasers;
-	DynamicLightSystem lights;
-	TrackLayingSystem trackLaying;
-	TrackFadeSystem trackFade;
-	TreeBreezeSystem treeBreeze;
-	TreeBendSystem treeBend;
-	DebrisAnimationSystem debris;
-	TreeContactSystem treeContacts;
-	DisabledSoundSystem disabledSounds;
-	EmpSparkSystem empSparks;
-	AutoDepositPresentationSystem autoDepositTexts;
-	AbilityFeedbackSystem abilityFeedback;
-	UplinkStatusSystem uplinkStatus;
-	AttachedParticleClearSystem particleClears;
-	RegisterPresentationTick(tick, motion, pose, pings, exhaustSample, hitFx, ignitions, harvest, crates, promotions, chassis, trackLaying, treeContacts, cash,
-		disabledSounds, empSparks, autoDepositTexts, abilityFeedback, uplinkStatus, particleClears);
-	MountedDrawSystem mountedDraw;
-	TintStatusSystem tintStatus;
-	ObjectIconSystem objectIcons;
-	UplinkEffectSystem uplinkEffects;
-	RiderTintSystem riderTint;
-	RegisterPresentationFrame(frame, treads, wheels, emitters, objects, attachments, damage, fire, fx, exhausts, lasers, lights, trackFade, treeBreeze, treeBend, debris, mountedDraw, tintStatus, objectIcons, uplinkEffects, riderTint);
+	RegisterPresentationTick(tick);
+	RegisterPresentationFrame(frame);
 	SoundLoopSystem loops;
 	AudioMixSystem mix;
-	UplinkSoundSystem uplinkSounds;
-	FireLoopSystem fireLoops;
-	RegisterSoundFrame(frame, loops, mix, uplinkSounds, fireLoops);
+	RegisterSoundFrame(frame);
 	tick.Finalize(world.Components());
 	frame.Finalize(world.Components());
 	// Building the schedules checks every conflict is ordered.

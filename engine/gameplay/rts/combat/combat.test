@@ -11,6 +11,7 @@
 #include <vector>
 
 import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.rts.combat.algorithms.weapon_fitness;
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.combat.systems.impact_system;
 import engine.gameplay.common.identity.components.definition_ref;
@@ -66,6 +67,7 @@ struct Battle
 	ArmorCatalog &armors{world.EmplaceResource<ArmorCatalog>()};
 	FiredShots &fired{world.EmplaceResource<FiredShots>()};
 	TemporaryWeaponFires &temporaryFires{world.EmplaceResource<TemporaryWeaponFires>()};
+	DirectShots &directShots{world.EmplaceResource<DirectShots>()};
 	ShotQueue &queue{world.EmplaceResource<ShotQueue>()};
 	IncomingDamage &incoming{world.EmplaceResource<IncomingDamage>()};
 	ShockWaves &shockWaves{world.EmplaceResource<ShockWaves>()};
@@ -89,8 +91,11 @@ struct Battle
 		field.heights.assign(4, Fixed{});
 		world.EmplaceResource<GroundHeight>(field);
 		world.EmplaceResource<LaunchLayouts>();
+		world.EmplaceResource<TemplateEquivalence>();
 		world.EmplaceResource<Detonations>();
+		world.EmplaceResource<Disarms>();
 		world.EmplaceResource<MissileDetonations>();
+		world.EmplaceResource<MissileGarrisonHits>();
 		world.EmplaceResource<PointDefenseShots>();
 		world.EmplaceResource<PhysicsSettings>();
 		world.EmplaceResource<RandomSeed>(RandomSeed{99});
@@ -130,6 +135,7 @@ struct Battle
 		world.RegisterComponent<Health>();
 		world.RegisterComponent<HealthFloor>();
 		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<Experience>();
 		world.RegisterComponent<Armament>();
 		world.RegisterComponent<StatusFlags>();
 		world.RegisterComponent<AttackTarget>();
@@ -137,15 +143,19 @@ struct Battle
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Descent>();
+		world.RegisterComponent<FloorLift>();
 		world.RegisterComponent<OffMap>();
 		world.RegisterComponent<AutoFire>();
 		world.RegisterComponent<Turret>();
 		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<UnderConstruction>();
 		world.RegisterComponent<AltTurret>();
 		world.RegisterComponent<WeaponSlots>();
 		world.RegisterComponent<PointDefense>();
 		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Producer>();
 		world.RegisterComponent<Attitude>();
 		world.RegisterComponent<ProjectileFlight>();
 		world.RegisterComponent<MissileFlight>();
@@ -265,6 +275,48 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_scan_never_picks_what_ai_may_not_attack)
 	BOOST_TEST(TargetingSystem::Acceptable(relationships, mine, self, Relationships::NoTeam, 0, weapon, aggression));
 	mine.classes |= target_class::NoAttackFromAi;
 	BOOST_TEST(!TargetingSystem::Acceptable(relationships, mine, self, Relationships::NoTeam, 0, weapon, aggression));
+}
+
+// Legacy parity (AIIdleState::onEnter -> AIUpdateInterface::resetNextMoodCheckTime; getNextMoodTarget's
+// m_randomlyOffsetMoodCheck, GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate.cpp): a unit seen going
+// idle first looks ForceIdle frames on (here 3); that look sets the next MoodAttackCheckRate (15) on, moved by
+// GameLogicRandomValue(-7, 7) once; every look after is exactly 15 on. A wake-up (wakeUpAndAttemptToTarget) looks at
+// once and offsets the next again.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_unit_first_looks_force_idle_frames_on_then_randomly_offset)
+{
+	Battle battle;
+	battle.moods.forceIdleTicks = 3;
+	const ecs::Entity unit = battle.Add(0, 100, 100, battle.rifle, 100);
+	battle.world.Get<Aggression>(unit)->nextScan = 0;
+	std::vector<std::uint64_t> scans;
+	battle.Run(1, 60, [&](int tick) {
+		const Aggression &aggression = *battle.world.Get<Aggression>(unit);
+		if (tick == 1)
+		{
+			BOOST_TEST(aggression.nextScan == 4u); // entered idle on tick 1
+			BOOST_TEST((aggression.moodFlags & mood_flag::OffsetNext) != 0);
+		}
+		if (scans.empty() || scans.back() != aggression.nextScan)
+			scans.push_back(aggression.nextScan);
+		if (tick == 30)
+		{
+			WakeToTarget(*battle.world.Get<Aggression>(unit), 31);
+			scans.push_back(31);
+		}
+	});
+	BOOST_TEST_REQUIRE(scans.size() >= 4u);
+	BOOST_TEST(scans[0] == 4u);
+	BOOST_TEST(scans[1] >= 4u + 15u - 7u);
+	BOOST_TEST(scans[1] <= 4u + 15u + 7u);
+	// Then exactly the rate, until the wake-up at 31 offsets the look after it.
+	for (std::size_t look = 2; look < scans.size() && scans[look - 1] < 31u; ++look)
+		if (scans[look] != 31u)
+			BOOST_TEST(scans[look] == scans[look - 1] + 15u);
+	const auto woken = std::ranges::find(scans, 31u);
+	BOOST_TEST_REQUIRE((woken != scans.end() && woken + 1 != scans.end()));
+	BOOST_TEST(woken[1] >= 31u + 15u - 7u);
+	BOOST_TEST(woken[1] <= 31u + 15u + 7u);
+	BOOST_TEST((battle.world.Get<Aggression>(unit)->moodFlags & mood_flag::OffsetNext) == 0);
 }
 
 BOOST_AUTO_TEST_CASE(idle_units_acquire_enemies_and_shoot_them_dead)
@@ -488,6 +540,35 @@ BOOST_AUTO_TEST_CASE(armor_scales_damage_and_splash_spares_friends)
 	BOOST_TEST((tankLoss >= Fixed::FromInt(50)));
 	BOOST_TEST((nearLoss > Fixed{} && nearLoss < tankLoss));
 	BOOST_TEST(battle.world.Get<Health>(friendNear)->current.Raw() == Fixed::FromInt(1000).Raw());
+}
+
+// Legacy parity (GeneralsMD Weapon.cpp, Weapon::dealDamageInternal's RadiusDamageAngle): a cannon with a 45 degree
+// cone, its firer at (100, 100) facing its target at (200, 100): of those in the blast, one 26 degrees off the firer's
+// facing is hurt, one 51 degrees off is not (nor pushed); a weapon without a cone hurts both.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_coned_blast_spares_what_is_outside_its_angle)
+{
+	const auto run = [](bool coned) {
+		Battle battle;
+		WeaponDefinition cannon = battle.weapons.At(battle.cannon);
+		cannon.secondaryRadius = Fixed::FromInt(90);
+		cannon.coned = coned;
+		cannon.coneCosine = Engine::Math::Cos(Engine::Math::TurnFromDegrees(45));
+		const ecs::Entity gun = battle.Add(0, 100, 100, battle.weapons.Add(cannon), 100);
+		const ecs::Entity target = battle.Add(1, 200, 100, WeaponCatalog::None, 100000);
+		*battle.world.Get<AttackTarget>(gun) = {target, true};
+		battle.world.Get<Aggression>(target)->autoAcquire = false;
+		const ecs::Entity inside = battle.Add(1, 180, 140, WeaponCatalog::None, 1000);
+		const ecs::Entity outside = battle.Add(1, 140, 150, WeaponCatalog::None, 1000);
+		for (const ecs::Entity bystander : {inside, outside})
+			battle.world.Get<Aggression>(bystander)->autoAcquire = false;
+		battle.Run(1, 60);
+		return std::pair{battle.world.Get<Health>(inside)->current < Fixed::FromInt(1000), battle.world.Get<Health>(outside)->current < Fixed::FromInt(1000)};
+	};
+	const auto coned = run(true), plain = run(false);
+	BOOST_TEST(coned.first);
+	BOOST_TEST(!coned.second);
+	BOOST_TEST(plain.first);
+	BOOST_TEST(plain.second);
 }
 
 BOOST_AUTO_TEST_CASE(a_fire_field_burns_what_stands_in_it_on_its_weapon_delay)
@@ -884,15 +965,81 @@ BOOST_AUTO_TEST_CASE(turrets_aim_identically_on_any_number_of_workers)
 	BOOST_TEST(serial.second == parallel.second);
 }
 
+// Legacy parity (GeneralsMD Weapon.cpp WeaponTemplate::estimateWeaponDamage, retail RETAIL_COMPATIBLE_CRC branch, and
+// ActiveBody.cpp ActiveBody::estimateDamage), branch by branch: shrubbery only to a burning weapon (1); a sniper
+// nothing into an empty structure that holds units, nor one under construction; a surrender weapon or one allowed at
+// garrisons 1 against a garrison it can clear (else its armor); disarming 1 against mines and traps, else nothing;
+// deploying 1 against the ground, its armor against the air; subdual nothing to what cannot be subdued; a
+// garrison-killing weapon 1 or nothing; else the damage the armor lets through.
+BOOST_AUTO_TEST_CASE(legacy_parity_weapon_damage_is_estimated_as_the_original)
+{
+	WeaponCatalog weapons;
+	weapons.sniper = 1;
+	weapons.surrender = 2;
+	weapons.disarm = 3;
+	weapons.deploy = 4;
+	weapons.killGarrisoned = 5;
+	weapons.burnedDeath = 7;
+	ArmorCatalog armors;
+	armors.SetSubdual(std::uint64_t{1} << 6);
+	ArmorDefinition plate;
+	plate.coefficient[0] = Fixed::FromRatio(1, 2);
+	plate.coefficient[1] = Fixed{};
+	plate.coefficient[2] = Fixed{};
+	const std::uint32_t armored = armors.Add(plate);
+	BOOST_TEST(armors.SomeStop(1));
+	BOOST_TEST(!armors.SomeStop(0));
+	const Fixed ten = Fixed::FromInt(10);
+	const auto weapon = [](std::uint32_t type, std::uint32_t death = 0, bool garrisons = false) {
+		WeaponDefinition definition;
+		definition.damageType = type;
+		definition.deathType = death;
+		definition.allowAttackGarrisoned = garrisons;
+		return definition;
+	};
+	const auto estimate = [&](const WeaponDefinition &definition, const VictimFitness &victim) {
+		return EstimateWeaponDamage(definition, ten, victim, weapons, armors);
+	};
+	// Plain: what the armor lets through.
+	BOOST_TEST((estimate(weapon(0), {target_class::Vehicle, armored}) == Fixed::FromInt(5)));
+	// Shrubbery.
+	BOOST_TEST((estimate(weapon(0, 7), {target_class::Shrubbery}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(0), {target_class::Shrubbery}) == Fixed{}));
+	// A sniper at structures.
+	BOOST_TEST((estimate(weapon(1), {target_class::Structure | target_class::Emptied}) == Fixed{}));
+	BOOST_TEST((estimate(weapon(1), {target_class::Structure, 0, true}) == Fixed{}));
+	BOOST_TEST((estimate(weapon(1), {target_class::Structure}) == ten));
+	// Surrender, or allowed at garrisons: 1 at a clearable garrison, else the armor (none of surrender through plate).
+	BOOST_TEST((estimate(weapon(2), {target_class::Structure | target_class::Clearable, armored}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(2), {target_class::Structure, armored}) == Fixed{}));
+	BOOST_TEST((estimate(weapon(0, 0, true), {target_class::Structure | target_class::Clearable, armored}) == Fixed::One()));
+	// Disarming.
+	BOOST_TEST((estimate(weapon(3), {target_class::Mine}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(3), {target_class::Trap}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(3), {target_class::Vehicle}) == Fixed{}));
+	// Deploying.
+	BOOST_TEST((estimate(weapon(4), {target_class::Vehicle | target_class::Ground, armored}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(4), {target_class::Vehicle | target_class::AirborneVehicle}) == ten));
+	// Subdual.
+	BOOST_TEST((estimate(weapon(6), {target_class::Vehicle}) == Fixed{}));
+	BOOST_TEST((estimate(weapon(6), {target_class::Vehicle, 0, false, true}) == ten));
+	// Killing a garrison.
+	BOOST_TEST((estimate(weapon(5), {target_class::Structure | target_class::Clearable}) == Fixed::One()));
+	BOOST_TEST((estimate(weapon(5), {target_class::Structure}) == Fixed{}));
+}
+
 // Legacy parity (GeneralsMD Weapon.cpp, Weapon::privateFireWeapon): each shot
-// fires m_curBarrel (wrapped at the barrel count first), then moves to the next
-// after ShotsPerBarrel (always 1 in Zero Hour) shots.
+// fires m_curBarrel (wrapped at the barrel count first, its m_numShotsForCurBarrel
+// starting afresh), then moves to the next after ShotsPerBarrel shots (1 in every
+// shipped weapon; a mod's 2 fires each barrel twice).
 BOOST_AUTO_TEST_CASE(legacy_parity_shots_take_the_barrels_in_turn)
 {
-	// A rifle every 10 ticks at a target straight ahead: shots on ticks 1, 11, 21.
-	const auto run = [](int ticks, std::uint8_t barrels) {
+	// A rifle every 10 ticks at a target straight ahead: shots on ticks 1, 11, 21, 31, 41.
+	const auto run = [](int ticks, std::uint8_t barrels, std::uint32_t perBarrel = 1) {
 		Battle battle;
-		const ecs::Entity gun = battle.Add(0, 100, 100, battle.rifle, 100);
+		WeaponDefinition rifle = battle.weapons.At(battle.rifle);
+		rifle.shotsPerBarrel = perBarrel;
+		const ecs::Entity gun = battle.Add(0, 100, 100, battle.weapons.Add(rifle), 100);
 		const ecs::Entity target = battle.Add(1, 180, 100, WeaponCatalog::None, 1000);
 		battle.world.Get<Armament>(gun)->barrels = barrels;
 		*battle.world.Get<AttackTarget>(gun) = {target, true};
@@ -905,6 +1052,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_shots_take_the_barrels_in_turn)
 	BOOST_TEST(run(21, 2).firedBarrel == 0u);
 	BOOST_TEST(run(21, 3).firedBarrel == 2u);
 	BOOST_TEST(run(21, 1).firedBarrel == 0u);
+	// Two shots a barrel: 0, 0, 1, 1, 0.
+	BOOST_TEST(run(1, 2, 2).firedBarrel == 0u);
+	BOOST_TEST(run(11, 2, 2).firedBarrel == 0u);
+	BOOST_TEST(run(21, 2, 2).firedBarrel == 1u);
+	BOOST_TEST(run(31, 2, 2).firedBarrel == 1u);
+	BOOST_TEST(run(41, 2, 2).firedBarrel == 0u);
+	// One barrel: every shot from it.
+	BOOST_TEST(run(31, 1, 2).firedBarrel == 0u);
 }
 
 namespace
@@ -1242,6 +1397,111 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_ignites_steers_locks_and_hits_on_th
 	BOOST_TEST((world.Get<Health>(victim)->current < Fixed::FromInt(1000)));
 }
 
+// MissileAIUpdate::doLaunchState / doIgnitionState / doAttackState (IgnitionDelay, DetonateOnNoFuel; the Dragon tank's
+// flame projectiles detonate on no fuel): fired on tick 0 with an IgnitionDelay of 30 frames it launches unarmed and
+// unlit (no thrust), and ignites on tick 30 (frame - m_stateTimestamp >= delay, falling through
+// into IGNITION the same frame: armed, its exhaust lit, its fuel lasting FuelLifetime from then); with
+// DetonateOnNoFuel it goes off on the frame its fuel runs out (tick 35 for 5 frames of fuel), where it is.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_waits_its_ignition_delay_and_goes_off_out_of_fuel)
+{
+	Battle battle;
+	ecs::World &world = battle.world;
+	const ecs::Entity victim = battle.Add(1, 900, 0, WeaponCatalog::None, 1000);
+	WeaponDefinition rocket = battle.weapons.At(battle.cannon);
+	rocket.projectile = rocket.guided = true;
+	MissileFlightDefinition &d = rocket.missile;
+	const Fixed perSecond = Fixed::FromInt(30);
+	d.followsTarget = true;
+	d.ignitionTicks = 30;
+	d.fuelTicks = 5;
+	d.detonateOnNoFuel = true;
+	d.initialSpeed = Fixed::FromInt(150) / perSecond;
+	d.maxSpeed = Fixed::FromInt(225) / perSecond;
+	d.acceleration = Fixed::FromInt(675) / Fixed::FromInt(900);
+	d.turnRate = Engine::Math::TurnFromDegrees(Fixed::FromInt(100) / perSecond);
+	d.maxThrustAngle = Engine::Math::TurnFromDegrees(25);
+	d.radius = Fixed::FromInt(2);
+	const std::uint32_t weapon = battle.weapons.Add(rocket);
+	Shot shot;
+	shot.target = victim;
+	shot.weapon = weapon;
+	shot.origin = {{}, {}, Fixed::FromInt(10)};
+	shot.aim = {Fixed::FromInt(900), {}, {}};
+	const ecs::Entity missile = world.Create();
+	world.Add<Transform>(missile);
+	world.Add<Attitude>(missile);
+	world.Add<MissileFlight>(missile);
+	*world.Get<Transform>(missile) = {shot.origin, {}};
+	*world.Get<MissileFlight>(missile) = LaunchMissile(shot, battle.weapons.At(weapon));
+	int ignited = 0, detonated = 0;
+	battle.Run(1, 40, [&](int tick) {
+		world.Resource<MissileDetonations>().ForEach([&](const Shot &) { detonated = tick; });
+		if (!world.IsAlive(missile))
+			return;
+		const MissileFlight &flight = *world.Get<MissileFlight>(missile);
+		if (ignited == 0 && flight.armed)
+		{
+			ignited = tick;
+			BOOST_TEST(flight.exhaustLit);
+		}
+	});
+	BOOST_TEST(ignited == 30);
+	BOOST_TEST(detonated == 35);
+	BOOST_TEST(!world.IsAlive(missile));
+}
+
+// Weapon::privateFireWeapon (AutoReloadsClip): a clip of 2 that reloads (YES) fires again once ClipReloadTime is up; one
+// that never does (NO: getAutoReloadsClip false) is OUT_OF_AMMO for good once its clip is out (m_whenWeCanFireAgain
+// 0x7fffffff): it fires its two shots and no more.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_clip_that_does_not_reload_stays_empty)
+{
+	const auto shots = [](bool reloads) {
+		Battle battle;
+		WeaponDefinition gun = battle.weapons.At(battle.rifle);
+		gun.clipSize = 2;
+		gun.clipReload = 30;
+		gun.noReload = !reloads;
+		const std::uint32_t weapon = battle.weapons.Add(gun);
+		const ecs::Entity shooter = battle.Add(0, 100, 100, weapon, 100);
+		const ecs::Entity target = battle.Add(1, 150, 100, WeaponCatalog::None, 100000);
+		*battle.world.Get<AttackTarget>(shooter) = {target, true};
+		int fired = 0;
+		battle.Run(1, 200, [&](int) { battle.fired.ForEach([&](const Shot &shot) { fired += shot.source == shooter ? 1 : 0; }); });
+		return std::pair{fired, battle.world.Get<Armament>(shooter)->readyTick};
+	};
+	const auto [reloading, ready] = shots(true);
+	BOOST_TEST(reloading > 2);
+	BOOST_TEST(ready != OutOfAmmo);
+	const auto [spent, never] = shots(false);
+	BOOST_TEST(spent == 2);
+	BOOST_TEST(never == OutOfAmmo);
+}
+
+// MissileAIUpdate::projectileFireAtObjectOrPosition (UseWeaponSpeed): the detonation weapon's WeaponSpeed stands for its
+// InitialVelocity, its locomotor's top speed and its acceleration (m_maxAccel); without it, its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_may_fly_at_its_weapons_speed)
+{
+	Battle battle;
+	WeaponDefinition rocket = battle.weapons.At(battle.cannon);
+	rocket.projectile = rocket.guided = true;
+	rocket.speed = Fixed::FromInt(20);
+	rocket.missile.initialSpeed = Fixed::FromInt(5);
+	rocket.missile.maxSpeed = Fixed::FromInt(7);
+	rocket.missile.acceleration = Fixed::One();
+	Shot shot;
+	shot.origin = {{}, {}, Fixed::FromInt(10)};
+	shot.aim = {Fixed::FromInt(200), {}, Fixed::FromInt(10)};
+	const MissileFlight own = LaunchMissile(shot, rocket);
+	BOOST_TEST(Near(Engine::Math::Length(own.velocity), 5.0, 0.01));
+	BOOST_TEST((own.maxSpeed == Fixed::FromInt(7)));
+	BOOST_TEST((own.maxAccel == Fixed::One()));
+	rocket.missile.useWeaponSpeed = true;
+	const MissileFlight fast = LaunchMissile(shot, rocket);
+	BOOST_TEST(Near(Engine::Math::Length(fast.velocity), 20.0, 0.01));
+	BOOST_TEST((fast.maxSpeed == Fixed::FromInt(20)));
+	BOOST_TEST((fast.maxAccel == Fixed::FromInt(20)));
+}
+
 // AIUpdateInterface with an AltTurret (TurretAI per turret): linked (TurretsLinked, the battleship's), the
 // second turret aims at what the first does at its own rate from its own rest; not linked, nothing aims it.
 // First turret 6 degrees a frame from 0, second 3 a frame from 180 (NaturalTurretAngle 180), the target a
@@ -1511,6 +1771,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_last_damage_prefers_a_real_attacker)
 	world.RegisterComponent<Health>();
 	world.RegisterComponent<HealthFloor>();
 	world.RegisterComponent<Subdual>();
+	world.RegisterComponent<Experience>();
 	world.RegisterComponent<Targetable>();
 	world.RegisterComponent<DefinitionRef>();
 	world.RegisterComponent<Owner>();

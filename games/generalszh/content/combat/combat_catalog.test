@@ -82,7 +82,44 @@ BOOST_AUTO_TEST_CASE(armor_and_weapons_bind_onto_the_engine_definitions)
 	BOOST_TEST((weapon.anti & engine::gameplay::weapon_anti::Ground) != 0u); // the default stays
 	BOOST_TEST(weapon.affects == (engine::gameplay::weapon_affects::Enemies | engine::gameplay::weapon_affects::Neutrals));
 	BOOST_TEST(weapon.projectile);
-	BOOST_TEST(gun->fireFX == "WeaponFX_CrusaderGun");
+	BOOST_TEST(gun->FireFX(0) == "WeaponFX_CrusaderGun");
+}
+
+// Legacy parity (GeneralsMD Weapon.cpp parseAllVetLevelsFXList / parsePerVetLevelFXList / parseAllVetLevelsPSys /
+// parsePerVetLevelPSys and their AsciiString forms): FireFX and the rest fill every veterancy level, their Veterancy*
+// lines one level, in the order the fields come (a later FireFX overwrites a level set before it); None is none.
+BOOST_AUTO_TEST_CASE(legacy_parity_weapon_effects_are_kept_per_veterancy_level)
+{
+	Diagnostics diagnostics;
+	const Document document = Parse(
+		"Weapon VetGun\n"
+		"  FireFX = WeaponFX_Gun\n"
+		"  VeterancyFireFX = HEROIC WeaponFX_HeroicGun\n"
+		"  ProjectileExhaust = MissileExhaust\n"
+		"  VeterancyProjectileExhaust = ELITE EliteExhaust\n"
+		"  VeterancyProjectileDetonationFX = VETERAN WeaponFX_VeteranBlast\n"
+		"  ProjectileDetonationFX = WeaponFX_Blast\n"
+		"  FireOCL = OCL_Fire\n"
+		"  VeterancyFireOCL = REGULAR None\n"
+		"  ShowsAmmoPips = Yes\n"
+		"End\n",
+		diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto weapons = BuildWeaponCatalog(document, context);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	const auto *gun = weapons.Find("VetGun");
+	BOOST_TEST_REQUIRE(gun != nullptr);
+	for (std::uint8_t level = 0; level < 3; ++level)
+		BOOST_TEST(gun->FireFX(level) == "WeaponFX_Gun");
+	BOOST_TEST(gun->FireFX(3) == "WeaponFX_HeroicGun");
+	BOOST_TEST(gun->Exhaust(0) == "MissileExhaust");
+	BOOST_TEST(gun->Exhaust(2) == "EliteExhaust");
+	BOOST_TEST(gun->Exhaust(3) == "MissileExhaust");
+	for (std::uint8_t level = 0; level < 4; ++level)
+		BOOST_TEST(gun->DetonationFX(level) == "WeaponFX_Blast");
+	BOOST_TEST(gun->FireOCL(0).empty());
+	BOOST_TEST(gun->FireOCL(1) == "OCL_Fire");
+	BOOST_TEST(gun->showsAmmoPips);
 }
 
 BOOST_AUTO_TEST_CASE(shipped_combat_content_binds_and_shell_map_units_are_armed)

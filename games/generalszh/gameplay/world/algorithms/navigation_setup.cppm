@@ -52,4 +52,30 @@ inline void BuildNavigationGrid(GameWorld &game, engine::gameplay::NavigationGri
 		gp::BuildClearance(grid, grid.Clearance().back());
 	}
 }
+
+// Pathfinder::forceMapRecalculation after a water table moved: the cells' terrain (cliff, water, clear) classified
+// again against the water now (the obstacles stamped in stay) and the clearance planes rebuilt.
+inline void RefreshNavigationTerrain(GameWorld &game, engine::gameplay::NavigationGrid &grid)
+{
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	const auto &terrain = game.level.terrain;
+	const auto &surface = game.level.surface;
+	const std::int32_t border = static_cast<std::int32_t>(terrain.border);
+	const auto cliff = [&](std::int32_t x, std::int32_t y) {
+		if (surface.cliffFlags.empty() || surface.cliffFlagBytesPerRow == 0)
+			return false;
+		const std::int32_t mapWidth = static_cast<std::int32_t>(terrain.width), mapHeight = static_cast<std::int32_t>(terrain.height);
+		const std::int32_t cx = std::clamp(x + border, 0, mapWidth - 2), cy = std::clamp(y + border, 0, mapHeight - 2);
+		const std::size_t at = static_cast<std::size_t>(cy) * surface.cliffFlagBytesPerRow + static_cast<std::size_t>(cx >> 3);
+		return at < surface.cliffFlags.size() && (surface.cliffFlags[at] & (1u << (cx & 7))) != 0;
+	};
+	const auto underwater = [&](Fixed x, Fixed y) {
+		Fixed water;
+		return game.ground.Water({x, y}, water) && game.ground.At({x, y}) < water;
+	};
+	gp::ClassifyTerrain(grid, cliff, underwater);
+	for (gp::ClearancePlane &plane : grid.Clearance())
+		gp::BuildClearance(grid, plane);
+}
 }

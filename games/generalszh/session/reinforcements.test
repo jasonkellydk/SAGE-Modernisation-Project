@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -8,6 +10,7 @@
 #include <vector>
 
 import games.generalszh.session.session;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
 import games.generalszh.gameplay.teams.algorithms.reinforcements;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -21,6 +24,7 @@ import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.delivery.components.delivery;
+import engine.gameplay.rts.sciences.resources.player_sciences;
 import engine.gameplay.rts.teams.resources.team_roster;
 import games.generalszh.gameplay.orders.algorithms.command_application;
 import games.generalszh.gameplay.teams.algorithms.team_actions;
@@ -431,6 +435,145 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_teams_attack_priority_set_reaches_later_mem
 	BOOST_TEST(game->World().Get<gp::Aggression>(joiner)->prioritySet == 0u);
 	gameplay::ChangeTeam(game->Game(), joiner, instances.front());
 	BOOST_TEST(game->World().Get<gp::Aggression>(joiner)->prioritySet == set);
+}
+
+// Legacy parity (ObjectCreationList.cpp, DeliverPayloadNugget::create) on the shipped SUPERWEAPON_NapalmStrike (5 MiGs,
+// FormationSpacing 35, DeliveryDistance 300, WeaponConvergenceFactor 1, StartAtMaxSpeed, StartAtPreferredHeight) and
+// SUPERWEAPON_ArtilleryBarrage1 (12 cannons, FormationSpacing 1, WeaponErrorRadius 100): transport i sits offset
+// (i + 1) / 2 * FormationSpacing (an Int, truncated) along the direction to the start turned +90 degrees plus itself
+// (odd i) or -90 degrees plus itself (even i), start and goal alike; its start pulled back 1.5 x DeliveryDistance along
+// its heading, at its locomotor's preferred height over the ground, at its locomotor's full speed (the motive force of
+// maxSpeed x mass its first physics step turns into that speed); its target the strike's target plus the offset x
+// (1 - WeaponConvergenceFactor), and (after the first) off by up to WeaponErrorRadius.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_payload_formation_lines_up_as_the_original)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 1, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const Engine::Math::FixedVector2 from = low + Engine::Math::FixedVector2{Fixed::FromInt(600), Fixed::FromInt(900)};
+	const Engine::Math::FixedVector2 to = low + Engine::Math::FixedVector2{Fixed::FromInt(1600), Fixed::FromInt(900)};
+	const auto carriers = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				found.push_back(entity);
+		});
+		std::ranges::sort(found, {}, [](ecs::Entity entity) { return entity.index; });
+		return found;
+	};
+	const auto &napalm = shell.game.powers.deliveries.at("SUPERWEAPON_NapalmStrike").front();
+	BOOST_TEST(napalm.formationSize == 5u);
+	BOOST_TEST((napalm.formationSpacing == Fixed::FromInt(35)));
+	BOOST_TEST((napalm.convergenceFactor == Fixed::One()));
+	BOOST_TEST(napalm.startAtMaxSpeed);
+	gameplay::detail::Deliver(game.Game(), napalm, {from.x, from.y, Fixed{}}, to, america);
+	const auto made = carriers();
+	BOOST_TEST_REQUIRE(made.size() == 5u);
+	// Heading east from the west: the direction to the start is (-1, 0); +90 plus itself (-1, -1), -90 plus itself (-1, 1).
+	const std::array<Engine::Math::FixedVector2, 5> offsets{{{}, {Fixed::FromInt(-35), Fixed::FromInt(-35)}, {Fixed::FromInt(-35), Fixed::FromInt(35)},
+		{Fixed::FromInt(-70), Fixed::FromInt(-70)}, {Fixed::FromInt(-70), Fixed::FromInt(70)}}};
+	auto &world = game.World();
+	for (std::size_t index = 0; index < made.size(); ++index)
+	{
+		const gp::Transform &at = *world.Get<gp::Transform>(made[index]);
+		const gp::Delivery &run = *world.Get<gp::Delivery>(made[index]);
+		const gp::Locomotion &motion = *world.Get<gp::Locomotion>(made[index]);
+		const Engine::Math::FixedVector2 start = from + offsets[index] - Engine::Math::FixedVector2{napalm.deliveryDistance * Fixed::FromRatio(3, 2), Fixed{}};
+		BOOST_TEST((Engine::Math::Length(at.position.XY() - start) <= Fixed::FromRatio(1, 100)));
+		BOOST_TEST((at.position.z == game.Game().ground.At(at.position.XY()) + motion.locomotor.preferredHeight));
+		BOOST_TEST((motion.speed == motion.locomotor.maxSpeed));
+		BOOST_TEST((Engine::Math::Length(run.moveTo - (to + offsets[index])) <= Fixed::FromRatio(1, 100)));
+		BOOST_TEST((Engine::Math::Length(run.target - to) <= Fixed::FromRatio(1, 100))); // converging on the target
+	}
+	for (const ecs::Entity carrier : made)
+		game.World().Destroy(carrier);
+	const auto &barrage = shell.game.powers.deliveries.at("SUPERWEAPON_ArtilleryBarrage1").front();
+	BOOST_TEST(barrage.formationSize == 12u);
+	BOOST_TEST((barrage.formationSpacing == Fixed::One()));
+	BOOST_TEST((barrage.errorRadius == Fixed::FromInt(100)));
+	gameplay::detail::Deliver(game.Game(), barrage, {from.x, from.y, Fixed{}}, to, america);
+	const auto cannons = carriers();
+	BOOST_TEST_REQUIRE(cannons.size() == 12u);
+	// Each cannon by its goal's offset: (i + 1) / 2 * 1 spacings, no convergence (the target moves with the offset),
+	// then off by the error; the first spot on.
+	std::vector<bool> seen(12, false);
+	for (const ecs::Entity cannon : cannons)
+	{
+		const gp::Delivery &run = *world.Get<gp::Delivery>(cannon);
+		std::optional<std::size_t> which;
+		for (std::size_t index = 0; index < 12 && !which; ++index)
+		{
+			const Fixed spacing = Fixed::FromInt(static_cast<std::int64_t>((index + 1) / 2));
+			const Engine::Math::FixedVector2 offset{Fixed{} - spacing, index % 2 != 0 ? Fixed{} - spacing : spacing};
+			if (!seen[index] && Engine::Math::Length(run.moveTo - (to + offset)) <= Fixed::FromRatio(1, 100))
+				which = index;
+		}
+		BOOST_TEST_REQUIRE(which.has_value());
+		seen[*which] = true;
+		const Fixed spacing = Fixed::FromInt(static_cast<std::int64_t>((*which + 1) / 2));
+		const Engine::Math::FixedVector2 offset{Fixed{} - spacing, *which % 2 != 0 ? Fixed{} - spacing : spacing};
+		const Fixed error = Engine::Math::Length(run.target - (to + offset));
+		if (*which == 0)
+			BOOST_TEST((error <= Fixed::FromRatio(1, 100)));
+		else
+			BOOST_TEST((error <= Fixed::FromInt(100) + Fixed::FromRatio(1, 100)));
+	}
+}
+
+// Legacy parity (OCLSpecialPower::findOCL / doSpecialPowerAtLocation; AmericaCommandCenter's SuperweaponParadropAmerica:
+// OCL SUPERWEAPON_Paradrop1, UpgradeOCL SCIENCE_Paradrop3 SUPERWEAPON_Paradrop3, UpgradeOCL SCIENCE_Paradrop2
+// SUPERWEAPON_Paradrop2): the power runs the first UpgradeOCL whose science its player has, in the module's order, else
+// its OCL: the payload carried is that list's.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_paradrop_grows_with_its_players_sciences)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 1, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	const Engine::Math::FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity centre = game.Place("AmericaCommandCenter", low + Engine::Math::FixedVector2{Fixed::FromInt(400), Fixed::FromInt(400)}, {}, america);
+	const auto carried = [&] {
+		std::size_t riders = 0;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity carrier : chunk.Entities())
+			{
+				riders += game.Game().manifest.Aboard(carrier).size();
+				game.World().Destroy(carrier);
+			}
+		});
+		return riders;
+	};
+	const auto payload = [&](const char *list) {
+		std::size_t count = 0;
+		for (const auto &run : shell.game.powers.deliveries.at(list))
+			for (const auto &item : run.payload)
+				count += item.count * run.formationSize;
+		return count;
+	};
+	const auto fire = [&] {
+		gameplay::FireSpecialPower(game.Game(), centre, "SuperweaponParadropAmerica", target, true);
+		return carried();
+	};
+	BOOST_TEST_REQUIRE(payload("SUPERWEAPON_Paradrop1") != payload("SUPERWEAPON_Paradrop2"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop1"));
+	auto &sciences = game.World().Resource<gp::PlayerSciences>();
+	sciences.Grant(player, *shell.game.Science("SCIENCE_Paradrop2"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop2"));
+	sciences.Grant(player, *shell.game.Science("SCIENCE_Paradrop3"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop3")); // the first listed it has
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -124,15 +124,19 @@ export struct ControlVisual final
 	std::uint32_t list_columns = 1;
 	bool checked = false;
 	bool image_style = false;
+	// A USER window drawn by W3DGadgetPushButtonImageDraw (DRAWCALLBACK): as a one-image push button.
+	bool push_image_draw = false;
 	// A command button (USE_OVERLAY_STATES), whether it is enabled, and its ALWAYS_COLOR / NOT_READY status.
 	bool overlay_states = false;
 	bool enabled = true;
 	bool always_color = false;
 	bool not_ready = false;
+	bool flashing = false; // WIN_STATUS_FLASHING: the pushed overlay over it
 	bool clock = false; // a push button's clock (see WNDWindow)
 	int clock_percent = 0;
 	bool clock_remaining = false;
 	Graphics::Color2D clock_color{};
+	ImageRef overlay_image{}; // a push button's overlay image (GadgetButtonDrawOverlayImage), over its whole rectangle
 	const ImageRef *highlighted_overlay = nullptr; // Cameo_hilited
 	const ImageRef *pushed_overlay = nullptr;      // Cameo_push
 	bool wrap_centered = false;
@@ -143,6 +147,7 @@ export struct ControlVisual final
 	bool centered_text = false;
 	bool centered_text_vertically = true;
 	const WNDPicture *picture = nullptr; // a letterboxed picture instead of the window's own look
+	const ImageRef *video = nullptr;     // a movie's frame over the window's own look (setVideoBuffer)
 	// A list box's scroll bar.
 	bool has_scroll_bar = false;
 	const WNDDrawState *scroll_up = nullptr;
@@ -220,6 +225,11 @@ bool Render_User(DrawList &draw_list, const ControlVisual &visual) noexcept
 	if (visual.state == nullptr)
 		return false;
 	const WNDDrawCell &cell = Cell(*visual.state, 0);
+	// W3DGadgetPushButtonImageDrawOne without overlay states: its state's image (the enabled one, or the disabled one
+	// while disabled; none: nothing), then its overlay image (GadgetButtonDrawOverlayImage), never its colour.
+	if (visual.push_image_draw)
+		return (!cell.image.texture.Is_Valid() || draw_list.Add_Image(cell.image, visual.rectangle)) &&
+			(!visual.overlay_image.texture.Is_Valid() || draw_list.Add_Image(visual.overlay_image, visual.rectangle));
 	if (visual.image_style)
 		return !cell.image.texture.Is_Valid() || draw_list.Add_Image(cell.image, visual.rectangle);
 	if (cell.color.alpha > 0.0f && !draw_list.Add_Rect(visual.rectangle, cell.color))
@@ -280,6 +290,16 @@ bool Render_Push_Button(DrawList &draw_list, const ControlVisual &visual) noexce
 		button.fill_color = Cell(state, 0).color;
 		button.has_border = Cell(state, 0).border_color.alpha > 0.0f;
 		button.border_color = Cell(state, 0).border_color;
+	}
+	// W3DGadgetPushButtonImageDraw: a flashing button (WIN_STATUS_FLASHING) draws the Cameo_push image over itself.
+	if (visual.flashing && visual.pushed_overlay != nullptr && visual.pushed_overlay->texture.Is_Valid()) {
+		button.flashing = true;
+		button.flashing_image = *visual.pushed_overlay;
+	}
+	// W3DGadgetPushButtonImageDraw: the button's overlay image (PushButtonData::overlayImage) over its whole window.
+	if (visual.overlay_image.texture.Is_Valid()) {
+		button.has_overlay = true;
+		button.overlay_image = visual.overlay_image;
 	}
 	if (visual.clock) {
 		button.has_clock = true;
@@ -964,6 +984,8 @@ export bool Render_Control(DrawList &draw_list, const ControlVisual &visual) noe
 	}
 	// Combo boxes draw their own text (the selected item); text entries theirs, left aligned, with the caret.
 	if (!rendered)
+		return false;
+	if (visual.video != nullptr && !draw_list.Add_Image(*visual.video, visual.rectangle))
 		return false;
 	if (visual.kind == ControlKind::ComboBox)
 		return true;

@@ -16,23 +16,33 @@ module;
 
 module games.generalszh.hosts.game.game_client;
 
+import games.generalszh.presentation.objects.algorithms.scenery_setup;
+import games.generalszh.presentation.objects.systems.rope_view_systems;
+import games.generalszh.gameplay.beacons.resources.beacons;
+import games.generalszh.presentation.models.model_library_system;
+import games.generalszh.presentation.scripted.algorithms.client_script_effects;
+import games.generalszh.presentation.scripted.algorithms.camera_script_effects;
+import games.generalszh.presentation.composition.schedules;
+import games.generalszh.presentation.composition.objects;
+import games.generalszh.presentation.composition.hud;
+import games.generalszh.presentation.composition.interaction;
+import games.generalszh.presentation.composition.audio;
+import games.generalszh.presentation.interaction.algorithms.rule_queries;
+import games.generalszh.presentation.hud.algorithms.overlay_extract;
+import games.generalszh.presentation.hud.resources.military_caption;
+import games.generalszh.presentation.interaction.components.selected;
+import games.generalszh.presentation.hud.resources.in_game_messages;
+import games.generalszh.presentation.hud.algorithms.message_list;
+import games.generalszh.presentation.hud.resources.screen_fade;
 import engine.camera.model.rts_camera;
 import engine.time.simulation_time;
 import games.generalszh.session.session_view;
 import games.generalszh.hud.superweapon_timers;
 import games.generalszh.presentation.hud.systems.eva_system;
-import games.generalszh.presentation.hud.systems.production_presentation_system;
-import games.generalszh.presentation.hud.systems.overcharge_notice_system;
-import games.generalszh.presentation.hud.systems.rally_notice_system;
-import games.generalszh.presentation.hud.systems.radar_event_system;
 import games.generalszh.content.eva.eva_content;
 import games.generalszh.scripting.core_vocabulary;
 import games.generalszh.scripting.presentation_vocabulary;
 import games.generalszh.scripting.match_vocabulary;
-import games.generalszh.presentation.hud.systems.in_game_message_system;
-import games.generalszh.presentation.hud.systems.military_caption_system;
-import games.generalszh.presentation.hud.systems.screen_fade_system;
-import games.generalszh.presentation.objects.systems.script_flash_systems;
 import engine.gameplay.common.appearance.components.indicator_color;
 import games.generalszh.presentation.hud.algorithms.radar_event_rules;
 import games.generalszh.presentation.hud.algorithms.named_timer_lines;
@@ -48,16 +58,15 @@ import engine.audio.adapters.preferred_output;
 import games.generalszh.presentation.objects.algorithms.tick_effects;
 import engine.ecs.scheduler.scheduler;
 import games.generalszh.presentation.objects.algorithms.presentation_schedule;
-import games.generalszh.presentation.interaction.systems.interaction_systems;
-import games.generalszh.presentation.interaction.systems.build_placement_system;
 import games.generalszh.presentation.objects.systems.placement_ghost_system;
-import games.generalszh.presentation.objects.systems.disable_presentation_systems;
+import games.generalszh.presentation.objects.systems.radius_decal_view_system;
 import games.generalszh.presentation.interaction.algorithms.selection_setup;
 import games.generalszh.content.stealth.stealth_content;
 import games.generalszh.content.fire.fire_content;
 import games.generalszh.content.death.death_content;
 import games.generalszh.content.topple.topple_content;
 import games.generalszh.presentation.rendering.model_bones;
+import engine.gameplay.rts.vision.resources.shroud_map;
 import engine.jobs.job_system;
 import games.generalszh.content.loading.game_content;
 import games.generalszh.content.objects.model_draw;
@@ -68,6 +77,14 @@ import games.generalszh.content.objects.model_conditions;
 import Engine.Core.Math.FixedPresentation;
 import Engine.Core.Math.Vector3;
 import Graphics.Scene.AffineTransform;
+import games.generalszh.presentation.camera.algorithms.camera_shaking;
+import games.generalszh.presentation.camera.algorithms.motion_blur_steps;
+import games.generalszh.presentation.camera.algorithms.selection_focus;
+import games.generalszh.presentation.camera.algorithms.camera_slave;
+import games.generalszh.presentation.rendering.infantry_lighting;
+import games.generalszh.presentation.hud.algorithms.cameo_flash_steps;
+import games.generalszh.presentation.hud.algorithms.cinematic_text_layout;
+import games.generalszh.presentation.hud.algorithms.popup_message_layout;
 
 namespace generalszh::host
 {
@@ -86,6 +103,7 @@ struct LocalScripts
 	std::unique_ptr<scripting::LocalMatchHost> host;
 	std::optional<engine::scripting::ScriptRuntime> runtime;
 	std::uint64_t tick{0};
+	std::map<std::string, std::int64_t> recorded; // PLAYER_LOST_OBJECT_TYPE's counts seen, on this machine
 };
 
 struct GameClient::State
@@ -98,12 +116,18 @@ struct GameClient::State
 	// Single player is a match of one through an in-process relay.
 	std::unique_ptr<session::ClientMatch> simulation;
 	std::unique_ptr<LocalScripts> localScripts;
+	// GameLogic::isInMultiplayerGame (a network match) and isInReplayGame: beacons are placed and removed only in the one
+	// and never in the other.
+	bool multiplayerMatch{false};
+	bool replayMatch{false};
 	std::uint64_t generation{0};
 	engine::camera::RtsCamera camera;
 	float speed{1.0f};
 	float baseSpeed{1.0f}; // the player's own speed (a script's SET_FPS_LIMIT lasts only its match)
 	ClientSettings settings;
-	std::string detailLevel{"High"}; // the options' StaticGameLOD
+	presentation::ShroudCells shroud; // the viewer's shroud as last drawn
+	std::int32_t detailLevel{presentation::detail_level::High}; // the options' StaticGameLOD
+	presentation::CustomDetail customDetail;                     // the player's own detail (Custom)
 	bool retaliation{true};          // the options' Retaliation
 	// Whose eyes the world is seen through without a seat (the shell map): PlayerList::newGame's local player, the
 	// map's first human player, else its first that is not neutral.
@@ -143,92 +167,39 @@ struct GameClient::State
 	std::unique_ptr<ecs::SystemRegistry> frameSystems;
 	std::unique_ptr<ecs::Scheduler> tickScheduler;
 	std::unique_ptr<ecs::Scheduler> frameScheduler;
-	presentation::MotionSampleSystem motionSample;
-	presentation::PoseSampleSystem poseSample;
-	presentation::DetectorPingSystem detectorPings;
-	presentation::HitFxSystem hitFx;
-	presentation::MissileIgnitionSystem missileIgnitions;
-	presentation::HarvestPresentationSystem harvestPresentation;
-	presentation::CratePresentationSystem cratePresentation;
-	presentation::CashPresentationSystem cashPresentation;
-	presentation::PromotionPresentationSystem promotionPresentation;
-	presentation::ChassisSystem chassis;
-	presentation::TreadRollSystem treadRoll;
-	presentation::WheelRollSystem wheelRoll;
-	presentation::MotionEmitterSystem motionEmitters;
-	presentation::ObjectPresentationSystem objectPresentation;
-	presentation::EffectAttachmentSystem effectAttachments;
-	presentation::DamageEffectSystem damageEffects;
-	presentation::FireFxPlacementSystem fireFxPlacement;
-	presentation::ExhaustSampleSystem exhaustSample;
-	presentation::ExhaustSystem exhausts;
-	presentation::LaserSystem lasers;
-	presentation::FxPlaybackSystem fxPlayback;
-	presentation::DynamicLightSystem dynamicLights;
-	presentation::TrackLayingSystem trackLaying;
-	presentation::TrackFadeSystem trackFade;
-	presentation::TreeBreezeSystem treeBreeze;
-	presentation::TreeBendSystem treeBend;
-	presentation::DebrisAnimationSystem debrisAnimation;
-	presentation::TreeContactSystem treeContacts;
-	presentation::SoundLoopSystem soundLoops;
-	presentation::AudioMixSystem audioMix;
-	presentation::PointerInteractionSystem pointerInteraction;
-	presentation::InGameMessageSystem inGameMessages;
-	presentation::MilitaryCaptionSystem militaryCaption;
-	presentation::ScreenFadeSystem screenFade;
-	presentation::ScriptFlashSystem scriptFlash;
-	presentation::EvaSystem eva;
-	presentation::ProductionPresentationSystem productionPresentation;
-	presentation::OverchargeNoticeSystem overchargeNotices;
-	presentation::RallyNoticeSystem rallyNotices;
-	presentation::DisabledSoundSystem disabledSounds;
-	presentation::EmpSparkSystem empSparks;
-	presentation::AutoDepositPresentationSystem autoDepositTexts;
-	presentation::AbilityFeedbackSystem abilityFeedback;
-	presentation::TintStatusSystem tintStatus;
-	presentation::RiderTintSystem riderTint;
-	presentation::ObjectIconSystem objectIcons;
-	presentation::UplinkStatusSystem uplinkStatus;
-	presentation::AttachedParticleClearSystem particleClears;
-	presentation::UplinkEffectSystem uplinkEffects;
-	presentation::UplinkSoundSystem uplinkSounds;
-	presentation::FireLoopSystem fireLoops;
-	presentation::MountedDrawSystem mountedDraw;
-	presentation::RadarEventSystem radarEvents;
 	std::function<std::u16string(std::string_view)> labels; // the game's strings (GameText::fetch)
 	content::EvaCatalog evaCatalog; // Eva.ini
 	content::InGameUiContent inGameUi;
 	content::MouseContent mouse;
 	content::LanguageFonts language;
 	Engine::Math::FixedVector2 playableExtent{}; // the active boundary the camera keeps within
-	hud::SuperweaponFlash superweaponFlash; // the ready countdowns' flash (InGameUI's, kept across frames)
 	std::vector<std::pair<std::string, std::u16string>> playerNames;
 	std::u16string defeatedText{u"%ls has been defeated."};
-	presentation::BuildPlacementSystem buildPlacement;
-	presentation::PlacementGhostSystem placementGhosts;
 	// The player's pointer since the last frame (presses and releases gather until the interaction reads them).
 	PointerState pointer;
 	float viewportWidth{800}, viewportHeight{600};
 	std::uint64_t presentationTicks{0};
 	std::uint64_t presentationFrames{0};
+	// W3DView's slave mode (cameraEnableSlaveMode): the named unit and bone the camera rides, and this frame's bone
+	// transform once the renderer has handed it back.
+	bool cameraSlaved{false};
+	std::string slaveUnit;
+	std::string slaveBone;
+	std::optional<std::array<float, 12>> slaveView;
+
+	// W3DView::isCameraMovementFinished: a zoom motion blur counts as finished, else the camera's scripted moves.
+	bool CameraMovementFinished()
+	{
+		const auto *filter = simulation ? Game().World().FindResource<presentation::ViewFilter>() : nullptr;
+		return (filter != nullptr && presentation::MotionBlurZooming(*filter)) || camera.IsCameraMovementFinished();
+	}
 
 	void BindPresentation()
 	{
 		ecs::World &world = Game().World();
-		world.EmplaceResource<presentation::PresentationFrame>();
-		presentation::KnowMotionLooks(world.EmplaceResource<presentation::MotionLooks>(), Game());
-		presentation::LookCatalog &catalog = world.EmplaceResource<presentation::LookCatalog>();
-		catalog.playerColors = playerColors;
-		catalog.night = night && content.gameData.forceModelsToFollowTimeOfDay;
-		presentation::KnowLooks(catalog, Game());
-		world.EmplaceResource<presentation::LookClips>();
-		world.EmplaceResource<presentation::ObjectInstances>();
-		world.EmplaceResource<presentation::MountedInstances>();
-		world.EmplaceResource<presentation::PresentedObjects>();
-		world.EmplaceResource<presentation::ParticleWorldHandle>(presentation::ParticleWorldHandle{particles.get(), &effects});
+		namespace composition = presentation::composition;
 		// Where models' bones sit, from the renderer's loaded models (effects ride on them).
-		world.EmplaceResource<presentation::BonePoses>(presentation::BonePoses{[this](std::string_view model, std::string_view bone) {
+		presentation::BonePoses poses{[this](std::string_view model, std::string_view bone) {
 			presentation::BoneLookup lookup;
 			lookup.ready = bones.Ready(model);
 			if (lookup.ready)
@@ -240,230 +211,23 @@ struct GameClient::State
 				}
 			return lookup;
 		}, [this](std::string_view model, std::string_view bone, bool family) { return bones.Find(model, bone, family); },
-			[this](std::string_view model, std::string_view bone, std::string_view ancestor) { return bones.Descends(model, bone, ancestor); }});
-		world.EmplaceResource<presentation::FxRequests>();
-		world.EmplaceResource<presentation::FloatingTexts>();
-		world.EmplaceResource<presentation::WorldAnimations>();
-		world.EmplaceResource<presentation::Breeze>();
-		world.EmplaceResource<presentation::TreeBreeze>();
-		world.EmplaceResource<presentation::FloatingTextSettings>().addCash = addCashText;
-		world.Resource<presentation::FloatingTextSettings>().loseCash = loseCashText;
-		world.EmplaceResource<presentation::WeaponExhausts>();
-		world.EmplaceResource<presentation::WeaponFireLoops>();
-		world.EmplaceResource<presentation::WeaponLasers>();
-		world.EmplaceResource<presentation::LaserRequests>();
-		world.EmplaceResource<presentation::ActiveLasers>();
-		world.EmplaceResource<presentation::LaserFrame>();
-		world.EmplaceResource<presentation::SoundRequests>();
-		world.EmplaceResource<presentation::ShakeRequests>();
-		world.EmplaceResource<presentation::LightPulses>();
-		world.EmplaceResource<presentation::DynamicLights>();
-		world.EmplaceResource<presentation::ScorchMarks>();
-		world.EmplaceResource<presentation::TrackSettings>();
-		ApplyTrackSettings();
-		world.EmplaceResource<presentation::PresentationRandom>();
-		world.EmplaceResource<presentation::EffectStats>();
-		world.EmplaceResource<presentation::AudioHandle>(presentation::AudioHandle{&audio, player.get(), &mixer});
-		world.EmplaceResource<presentation::AudioState>();
-		world.EmplaceResource<presentation::AudioCommands>();
-		world.EmplaceResource<presentation::EvaState>().catalog = evaCatalog;
-		world.EmplaceResource<presentation::RadarEvents>();
-		{
-			// Object::getRadarPriority / Radar::isPriorityVisible by definition; the damage that never warns; the words and sounds.
-			auto &radar = world.EmplaceResource<presentation::RadarFeedback>();
-			for (std::size_t index = 0; index < Game().DefinitionCount(); ++index)
-			{
-				const content::ObjectDefinition &kind = Game().Definition(static_cast<std::uint32_t>(index));
-				bool shown = kind.radarPriority != "NOT_ON_RADAR";
-				if (kind.radarPriority.empty() || kind.radarPriority == "INVALID")
-					shown = kind.Is("CAPTURABLE") ||
-						std::any_of(kind.modules.begin(), kind.modules.end(), [](const content::ModuleEntry &module) { return module.type == "GarrisonContain"; });
-				radar.onRadar.push_back(shown);
-			}
-			radar.penaltyDamage = content::DamageTypeIndex("PENALTY").value_or(0xFFFFFFFFu);
-			radar.healingDamage = content::DamageTypeIndex("HEALING").value_or(0xFFFFFFFFu);
-			if (labels)
-			{
-				radar.underAttack = labels("RADAR:UnderAttack");
-				radar.unitUnderAttack = labels("RADAR:UnitUnderAttack");
-				radar.harvesterUnderAttack = labels("RADAR:HarvesterUnderAttack");
-				radar.structureUnderAttack = labels("RADAR:StructureUnderAttack");
-				radar.infiltration = labels("RADAR:Infiltration");
-				// BattlePlanUpdate's message labels, by definition.
-				for (std::size_t index = 0; index < Game().DefinitionCount(); ++index)
-				{
-					std::array<std::u16string, 3> messages;
-					for (const content::ModuleEntry &module : Game().Definition(static_cast<std::uint32_t>(index)).modules)
-						if (module.block != nullptr && module.type == "BattlePlanUpdate")
-						{
-							constexpr std::array<std::string_view, 3> keys{"BombardmentMessageLabel", "HoldTheLineMessageLabel", "SearchAndDestroyMessageLabel"};
-							for (std::size_t plan = 0; plan < keys.size(); ++plan)
-								if (const auto *node = module.block->Find(keys[plan]); node != nullptr && !node->values.empty())
-									messages[plan] = labels(node->Value());
-							break;
-						}
-					radar.battlePlanMessages.push_back(std::move(messages));
-				}
-			}
-			const auto misc = [&](std::string_view field) {
-				const auto found = content.miscAudio.find(field);
-				return found != content.miscAudio.end() ? found->second : std::string{};
-			};
-			radar.harvesterSound = misc("RadarNotifyHarvesterUnderAttackSound");
-			radar.structureSound = misc("RadarNotifyStructureUnderAttackSound");
-			radar.infiltrationSound = misc("RadarNotifyInfiltrationSound");
-		}
-		world.EmplaceResource<presentation::ListenerPose>();
-		// The player's interaction: pointer, view, selection and orders (the local seat's player).
-		world.EmplaceResource<presentation::PointerInput>();
-		world.EmplaceResource<presentation::InteractionView>();
-		world.EmplaceResource<presentation::InteractionState>();
-		{
-			auto &settings = world.EmplaceResource<presentation::MouseSettings>();
-			settings.dragTolerance = static_cast<float>(mouse.dragTolerance);
-			settings.dragTolerance3D = static_cast<float>(mouse.dragTolerance3D);
-			settings.dragToleranceMs = mouse.dragToleranceMs;
-			for (std::size_t kind = 0; kind < settings.cursorDirections.size(); ++kind)
-				settings.cursorDirections[kind] = mouse.cursors[kind].directions;
-		}
-		world.EmplaceResource<presentation::SelectionBox>();
-		world.EmplaceResource<presentation::CursorState>();
-		world.EmplaceResource<presentation::GuiTargeting>();
-		world.EmplaceResource<presentation::PlayerOrders>();
-		world.EmplaceResource<presentation::BuildPlacement>();
-		{
-			// InGameUI's messages: its colours and delay (MessageDelayMS / 30 / 1000, whole numbers), the players' names.
-			auto &messages = world.EmplaceResource<presentation::InGameMessages>();
-			messages.color1 = inGameUi.messageColor1;
-			messages.color2 = inGameUi.messageColor2;
-			messages.timeoutTicks = static_cast<std::uint64_t>(std::max<std::int64_t>(inGameUi.messageDelayMs / 30 / 1000, 0));
-			messages.defeatedText = defeatedText;
-			if (labels)
-			{
-				messages.upgradeCompleteText = labels("UPGRADE:UpgradeComplete");
-				messages.overchargeExhaustedText = labels("GUI:OverchargeExhausted");
-				messages.rallySetText = labels("GUI:RallyPointSet");
-				messages.rallyNoPathText = labels("GUI:RallyPointNoPath");
-				for (const auto &[name, object] : content.objects)
-					if (!object.displayName.empty() && !messages.displayNames.contains(object.displayName))
-						messages.displayNames.emplace(object.displayName, labels(object.displayName));
-				for (const content::UpgradeContent &upgrade : content.upgrades.upgrades)
-					messages.upgradeNames.push_back(upgrade.displayName.empty() ? std::u16string{} : labels(upgrade.displayName));
-			}
-			if (const auto *roster = world.FindResource<engine::gameplay::TeamRoster>())
-				for (const auto &[name, shown] : playerNames)
-					if (const auto player = roster->FindPlayer(name))
-					{
-						if (messages.playerNames.size() <= *player)
-							messages.playerNames.resize(*player + 1);
-						messages.playerNames[*player] = shown;
-					}
-		}
-		{
-			// The military caption's colour (InGameUI.ini) and typing (Language.ini: letters MilitaryCaptionSpeed ticks
-			// apart, MilitaryCaptionDelayMS before the first and each line, in whole ticks).
-			// InGameUI's named timers: their flash every NamedTimerCountdownFlashDuration frames (whole ticks).
-			world.EmplaceResource<presentation::NamedTimers>().flashTicks =
-				static_cast<std::uint64_t>(std::max<std::int64_t>(inGameUi.namedTimerFlashFrames.Floor(), 0));
-			// ScriptEngine::newMap: every map starts on a fade in from black.
-			world.EmplaceResource<presentation::ScreenFade>(presentation::StartFade());
-			auto &caption = world.EmplaceResource<presentation::MilitaryCaption>();
-			caption.baseColor = inGameUi.militaryCaptionColor;
-			caption.speedTicks = static_cast<std::uint64_t>(std::max(language.militaryCaptionSpeed, 0));
-			caption.delayTicks = static_cast<std::uint64_t>(std::max(30 * language.militaryCaptionDelayMs / 1000, 0));
-		}
-		world.EmplaceResource<presentation::PlacementGhosts>().opacity = Engine::Math::ToFloat(Game().Content().gameData.objectPlacementOpacity);
-		presentation::KnowSelectables(world.EmplaceResource<presentation::SelectionCatalog>(), Game());
-		if (const auto seat = Game().SeatPlayer(Game().LocalSeat()))
-			world.EmplaceResource<presentation::LocalPlayer>(presentation::LocalPlayer{*seat, true});
-		else
-			world.EmplaceResource<presentation::LocalPlayer>();
-		// A thing that goes stops its sounds.
-		world.Side<presentation::SoundLoops>().OnRemove([sounds = player.get()](ecs::Entity, presentation::SoundLoops &loops) {
-			for (const auto handle : {loops.ambient, loops.move, loops.burning, loops.crashing, loops.turret})
-				if (handle != 0 && sounds != nullptr)
-					sounds->Stop(handle);
-		});
+			[this](std::string_view model, std::string_view bone, std::string_view ancestor) { return bones.Descends(model, bone, ancestor); }};
+		composition::EmplaceObjectResources(world, Game(),
+			{playerColors, night && content.gameData.forceModelsToFollowTimeOfDay, particles.get(), &effects, std::move(poses), addCashText, loseCashText});
+		ApplyDetail();
+		composition::EmplaceAudioResources(world, presentation::AudioHandle{&audio, player.get(), &mixer});
+		composition::EmplaceHudResources(world, Game(), {labels, &inGameUi, &language, &evaCatalog, playerNames, defeatedText, &content});
+		composition::EmplaceInteractionResources(world, Game(), mouse, inGameUi);
 		world.EmplaceResource<presentation::TerrainHeightHandle>(presentation::TerrainHeightHandle{[this](float x, float y) {
 			return terrainHeight ? terrainHeight(x, y) : 0.0f;
 		}});
-		world.Side<presentation::DamageEmission>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::DamageEmission &emission) {
-			for (const auto &attached : emission.systems)
-				emitters->Stop(attached.id);
-		});
-		// An object that goes takes its riding effects at once.
-		world.Side<presentation::ConditionEmission>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::ConditionEmission &emission) {
-			for (const auto &attached : emission.systems)
-				emitters->Destroy(attached.id);
-		});
-		world.Side<presentation::FxEmission>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::FxEmission &riding) {
-			for (const auto &attached : riding.systems)
-				emitters->Destroy(attached.id);
-		});
-		world.Side<presentation::CrashTrailEmission>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::CrashTrailEmission &trail) {
-			for (const auto &attached : trail.systems)
-				emitters->Destroy(attached.id);
-		});
-		// An uplink that goes takes its effects and sounds (killEverything).
-		world.Side<presentation::UplinkEffects>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::UplinkEffects &effects) {
-			for (const auto system : effects.systems)
-				emitters->Destroy(system);
-			for (const auto system : effects.orbitSystems)
-				if (system != 0)
-					emitters->Destroy(system);
-		});
-		world.Side<presentation::FireSoundLoop>().OnRemove([sounds = player.get()](ecs::Entity, presentation::FireSoundLoop &loop) {
-			if (loop.handle != 0 && sounds != nullptr)
-				sounds->Stop(loop.handle);
-		});
-		world.Side<presentation::UplinkSounds>().OnRemove([sounds = player.get()](ecs::Entity, presentation::UplinkSounds &loops) {
-			for (const auto handle : loops.handles)
-				if (handle != 0 && sounds != nullptr)
-					sounds->Stop(handle);
-		});
-		// A vehicle that goes stops its emitters; what is out lives on.
-		world.Side<presentation::MotionEmission>().OnRemove([emitters = particles.get()](ecs::Entity, presentation::MotionEmission &emission) {
-			for (std::uint32_t index = 0; index < emission.count && emitters != nullptr; ++index)
-				emitters->Stop(emission.systems[index]);
-		});
+		composition::BindSoundReleases(world, player.get());
+		composition::BindObjectEffectReleases(world, particles.get());
 		tickScheduler.reset();
 		frameScheduler.reset();
 		tickSystems = std::make_unique<ecs::SystemRegistry>();
 		frameSystems = std::make_unique<ecs::SystemRegistry>();
-		presentation::RegisterPresentationTick(*tickSystems, motionSample, poseSample, detectorPings, exhaustSample, hitFx, missileIgnitions, harvestPresentation, cratePresentation, promotionPresentation, chassis, trackLaying, treeContacts, cashPresentation, disabledSounds, empSparks, autoDepositTexts, abilityFeedback, uplinkStatus, particleClears);
-		presentation::RegisterPresentationFrame(*frameSystems, treadRoll, wheelRoll, motionEmitters, objectPresentation, effectAttachments, damageEffects, fireFxPlacement, fxPlayback, exhausts, lasers, dynamicLights, trackFade, treeBreeze, treeBend, debrisAnimation, mountedDraw, tintStatus, objectIcons, uplinkEffects, riderTint);
-		presentation::RegisterSoundFrame(*frameSystems, soundLoops, audioMix, uplinkSounds, fireLoops);
-		tickSystems->Register(inGameMessages);
-		tickSystems->Register(militaryCaption);
-		tickSystems->Register(screenFade);
-		tickSystems->Register(scriptFlash);
-		// Drawable::updateDrawable after the logic's own colour flashes (EMPUpdate).
-		tickSystems->OrderBefore<presentation::EmpSparkSystem, presentation::ScriptFlashSystem>();
-		tickSystems->OrderBefore<presentation::InGameMessageSystem, presentation::MilitaryCaptionSystem>();
-		tickSystems->OrderBefore<presentation::MilitaryCaptionSystem, presentation::EvaSystem>();
-		tickSystems->Register(eva);
-		tickSystems->OrderBefore<presentation::InGameMessageSystem, presentation::EvaSystem>();
-		tickSystems->Register(productionPresentation);
-		tickSystems->OrderBefore<presentation::InGameMessageSystem, presentation::ProductionPresentationSystem>();
-		tickSystems->OrderBefore<presentation::MilitaryCaptionSystem, presentation::ProductionPresentationSystem>();
-		tickSystems->OrderBefore<presentation::CratePresentationSystem, presentation::ProductionPresentationSystem>();
-		tickSystems->Register(overchargeNotices);
-		tickSystems->OrderBefore<presentation::InGameMessageSystem, presentation::OverchargeNoticeSystem>();
-		tickSystems->OrderBefore<presentation::ProductionPresentationSystem, presentation::OverchargeNoticeSystem>();
-		tickSystems->Register(rallyNotices);
-		tickSystems->OrderBefore<generalszh::presentation::AbilityFeedbackSystem, presentation::RallyNoticeSystem>();
-		tickSystems->OrderBefore<generalszh::presentation::DisabledSoundSystem, presentation::RallyNoticeSystem>();
-		tickSystems->OrderBefore<presentation::OverchargeNoticeSystem, presentation::RallyNoticeSystem>();
-		tickSystems->Register(radarEvents);
-		tickSystems->OrderBefore<presentation::OverchargeNoticeSystem, presentation::RadarEventSystem>();
-		tickSystems->OrderBefore<presentation::RallyNoticeSystem, presentation::RadarEventSystem>();
-		tickSystems->OrderBefore<presentation::ProductionPresentationSystem, presentation::RadarEventSystem>();
-		tickSystems->OrderBefore<presentation::RadarEventSystem, presentation::EvaSystem>();
-		tickSystems->OrderBefore<presentation::ProductionPresentationSystem, presentation::DisabledSoundSystem>();
-		tickSystems->OrderBefore<presentation::EvaSystem, presentation::EmpSparkSystem>();
-		frameSystems->Register(pointerInteraction);
-		frameSystems->Register(buildPlacement);
-		frameSystems->Register(placementGhosts);
+		composition::RegisterPresentationSystems(*tickSystems, *frameSystems);
 		tickSystems->Finalize(world.Components());
 		frameSystems->Finalize(world.Components());
 		tickScheduler = std::make_unique<ecs::Scheduler>(world, *tickSystems, *effectJobs);
@@ -506,6 +270,7 @@ struct GameClient::State
 		case Kind::SoundEnable: commands->pending.push_back({Audio::SoundEnable, command.text}); break;
 		case Kind::SoundStop: commands->pending.push_back({Audio::SoundStop, command.text}); break;
 		case Kind::SoundStopMuted: commands->pending.push_back({Audio::SoundStopMuted}); break;
+		case Kind::FlatSoundsPaused: commands->pending.push_back({Audio::FlatSoundsPaused, {}, command.flag}); break;
 		case Kind::SoundEffect:
 		case Kind::SoundEffectAt:
 		case Kind::SoundFromNamed:
@@ -562,6 +327,10 @@ struct GameClient::State
 		// This frame's scroll (for the cursor): scrolling by a drag or the keys, and its offset in pixels.
 		bool moving{false};
 		float offsetX{0}, offsetY{0};
+		// The middle button's drag turning the view (m_isRotating), from where it went down and when.
+		bool rotating{false};
+		float rotateAnchorX{0}, rotateFirstX{0}, rotateFirstY{0};
+		std::uint64_t rotateFrame{0};
 	} look;
 
 	void LookAround(double gameSeconds)
@@ -574,6 +343,32 @@ struct GameClient::State
 		{
 			camera.BeginUserAction();
 			camera.ZoomBy(-pointer.wheel * 10.0f);
+		}
+		// The middle button: a drag turns the view 0.01 radians a pixel across; a click (moved 5 pixels at most, let go
+		// within 5 frames) puts the angle, pitch and zoom back to their defaults.
+		if ((pointer.pressed & 4u) != 0)
+		{
+			look.rotating = true;
+			look.rotateAnchorX = look.rotateFirstX = pointer.x;
+			look.rotateFirstY = pointer.y;
+			look.rotateFrame = presentationFrames;
+		}
+		if (look.rotating && pointer.x != look.rotateAnchorX)
+		{
+			camera.BeginUserAction();
+			camera.SetAngle(camera.Angle() + 0.01f * (pointer.x - look.rotateAnchorX));
+			look.rotateAnchorX = pointer.x;
+		}
+		if ((pointer.released & 4u) != 0 && look.rotating)
+		{
+			look.rotating = false;
+			const bool moved = std::abs(pointer.x - look.rotateFirstX) > 5.0f || std::abs(pointer.y - look.rotateFirstY) > 5.0f;
+			if (!moved && presentationFrames - look.rotateFrame < 5)
+			{
+				camera.SetAngleToDefault();
+				camera.SetPitchToDefault();
+				camera.SetZoomToDefault();
+			}
 		}
 		if ((pointer.pressed & 2u) != 0 && !look.scrolling)
 		{
@@ -629,11 +424,14 @@ struct GameClient::State
 			presentation::KnowMotionLooks(Game().World().Resource<presentation::MotionLooks>(), Game());
 			presentation::KnowLooks(Game().World().Resource<presentation::LookCatalog>(), Game());
 			presentation::KnowPartLooks(Game().World().Resource<presentation::LookCatalog>(), Game().World());
+			presentation::KnowSupplyLooks(Game().World().Resource<presentation::LookCatalog>(), Game().World(), Game().World().Resource<presentation::BonePoses>());
 			presentation::KnowSelectables(Game().World().Resource<presentation::SelectionCatalog>(), Game());
 			presentation::QueueTickSounds(Game().World().Resource<presentation::SoundRequests>(), Game());
 			presentation::KnowExhausts(Game().World().Resource<presentation::WeaponExhausts>(), Game());
+			presentation::KnowRecoils(Game().World().Resource<presentation::WeaponRecoils>(), Game());
 			presentation::KnowFireLoops(Game().World().Resource<presentation::WeaponFireLoops>(), Game());
 			presentation::KnowLasers(Game().World().Resource<presentation::WeaponLasers>(), Game());
+			presentation::KnowStreams(Game().World().Resource<presentation::WeaponStreams>(), Game());
 			presentation::QueueTickLasers(Game().World().Resource<presentation::LaserRequests>(), Game().World().Resource<presentation::WeaponLasers>(), Game());
 			presentation::QueueAssistLasers(Game().World().Resource<presentation::LaserRequests>(), Game().World().Resource<presentation::WeaponLasers>(), Game());
 			presentation::QueueTickEffects(Game().World().Resource<presentation::FxRequests>(), Game().World().Resource<presentation::LookCatalog>(), Game());
@@ -654,175 +452,15 @@ struct GameClient::State
 
 	void Apply(const scripting::ClientScriptCommand &command)
 	{
-		using Kind = scripting::ClientScriptCommand::Kind;
-		switch (command.kind)
-		{
-		case Kind::MusicTrack: settings.musicTrack = command.text; break;
-		case Kind::MusicVolume: settings.musicVolume = command.percent; break;
-		case Kind::SoundVolume: settings.soundVolume = command.percent; break;
-		case Kind::SpeechVolume: settings.speechVolume = command.percent; break;
-		case Kind::SpeechPlay: settings.speechQueue.push_back(command.text); break;
-		case Kind::Movie: settings.movies.push_back(command.text); break;
-		case Kind::QuickVictory:
-			settings.matchEnd = ClientSettings::MatchEnd::QuickVictory;
-			settings.matchEndTick = localScripts ? localScripts->tick : 0;
-			settings.inputDisabled = true;
-			break;
-		case Kind::SoundDisable: settings.disabledSounds.push_back(command.text); break;
-		case Kind::AudioVolumeOverride: settings.soundVolumeOverrides.emplace_back(command.text, command.percent); break;
-		case Kind::EvaEnabled: settings.evaEnabled = command.flag; break;
-		case Kind::RadarForceEnable: settings.radarForced = true; break;
-		case Kind::RadarRevertToNormal: settings.radarForced = false; break;
-		case Kind::RadarHidden: settings.radarHidden = command.flag; break;
-		case Kind::BorderShroudDisabled: settings.borderShroudDisabled = true; break;
-		case Kind::DrawIconUi: settings.drawIconUi = command.flag; break;
-		case Kind::TreeSway:
-			// ScriptEngine::doSetTreeSway: a new breeze (trees roll their sway again); a period of at least a frame.
-			if (auto *breeze = simulation ? Game().World().FindResource<presentation::Breeze>() : nullptr)
-			{
-				++breeze->version;
-				breeze->direction = Engine::Math::ToFloat(command.numbers[0]);
-				breeze->directionX = std::sin(breeze->direction);
-				breeze->directionY = std::cos(breeze->direction);
-				breeze->intensity = Engine::Math::ToFloat(command.numbers[1]);
-				breeze->lean = Engine::Math::ToFloat(command.numbers[2]);
-				breeze->periodFrames = std::max(Engine::Math::ToFloat(command.numbers[3]), 1.0f);
-				breeze->randomness = Engine::Math::ToFloat(command.numbers[4]);
-			}
-			break;
-		case Kind::OcclusionMode: settings.occlusion = command.flag; break;
-		case Kind::ParticleCapMode: settings.particleCap = command.flag; break;
-		case Kind::SpecialPowerDisplay: settings.specialPowerDisplayDisabled = !command.flag; break;
-		case Kind::InputEnabled:
-			// doDisableInput (the selection dropped: deselectAllDrawables) / doEnableInput.
-			settings.inputDisabled = !command.flag;
-			if (!command.flag)
-				Game().World().Side<presentation::Selected>().Clear();
-			break;
-		case Kind::Letterbox:
-			if (settings.letterbox != command.flag)
-				++settings.letterboxChanges;
-			settings.letterbox = command.flag;
-			break;
-		case Kind::BlackWhite:
-			settings.blackWhite = command.flag;
-			settings.blackWhiteFrames = command.percent;
-			break;
-		case Kind::Fade:
-			// ScriptEngine::setFade, first stepped the tick after its script's.
-			if (auto *fade = Game().World().FindResource<presentation::ScreenFade>())
-			{
-				const auto real = [](Engine::Math::Fixed value) { return Engine::Math::ToFloat(value); };
-				presentation::SetFade(*fade, static_cast<presentation::FadeKind>(command.percent), real(command.numbers[0]), real(command.numbers[1]),
-					command.numbers[2].Round(), command.numbers[3].Round(), command.numbers[4].Round(), presentationTicks + 1);
-			}
-			break;
-		case Kind::RadarEvent:
-			// Radar::createEvent (4 seconds), from the logic frame its script ran on.
-			if (auto *radar = Game().World().FindResource<presentation::RadarEvents>())
-			{
-				const auto at = Ground(command.position);
-				presentation::CreateRadarEvent(*radar, {at.x, at.y, at.z}, static_cast<presentation::RadarEventType>(command.percent), presentationTicks);
-			}
-			break;
-		case Kind::LogicRate:
-		{
-			// setLogicTimeScaleFps (0: GameData's FramesPerSecondLimit): the simulation's ticks a second, rendering apart.
-			const std::int64_t fps = command.percent != 0 ? command.percent : content.gameData.framesPerSecondLimit;
-			if (fps > 0)
-				speed = std::clamp(static_cast<float>(fps) / static_cast<float>(LogicTicksPerSecond), 0.05f, 16.0f);
-			break;
-		}
-		case Kind::ObjectSound:
-		{
-			// Drawable::enableAmbientSoundFromScript on the named unit's drawable.
-			ecs::World &world = Game().World();
-			const ecs::Entity unit = Game().Named(command.subject);
-			if (!world.IsAlive(unit))
-				break;
-			auto &loops = world.Side<presentation::SoundLoops>();
-			if (loops.Get(unit) == nullptr)
-			{
-				presentation::SoundLoops fresh;
-				loops.Insert(unit, &fresh);
-			}
-			presentation::SoundLoops &mine = *loops.Get(unit);
-			mine.scriptOff = command.flag ? 0u : 1u;
-			if (command.flag)
-				mine.scriptStart = 1;
-			else if (mine.ambient != 0 && player)
-			{
-				player->Stop(mine.ambient);
-				mine.ambient = 0;
-			}
-			break;
-		}
-		case Kind::NamedTimer:
-			// InGameUI::addNamedTimer with TheGameText->fetch of the label.
-			if (auto *timers = Game().World().FindResource<presentation::NamedTimers>())
-				presentation::AddNamedTimer(*timers, command.subject,
-					labels ? labels(command.text) : std::u16string(command.text.begin(), command.text.end()), command.flag);
-			break;
-		case Kind::NamedTimerHide:
-			if (auto *timers = Game().World().FindResource<presentation::NamedTimers>())
-				presentation::RemoveNamedTimer(*timers, command.subject);
-			break;
-		case Kind::NamedTimersShown:
-			if (auto *timers = Game().World().FindResource<presentation::NamedTimers>())
-				timers->shown = command.flag;
-			break;
-		case Kind::Flash:
-		{
-			// doNamedFlash (only for some seconds) / doTeamFlash: LOGICFRAMES_PER_SECOND * seconds / DRAWABLE_FRAMES_PER_FLASH
-			// flashes, white or its player's colour (getIndicatorColor).
-			ecs::World &world = Game().World();
-			std::vector<ecs::Entity> targets;
-			if (command.flag)
-				targets = Game().TeamMembers(command.subject);
-			else if (command.percent > 0)
-				targets.push_back(Game().Named(command.subject));
-			const auto *catalog = world.FindResource<presentation::LookCatalog>();
-			const std::int32_t count = static_cast<std::int32_t>(30 * command.percent / 15);
-			for (const ecs::Entity target : targets)
-			{
-				if (!world.IsAlive(target))
-					continue;
-				std::array<float, 3> color{1.0f, 1.0f, 1.0f};
-				// Object::getIndicatorColor: a colour a script gave it, else its player's.
-				if (const auto *custom = world.Get<engine::gameplay::IndicatorColor>(target); command.text != "WHITE" && custom != nullptr && custom->argb != 0)
-					color = {static_cast<float>((custom->argb >> 16) & 0xFF) / 255.0f, static_cast<float>((custom->argb >> 8) & 0xFF) / 255.0f,
-						static_cast<float>(custom->argb & 0xFF) / 255.0f};
-				else if (command.text != "WHITE" && catalog != nullptr)
-					if (const auto *owner = world.Get<engine::gameplay::Owner>(target))
-					{
-						const auto house = catalog->ColorOf(owner->player);
-						color = {house[0], house[1], house[2]};
-					}
-				auto &flashes = world.Side<presentation::ScriptFlash>();
-				presentation::ScriptFlash flash{count, color};
-				if (auto *existing = flashes.Get(target))
-					*existing = flash;
-				else
-					flashes.Insert(target, &flash);
-			}
-			break;
-		}
-		case Kind::MilitaryCaption:
-			// InGameUI::militarySubtitle (TheGameText->fetch of the label), from the logic frame its script ran on.
-			if (auto *caption = Game().World().FindResource<presentation::MilitaryCaption>())
-				presentation::ShowCaption(*caption, labels ? labels(command.text) : std::u16string(command.text.begin(), command.text.end()), command.percent,
-					presentationTicks);
-			break;
-		// doVictory / doDefeat: the window closes whatever showed, input goes off; doLocalDefeat keeps input.
-		case Kind::Victory:
-		case Kind::Defeat:
-		case Kind::LocalDefeat:
-			settings.matchEnd = command.kind == Kind::Victory ? ClientSettings::MatchEnd::Victory
-				: command.kind == Kind::Defeat ? ClientSettings::MatchEnd::Defeat : ClientSettings::MatchEnd::LocalDefeat;
-			settings.matchEndTick = localScripts ? localScripts->tick : 0;
-			settings.inputDisabled = settings.inputDisabled || command.kind != Kind::LocalDefeat;
-			break;
-		}
+		if (!simulation)
+			return;
+		presentation::ClientScriptHost host{Game(), labels, terrainHeight,
+			[this](std::uint64_t sound) {
+				if (player)
+					player->Stop(sound);
+			},
+			localScripts ? localScripts->tick : 0, presentationTicks, viewportWidth, viewportHeight, static_cast<std::uint32_t>(LogicTicksPerSecond), speed};
+		presentation::ApplyClientScript(Game().World(), settings, host, command);
 	}
 
 	// A named unit as the camera sees it (where it is drawn this frame; gone: nullopt, which ends a lock).
@@ -843,130 +481,58 @@ struct GameClient::State
 
 	void Apply(const scripting::CameraScriptCommand &command)
 	{
-		using Kind = scripting::CameraScriptCommand::Kind;
-		const auto ms = [](std::int64_t value) { return static_cast<float>(value); };
-		const auto real = [](Engine::Math::Fixed value) { return Engine::Math::ToFloat(value); };
-		switch (command.kind)
-		{
-		case Kind::Setup:
-			// doSetupCamera: moveCameraTo at once, cameraModLookToward, cameraModFinalPitch, cameraModFinalZoom.
-			camera.MoveCameraTo(Ground(command.points[0]), 0, 0, true, 0.0f, 0.0f);
-			camera.CameraModLookToward(Ground(command.points[1]));
-			camera.CameraModFinalPitch(real(command.values[1]), 0.0f, 0.0f);
-			camera.CameraModFinalZoom(real(command.values[0]), 0.0f, 0.0f);
+		if (!simulation)
 			return;
-		case Kind::Zoom:
-			camera.ZoomCamera(real(command.values[0]), static_cast<int>(command.milliseconds), ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			return;
-		case Kind::Pitch:
-			camera.PitchCamera(real(command.values[0]), static_cast<int>(command.milliseconds), ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			return;
-		case Kind::Rotate:
-			camera.RotateCamera(real(command.values[0]), static_cast<int>(command.milliseconds), ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			return;
-		case Kind::Reset:
-			camera.ResetCamera(Ground(command.points[0]), static_cast<int>(command.milliseconds), ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			return;
-		case Kind::FreezeTime: camera.CameraModFreezeTime(); return;
-		case Kind::FreezeAngle: camera.CameraModFreezeAngle(); return;
-		case Kind::FinalZoom: camera.CameraModFinalZoom(real(command.values[0]), real(command.values[1]), real(command.values[2])); return;
-		case Kind::FinalPitch: camera.CameraModFinalPitch(real(command.values[0]), real(command.values[1]), real(command.values[2])); return;
-		case Kind::FinalSpeed: camera.CameraModFinalTimeMultiplier(static_cast<int>(command.count)); return;
-		case Kind::RollingAverage: camera.CameraModRollingAverage(static_cast<int>(command.count)); return;
-		case Kind::Follow:
-		case Kind::Tether:
-		{
-			// setCameraLock, snapToCameraLock when asked, setSnapMode(LOCK_FOLLOW, 0) or (LOCK_TETHER, play).
-			const ecs::Entity unit = Game().Named(command.unit);
-			if (!Game().World().IsAlive(unit))
-				return;
-			camera.SetCameraLock(LockOn(unit));
-			if (command.flag)
-				camera.SnapToCameraLock();
-			camera.SetSnapMode(command.kind == Kind::Follow ? engine::camera::CameraLockMode::Follow : engine::camera::CameraLockMode::Tether,
-				command.kind == Kind::Follow ? 0.0f : real(command.values[0]));
-			return;
-		}
-		case Kind::StopFollow: camera.SetCameraLock({}); return;
-		case Kind::SetDefault:
-		{
-			// doCameraSetDefault (PRESERVE_RETAIL_SCRIPTED_CAMERA): pitch = ViewDefaultPitchRadians - pitch; the angle unused.
-			constexpr float DefaultPitch = 37.5f * std::numbers::pi_v<float> / 180.0f;
-			camera.SetDefaultView(DefaultPitch - real(command.values[0]), real(command.values[1]), real(command.values[2]));
-			return;
-		}
-		case Kind::LookTowardObject:
-		{
-			const ecs::Entity unit = Game().Named(command.unit);
-			if (!Game().World().IsAlive(unit))
-				return;
-			auto lock = LockOn(unit);
-			camera.RotateCameraTowardTarget([lock]() -> std::optional<Engine::Math::Vector3> {
-				if (const auto state = lock())
-					return state->position;
-				return std::nullopt;
-			}, static_cast<int>(command.milliseconds), static_cast<int>(command.holdMilliseconds), ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			return;
-		}
-		case Kind::LookTowardWaypoint:
-			camera.RotateCameraTowardPosition(Ground(command.points[0]), static_cast<int>(command.milliseconds), ms(command.easeInMilliseconds),
-				ms(command.easeOutMilliseconds), command.flag);
-			return;
-		case Kind::Shake:
-		{
-			// View::shake at the camera's position: the type's GameData intensity, a random direction.
-			ecs::World &world = Game().World();
-			if (auto *shakes = world.FindResource<presentation::ShakeRequests>())
-			{
-				const auto &position = camera.Position();
-				shakes->pending.push_back({static_cast<presentation::ShakeType>(command.count), {position.x, position.y, position.z}});
-			}
-			return;
-		}
-		default:
-			break;
-		}
-		if (command.points.empty())
-			return;
-		switch (command.kind)
-		{
-		case Kind::MoveTo:
-			camera.MoveCameraTo(Ground(command.points.front()), static_cast<int>(command.milliseconds),
-				static_cast<int>(command.shutterMilliseconds), true, ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			break;
-		case Kind::MoveAlongPath:
-		{
-			std::vector<Engine::Math::Vector3> path;
-			for (const auto &point : command.points)
-				path.push_back(Ground(point));
-			camera.MoveCameraAlongWaypointPath(path, static_cast<int>(command.milliseconds), static_cast<int>(command.shutterMilliseconds),
-				true, ms(command.easeInMilliseconds), ms(command.easeOutMilliseconds));
-			break;
-		}
-		case Kind::LookToward:
-			camera.CameraModLookToward(Ground(command.points.front()));
-			break;
-		case Kind::FinalLookToward:
-			camera.CameraModFinalLookToward(Ground(command.points.front()));
-			break;
-		}
+		presentation::CameraScriptHost host{Game(), terrainHeight, [this](ecs::Entity unit) { return LockOn(unit); }, presented, cameraSlaved, slaveUnit,
+			slaveBone};
+		presentation::ApplyCameraScript(camera, Game().World(), host, command);
 	}
 	// TerrainTracksRenderObjClassSystem::setDetail and init: GameData's MakeTrackMarks and MaxTerrainTracks, and the
 	// detail level's GameLOD track limits.
+	// GameLOD::applyStaticLODLevel's UseCloudMap (the player's own for the Custom level), shown only by day
+	// (BaseHeightMapRenderObjClass::useCloudMap: not TIME_OF_DAY_NIGHT).
+	// GameLODManager::applyStaticLODLevel: the detail the level gives (DetailSettings), then what follows from it.
+	void ApplyDetail()
+	{
+		ecs::World &world = Game().World();
+		const presentation::DetailSettings detail = presentation::ApplyDetailLevel(content.staticLods, detailLevel, customDetail);
+		if (auto *kept = world.FindResource<presentation::DetailSettings>())
+			*kept = detail;
+		else
+			world.EmplaceResource<presentation::DetailSettings>(detail);
+		// GlobalData m_maxParticleCount: ParticleSystem::createParticle's cap.
+		if (particles)
+			particles->SetMaxParticles(detail.maxParticleCount);
+		ApplyTrackSettings();
+		ApplyCloudSettings();
+	}
+
+	// BaseHeightMapRenderObjClass::useCloudMap: the detail's UseCloudMap, shown only by day (not TIME_OF_DAY_NIGHT).
+	void ApplyCloudSettings()
+	{
+		auto *clouds = Game().World().FindResource<presentation::CloudLayer>();
+		const auto *detail = Game().World().FindResource<presentation::DetailSettings>();
+		if (clouds == nullptr || detail == nullptr)
+			return;
+		clouds->enabled = detail->useCloudMap && !night;
+	}
+
+	// TerrainTracksRenderObjClassSystem::setDetail and init: GameData's MakeTrackMarks and MaxTerrainTracks, and the
+	// detail's track limits.
 	void ApplyTrackSettings()
 	{
 		auto *settings = Game().World().FindResource<presentation::TrackSettings>();
-		if (settings == nullptr)
+		const auto *detail = Game().World().FindResource<presentation::DetailSettings>();
+		if (settings == nullptr || detail == nullptr)
 			return;
 		settings->make = content.gameData.makeTrackMarks;
 		settings->maxTracks = content.gameData.maxTerrainTracks;
-		for (const auto &lod : content.staticLods)
-			if (lod.name == detailLevel)
-			{
-				settings->maxEdges = lod.maxTankTrackEdges;
-				settings->maxOpaqueEdges = lod.maxTankTrackOpaqueEdges;
-				settings->fadeMilliseconds = lod.maxTankTrackFadeDelay;
-			}
+		if (detailLevel != presentation::detail_level::Custom)
+		{
+			settings->maxEdges = detail->maxTankTrackEdges;
+			settings->maxOpaqueEdges = detail->maxTankTrackOpaqueEdges;
+			settings->fadeMilliseconds = detail->maxTankTrackFadeDelay;
+		}
 	}
 };
 
@@ -1003,7 +569,7 @@ void GameClient::TraceScripts(bool on) { m_state->scriptTrace = on; }
 bool GameClient::Start(const engine::level::Level &level, TerrainHeight terrainHeight, std::array<float, 2> playable, float aspectRatio,
 	std::uint64_t seed, std::vector<std::string> seats, std::vector<PlayerStart> starts, std::string cameraMarker,
 	std::optional<std::uint8_t> soloDifficulty, bool challenge, std::span<const std::byte> checkpoint, std::optional<session::NetworkMatchOptions> network,
-	std::int32_t rankPoints)
+	std::int32_t rankPoints, const ReplayStart *replay, bool record, std::optional<session::ScenerySetup> scenery)
 {
 	State &state = *m_state;
 	if (state.simulation)
@@ -1015,11 +581,7 @@ bool GameClient::Start(const engine::level::Level &level, TerrainHeight terrainH
 			[&state](float x, float y) { return state.terrainHeight ? state.terrainHeight(x, y) : 0.0f; });
 		state.simulation.reset();
 		state.localScripts.reset();
-		state.settings.matchEnd = ClientSettings::MatchEnd::None;
-		state.settings.inputDisabled = false;
-		// Radar::reset (newMap): no longer forced on (a hidden radar stays hidden: the retail code keeps it).
-		state.settings.radarForced = false;
-		state.settings.localDefeatSeen = false;
+		presentation::ResetForNewMatch(state.settings);
 		state.instances.clear();
 		state.playerColors.clear();
 		state.pinnedLook.reset();
@@ -1046,7 +608,16 @@ bool GameClient::Start(const engine::level::Level &level, TerrainHeight terrainH
 	session::SessionOptions options;
 	options.seed = seed;
 	// A LAN game: this machine's player is its seat's (each machine sees and plays its own).
-	options.localSeat = network ? network->seat : 0;
+	options.localSeat = network ? network->seat : replay != nullptr ? replay->seat : 0;
+	options.record = record && replay == nullptr;
+	// The scenery as given (a match's plan), else by this machine's detail (the shell map).
+	if (scenery)
+		options.scenery = *scenery;
+	else
+	{
+		const presentation::DetailSettings detail = presentation::ApplyDetailLevel(state.content.staticLods, state.detailLevel, state.customDetail);
+		options.scenery = session::ScenerySetupFor(detail.level, detail.useTrees, network.has_value());
+	}
 	const std::string localPlayer = options.localSeat < seats.size() ? seats[options.localSeat] : std::string{};
 	options.seats = std::move(seats);
 	options.scriptTrace = state.scriptTrace;
@@ -1057,13 +628,13 @@ bool GameClient::Start(const engine::level::Level &level, TerrainHeight terrainH
 	options.rankPointsAtStart = rankPoints;
 	for (const PlayerStart &start : starts)
 		options.starts.push_back({start.player, start.team, start.playerTemplate, start.startPosition});
-	options.cameraMovementFinished = [&camera = state.camera] { return camera.IsCameraMovementFinished(); };
+	options.cameraMovementFinished = [&state] { return state.CameraMovementFinished(); };
 	// GameEngine::isTimeFrozen: a camera move with CAMERA_MOD_FREEZE_TIME holds the game while it lasts; nothing freezes
 	// a network game.
 	options.timeFreezes = !network.has_value();
 	if (!network)
 	{
-		options.cameraFreezesTime = [&camera = state.camera] { return camera.IsTimeFrozen() && !camera.IsCameraMovementFinished(); };
+		options.cameraFreezesTime = [&state] { return state.camera.IsTimeFrozen() && !state.CameraMovementFinished(); };
 		// evaluateNamedSelected: in the local player's selection (not in a multiplayer game).
 		options.selected = [&state](ecs::Entity entity) { return state.simulation && state.Game().World().Side<presentation::Selected>().Get(entity) != nullptr; };
 	}
@@ -1088,29 +659,77 @@ bool GameClient::Start(const engine::level::Level &level, TerrainHeight terrainH
 		if (firstPlayer == presentation::PresentationFrame::NoViewer)
 			firstPlayer = index;
 		if (state.eyes == presentation::PresentationFrame::NoViewer && properties.Get<bool>("playerIsHuman").value_or(false) &&
-			(!network || properties.Get<std::string>("playerName").value_or("") == localPlayer))
+			((!network && replay == nullptr) || properties.Get<std::string>("playerName").value_or("") == localPlayer))
 			state.eyes = index;
 	}
 	if (state.eyes == presentation::PresentationFrame::NoViewer)
 		state.eyes = firstPlayer;
 	for (const auto &participant : level.scenario.participants)
 	{
-		// Its own colour, else its faction's (PlayerTemplate.ini), else the neutral white.
-		const auto argb = content::SideColor(participant.properties.Get<std::int64_t>("playerColor"), state.content.factionColors,
+		// Its own colour (on a night map its night colour: Drawable::friend_bindToObject's getNightIndicatorColor), else its
+		// faction's (PlayerTemplate.ini), else the neutral white.
+		auto own = participant.properties.Get<std::int64_t>("playerColor");
+		if (const auto nightColor = participant.properties.Get<std::int64_t>("playerNightColor"); state.night && nightColor)
+			own = nightColor;
+		const auto argb = content::SideColor(own, state.content.factionColors,
 			participant.properties.Get<std::string>("playerFaction").value_or(""));
 		state.playerColors.push_back({static_cast<float>((argb >> 16) & 0xFF) / 255.0f, static_cast<float>((argb >> 8) & 0xFF) / 255.0f,
 			static_cast<float>(argb & 0xFF) / 255.0f, 1.0f});
 	}
-	state.simulation = network            ? session::MakeNetworkMatch(level, state.content, std::move(options), *network)
+	state.simulation = replay != nullptr  ? session::MakeReplayMatch(level, state.content, std::move(options), replay->recording)
+		: network                         ? session::MakeNetworkMatch(level, state.content, std::move(options), *network)
 		: checkpoint.empty() ? session::MakeClientMatch(level, state.content, std::move(options))
 							 : session::ResumeClientMatch(level, state.content, std::move(options), checkpoint);
 	if (!state.simulation)
 		return false;
+	state.multiplayerMatch = network.has_value() && replay == nullptr;
+	state.replayMatch = replay != nullptr;
 	state.playableExtent = state.Game().PlayableExtent();
 	state.BindPresentation();
+	// The map's scenery the client alone keeps (GameLogic::startNewGame's trees and props), by the match's rules.
+	{
+		ecs::World &world = state.Game().World();
+		if (auto *scenery = world.FindResource<presentation::Scenery>())
+			presentation::BuildScenery(*scenery, level.placements, state.Game(), world.Resource<presentation::LookCatalog>(),
+				world.Resource<gameplay::MapSceneryRules>(), world.Resource<engine::gameplay::GroundHeight>(), playable);
+	}
 	state.TakeSnapshot();
 	state.TakeSnapshot();
 	return true;
+}
+
+const engine::net::CommandRecording *GameClient::Recording() const
+{
+	return m_state->simulation ? m_state->simulation->Recording() : nullptr;
+}
+
+std::optional<session::ClientMatch::Playback> GameClient::PlaybackState() const
+{
+	return m_state->simulation ? m_state->simulation->PlaybackState() : std::nullopt;
+}
+
+const presentation::ShroudCells *GameClient::Shroud()
+{
+	State &state = *m_state;
+	if (!state.simulation)
+		return nullptr;
+	const auto local = LocalPlayer();
+	const auto *map = state.Game().World().FindResource<engine::gameplay::ShroudMap>();
+	if (!local || map == nullptr || *local >= map->Players())
+		return nullptr;
+	const auto &data = state.content.gameData;
+	presentation::FillShroudCells(*map, *local, {data.shroudColor, data.clearAlpha, data.fogAlpha, data.shroudAlpha}, state.settings.borderShroudDisabled,
+		state.shroud);
+	return &state.shroud;
+}
+
+void GameClient::ShowMessage(const std::u16string &text)
+{
+	State &state = *m_state;
+	if (!state.simulation)
+		return;
+	if (auto *messages = state.Game().World().FindResource<presentation::InGameMessages>())
+		presentation::AddMessage(*messages, text, state.Game().CurrentTick());
 }
 
 void GameClient::SaveClientState(engine::core::serialization::ByteWriter &writer) const
@@ -1124,23 +743,23 @@ void GameClient::SaveClientState(engine::core::serialization::ByteWriter &writer
 	real(state.camera.Angle());
 	real(state.camera.Pitch());
 	real(state.camera.Zoom());
-	const ClientSettings &settings = state.settings;
-	writer.Text(settings.musicTrack);
-	writer.I64(settings.musicVolume);
-	writer.I64(settings.soundVolume);
-	writer.I64(settings.speechVolume);
-	writer.U32(static_cast<std::uint32_t>(settings.disabledSounds.size()));
-	for (const std::string &sound : settings.disabledSounds)
-		writer.Text(sound);
-	writer.U32(static_cast<std::uint32_t>(settings.soundVolumeOverrides.size()));
-	for (const auto &[sound, volume] : settings.soundVolumeOverrides)
+	presentation::SaveScriptedPresentation(state.settings, writer);
+	// The local player's own scripts (MultiplayerScripts.scb and the skirmish human's): their runtime's state (flags,
+	// counters, timers, scripts on or off, sequences), its tick and PLAYER_LOST_OBJECT_TYPE's counts seen
+	// (GameState's saved ScriptEngine covers every script list).
+	const LocalScripts *local = state.localScripts.get();
+	writer.Flag(local != nullptr && local->runtime.has_value());
+	if (local != nullptr && local->runtime)
 	{
-		writer.Text(sound);
-		writer.I64(volume);
+		writer.U64(local->tick);
+		local->runtime->SaveState(writer);
+		writer.U32(static_cast<std::uint32_t>(local->recorded.size()));
+		for (const auto &[key, count] : local->recorded)
+		{
+			writer.Text(key);
+			writer.I64(count);
+		}
 	}
-	for (const bool flag : {settings.evaEnabled, settings.radarForced, settings.radarHidden, settings.borderShroudDisabled, settings.drawIconUi,
-			 settings.occlusion, settings.particleCap, settings.specialPowerDisplayDisabled, settings.inputDisabled, settings.localDefeatSeen})
-		writer.Flag(flag);
 }
 
 bool GameClient::LoadClientState(engine::core::serialization::ByteReader &reader)
@@ -1150,24 +769,25 @@ bool GameClient::LoadClientState(engine::core::serialization::ByteReader &reader
 	const float x = real(), y = real(), z = real();
 	const float angle = real(), pitch = real(), zoom = real();
 	ClientSettings settings = state.settings;
-	settings.musicTrack = reader.Text().value_or("");
-	settings.musicVolume = reader.I64().value_or(100);
-	settings.soundVolume = reader.I64().value_or(100);
-	settings.speechVolume = reader.I64().value_or(100);
-	settings.disabledSounds.clear();
-	for (std::uint32_t count = reader.U32().value_or(0); count > 0 && !reader.Failed(); --count)
-		settings.disabledSounds.push_back(reader.Text().value_or(""));
-	settings.soundVolumeOverrides.clear();
-	for (std::uint32_t count = reader.U32().value_or(0); count > 0 && !reader.Failed(); --count)
-	{
-		std::string sound = reader.Text().value_or("");
-		settings.soundVolumeOverrides.emplace_back(std::move(sound), reader.I64().value_or(100));
-	}
-	for (bool *flag : {&settings.evaEnabled, &settings.radarForced, &settings.radarHidden, &settings.borderShroudDisabled, &settings.drawIconUi,
-			 &settings.occlusion, &settings.particleCap, &settings.specialPowerDisplayDisabled, &settings.inputDisabled, &settings.localDefeatSeen})
-		*flag = reader.Flag().value_or(*flag);
-	if (reader.Failed())
+	if (!presentation::LoadScriptedPresentation(settings, reader))
 		return false;
+	// The local scripts' state, when the save has it (older saves end before it).
+	if (reader.Flag().value_or(false))
+	{
+		LocalScripts *local = state.localScripts.get();
+		const std::uint64_t tick = reader.U64().value_or(0);
+		if (local == nullptr || !local->runtime || !local->runtime->LoadState(reader))
+			return false;
+		local->tick = tick;
+		local->recorded.clear();
+		for (std::uint32_t count = reader.U32().value_or(0); count > 0 && !reader.Failed(); --count)
+		{
+			std::string key = reader.Text().value_or("");
+			local->recorded[std::move(key)] = reader.I64().value_or(0);
+		}
+		if (reader.Failed())
+			return false;
+	}
 	state.settings = std::move(settings);
 	state.camera.SetPosition({x, y, z});
 	state.camera.SetAngle(angle);
@@ -1230,7 +850,11 @@ std::optional<std::array<std::uint8_t, 2>> GameClient::MouseCursor() const
 		return std::nullopt;
 	return std::array<std::uint8_t, 2>{static_cast<std::uint8_t>(cursor->cursor), cursor->direction};
 }
-double GameClient::TicksPerSecond() const noexcept { return LogicTicksPerSecond * m_state->speed; }
+// A script's time multiplier (View::setTimeMultiplier) runs the logic that many times faster.
+double GameClient::TicksPerSecond() const noexcept
+{
+	return LogicTicksPerSecond * m_state->speed * engine::camera::FastForwardFactor(m_state->camera.TimeMultiplier());
+}
 
 void GameClient::Tick()
 {
@@ -1277,12 +901,18 @@ void GameClient::Tick()
 		}
 	}
 	state.camera.StepFixed();
+	// ScreenMotionBlurFilter's zoom count, once a logic frame from the frame its script ran: at a jump's peak the camera
+	// looks at its point (TheTacticalView->lookAt).
+	if (auto *filter = state.Game().World().FindResource<presentation::ViewFilter>())
+		if (const auto step = presentation::StepMotionBlur(*filter, state.Game().CurrentTick()); step.jumpTo)
+			state.camera.LookAt({(*step.jumpTo)[0], (*step.jumpTo)[1], (*step.jumpTo)[2]});
 	state.TakeSnapshot();
 }
 
 void GameClient::Update(float deltaSeconds, float alpha)
 {
 	State &state = *m_state;
+
 	// The camera runs on elapsed game time (real time scaled by the game
 	// speed; uncapped rendering). A long stall (loading, a breakpoint) is
 	// clamped so the camera does not jump.
@@ -1295,8 +925,30 @@ void GameClient::Update(float deltaSeconds, float alpha)
 		state.camera.LookAt({x, y, state.terrainHeight ? state.terrainHeight(x, y) : 0.0f});
 	}
 
-	// Animations run on game time too.
-	const double gameSeconds = static_cast<double>(std::clamp(deltaSeconds, 0.0f, 0.25f) * state.speed);
+	// Animations run on game time too (a script's time multiplier running the game that many times faster while the
+	// view moves on at its own pace).
+	const double gameSeconds = static_cast<double>(std::clamp(deltaSeconds, 0.0f, 0.25f) * state.speed *
+		static_cast<float>(engine::camera::FastForwardFactor(state.camera.TimeMultiplier())));
+	if (state.simulation)
+	{
+		ecs::World &world = state.Game().World();
+		const float realSeconds = std::clamp(deltaSeconds, 0.0f, 0.25f);
+		// CameraShakeSystemClass: the shakers age by the frame's real time and sum their roll at the camera's position.
+		if (auto *shakers = world.FindResource<presentation::CameraShakers>())
+		{
+			presentation::StepCameraShakers(*shakers, realSeconds);
+			const auto &eye = state.camera.View().eye;
+			shakers->angles = presentation::CameraShaking(*shakers)
+				? presentation::ShakerAngles(*shakers, {eye.x, eye.y, eye.z}, world.Resource<presentation::PresentationRandom>().engine)
+				: std::array<float, 3>{};
+		}
+		if (auto *cinematic = world.FindResource<presentation::CinematicText>())
+			presentation::AdvanceCinematicText(*cinematic, realSeconds);
+		// A slaved camera whose unit is gone (or undrawn) stops riding it.
+		state.slaveView.reset();
+		if (state.cameraSlaved && !world.IsAlive(state.Game().Named(state.slaveUnit)))
+			state.cameraSlaved = false;
+	}
 	state.clock += gameSeconds;
 
 	// Effects step at the data's 30 frames a second of game time; drawing
@@ -1346,38 +998,31 @@ void GameClient::Update(float deltaSeconds, float alpha)
 			const Engine::Math::Vector3 up = view.transform.Basis_Y(), back = view.transform.Basis_Z();
 			interaction = {{view.eye.x, view.eye.y, view.eye.z}, {right.x, right.y, right.z}, {up.x, up.y, up.z}, {-back.x, -back.y, -back.z},
 				std::tan(view.horizontalFieldOfView * 0.5f), std::tan(view.horizontalFieldOfView * 0.5f) / std::max(view.aspectRatio, 0.01f),
-				state.viewportWidth, state.viewportHeight, true};
+				state.viewportWidth, state.viewportHeight, true, view.farClip};
 			const PointerState &pointer = state.pointer;
 			state.Game().World().Resource<presentation::PointerInput>() = {pointer.x, pointer.y, pointer.down, pointer.pressed, pointer.released,
 				pointer.shift, pointer.ctrl, pointer.alt, pointer.timeMs, pointer.overInterface, state.look.moving, state.look.offsetX, state.look.offsetY};
 			state.pointer.pressed = state.pointer.released = 0;
 			state.pointer.wheel = 0;
 		}
-		// A structure being placed: whether it may go where the ghost is (BuildAssistant::isLocationLegalToBuild).
-		if (auto &placement = state.Game().World().Resource<presentation::BuildPlacement>(); placement.active && placement.onGround)
-		{
-			const float turns = placement.facing / (2.0f * std::numbers::pi_v<float>);
-			placement.legal = state.Game().CanBuildAt(placement.builder, placement.structure,
-				{Engine::Math::Fixed::FromRaw(std::llround(static_cast<double>(placement.at[0]) * 65536.0)), Engine::Math::Fixed::FromRaw(std::llround(static_cast<double>(placement.at[1]) * 65536.0))},
-				Engine::Math::TurnAngle{static_cast<std::uint32_t>(static_cast<std::int64_t>(std::llround(static_cast<double>(turns) * 4294967296.0)))});
-		}
-		// A command waiting for an object: whether its power may be fired at the one under the pointer (as the interaction
-		// last picked it; canDoSpecialPowerAtObject).
-		if (auto &targeting = state.Game().World().Resource<presentation::GuiTargeting>(); targeting.active && !targeting.shortcutType.empty())
-		{
-			const auto *local = state.Game().World().FindResource<presentation::LocalPlayer>();
-			const auto source = local != nullptr && local->valid ? state.Game().ShortcutPowerSource(local->player, targeting.shortcutType) : std::nullopt;
-			targeting.source = source.value_or(ecs::Entity{});
-		}
-		if (auto &targeting = state.Game().World().Resource<presentation::GuiTargeting>(); targeting.active)
-			targeting.validFor = targeting.hovered != ecs::Entity{} && state.Game().CanTargetWithPower(targeting.source, targeting.power, targeting.hovered)
-				? targeting.hovered : ecs::Entity{};
+		// What the interaction asks the rules: where the structure being placed may go, what a waiting command may target.
+		presentation::QueryPlacementLegality(state.Game().World(), state.Game());
+		presentation::QueryTargetingValidity(state.Game().World(), state.Game());
 		state.frameScheduler->Execute(engine::time::SimulationTime{++state.presentationFrames, engine::time::FixedStep{30}});
 		// The player's orders go to the match (they apply on the tick the relay gives them).
 		auto &orders = state.Game().World().Resource<presentation::PlayerOrders>().pending;
 		for (const auto &order : orders)
 			state.simulation->Submit(order);
 		orders.clear();
+		// A single-player mission's MUSIC_TRACK_HAS_COMPLETED: the music's progress told the simulation as it changes (a
+		// recorded command, so a replay plays it back; never in a network match, whose music scripts run here).
+		if (auto *audio = state.Game().World().FindResource<presentation::AudioState>(); audio != nullptr && !state.multiplayerMatch && !state.replayMatch &&
+			(audio->reportedMusic != audio->musicName || audio->reportedCompletions != audio->musicCompletions))
+		{
+			audio->reportedMusic = audio->musicName;
+			audio->reportedCompletions = audio->musicCompletions;
+			state.simulation->Submit(commands::MusicProgress{audio->musicName, audio->musicCompletions});
+		}
 	}
 
 	state.instances.clear();
@@ -1389,6 +1034,12 @@ void GameClient::Update(float deltaSeconds, float alpha)
 		// The structure being placed, with the objects.
 		const auto &ghosts = world.Resource<presentation::PlacementGhosts>().instances;
 		state.instances.insert(state.instances.end(), ghosts.begin(), ghosts.end());
+		// The rally point flag of the one thing selected (showRallyPoint).
+		const auto &markers = world.Resource<presentation::RallyPointMarkers>().instances;
+		state.instances.insert(state.instances.end(), markers.begin(), markers.end());
+		// Where moves were just ordered (W3DInGameUI::drawMoveHints).
+		const auto &hints = world.Resource<presentation::MoveHints>().instances;
+		state.instances.insert(state.instances.end(), hints.begin(), hints.end());
 		world.Resource<presentation::PresentedObjects>().AppendTo(state.presented);
 		// Explosions shake the camera (the original's View::shake: by type, falling off with distance, a random direction).
 		auto &shakes = world.Resource<presentation::ShakeRequests>().pending;
@@ -1449,174 +1100,11 @@ void GameClient::SetViewport(float width, float height) noexcept
 InGameOverlay GameClient::Overlay() const
 {
 	State &state = *m_state;
-	InGameOverlay overlay;
 	if (!state.simulation || !state.frameScheduler)
-		return overlay;
-	ecs::World &world = state.Game().World();
-	const auto &box = world.Resource<presentation::SelectionBox>();
-	overlay.boxActive = box.active;
-	if (const auto *messages = world.FindResource<presentation::InGameMessages>())
-	{
-		overlay.messageAt = {static_cast<float>(state.inGameUi.messagePosition[0]), static_cast<float>(state.inGameUi.messagePosition[1])};
-		for (std::size_t index = messages->slots.size(); index-- > 0;)
-			if (const auto &message = messages->slots[index]; message.shown)
-				overlay.messages.push_back({message.text, {message.color[0] / 255.0f, message.color[1] / 255.0f, message.color[2] / 255.0f, message.color[3] / 255.0f}});
-	}
-	if (const auto *timers = world.FindResource<presentation::NamedTimers>())
-	{
-		const auto rgba = [](const std::array<std::uint8_t, 4> &c) { return std::array<float, 4>{c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, c[3] / 255.0f}; };
-		for (const auto &line : presentation::NamedTimerLines(*timers, [&state](std::string_view name) { return state.Game().ScriptCounter(name); },
-				 state.Game().CurrentTick()))
-			overlay.namedTimers.push_back({line.text, line.ready, rgba(line.flashColor ? state.inGameUi.namedTimerFlashColor : state.inGameUi.namedTimerNormalColor)});
-		overlay.namedTimerAt = {Engine::Math::ToFloat(state.inGameUi.namedTimerPosition[0]), Engine::Math::ToFloat(state.inGameUi.namedTimerPosition[1])};
-	}
-	if (const auto *fade = world.FindResource<presentation::ScreenFade>())
-	{
-		overlay.fade = static_cast<std::uint8_t>(fade->kind);
-		overlay.fadeValue = fade->value;
-	}
-	if (const auto *caption = world.FindResource<presentation::MilitaryCaption>(); caption != nullptr && caption->shown)
-	{
-		overlay.caption.shown = true;
-		overlay.caption.lines = caption->lines;
-		overlay.caption.color = {caption->color[0] / 255.0f, caption->color[1] / 255.0f, caption->color[2] / 255.0f, caption->color[3] / 255.0f};
-		overlay.caption.block = caption->blockDrawn;
-		overlay.caption.at = {static_cast<float>(state.inGameUi.militaryCaptionPosition[0]), static_cast<float>(state.inGameUi.militaryCaptionPosition[1])};
-	}
-	overlay.box = {std::min(box.x0, box.x1), std::min(box.y0, box.y1), std::max(box.x0, box.x1), std::max(box.y0, box.y1)};
-	const auto &view = world.Resource<presentation::InteractionView>();
-	const auto &catalog = world.Resource<presentation::SelectionCatalog>();
-	const auto &data = state.Game().Content().gameData;
-	// Drawable::drawHealthBar for the selected (computeHealthRegion: the health box position projected, its width
-	// over the zoom, 3 high, starting 0.45 of its width left of centre; none at no health or for FORCEATTACKABLE).
-	const float zoom = std::max(state.camera.Zoom(), 0.01f);
-	for (const ecs::Entity entity : world.Side<presentation::Selected>().Entities())
-	{
-		const auto *transform = world.Get<engine::gameplay::Transform>(entity);
-		const auto *definition = world.Get<engine::gameplay::DefinitionRef>(entity);
-		const auto *body = world.Get<engine::gameplay::Health>(entity);
-		if (transform == nullptr || definition == nullptr || body == nullptr || body->maximum <= Engine::Math::Fixed{} || body->current <= Engine::Math::Fixed{})
-			continue;
-		const presentation::SelectionLook *look = catalog.Of(definition->index);
-		if (look == nullptr || look->healthBoxWidth <= 0.0f || (look->kinds & presentation::select_kind::ForceAttackable) != 0)
-			continue;
-		float sx = 0, sy = 0;
-		if (!view.Project(Engine::Math::ToFloat(transform->position.x), Engine::Math::ToFloat(transform->position.y),
-				Engine::Math::ToFloat(transform->position.z) + look->top + 10.0f, sx, sy))
-			continue;
-		const float width = look->healthBoxWidth / zoom;
-		SelectedMarker marker;
-		marker.x = std::floor(sx - width * 0.45f);
-		marker.y = std::floor(sy - 1.5f);
-		marker.width = std::floor(width);
-		marker.health = std::clamp(Engine::Math::ToFloat(body->current) / Engine::Math::ToFloat(body->maximum), 0.0f, 1.0f);
-		marker.reallyDamaged = body->current < body->maximum * data.unitReallyDamaged;
-		marker.damaged = !marker.reallyDamaged && body->current < body->maximum * data.unitDamaged;
-		if (const auto *off = world.Get<engine::gameplay::Disabled>(entity))
-			marker.disabled = (off->mask & ~engine::gameplay::disabled_type::Held) != 0;
-		overlay.selected.push_back(marker);
-	}
-	// Drawable::drawIconUI for everything seen, while icon UI is on and no script fade runs: its animated icons as
-	// ObjectIconSystem left them (their Animation2D's image this many logic frames after it was made) against its health
-	// region, then its veterancy (alive, not IGNORED_IN_GUI, with a health box).
-	if (state.settings.drawIconUi && overlay.fade == 0)
-	{
-		const double clock = world.Resource<presentation::PresentationFrame>().clock;
-		const auto *looks = world.FindResource<presentation::LookCatalog>();
-		const auto &iconTable = world.Side<presentation::ObjectIcons>();
-		world.Resource<engine::gameplay::VisibleObjects>().ForEach([&](const engine::gameplay::VisibleObject &object) {
-			const presentation::SelectionLook *look = catalog.Of(object.definition);
-			if (look == nullptr || look->healthBoxWidth <= 0.0f)
-				return;
-			const auto &at = object.transform.position;
-			float sx = 0, sy = 0;
-			if (!view.Project(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z) + look->top + 10.0f, sx, sy))
-				return;
-			const int screenX = static_cast<int>(sx), screenY = static_cast<int>(sy);
-			if (const presentation::ObjectIcons *icons = iconTable.Get(object.entity); icons != nullptr && icons->drawn != 0)
-			{
-				const presentation::DefinitionLooks *kind = looks != nullptr ? looks->Of(object.definition) : nullptr;
-				const float scale = presentation::EnthusiasticScale(kind != nullptr && (kind->structure || kind->hugeVehicle), kind != nullptr && kind->vehicle);
-				for (std::size_t index = 0; index < presentation::ObjectIconCount; ++index)
-				{
-					const auto icon = static_cast<presentation::ObjectIcon>(index);
-					if (!icons->Drawn(icon))
-						continue;
-					const auto found = state.content.animations2d.find(presentation::ObjectIconAnimations[index]);
-					if (found == state.content.animations2d.end() || found->second.images.empty())
-						continue;
-					const auto frames = static_cast<std::uint64_t>(std::max(clock - icons->since[index], 0.0) * 30.0);
-					OverlayImage image{found->second.images[found->second.ImageAt(frames)], sx, sy, 1.0f, 1.0f};
-					image.placement = OverlayImage::Placement::Icon;
-					image.icon = icon;
-					image.region = presentation::HealthRegion(screenX, screenY, look->healthBoxWidth, zoom);
-					image.iconScale = scale;
-					overlay.images.push_back(std::move(image));
-				}
-			}
-			const auto *experience = world.Get<engine::gameplay::Experience>(object.entity);
-			const auto *body = world.Get<engine::gameplay::Health>(object.entity);
-			const presentation::DefinitionLooks *kind = looks != nullptr ? looks->Of(object.definition) : nullptr;
-			if (experience == nullptr || (body != nullptr && body->current <= Engine::Math::Fixed{}) || world.Has<engine::gameplay::Dying>(object.entity) ||
-				(kind != nullptr && kind->ignoredInGui))
-				return;
-			if (const std::string_view veteran = presentation::VeterancyImage(experience->level); !veteran.empty())
-			{
-				OverlayImage image{std::string(veteran), static_cast<float>(screenX), static_cast<float>(screenY), 1.0f, 1.0f};
-				image.placement = OverlayImage::Placement::Veterancy;
-				image.healthBoxWidth = look->healthBoxWidth;
-				image.zoom = zoom;
-				overlay.images.push_back(std::move(image));
-			}
-		});
-	}
-	// InGameUI::updateAndDrawWorldAnimations: each at its risen point, on the image its Animation2D shows this many
-	// logic frames in, its own size at 1.3 over the zoom, at its fading alpha.
-	if (const auto *animations = world.FindResource<presentation::WorldAnimations>())
-	{
-		const double clock = world.Resource<presentation::PresentationFrame>().clock;
-		for (const presentation::WorldAnimation &animation : animations->shown)
-		{
-			const auto found = state.content.animations2d.find(animation.animation);
-			if (found == state.content.animations2d.end() || found->second.images.empty())
-				continue;
-			const auto at = animation.PositionAt(clock);
-			float sx = 0, sy = 0;
-			if (!view.Project(at[0], at[1], at[2], sx, sy))
-				continue;
-			const auto frames = static_cast<std::uint64_t>(std::max(clock - animation.start, 0.0) * 30.0);
-			overlay.images.push_back({found->second.images[found->second.ImageAt(frames)], sx, sy, 1.3f / zoom, animation.AlphaAt(clock)});
-		}
-	}
-	// InGameUI::postDraw's superweapon countdowns: in their owner's colour, a ready one flashing (unless a script hid them).
-	overlay.superweaponAt = {Engine::Math::ToFloat(state.inGameUi.superweaponPosition[0]), Engine::Math::ToFloat(state.inGameUi.superweaponPosition[1])};
-	if (!state.settings.specialPowerDisplayDisabled)
-	{
-		const auto *looks = world.FindResource<presentation::LookCatalog>();
-		const std::uint64_t tick = state.Game().CurrentTick();
-		const auto &flash = state.inGameUi.superweaponFlashColor;
-		for (const hud::SuperweaponEntry &entry : hud::ReadSuperweaponTimers(state.Game(), tick))
-		{
-			OverlaySuperweapon line{entry.shown, entry.power, hud::CountdownText(entry.readySeconds), {1, 1, 1, 1}, entry.ready};
-			if (looks != nullptr)
-				line.color = looks->ColorOf(entry.player);
-			line.color[3] = 1.0f;
-			if (entry.shown && entry.ready && state.superweaponFlash.FlashColor(tick, state.inGameUi.superweaponFlashFrames))
-				line.color = {flash[0] / 255.0f, flash[1] / 255.0f, flash[2] / 255.0f, flash[3] / 255.0f};
-			overlay.superweapons.push_back(std::move(line));
-		}
-	}
-	// InGameUI::drawFloatingText: at its start, risen a pixel a tick, in its colour at its alpha.
-	const auto &settings = world.Resource<presentation::FloatingTextSettings>();
-	for (const presentation::FloatingText &text : world.Resource<presentation::FloatingTexts>().shown)
-	{
-		float sx = 0, sy = 0;
-		if (!view.Project(text.at[0], text.at[1], text.at[2], sx, sy))
-			continue;
-		overlay.texts.push_back({text.text, sx, sy - static_cast<float>(text.ticks) * settings.riseRate,
-			{text.color[0], text.color[1], text.color[2], static_cast<float>(std::clamp(text.alpha, 0, 255)) / 255.0f}});
-	}
-	return overlay;
+		return {};
+	return presentation::ExtractInGameOverlay(state.Game().World(), state.Game(),
+		{&state.inGameUi, &state.content.animations2d, state.settings.drawIconUi, state.settings.specialPowerDisplayDisabled, state.camera.Zoom(),
+			state.labels ? state.labels("CONTROLBAR:UnderConstructionDesc") : std::u16string{}});
 }
 
 void GameClient::SetAddCashText(std::u16string pattern)
@@ -1709,6 +1197,10 @@ void GameClient::BeginTargeting(ecs::Entity source, std::string_view name, std::
 		targeting.kind = presentation::GuiCommandKind::RallyPoint;
 	if (button->commandName == "ATTACK_MOVE")
 		targeting.kind = presentation::GuiCommandKind::AttackMove;
+	if (button->commandName == "PLACE_BEACON")
+		targeting.kind = presentation::GuiCommandKind::PlaceBeacon;
+	if (button->commandName == "COMBATDROP")
+		targeting.kind = presentation::GuiCommandKind::CombatDrop;
 	if (button->commandName == "FIRE_WEAPON")
 	{
 		targeting.kind = presentation::GuiCommandKind::FireWeapon;
@@ -1721,7 +1213,13 @@ void GameClient::BeginTargeting(ecs::Entity source, std::string_view name, std::
 		targeting.guardMode = button->commandName == "GUARD_WITHOUT_PURSUIT" ? 1 : button->commandName == "GUARD_FLYING_UNITS_ONLY" ? 2 : 0;
 	}
 	if (const auto power = state.content.powers.Template(button->specialPower))
+	{
 		targeting.powerType = state.content.powers.templates[*power].type;
+		targeting.powerCursorRadius = state.content.powers.templates[*power].radiusCursorRadius;
+	}
+	// setGUICommand's setRadiusCursor: the button's RadiusCursorType, its weapon slot for a weapon's radius.
+	targeting.radiusCursor = button->radiusCursor;
+	targeting.weaponSlot = button->weaponSlot;
 	// Mouse::getCursorIndex (case-insensitive); not a cursor: CROSS (the INI's Target).
 	const auto cursorNamed = [](std::string_view cursor) {
 		for (std::size_t index = 0; index < content::MouseCursorNames.size(); ++index)
@@ -1759,7 +1257,7 @@ namespace
 class LocalMatch final : public scripting::LocalMatchHost
 {
 public:
-	explicit LocalMatch(GameClient &client) : m_client(client) {}
+	LocalMatch(GameClient &client, std::map<std::string, std::int64_t> &recorded) : m_client(client), m_recorded(recorded) {}
 
 	bool AlliedVictory() const override
 	{
@@ -1824,7 +1322,7 @@ private:
 		const auto *roster = view != nullptr ? view->World().FindResource<engine::gameplay::TeamRoster>() : nullptr;
 		return roster != nullptr ? roster->FindPlayer(name) : std::nullopt;
 	}
-	std::map<std::string, std::int64_t> m_recorded; // PLAYER_LOST_OBJECT_TYPE's counts seen, on this machine
+	std::map<std::string, std::int64_t> &m_recorded; // PLAYER_LOST_OBJECT_TYPE's counts seen, on this machine (LocalScripts)
 
 	const engine::gameplay::MatchOutcome *Outcome() const
 	{
@@ -1851,13 +1349,51 @@ void GameClient::UseMatchScripts(std::vector<engine::level::ScriptList> lists)
 	auto local = std::make_unique<LocalScripts>();
 	for (engine::level::ScriptList &scripts : lists)
 		local->scenario.participants.emplace_back().scripts = std::move(scripts);
-	local->host = std::make_unique<LocalMatch>(*this);
+	local->host = std::make_unique<LocalMatch>(*this, local->recorded);
 	scripting::AddCoreVocabulary(local->vocabulary);
 	scripting::AddPresentationVocabulary(local->vocabulary, local->commands);
 	scripting::AddMatchVocabulary(local->vocabulary, local->host.get());
 	local->runtime.emplace(local->scenario, local->vocabulary, engine::scripting::ScriptHooks{},
 		engine::scripting::ScriptRuntimeOptions{static_cast<std::uint32_t>(LogicTicksPerSecond), 1});
 	state.localScripts = std::move(local);
+}
+
+// CommandXlat's MSG_META_PLACE_BEACON: in a network match (not a replay), with the local player still playing and fewer
+// than MaxBeaconsPerPlayer of its beacons up, Command_PlaceBeacon waits for its spot.
+void GameClient::PlaceBeaconKey()
+{
+	State &state = *m_state;
+	if (!state.simulation || !state.multiplayerMatch || state.replayMatch)
+		return;
+	auto &world = state.Game().World();
+	const auto *local = world.FindResource<presentation::LocalPlayer>();
+	const auto *rules = world.FindResource<gameplay::BeaconRules>();
+	if (local == nullptr || !local->valid || rules == nullptr)
+		return;
+	if (const auto *outcome = world.FindResource<engine::gameplay::MatchOutcome>())
+		if (const auto *standing = outcome->Of(local->player); standing != nullptr && standing->defeated)
+			return;
+	const std::string_view beacon = rules->Of(local->player);
+	std::int32_t count = 0;
+	ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Owner>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+		const auto owners = chunk.template Get<engine::gameplay::Owner>();
+		for (std::size_t row = 0; row < definitions.size(); ++row)
+			count += owners[row].player == local->player && !beacon.empty() && state.Game().Definition(definitions[row].index).name == beacon ? 1 : 0;
+	});
+	if (count < rules->maxPerPlayer)
+		BeginTargeting({}, "Command_PlaceBeacon");
+}
+
+// CommandXlat's MSG_META_REMOVE_BEACON: in a network match (not a replay), MSG_REMOVE_BEACON over the selection.
+void GameClient::RemoveBeaconKey()
+{
+	State &state = *m_state;
+	if (!state.simulation || !state.multiplayerMatch || state.replayMatch)
+		return;
+	const auto entities = state.Game().World().Side<presentation::Selected>().Entities();
+	state.simulation->Submit(commands::RemoveBeacon{std::vector<ecs::Entity>(entities.begin(), entities.end())});
 }
 
 void GameClient::Submit(const commands::GameCommand &command)
@@ -1903,12 +1439,25 @@ void GameClient::RestoreMusic()
 
 void GameClient::SetRetaliation(bool enabled) noexcept { m_state->retaliation = enabled; }
 
-void GameClient::SetDetailLevel(std::string_view level)
+void GameClient::SetDetail(std::int32_t level, const presentation::CustomDetail &custom)
 {
 	State &state = *m_state;
-	state.detailLevel = std::string(level);
+	state.detailLevel = level;
+	state.customDetail = custom;
 	if (state.simulation)
-		state.ApplyTrackSettings();
+		state.ApplyDetail();
+}
+
+const presentation::DetailSettings *GameClient::Detail() const
+{
+	State &state = *m_state;
+	return state.simulation ? state.Game().World().FindResource<presentation::DetailSettings>() : nullptr;
+}
+
+const presentation::CloudLayer *GameClient::Clouds() const
+{
+	State &state = *m_state;
+	return state.simulation ? state.Game().World().FindResource<presentation::CloudLayer>() : nullptr;
 }
 
 std::vector<presentation::TrackView> GameClient::Tracks() const
@@ -1926,13 +1475,20 @@ std::vector<presentation::TrackView> GameClient::Tracks() const
 	world.Side<presentation::TrackMarks>().ForEach([&](ecs::Entity, presentation::TrackMarks &track) {
 		if (track.count < 2 || track.texture >= catalog->trackTextures.size())
 			return;
-		presentation::TrackView view{catalog->trackTextures[track.texture], {}, maxEdges, settings->maxOpaqueEdges};
+		presentation::TrackView view{catalog->trackTextures[track.texture], {}, {}, {}, {}, maxEdges, settings->maxOpaqueEdges};
+		view.left.reserve(track.count);
+		view.right.reserve(track.count);
+		view.v.reserve(track.count);
+		view.alpha.reserve(track.count);
 		std::uint32_t index = track.bottom;
 		for (std::uint32_t i = 0; i < track.count; ++i, ++index)
 		{
 			if (index >= maxEdges)
 				index = 0;
-			view.edges.push_back(track.edges[index]);
+			view.left.push_back(track.left[index]);
+			view.right.push_back(track.right[index]);
+			view.v.push_back(track.v[index]);
+			view.alpha.push_back(track.alpha[index]);
 		}
 		views.push_back(std::move(view));
 	});
@@ -1988,6 +1544,24 @@ std::vector<presentation::ShownLight> GameClient::Lights() const
 	return {};
 }
 
+const presentation::RadiusCursor *GameClient::CursorDecal() const
+{
+	State &state = *m_state;
+	return state.simulation ? state.Game().World().FindResource<presentation::RadiusCursor>() : nullptr;
+}
+
+const presentation::Tracers *GameClient::TracerEffects() const
+{
+	State &state = *m_state;
+	return state.simulation ? state.Game().World().FindResource<presentation::Tracers>() : nullptr;
+}
+
+const presentation::RadiusDecalViews *GameClient::RadiusDecals() const
+{
+	State &state = *m_state;
+	return state.simulation ? state.Game().World().FindResource<presentation::RadiusDecalViews>() : nullptr;
+}
+
 const presentation::ScorchMarks *GameClient::Scorches() const
 {
 	State &state = *m_state;
@@ -2001,6 +1575,10 @@ std::vector<presentation::BeamSegment> GameClient::Lasers() const
 	if (const auto *frame = state.simulation ? state.Game().World().FindResource<presentation::LaserFrame>() : nullptr)
 		for (const auto &beam : frame->beams)
 			beams.push_back({beam.start, beam.end, beam.width, beam.color, beam.texture, beam.uvScale, beam.uvOffset});
+	// W3DRopeDraw's lines, blended.
+	if (const auto *ropes = state.simulation ? state.Game().World().FindResource<presentation::RopeViews>() : nullptr)
+		for (std::size_t row = 0; row < ropes->Size(); ++row)
+			beams.push_back({ropes->starts[row], ropes->ends[row], ropes->widths[row], ropes->colors[row], {}, 1.0f, 0.0f, false});
 	return beams;
 }
 
@@ -2045,7 +1623,19 @@ void GameClient::UserLookAt(float x, float y)
 void GameClient::ApplyView(Graphics::CameraState &camera) const
 {
 	const auto &view = m_state->camera.View();
-	camera.Set_Transform(Graphics::Import_Affine_Transform(view.transform));
+	// W3DView::getCameraTransform: the look, turned by the camera shakers' roll about x, y and z; a slaved camera is its
+	// bone's transform instead.
+	Engine::Math::AffineTransform3 transform = view.transform;
+	if (m_state->slaveView)
+		transform.elements = *m_state->slaveView;
+	else if (const auto *shakers = m_state->simulation ? m_state->Game().World().FindResource<presentation::CameraShakers>() : nullptr;
+			 shakers != nullptr && presentation::CameraShaking(*shakers))
+	{
+		transform = Compose(transform, Engine::Math::AffineTransform3::Rotation_X(shakers->angles[0]));
+		transform = Compose(transform, Engine::Math::AffineTransform3::Rotation_Y(shakers->angles[1]));
+		transform = Compose(transform, Engine::Math::AffineTransform3::Rotation_Z(shakers->angles[2]));
+	}
+	camera.Set_Transform(Graphics::Import_Affine_Transform(transform));
 	// Aspect before the view plane, as the original's setWidth.
 	camera.Set_Aspect_Ratio(view.aspectRatio);
 	camera.Set_View_Plane(view.horizontalFieldOfView, -1.0f);
@@ -2060,99 +1650,69 @@ std::array<float, 3> GameClient::Eye() const
 
 std::span<const ObjectInstance> GameClient::Objects() const noexcept { return m_state->instances; }
 
-void GameClient::KnowClips(const std::function<std::optional<std::pair<float, float>>(std::uint32_t look)> &clipOf)
+presentation::ModelLibrary *GameClient::Models() const noexcept
 {
-	State &state = *m_state;
-	if (!state.simulation)
-		return;
-	ecs::World &world = state.Game().World();
-	const auto *catalog = world.FindResource<presentation::LookCatalog>();
-	auto *clips = world.FindResource<presentation::LookClips>();
-	if (catalog == nullptr || clips == nullptr)
-		return;
-	clips->byLook.resize(catalog->looks.size());
-	for (std::uint32_t look = 0; look < clips->byLook.size(); ++look)
-		if (!clips->byLook[look].Known())
-			if (const auto clip = clipOf(look))
-				clips->byLook[look] = {clip->first, clip->second};
+	return m_state->simulation ? m_state->Game().World().FindResource<presentation::ModelLibrary>() : nullptr;
 }
 
-ObjectModel GameClient::ModelFor(std::uint32_t look) const
+void GameClient::WaitForModels()
 {
-	State &state = *m_state;
-	const auto *catalog = state.simulation ? state.Game().World().FindResource<presentation::LookCatalog>() : nullptr;
-	if (catalog == nullptr || look >= catalog->looks.size())
-		return {};
-	const presentation::LookEntry info = catalog->looks[look];
-	// A model shown instead of a definition's (a debris piece), still or playing one of its animations.
-	if (info.model != 0)
-		return {catalog->lookModels[look], look < catalog->lookAnimations.size() ? catalog->lookAnimations[look] : std::string{},
-			static_cast<ObjectAnimationMode>(info.mode), false};
-	const presentation::DefinitionLooks &definitionLooks = catalog->byDefinition[info.definition];
-	if (info.draw != 0)
-	{
-		// Another draw module (a rider): its state's model, animation and parts, turning nothing.
-		const content::ModelStates &extra = definitionLooks.extraDraws[info.draw - 1].states;
-		const content::ModelState &picked = extra.states[info.state];
-		const bool loops = picked.animationMode == content::ModelAnimationMode::Loop || picked.animationMode == content::ModelAnimationMode::LoopPingPong ||
-			picked.animationMode == content::ModelAnimationMode::LoopBackwards;
-		return {picked.model, picked.animations.empty() ? std::string{} : picked.animations.front(), static_cast<ObjectAnimationMode>(picked.animationMode),
-			picked.idleAnimation && !loops, picked.hiddenSubObjects, picked.shownSubObjects, picked.muzzleFlashes};
-	}
-	const content::ModelStates &states = definitionLooks.states;
-	const auto *motion = state.Game().World().FindResource<presentation::MotionLooks>();
-	const presentation::MotionLook *wheels = motion != nullptr ? motion->Of(info.definition) : nullptr;
-	std::vector<std::string> tires = wheels != nullptr ? wheels->wheelBones : std::vector<std::string>{};
-	std::vector<std::string> steered = wheels != nullptr ? wheels->steeredBones : std::vector<std::string>{};
-	const std::vector<std::uint8_t> corners = wheels != nullptr ? wheels->wheelCorners : std::vector<std::uint8_t>{};
-	const std::string cab = wheels != nullptr ? wheels->cabBone : std::string{};
-	const std::string trailer = wheels != nullptr ? wheels->trailerBone : std::string{};
-	if (!states.Empty())
-	{
-		const content::ModelState &picked = states.states[info.state];
-		const bool loops = picked.animationMode == content::ModelAnimationMode::Loop || picked.animationMode == content::ModelAnimationMode::LoopPingPong ||
-			picked.animationMode == content::ModelAnimationMode::LoopBackwards;
-		const std::string animation = picked.animations.empty() ? std::string{} : picked.animations[std::min<std::size_t>(info.variant, picked.animations.size() - 1)];
-		ObjectModel model{picked.model, animation,
-			static_cast<ObjectAnimationMode>(picked.animationMode), false, picked.hiddenSubObjects,
-			picked.shownSubObjects, picked.muzzleFlashes, std::move(tires), std::move(steered), cab, trailer, picked.turretBone, picked.turretPitchBone,
-			static_cast<float>(static_cast<std::int32_t>(picked.turretArtAngle.units)) * 6.283185307179586f / 4294967296.0f,
-			static_cast<float>(static_cast<std::int32_t>(picked.turretArtPitch.units)) * 6.283185307179586f / 4294967296.0f, picked.recoilBone,
-			picked.altTurretBone, picked.altTurretPitchBone,
-			static_cast<float>(static_cast<std::int32_t>(picked.altTurretArtAngle.units)) * 6.283185307179586f / 4294967296.0f,
-			static_cast<float>(static_cast<std::int32_t>(picked.altTurretArtPitch.units)) * 6.283185307179586f / 4294967296.0f};
-		model.tireCorners = corners;
-		// Its part overrides (SubObjectsUpgrade), in order over its state's own.
-		if (info.parts != 0 && info.parts < catalog->partOverrides.size())
-			for (const auto &[part, show] : catalog->partOverrides[info.parts])
-			{
-				const auto same = [&](const std::string &name) {
-					return std::ranges::equal(name, part, [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
-				};
-				std::erase_if(model.hidden, same);
-				std::erase_if(model.shown, same);
-				(show ? model.shown : model.hidden).push_back(part);
-			}
-		model.projectileSlots = states.projectileFeedbackSlots;
-		model.projectileBones = picked.slotLaunchBones;
-		model.projectileHideShow = picked.slotHideShowBones;
-		return model;
-	}
-	content::RestingModel resting = content::DefaultModel(state.Game().Definition(info.definition));
-	// The content's AnimationMode names map one to one onto the scene's.
-	ObjectModel model{std::move(resting.model), std::move(resting.animation), static_cast<ObjectAnimationMode>(resting.animationMode),
-		resting.idleAnimation, {}, {}, {}, std::move(tires), std::move(steered), cab, trailer};
-	model.tireCorners = corners;
-	// W3DTreeBuffer::updateTexture: a map tree is drawn with its TextureName, from Art/Terrain, else Art/Textures (the
-	// asset source reads a path as given, then looks the file name up under the textures).
-	if (definitionLooks.bufferTree && !definitionLooks.treeMotion.texture.empty())
-		model.texture = "Art/Terrain/" + definitionLooks.treeMotion.texture;
-	return model;
+	if (m_state->simulation)
+		presentation::WaitForInstanceModels(m_state->Game().World(), m_state->instances);
 }
 
 const ClientSettings &GameClient::Settings() const noexcept { return m_state->settings; }
 
+std::optional<SlavedCamera> GameClient::CameraSlave() const
+{
+	const State &state = *m_state;
+	if (!state.cameraSlaved || !state.simulation)
+		return std::nullopt;
+	const ecs::Entity unit = state.Game().Named(state.slaveUnit);
+	for (const presentation::PresentedObject &object : state.presented)
+		if (object.entity == unit)
+			return SlavedCamera{object.look, object.animationSeconds, object.animationStart, object.world, state.slaveBone};
+	return std::nullopt;
+}
+
+void GameClient::SlaveView(const std::array<float, 12> &bone)
+{
+	State &state = *m_state;
+	state.slaveView = bone;
+	// View::setPosition2D: the camera's pivot follows the bone.
+	const auto &position = state.camera.Position();
+	const std::array<float, 2> at = presentation::SlavePosition(bone);
+	state.camera.SetPosition({at[0], at[1], position.z});
+}
+
+float GameClient::InfantryLightScale(std::uint32_t timeOfDay) const noexcept
+{
+	const auto &scales = m_state->content.gameData.infantryLightScale;
+	const std::array<float, 4> values{Engine::Math::ToFloat(scales[0]), Engine::Math::ToFloat(scales[1]), Engine::Math::ToFloat(scales[2]),
+		Engine::Math::ToFloat(scales[3])};
+	return presentation::InfantryLightScale(m_state->settings.infantryLightOverride, values, timeOfDay);
+}
+
+const presentation::CinematicText *GameClient::CinematicText() const
+{
+	const auto *cinematic = m_state->simulation ? m_state->Game().World().FindResource<presentation::CinematicText>() : nullptr;
+	return cinematic != nullptr && presentation::CinematicTextShown(*cinematic) ? cinematic : nullptr;
+}
+
+const presentation::PopupMessage *GameClient::Popup() const
+{
+	const auto *popup = m_state->simulation ? m_state->Game().World().FindResource<presentation::PopupMessage>() : nullptr;
+	return popup != nullptr && popup->shown ? popup : nullptr;
+}
+
+bool GameClient::ClosePopup()
+{
+	auto *popup = m_state->simulation ? m_state->Game().World().FindResource<presentation::PopupMessage>() : nullptr;
+	return popup != nullptr && presentation::ClosePopupMessage(*popup);
+}
+
 const content::PlayerTemplates &GameClient::PlayerTemplates() const noexcept { return m_state->content.playerTemplates; }
+const content::MultiplayerSettings &GameClient::MultiplayerSettings() const noexcept { return m_state->content.multiplayer; }
 std::string GameClient::UnportedSummary() const { return m_state->simulation ? m_state->Game().UnportedSummary() : std::string{}; }
 std::size_t GameClient::EntityCount() const { return m_state->simulation ? m_state->Game().EntityCount() : 0; }
 std::size_t GameClient::WorkerCount() const { return m_state->simulation ? m_state->Game().WorkerCount() : 0; }

@@ -75,6 +75,7 @@ BOOST_AUTO_TEST_CASE(clicking_the_shipped_main_menu_drives_its_view_model)
 	BOOST_TEST(*clicked == "MainMenu.wnd:ButtonSinglePlayer");
 	BOOST_TEST(bindings.Activate(*clicked));
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	menu.TransitionsFinished(); // its panel has slid in (MainMenuUpdate)
 	// Its panel now covers the main one: Options cannot be reached until Back.
 	pointer.Reset(document);
 	const auto hidden = Click(pointer, document, "MainMenu.wnd:ButtonOptions");
@@ -84,6 +85,7 @@ BOOST_AUTO_TEST_CASE(clicking_the_shipped_main_menu_drives_its_view_model)
 	BOOST_TEST_REQUIRE(back.has_value());
 	bindings.Activate(*back);
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	menu.TransitionsFinished();
 	pointer.Reset(document);
 	const auto options = Click(pointer, document, "MainMenu.wnd:ButtonOptions");
 	BOOST_TEST_REQUIRE(options.has_value());

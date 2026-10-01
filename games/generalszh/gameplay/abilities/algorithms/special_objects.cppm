@@ -21,6 +21,7 @@ import engine.gameplay.common.identity.resources.relationships;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.spatial.components.off_map;
 import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.common.physics.components.physics_body;
 import engine.gameplay.rts.combat.resources.shots;
 import engine.gameplay.rts.lifecycle.resources.casualties;
 import engine.gameplay.common.health.components.health;
@@ -147,8 +148,9 @@ inline std::optional<std::uint8_t> SlotOfKind(const GameWorld &game, ecs::Entity
 }
 
 // createSpecialObject: at MaxSpecialObjects a persistent module makes no more, another's are destroyed first; its
-// SpecialObject is made on the unit's team where it stands, facing its way, its experience going to the unit. (Its
-// physics' pitch rate and airborne friction are not ported: no ported special object falls.)
+// SpecialObject is made on the unit's team where it stands, facing its way, its experience going to the unit; with a
+// body, it pitches at its CenterOfMassOffset (radians a frame: a Helix's NukeBomb tips as it falls) and has no
+// airborne friction (setAllowAirborneFriction(false)).
 inline ecs::Entity CreateSpecialObject(GameWorld &game, ecs::Entity unit, std::uint8_t slot)
 {
 	namespace gp = engine::gameplay;
@@ -176,6 +178,11 @@ inline ecs::Entity CreateSpecialObject(GameWorld &game, ecs::Entity unit, std::u
 		static_cast<std::uint8_t>(!module->specialObjectsPersistent || !module->specialObjectsPersistWhenOwnerDies ? 1 : 0)};
 	if (auto *experience = game.world.Get<gp::Experience>(made))
 		experience->sink = unit;
+	if (auto *body = game.world.Get<gp::PhysicsBody>(made))
+	{
+		body->pitchRate = static_cast<std::int32_t>(Engine::Math::TurnFromRadians(body->centerOfMassOffset).units);
+		body->Set(gp::physics_flag::AirborneFriction, false);
+	}
 	return made;
 }
 

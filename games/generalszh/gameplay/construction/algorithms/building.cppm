@@ -1,4 +1,6 @@
 export module games.generalszh.gameplay.construction.algorithms.building;
+import games.generalszh.gameplay.world.resources.map_scenery;
+import games.generalszh.gameplay.world.resources.match_rules;
 import engine.gameplay.rts.navigation.algorithms.clearance;
 import std;
 import games.generalszh.gameplay.production.algorithms.build_cost;
@@ -45,6 +47,15 @@ export namespace generalszh::gameplay
 {
 namespace building_detail
 {
+// ThingTemplate::getMaxSimultaneousOfType: DeterminedBySuperweaponRestriction takes the match's restriction (0: none).
+inline std::uint32_t MaxSimultaneous(const GameWorld &game, const content::ObjectDefinition &what)
+{
+	if (!what.maxSimultaneousBySuperweaponRestriction)
+		return what.maxSimultaneousOfType;
+	const auto *rules = game.world.FindResource<MatchRules>();
+	return rules != nullptr ? rules->superweaponRestriction : 0u;
+}
+
 // The builders: a DozerAIUpdate or WorkerAIUpdate.
 inline bool IsBuilder(const content::ObjectDefinition &definition)
 {
@@ -124,6 +135,10 @@ inline void SendToWork(GameWorld &game, ecs::Entity dozer, ecs::Entity structure
 	task.repairShare = repairShare;
 	task.leave = docks.leave;
 	*world.Get<gp::Builder>(dozer) = task;
+	// DozerAIUpdate::newTask(DOZER_TASK_BUILD): even thinking about building it makes it the structure's builder.
+	if (!repair)
+		if (auto *construction = world.Get<gp::UnderConstruction>(structure))
+			construction->builder = dozer;
 	OrderMove(game, dozer, docks.action, false, false);
 }
 
@@ -141,6 +156,30 @@ inline Engine::Math::Fixed RepairShare(GameWorld &game, const content::ObjectDef
 					return *percent / Engine::Math::Fixed::FromInt(100) / Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(game.step.TicksPerSecond()));
 			}
 	return {};
+}
+
+// ActionManager::canRepairObject: a DOZER builder, not dying nor inside anything, may repair a STRUCTURE not an enemy's,
+// alive, not a bridge or rebuild hole, not under construction, hurt.
+inline bool MayRepair(GameWorld &game, ecs::Entity dozer, ecs::Entity structure)
+{
+	namespace gp = engine::gameplay;
+	using namespace building_detail;
+	auto &world = game.world;
+	if (dozer == structure || !world.IsAlive(dozer) || !world.IsAlive(structure) || world.Has<gp::Dying>(dozer) || world.Has<gp::OffMap>(dozer))
+		return false;
+	const auto *ref = world.Get<gp::DefinitionRef>(dozer);
+	const auto *targetRef = world.Get<gp::DefinitionRef>(structure);
+	if (ref == nullptr || targetRef == nullptr || world.Get<gp::Owner>(dozer) == nullptr || world.Get<gp::Owner>(structure) == nullptr ||
+		world.Get<gp::Transform>(structure) == nullptr)
+		return false;
+	const content::ObjectDefinition &builder = game.templates.DefinitionAt(ref->index);
+	const content::ObjectDefinition &target = game.templates.DefinitionAt(targetRef->index);
+	if (!IsBuilder(builder) || !builder.Is("DOZER") || !target.Is("STRUCTURE") || world.Has<gp::UnderConstruction>(structure))
+		return false;
+	const auto *health = world.Get<gp::Health>(structure);
+	return RelationOf(game, dozer, structure) != gp::Relationship::Enemies && health != nullptr && !gp::IsDead(*health) &&
+		!world.Has<gp::Dying>(structure) && !target.Is("BRIDGE") && !target.Is("BRIDGE_TOWER") && !target.Is("REBUILD_HOLE") &&
+		health->current < health->maximum;
 }
 
 // A builder sent to a structure (its player's right-click): to go on building it (canResumeConstructionOf: its
@@ -168,23 +207,17 @@ inline bool OrderWork(GameWorld &game, ecs::Entity dozer, ecs::Entity structure)
 	{
 		if (mine->player != theirs->player)
 			return false;
-		bool taken = false;
-		ecs::Query<ecs::Read<gp::Builder>> builders(world);
-		builders.ForEachChunk([&](auto chunk) {
-			const auto rows = chunk.template Get<gp::Builder>();
-			const auto entities = chunk.Entities();
-			for (std::size_t row = 0; row < rows.size(); ++row)
-				taken = taken || (rows[row].target == structure && rows[row].repair == 0 && entities[row] != dozer);
-		});
-		if (taken)
-			return false;
+		// ActionManager::canResumeConstructionOf: not while its builder (the one it names; this dozer too) has its build
+		// task on it: a resume of work already under way does nothing (the AI's processBaseBuilding asks every pass;
+		// its dozer keeps the spot it picked).
+		const ecs::Entity current = world.Get<gp::UnderConstruction>(structure)->builder;
+		if (world.IsAlive(current))
+			if (const auto *task = world.Get<gp::Builder>(current); task != nullptr && task->target == structure && task->repair == 0)
+				return false;
 		SendToWork(game, dozer, structure, false, {});
 		return true;
 	}
-	const auto *health = world.Get<gp::Health>(structure);
-	if (RelationOf(game, dozer, structure) == gp::Relationship::Enemies || health == nullptr || gp::IsDead(*health) ||
-		world.Has<gp::Dying>(structure) || target.Is("BRIDGE") || target.Is("BRIDGE_TOWER") || target.Is("REBUILD_HOLE") ||
-		health->current >= health->maximum)
+	if (!MayRepair(game, dozer, structure))
 		return false;
 	SendToWork(game, dozer, structure, true, RepairShare(game, builder));
 	return true;
@@ -203,6 +236,41 @@ enum class CanMake : std::uint8_t
 // unit while it may build units); Buildable (a script's status first) not No; Ignore_Prerequisites is enough; Only_By_AI
 // only for a computer; its prerequisite objects (one of each group) and sciences owned; not past MaxSimultaneousOfType
 // (canBuildMoreOfType: counting, alive, what is it or shares its MaxSimultaneousLinkKey).
+// The kinds of thing a player has (alive, not dying), each definition once: OwnedObjects for one player.
+inline std::vector<std::string_view> OwnedKinds(GameWorld &game, std::uint32_t player)
+{
+	namespace gp = engine::gameplay;
+	std::vector<std::uint8_t> seen(game.templates.DefinitionCount(), 0);
+	std::vector<std::string_view> kinds;
+	ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>, ecs::Exclude<gp::Dying>> things(game.world);
+	things.ForEachChunk([&](auto chunk) {
+		const auto owners = chunk.template Get<gp::Owner>();
+		const auto definitions = chunk.template Get<gp::DefinitionRef>();
+		for (std::size_t row = 0; row < owners.size(); ++row)
+		{
+			const std::uint32_t index = definitions[row].index;
+			if (owners[row].player != player || index >= seen.size() || seen[index] != 0)
+				continue;
+			seen[index] = 1;
+			kinds.push_back(game.templates.DefinitionAt(index).name);
+		}
+	});
+	return kinds;
+}
+// PrerequisitesMet over those kinds: one of each object group.
+inline bool HasPrerequisiteObjects(const std::vector<std::string_view> &kinds, const content::ObjectDefinition &unit)
+{
+	return std::all_of(unit.prerequisiteObjects.begin(), unit.prerequisiteObjects.end(), [&](const std::vector<std::string> &group) {
+		return std::any_of(group.begin(), group.end(), [&](const std::string &name) { return std::find(kinds.begin(), kinds.end(), name) != kinds.end(); });
+	});
+}
+// PrerequisitesMet(OwnedObjects(game), player, unit), gathering only that player's things and only when it has
+// prerequisite objects at all.
+inline bool PlayerHasPrerequisiteObjects(GameWorld &game, std::uint32_t player, const content::ObjectDefinition &unit)
+{
+	return unit.prerequisiteObjects.empty() || HasPrerequisiteObjects(OwnedKinds(game, player), unit);
+}
+
 inline bool PlayerCanBuild(GameWorld &game, std::uint32_t player, const content::ObjectDefinition &what)
 {
 	namespace gp = engine::gameplay;
@@ -221,7 +289,7 @@ inline bool PlayerCanBuild(GameWorld &game, std::uint32_t player, const content:
 		return true;
 	if (buildable == Buildable::OnlyByAI && !world.Resource<gp::HarvestCatalog>().Computer(player))
 		return false;
-	if (!PrerequisitesMet(OwnedObjects(game), player, what))
+	if (!PlayerHasPrerequisiteObjects(game, player, what))
 		return false;
 	for (const std::string &name : what.prerequisiteSciences)
 	{
@@ -229,7 +297,7 @@ inline bool PlayerCanBuild(GameWorld &game, std::uint32_t player, const content:
 		if (!science || !world.Resource<gp::PlayerSciences>().Has(player, *science))
 			return false;
 	}
-	if (what.maxSimultaneousOfType > 0)
+	if (const std::uint32_t most = building_detail::MaxSimultaneous(game, what); most > 0)
 	{
 		std::uint32_t count = 0;
 		ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>, ecs::Exclude<gp::Dying>> things(world);
@@ -245,7 +313,7 @@ inline bool PlayerCanBuild(GameWorld &game, std::uint32_t player, const content:
 					++count;
 			}
 		});
-		if (count >= what.maxSimultaneousOfType)
+		if (count >= most)
 			return false;
 	}
 	return true;
@@ -269,7 +337,7 @@ inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::
 	if (const auto *off = world.Get<gp::Disabled>(builder);
 		off != nullptr && (off->mask & (gp::disabled_type::ScriptDisabled | gp::disabled_type::ScriptUnderpowered)) != 0)
 		return CanMake::BuilderDisabled;
-	if (what.maxSimultaneousOfType > 0)
+	if (const std::uint32_t most = building_detail::MaxSimultaneous(game, what); most > 0)
 	{
 		std::uint32_t count = 0;
 		ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>, ecs::Exclude<gp::Dying>> things(world);
@@ -285,7 +353,7 @@ inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::
 					++count;
 			}
 		});
-		if (count >= what.maxSimultaneousOfType)
+		if (count >= most)
 			return CanMake::MaxedOut;
 	}
 	const content::ObjectDefinition &maker = game.templates.DefinitionAt(ref->index);
@@ -305,7 +373,7 @@ inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::
 		return CanMake::NoPrerequisites;
 	if (buildable != Buildable::IgnorePrerequisites)
 	{
-		if (!PrerequisitesMet(OwnedObjects(game), player, what))
+		if (!PlayerHasPrerequisiteObjects(game, player, what))
 			return CanMake::NoPrerequisites;
 		for (const std::string &name : what.prerequisiteSciences)
 		{
@@ -351,6 +419,8 @@ inline ecs::Entity BeginConstruction(GameWorld &game, ecs::Entity dozer, const s
 	// the money (DozerAIUpdate::construct). A rebuild (RebuildHoleBehavior's worker: construct directly) moves no one.
 	if (auto removable = RemovableUnder(game, *what, at, facing); !removable.empty())
 		RetireNow(game, std::move(removable));
+	// removeTreesAndPropsForConstruction: the client's trees and props under it go too.
+	world.Resource<SceneryClearings>().list.push_back({at, facing, FootprintOf(*what)});
 	if (!rebuild)
 	{
 		const ConstructionMoves out = MoveObjectsForConstruction(game, *what, at, facing, player);
@@ -361,7 +431,7 @@ inline ecs::Entity BeginConstruction(GameWorld &game, ecs::Entity dozer, const s
 	}
 	if (!rebuild)
 		world.Resource<gp::PlayerMoney>().Withdraw(player, CostToBuild(game, player, *what));
-	const ecs::Entity placed = SpawnObject(game, structure, at, facing, *team, "");
+	const ecs::Entity placed = SpawnObject(game, structure, at, facing, *team, "", true, true);
 	if (!world.IsAlive(placed))
 		return {};
 	// Newly constructed objects start at 0% and one hit point.
@@ -386,7 +456,7 @@ inline ecs::Entity BeginConstruction(GameWorld &game, ecs::Entity dozer, const s
 		}
 	}
 	// BaseRegenerateUpdate waits until it stands.
-	if (auto *regen = world.Get<gp::SelfHealing>(placed); regen != nullptr && regen->onlyWhenStanding != 0)
+	if (auto *regen = world.Get<gp::SelfHealing>(placed); regen != nullptr && regen->WaitsWhileNotStanding())
 		regen->waiting = 1;
 	// calcTimeToBuild: BuildTime * LOGICFRAMES_PER_SECOND, as an Int.
 	world.Get<gp::UnderConstruction>(placed)->buildTicks = static_cast<std::uint64_t>(std::max<std::int64_t>(

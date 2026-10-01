@@ -41,19 +41,18 @@ inline void Lay(TrackMarks &track, const std::array<float, 3> &at, const std::ar
 	}
 	// vX = vDir x vZ.
 	const std::array<float, 3> across{dy * normal[2], -dx * normal[2], dx * normal[1] - dy * normal[0]};
-	TrackEdge &edge = track.edges[track.top];
+	const std::uint32_t edge = track.top;
 	const float half = track.width * 0.5f;
 	for (std::size_t axis = 0; axis < 3; ++axis)
 	{
-		edge.ends[0][axis] = at[axis] - half * across[axis];
-		edge.ends[1][axis] = at[axis] + half * across[axis];
+		track.left[edge][axis] = at[axis] - half * across[axis];
+		track.right[edge][axis] = at[axis] + half * across[axis];
 	}
-	edge.ends[0][2] += 0.2f * 10.0f;
-	edge.ends[1][2] += 0.2f * 10.0f;
-	const float row = (track.total & 1u) != 0 ? 0.0f : 1.0f;
-	edge.uv = {{{0.0f, row}, {1.0f, row}}};
-	edge.laid = now;
-	edge.alpha = alpha;
+	track.left[edge][2] += 0.2f * 10.0f;
+	track.right[edge][2] += 0.2f * 10.0f;
+	track.v[edge] = (track.total & 1u) != 0 ? 0.0f : 1.0f;
+	track.laid[edge] = now;
+	track.alpha[edge] = alpha;
 	track.anchor = at;
 	++track.count;
 	++track.total;
@@ -94,7 +93,7 @@ inline void CapTrack(TrackMarks &track, const std::array<float, 3> &at, const st
 	if (dx * dx + dy * dy + dz * dz < track.length * track.length)
 	{
 		const std::uint32_t last = track.top == 0 ? maxEdges - 1 : track.top - 1;
-		track.edges[last].alpha = 0.0f;
+		track.alpha[last] = 0.0f;
 		track.haveCap = 1;
 		track.haveAnchor = 0;
 		return;
@@ -111,12 +110,11 @@ inline void FadeTrack(TrackMarks &track, std::uint32_t maxEdges, double fadeSeco
 	{
 		if (index >= maxEdges)
 			index = 0;
-		TrackEdge &edge = track.edges[index];
-		float left = fadeSeconds > 0.0 ? static_cast<float>(1.0 - (now - edge.laid) / fadeSeconds) : 0.0f;
+		float left = fadeSeconds > 0.0 ? static_cast<float>(1.0 - (now - track.laid[index]) / fadeSeconds) : 0.0f;
 		if (left < 0.0f)
 			left = 0.0f;
-		if (edge.alpha > 0.0f)
-			edge.alpha = left;
+		if (track.alpha[index] > 0.0f)
+			track.alpha[index] = left;
 		if (left == 0.0f)
 		{
 			++track.bottom;

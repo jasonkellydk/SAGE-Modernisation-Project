@@ -20,7 +20,9 @@ struct LoadoutSystem
 {
 	using Query = ecs::Query<ecs::Write<Loadout>, ecs::Read<DefinitionRef>, ecs::Optional<Experience>, ecs::OptionalWrite<Armament>,
 		ecs::OptionalWrite<WeaponSlots>, ecs::OptionalWrite<Health>>;
-	using Resources = ecs::Resources<ecs::Read<LoadoutCatalog>, ecs::Read<WeaponCatalog>>;
+	using Resources = ecs::Resources<ecs::Read<LoadoutCatalog>, ecs::Read<WeaponCatalog>, ecs::Write<LoadoutArmings>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) { context.Write<LoadoutArmings>().Reset(query.PreparedChunkCount()); }
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -34,6 +36,7 @@ struct LoadoutSystem
 		auto healths = chunk.Get<Health>();
 		const auto entities = chunk.Entities();
 		const std::uint32_t levelMask = catalog.LevelMask();
+		auto &armings = context.Write<LoadoutArmings>().Slot(context);
 		for (std::size_t row = 0; row < loadouts.size(); ++row)
 		{
 			Loadout &loadout = loadouts[row];
@@ -49,10 +52,17 @@ struct LoadoutSystem
 				{
 					if (loadout.weaponSet != Loadout::Unpicked)
 						if (auto added = EquipWeapons(armaments[row], slotSets.empty() ? nullptr : &slotSets[row], sets->weaponSets[best].weapons, weapons,
-								sets->weaponSets[best].lockShared))
+								sets->weaponSets[best].lockShared, sets->weaponSets[best].rules))
 							context.Commands().Add<WeaponSlots>(entities[row], *added);
 					loadout.weaponSet = best;
 				}
+			}
+			// Unarmed, its flags picking a set with a PRIMARY: the game arms it.
+			else if (!sets->weaponSets.empty())
+			{
+				const std::uint16_t best = BestSet(sets->weaponSets, loadout.weaponFlags);
+				if (best != loadout.weaponSet && sets->weaponSets[best].weapons[0] != WeaponCatalog::None)
+					armings.push_back(entities[row]);
 			}
 			if (!sets->armorSets.empty() && !healths.empty())
 			{

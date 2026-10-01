@@ -3,6 +3,8 @@ import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 import games.generalszh.gameplay.objects.algorithms.object_factory;
+import games.generalszh.gameplay.effects.algorithms.radius_decals;
+import games.generalszh.content.combat.combat_catalog;
 import engine.gameplay.rts.combat.resources.shots;
 import engine.gameplay.common.weapons.resources.weapon_catalog;
 import engine.gameplay.rts.combat.components.neutron_flight;
@@ -52,6 +54,9 @@ inline void ApplyObjectFlownLaunches(GameWorld &game)
 			world.Add<gp::Attitude>(missile);
 		world.Add<gp::NeutronFlight>(missile);
 		*world.Get<gp::NeutronFlight>(missile) = flight;
+		// NeutronMissileUpdate::projectileFireAtObjectOrPosition: its DeliveryDecal on its target, until it dies.
+		if (const auto neutron = content::ReadNeutronMissile(game.templates.DefinitionAt(weapon.projectileDefinition), game.step))
+			LayRadiusDecal(game, missile, neutron->deliveryDecal, neutron->deliveryDecalRadius, shot.aim, RadiusDecalUntil::Dies);
 	}
 }
 }

@@ -227,7 +227,7 @@ inline void ApplyCarBombs(GameWorld &game)
 			if (enemy && armament != nullptr && armament->weapon != gp::WeaponCatalog::None && targetable != nullptr &&
 				gp::CanTarget(game.templates.weapons.At(armament->weapon), targetable->classes) && !EffectivelyDead(game, vehicle))
 			{
-				OrderAttack(game, terrorist, vehicle);
+				OrderAttack(game, terrorist, vehicle, 0, gp::CommandSource::Ai);
 				if (!commanded)
 					AiCommanded(game, terrorist);
 			}

@@ -62,7 +62,10 @@ struct ProjectileArc
 	std::uint64_t maxLifespan{300};    // MaxLifespan in ticks (DEFAULT_MAX_LIFESPAN: 10 s): it goes off where it is then
 	bool tumble{false};                // TumbleRandomly: spins at random rates instead of facing along its path
 	std::uint8_t garrisonHitKill{0};   // GarrisonHitKillCount: a garrison it runs into loses up to this many instead
-	std::uint8_t reserved2[6]{};
+	// DetonateCallsKill (DumbProjectileBehavior::detonate): gone off, it is killed (unresistable, its most health,
+	// DEATH_DETONATED, by no one) so its die modules run, instead of being taken away.
+	std::uint8_t callsKill{0};
+	std::uint8_t reserved2[5]{};
 	std::uint32_t garrisonHitRequired{0};  // GarrisonHitKillRequiredKindOf, as target classes
 	std::uint32_t garrisonHitForbidden{0}; // GarrisonHitKillForbiddenKindOf, as target classes
 };
@@ -96,6 +99,15 @@ struct MissileFlightDefinition
 	Engine::Math::Fixed lockDistance{Engine::Math::Fixed::FromInt(75)}; // DistanceToTargetForLock
 	bool useWeaponSpeed{false};
 	bool detonateOnNoFuel{false};
+	// DetonateCallsKill (MissileAIUpdate::doKillSelfState): at the end of its KILL_SELF hold it is killed (Object::kill:
+	// unresistable, its most health, DEATH_NORMAL) so its die modules run, instead of being taken away.
+	bool detonateCallsKill{false};
+	// GarrisonHitKillCount (MissileAIUpdate::projectileHandleCollision): run into a garrison holding someone, it kills up
+	// to this many riders of GarrisonHitKillRequiredKindOf (all of them) and none of GarrisonHitKillForbiddenKindOf, and
+	// is gone without detonating; killing none, it detonates as usual.
+	std::uint8_t garrisonHitKill{0};
+	std::uint32_t garrisonHitRequired{0};
+	std::uint32_t garrisonHitForbidden{0};
 	std::uint64_t killSelfTicks{3};    // KillSelfDelay
 	Engine::Math::Fixed jamScatter{Engine::Math::Fixed::FromInt(75)}; // DistanceScatterWhenJammed
 	// Its locomotor.
@@ -110,6 +122,9 @@ struct MissileFlightDefinition
 	Engine::Math::Fixed radius{Engine::Math::Fixed::One()}; // GeometryMajorRadius
 };
 
+// How many ScatterTarget offsets a weapon may have (a 64-bit mask records which a clip has used).
+inline constexpr std::uint32_t ScatterTargetMax = 64;
+
 struct WeaponDefinition
 {
 	Engine::Math::Fixed primaryDamage;
@@ -120,12 +135,30 @@ struct WeaponDefinition
 	Engine::Math::Fixed minimumRange;
 	Engine::Math::Fixed speed;
 	Engine::Math::Fixed scatterRadius;
+	// ScatterRadiusVsInfantry (m_infantryInaccuracyDist): added to the scatter when the victim is infantry.
+	Engine::Math::Fixed infantryScatter;
+	// ScatterTarget / ScatterTargetScalar (Weapon::privateFireWeapon): a pattern of offsets (scaled by the scalar) that a
+	// clip's shots aim at, each once, in a random order: the pattern's `scatterCount` entries from `scatterFirst` in the
+	// catalog's scatterTargets (none: 0). ScatterTargetMax at most (the shipped weapons have up to 20).
+	Engine::Math::Fixed scatterTargetScalar;
+	std::uint32_t scatterFirst{0};
+	std::uint32_t scatterCount{0};
 	// ShockWaveAmount, ShockWaveRadius, ShockWaveTaperOff: the push its radius damage gives (none: 0), how far it
 	// reaches, and the share left of it at that edge.
 	Engine::Math::Fixed shockWaveAmount;
 	Engine::Math::Fixed shockWaveRadius;
 	Engine::Math::Fixed shockWaveTaperOff;
 	Engine::Math::TurnAngle aimDelta;
+	// MinTargetPitch / MaxTargetPitch (Weapon::isWithinTargetPitch): the pitches from its firer up or down to a victim it
+	// may target, in signed turn units (not given: -PI and PI, no limit).
+	std::int32_t minTargetPitch{std::numeric_limits<std::int32_t>::min()};
+	std::int32_t maxTargetPitch{std::numeric_limits<std::int32_t>::max()};
+	// HistoricBonusTime / Radius / Count / Weapon (WeaponTemplate::processHistoricDamage): when this many of its hits
+	// (this one included) land within the time and 2D radius of each other, the bonus weapon fires there (Count 0: none).
+	std::uint64_t historicBonusTicks{0};
+	Engine::Math::Fixed historicBonusRadius;
+	std::uint32_t historicBonusCount{0};
+	std::uint32_t historicBonusWeapon{0xFFFFFFFFu};
 	std::uint32_t damageType{0};
 	// How the victim dies (the game's death type index: normal, burned,
 	// exploded, crushed, ...); die behaviours are chosen by it.
@@ -148,6 +181,30 @@ struct WeaponDefinition
 	std::uint64_t autoReloadIdleTicks{0};
 	// An emptied clip reloads only back at base (jets: the original's AutoReloadsClip = RETURN_TO_BASE).
 	bool reloadsAtBase{false};
+	// AutoReloadsClip = No (NO_RELOAD): an emptied clip never reloads (OUT_OF_AMMO for good).
+	bool noReload{false};
+	// LeechRangeWeapon: once it fires (or begins its wind-up) at a victim, it reaches any distance for the rest of that attack.
+	bool leechRange{false};
+	// AllowAttackGarrisonedBldgs: reckoned to hurt a garrisoned building (one that can be cleared) whatever its armor.
+	bool allowAttackGarrisoned{false};
+	// ScaleWeaponSpeed / MinWeaponSpeed (DumbProjectileBehavior::projectileFireAtObjectOrPosition): a lobbed projectile's
+	// speed scaled with its range, from MinWeaponSpeed at MinimumAttackRange to WeaponSpeed at AttackRange (a tick's travel).
+	bool scaleWeaponSpeed{false};
+	Engine::Math::Fixed minWeaponSpeed{Engine::Math::Fixed::FromRatio(999999, 30)};
+	// SuspendFXDelay (ticks): a weapon shows no FX until this long after it is made (Weapon::m_suspendFXFrame).
+	std::uint64_t suspendFxTicks{0};
+	// RadiusDamageAngle (Weapon::dealDamageInternal): its radius damage only reaches those within this angle either side
+	// of its firer's facing (the cosine of it; `coned` false: every way, the default PI).
+	bool coned{false};
+	Engine::Math::Fixed coneCosine{-Engine::Math::Fixed::One()};
+	// MissileCallsOnDie (MissileAIUpdate::detonate): its missile, having gone off, is killed (DAMAGE_UNRESISTABLE,
+	// DEATH_DETONATED, its most health) so its die modules run, rather than just taking itself away.
+	bool missileCallsOnDie{false};
+	// ContinueAttackRange: its victim gone (or a mine spent), it goes on to the closest of that player's it may attack this
+	// near where the victim stood; and until it first fires in an attack, it sees through stealth (IGNORING_STEALTH).
+	Engine::Math::Fixed continueAttackRange;
+	// ShotsPerBarrel: how many shots each barrel fires before the next takes over.
+	std::uint32_t shotsPerBarrel{1};
 	// How long it winds up before it fires (PreAttackDelay), and when: before every shot, before the first of each
 	// clip, or before the first at each victim (PreAttackType PER_SHOT, PER_CLIP, PER_ATTACK).
 	std::uint64_t preAttackDelay{0};

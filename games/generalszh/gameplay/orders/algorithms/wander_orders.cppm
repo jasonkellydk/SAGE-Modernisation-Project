@@ -35,7 +35,11 @@ namespace locomotor_set
 inline constexpr std::uint8_t Normal = 0;
 inline constexpr std::uint8_t Wander = 1;
 inline constexpr std::uint8_t Panic = 2;
-inline constexpr std::array<std::string_view, 3> Names{"SET_NORMAL", "SET_WANDER", "SET_PANIC"};
+inline constexpr std::uint8_t Sluggish = 3;
+inline constexpr std::uint8_t Taxiing = 4;
+inline constexpr std::uint8_t Supersonic = 5;
+inline constexpr std::uint8_t Freefall = 6;
+inline constexpr const auto &Names = content::LocomotorSetNames;
 }
 
 inline bool ChooseLocomotorSet(GameWorld &game, ecs::Entity unit, std::uint8_t set)

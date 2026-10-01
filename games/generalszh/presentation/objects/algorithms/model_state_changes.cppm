@@ -6,7 +6,9 @@ export import games.generalszh.presentation.objects.resources.look_catalog;
 import Engine.Core.Math.FixedPresentation;
 
 // How a drawn object's model state changes, as W3DModelDraw does it (on the
-// ShownLook side table, with presentation's own per-object rolls):
+// ShownLook side table, with presentation's own per-object rolls), for any of its
+// draw modules (`Draw`: its model states, the look of each, how many animations
+// each picks among, whether it is a police car's light bar):
 // - setModelState: asked for a new state, it keeps what it shows when that
 //   is the state asked for (or already waiting); it lets the state showing
 //   finish its animation first when the new one waits for it
@@ -85,20 +87,23 @@ struct ModelStateRolls
 
 namespace model_state_detail
 {
-inline content::ModelAnimationMode ModeOf(const DefinitionLooks &looks, std::uint32_t state) noexcept
+template <class Draw>
+inline content::ModelAnimationMode ModeOf(const Draw &looks, std::uint32_t state) noexcept
 {
 	return state < looks.states.states.size() ? looks.states.states[state].animationMode : content::ModelAnimationMode::Once;
 }
 }
 
 // Whether the look showing has finished its animation.
-inline bool ShownStateComplete(const ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, double clock) noexcept
+template <class Draw>
+inline bool ShownStateComplete(const ShownLook &shown, const Draw &looks, const LookClips &clips, double clock) noexcept
 {
 	return ShownClipComplete(shown, clips.At(shown.look), model_state_detail::ModeOf(looks, shown.shown), clock);
 }
 
 // adjustAnimation: `state` shows from `clock`, after what showed until now (`hadShown`: something did).
-inline void ShowModelState(ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, std::uint32_t state, double clock,
+template <class Draw>
+inline void ShowModelState(ShownLook &shown, const Draw &looks, const LookClips &clips, std::uint32_t state, double clock,
 	ModelStateRolls rolls, bool hadShown = true)
 {
 	using Start = content::ModelState::StartFrame;
@@ -170,8 +175,27 @@ inline void ShowModelState(ShownLook &shown, const DefinitionLooks &looks, const
 		}
 }
 
+// W3DPoliceCarDraw's light bar on its clip's own rate: its quarter frame each 1/30 s once its clip is known (a state
+// shown before its model loaded took the state's speed; the model draws only once loaded, so nothing jumps), from a
+// random frame between 0 and 10. Returns whether it settled it now.
+template <class Draw>
+inline bool SettlePoliceLights(ShownLook &shown, const Draw &looks, const LookClips &clips, double clock, ModelStateRolls rolls)
+{
+	if (!looks.policeLights)
+		return false;
+	const LookClip clip = clips.At(shown.look);
+	if (clip.rate <= 0.0f || clip.frames <= 1.0f || shown.speed == 7.5f / clip.rate)
+		return false;
+	const std::uint32_t roll = rolls.Roll();
+	shown.since = clock;
+	shown.speed = 7.5f / clip.rate;
+	shown.start = std::min(10.0f * static_cast<float>((roll >> 20) % 1001u) / 1000.0f, clip.frames - 1.0f) / (clip.frames - 1.0f);
+	return true;
+}
+
 // setModelState: its conditions ask for `state`.
-inline void RequestModelState(ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, std::uint32_t state, double clock,
+template <class Draw>
+inline void RequestModelState(ShownLook &shown, const Draw &looks, const LookClips &clips, std::uint32_t state, double clock,
 	ModelStateRolls rolls)
 {
 	const auto &states = looks.states.states;
@@ -232,7 +256,8 @@ inline void SetShownSpeed(ShownLook &shown, const LookClip &clip, content::Model
 
 // adjustAnimSpeedToMovementSpeed: an animation covering a distance (distanceCovered), moving `perTick` a logic
 // frame, plays its whole clip in the time that takes (dist / speed frames of 1/30 s).
-inline void MatchMovementSpeed(ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, float perTick, double clock) noexcept
+template <class Draw>
+inline void MatchMovementSpeed(ShownLook &shown, const Draw &looks, const LookClips &clips, float perTick, double clock) noexcept
 {
 	constexpr float LogicFramesPerSecond = 30.0f;
 	const auto &states = looks.states.states;
@@ -255,7 +280,8 @@ inline void MatchMovementSpeed(ShownLook &shown, const DefinitionLooks &looks, c
 // W3DModelDraw::setAnimationLoopDuration: the animation showing plays its whole clip in `frames` logic frames
 // (setCurAnimDurationInMsec: its natural length over ceil(frames * 1000 / 30) ms as its speed), until the next state
 // (setModelState gives a new animation its own speed).
-inline void StretchToFrames(ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, std::uint64_t frames, double clock) noexcept
+template <class Draw>
+inline void StretchToFrames(ShownLook &shown, const Draw &looks, const LookClips &clips, std::uint64_t frames, double clock) noexcept
 {
 	if (frames == 0)
 		return;
@@ -271,7 +297,8 @@ inline void StretchToFrames(ShownLook &shown, const DefinitionLooks &looks, cons
 }
 
 // Once a frame: the state its conditions pick now, then what finishing its animation does (doDrawModule).
-inline void StepModelState(ShownLook &shown, const DefinitionLooks &looks, const LookClips &clips, std::uint32_t state, double clock,
+template <class Draw>
+inline void StepModelState(ShownLook &shown, const Draw &looks, const LookClips &clips, std::uint32_t state, double clock,
 	ModelStateRolls rolls)
 {
 	if (state != shown.state)

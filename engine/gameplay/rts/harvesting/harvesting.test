@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.cargo_size;
 import engine.gameplay.rts.harvesting.systems.harvest_roster_system;
 import engine.gameplay.rts.harvesting.systems.harvest_system;
 import engine.gameplay.rts.docking.systems.dock_system;
@@ -44,9 +45,12 @@ struct Base
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Harvester>();
 		world.RegisterComponent<Docking>();
 		world.RegisterComponent<Dock>();
+		world.RegisterComponent<DockLook>();
+		world.RegisterComponent<CargoSize>();
 		world.RegisterComponent<ResourceStore>();
 		world.RegisterComponent<ResourceDepot>();
 		world.RegisterComponent<Lifetime>();

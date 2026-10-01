@@ -187,14 +187,24 @@ public:
 	std::uint64_t Frame() const noexcept { return m_frame; }
 	std::uint64_t FrameCount() const noexcept { return m_frames == 0 ? 1 : m_frames; }
 
-	// Its last frame over the whole `width` x `height` screen.
-	void Draw(Graphics::Renderer2D &renderer, float width, float height)
+	// Its last frame as an image for this frame's draws (a window's video buffer); none before the first.
+	std::optional<Engine::UI::WND::ImageRef> FrameImage(Graphics::Renderer2D &renderer)
 	{
 		if (m_pixels.empty() || m_width == 0 || m_height == 0)
-			return;
+			return std::nullopt;
 		Engine::UI::WND::ImageRef picture;
 		picture.generated = renderer.Register_Texture({Graphics::TextureHandle(0x7AD1001u, 1), m_width, m_height, m_pitch, m_revision,
 			std::span<const std::byte>(m_pixels)});
+		return picture;
+	}
+
+	// Its last frame over the whole `width` x `height` screen.
+	void Draw(Graphics::Renderer2D &renderer, float width, float height)
+	{
+		const auto image = FrameImage(renderer);
+		if (!image)
+			return;
+		const Engine::UI::WND::ImageRef &picture = *image;
 		m_list.Clear();
 		m_list.Add_Image(picture, {0.0f, 0.0f, width, height});
 		m_renderer.Render_Draw_List(m_list, renderer);

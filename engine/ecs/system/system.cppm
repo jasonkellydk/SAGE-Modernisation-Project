@@ -262,6 +262,7 @@ struct SystemInfo
 	using ExecuteFunction = void (*)(void *, void *, SystemContext &);
 	using PrepareQueryFunction = std::size_t (*)(void *);
 	using ExecuteChunkFunction = void (*)(void *, void *, std::size_t, SystemContext &);
+	using PreparedChunkRowsFunction = std::size_t (*)(void *, std::size_t);
 
 	SystemId id{InvalidSystemId};
 	SystemKey stableKey{};
@@ -280,6 +281,8 @@ struct SystemInfo
 	ExecuteFunction execute{nullptr};
 	PrepareQueryFunction prepareQuery{nullptr};
 	ExecuteChunkFunction executeChunk{nullptr};
+	// Rows of a prepared chunk (1 for a batch system): what the scheduler balances its jobs by.
+	PreparedChunkRowsFunction preparedChunkRows{nullptr};
 	// Optional lifecycle of ONE cohesive chunk system, not extra graph nodes.
 	// Uses Query plus AuxiliaryAccess metadata and the same deferred wave commit.
 	ExecuteFunction beforeChunks{nullptr};
@@ -349,6 +352,14 @@ public:
 	{
 		RequireResource(ResourceKeyOf<T>(), ResourceTraits<T>::StableName, false);
 		return static_cast<const World &>(*m_world).template Resource<T>();
+	}
+
+	// A world resource the system declared with ecs::Read<T> (or Write) that the world may not hold (none: null).
+	template<ResourceType T>
+	const T *Find() const
+	{
+		RequireResource(ResourceKeyOf<T>(), ResourceTraits<T>::StableName, false);
+		return static_cast<const World &>(*m_world).template FindResource<T>();
 	}
 
 	template<typename Spec, typename T>
@@ -581,6 +592,9 @@ private:
 	static std::size_t PrepareQuery(void *query);
 
 	template<typename T>
+	static std::size_t PreparedChunkRows(void *query, std::size_t chunkIndex) noexcept;
+
+	template<typename T>
 	static void ExecuteSystemChunk(void *instance, void *query, std::size_t chunkIndex, SystemContext &context);
 
 	std::deque<SystemInfo> m_infos;
@@ -644,6 +658,7 @@ SystemId SystemRegistry::Register(T &system, const SystemPhase phase)
 	info.execute = &ExecuteSystem<T>;
 	info.prepareQuery = &PrepareQuery<T>;
 	info.executeChunk = &ExecuteSystemChunk<T>;
+	info.preparedChunkRows = &PreparedChunkRows<T>;
 	info.batch = detail::IsBatchSystem<T>;
 	info.borrowsJobs = detail::IsBatchSystem<T> && detail::BorrowsJobs<T>;
 	if constexpr (requires(T &value, typename T::Query &query, SystemContext &context) { value.BeforeChunks(query, context); })
@@ -787,8 +802,18 @@ std::size_t SystemRegistry::PrepareQuery(void *query)
 	else
 	{
 	using QueryType = typename T::Query;
-	return static_cast<QueryType *>(query)->PrepareChunks();
+	if constexpr (requires { SystemTraits<T>::PieceRows; })
+		return static_cast<QueryType *>(query)->PrepareChunks(SystemTraits<T>::PieceRows);
+	else
+		return static_cast<QueryType *>(query)->PrepareChunks();
 	}
+}
+
+template<typename T>
+std::size_t SystemRegistry::PreparedChunkRows(void *query, const std::size_t chunkIndex) noexcept
+{
+	if constexpr (detail::IsBatchSystem<T>) return 1;
+	else return static_cast<typename T::Query *>(query)->PreparedChunkRows(chunkIndex);
 }
 
 template<typename T>

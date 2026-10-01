@@ -43,6 +43,9 @@ BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
 	BOOST_TEST((data.shakeIntensity[2] == Engine::Math::Fixed::FromRatio(5, 2))); // strong
 	BOOST_TEST((data.shakeIntensity[5] == Engine::Math::Fixed::FromInt(10))); // cinematic insane
 	BOOST_TEST(data.forceModelsToFollowTimeOfDay);
+	// InfantryLightMorningScale = 100f ... EveningScale = 200f (the 'f' read as a float suffix, as the original's atof).
+	BOOST_TEST((data.infantryLightScale[0] == Engine::Math::Fixed::FromInt(100)));
+	BOOST_TEST((data.infantryLightScale[2] == Engine::Math::Fixed::FromInt(200)));
 	BOOST_TEST(data.powerBarBase == 7);
 	BOOST_TEST((data.powerBarIntervals == Engine::Math::Fixed::FromInt(3)));
 	BOOST_TEST(data.powerBarYellowRange == 5);
@@ -64,6 +67,11 @@ BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
 	BOOST_TEST((data.healthBonus[1] == Engine::Math::Fixed::FromRatio(6, 5)));
 	BOOST_TEST((data.healthBonus[2] == Engine::Math::Fixed::FromRatio(13, 10)));
 	BOOST_TEST((data.healthBonus[3] == Engine::Math::Fixed::FromRatio(3, 2)));
+	// AmmoPipWorldOffset X:0 Y:0 Z:10, AmmoPipScreenOffset X:-1 Y:0, AmmoPipScaleFactor 1.5.
+	BOOST_TEST((data.ammoPipWorldOffset[2] == Engine::Math::Fixed::FromInt(10)));
+	BOOST_TEST((data.ammoPipScreenOffset[0] == Engine::Math::Fixed::FromInt(-1)));
+	BOOST_TEST((data.ammoPipScreenOffset[1] == Engine::Math::Fixed{}));
+	BOOST_TEST((data.ammoPipScaleFactor == Engine::Math::Fixed::FromRatio(3, 2)));
 }
 
 // GlobalLanguage::parseFontDesc on the installed Language.ini: a quoted multi-word name, its point size and bold flag.
@@ -134,6 +142,42 @@ BOOST_AUTO_TEST_CASE(the_in_game_messages_bind)
 	BOOST_TEST(ui.namedTimerNormalFont == "Arial");
 	BOOST_TEST(!ui.namedTimerReadyBold);
 	BOOST_TEST(fonts.militaryCaptionDelayMs == 750);
+}
+
+// Legacy parity (GeneralsMD InGameUI.cpp's field table and RadiusDecal.cpp, RadiusDecalTemplate::parseRadiusDecalTemplate):
+// the radius cursors by RadiusCursorType as InGameUI.ini gives them: the daisy cutter's red fuel-air bomb decal
+// throbbing 50-100% over 1000 ms (30 frames), the Spectre gunship's 55-75% over 500 ms (15 frames), both alpha
+// decals only their owner sees.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_radius_cursors_bind_by_type)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const InGameUiContent ui = BindInGameUi(loader.Load({"Data/INI/Default/InGameUI", "Data/INI/InGameUI"}));
+	BOOST_TEST(!ui.radiusCursors[radius_cursor::None].Present());
+	const RadiusDecalLook &daisy = ui.radiusCursors[RadiusCursorIndex("DAISYCUTTER")];
+	BOOST_TEST(daisy.texture == "SCCFuelAirBomb_USA");
+	BOOST_TEST(!daisy.additive);
+	BOOST_TEST(daisy.minOpacity.Raw() == Engine::Math::Fixed::FromRatio(1, 2).Raw());
+	BOOST_TEST(daisy.maxOpacity.Raw() == Engine::Math::Fixed::One().Raw());
+	BOOST_TEST(daisy.throbTicks == 30u);
+	BOOST_TEST((daisy.color == std::array<std::uint8_t, 4>{255, 0, 0, 255}));
+	BOOST_TEST(daisy.hasColor);
+	BOOST_TEST(daisy.onlyOwner);
+	const RadiusDecalLook &spectre = ui.radiusCursors[RadiusCursorIndex("SPECTREGUNSHIP")];
+	BOOST_TEST(spectre.texture == "SCCSpecTarg");
+	BOOST_TEST(spectre.minOpacity.Raw() == Engine::Math::Fixed::FromRatio(55, 100).Raw());
+	BOOST_TEST(spectre.maxOpacity.Raw() == Engine::Math::Fixed::FromRatio(75, 100).Raw());
+	BOOST_TEST(spectre.throbTicks == 15u);
+	BOOST_TEST((spectre.color == std::array<std::uint8_t, 4>{127, 177, 222, 255}));
+	BOOST_TEST(ui.radiusCursors[radius_cursor::GuardArea].texture == "SCCGuard_Generic");
+	BOOST_TEST(ui.radiusCursors[radius_cursor::AttackDamageArea].texture == "EXTargeterAlpha");
+	for (const auto &[name, index] : RadiusCursorFields)
+		BOOST_TEST(ui.radiusCursors[index].Present(), name);
 }
 
 // Legacy: Core/GameEngine/Source/GameClient/Input/Mouse.cpp (Mouse::parseIni loads Data\INI\Mouse;

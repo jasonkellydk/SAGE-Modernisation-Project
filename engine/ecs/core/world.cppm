@@ -189,6 +189,12 @@ public:
 	std::size_t EntityCount() const noexcept { return m_entityCount; }
 	std::size_t ArchetypeCount() const noexcept { return m_archetypes.Count(); }
 	std::uint64_t ArchetypeRevision() const noexcept { return m_archetypes.Revision(); }
+	// For queries: archetypes by creation index, those in use in signature order, and the chunk layout events
+	// (ArchetypeRegistry).
+	Archetype *ArchetypeAt(std::uint32_t index) const noexcept { return m_archetypes.At(index); }
+	const std::vector<Archetype *> &ArchetypesInUse() const noexcept { return m_archetypes.InUse(); }
+	std::uint64_t ArchetypeLayoutEvents() const noexcept { return m_archetypes.LayoutEvents(); }
+	std::uint32_t ArchetypeLayoutEvent(std::uint64_t event) const noexcept { return m_archetypes.LayoutEvent(event); }
 	std::vector<Archetype *> GetArchetypes() { return m_archetypes.GetArchetypes(); }
 	std::vector<const Archetype *> GetArchetypes() const { return m_archetypes.GetArchetypes(); }
 	const ComponentRegistry &Components() const noexcept { return m_components; }
@@ -269,6 +275,14 @@ private:
 		const Signature &targetSignature,
 		ComponentId initializedComponent = InvalidComponentId,
 		void *initializedValue = nullptr);
+	void MoveEntityTo(Entity entity,
+		Archetype &target,
+		ComponentId initializedComponent = InvalidComponentId,
+		void *initializedValue = nullptr);
+	// The archetype with `component` added to (or removed from) `source`'s signature: from the edges already met, else
+	// found or made by signature (and remembered).
+	Archetype &ArchetypeWith(Archetype &source, ComponentId component);
+	Archetype &ArchetypeWithout(Archetype &source, ComponentId component);
 
 	friend class CommandBuffer;
 	friend class Scheduler;
@@ -508,14 +522,37 @@ bool World::AddComponent(Entity entity, const ComponentId component, void *value
 	if (record.location.archetype->Has(component))
 		return false;
 
-	Signature signature = record.location.archetype->GetSignature();
+	Archetype &target = ArchetypeWith(*record.location.archetype, component);
+	if (value == nullptr)
+		MoveEntityTo(entity, target);
+	else
+		MoveEntityTo(entity, target, component, value);
+	return true;
+}
+
+Archetype &World::ArchetypeWith(Archetype &source, const ComponentId component)
+{
+	for (const auto &[edge, target] : source.m_addEdges)
+		if (edge == component)
+			return *target;
+	Signature signature = source.GetSignature();
 	signature.push_back(component);
 	CanonicalizeSignature(signature);
-	if (value == nullptr)
-		MoveEntity(entity, signature);
-	else
-		MoveEntity(entity, signature, component, value);
-	return true;
+	Archetype &target = GetOrCreateArchetype(signature);
+	source.m_addEdges.emplace_back(component, &target);
+	return target;
+}
+
+Archetype &World::ArchetypeWithout(Archetype &source, const ComponentId component)
+{
+	for (const auto &[edge, target] : source.m_removeEdges)
+		if (edge == component)
+			return *target;
+	Signature signature = source.GetSignature();
+	signature.erase(std::remove(signature.begin(), signature.end(), component), signature.end());
+	Archetype &target = GetOrCreateArchetype(signature);
+	source.m_removeEdges.emplace_back(component, &target);
+	return target;
 }
 
 bool World::SetComponent(Entity entity, const ComponentId component, void *value)
@@ -553,9 +590,7 @@ bool World::RemoveComponent(const Entity entity, const ComponentId component)
 	if (!record.location.archetype->Has(component))
 		return false;
 
-	Signature signature = record.location.archetype->GetSignature();
-	signature.erase(std::remove(signature.begin(), signature.end(), component), signature.end());
-	MoveEntity(entity, signature);
+	MoveEntityTo(entity, ArchetypeWithout(*record.location.archetype, component));
 	return true;
 }
 
@@ -564,12 +599,19 @@ void World::MoveEntity(Entity entity,
 	const ComponentId initializedComponent,
 	void *initializedValue)
 {
+	MoveEntityTo(entity, GetOrCreateArchetype(targetSignature), initializedComponent, initializedValue);
+}
+
+void World::MoveEntityTo(Entity entity,
+	Archetype &target,
+	const ComponentId initializedComponent,
+	void *initializedValue)
+{
 	engine::core::Assert(IsAlive(entity));
 	engine::core::Assert(initializedValue == nullptr || initializedComponent != InvalidComponentId);
 	EntityRecord &record = m_records[entity.index];
 	const EntityLocation sourceLocation = record.location;
 	Archetype *source = sourceLocation.archetype;
-	Archetype &target = GetOrCreateArchetype(targetSignature);
 	if (source == &target)
 		return;
 

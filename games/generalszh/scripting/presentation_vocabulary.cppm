@@ -28,6 +28,7 @@ struct ClientScriptCommand
 		RadarRevertToNormal, // RADAR_REVERT_TO_NORMAL: no longer forced on
 		RadarHidden,         // flag: RADAR_DISABLE (hidden) / RADAR_ENABLE
 		BorderShroudDisabled,
+		BorderShroudEnabled,
 		DrawIconUi,          // flag
 		OcclusionMode,       // flag
 		ParticleCapMode,     // flag
@@ -57,6 +58,15 @@ struct ClientScriptCommand
 		LogicRate,           // SET_FPS_LIMIT: percent: logic frames a second (0: GameData's FramesPerSecondLimit)
 		Movie,               // MOVIE_PLAY_FULLSCREEN / MOVIE_PLAY_RADAR: text: the movie (both the display's full-screen movie here)
 		QuickVictory,        // QUICKVICTORY: input off, the campaign won, no window, the game left the next frame (quick end timer)
+		CameoFlash,          // CAMEO_FLASH: text: the command button; percent: seconds
+		DisplayText,         // DISPLAY_TEXT: text: the message's label (InGameUI::message)
+		CinematicText,       // DISPLAY_CINEMATIC_TEXT: text: its label; subject: the font ("Name - Size:n [Bold]"); percent: seconds
+		PopupMessage,        // INGAME_POPUP_MESSAGE: text: its label; numbers: x, y (percent of the screen), width; flag: pause
+		SkyBox,              // DRAW_SKYBOX_BEGIN / END: flag
+		Weather,             // SHOW_WEATHER: flag (SnowManager::setVisible)
+		InfantryLighting,    // SET_ / RESET_INFANTRY_LIGHTING_OVERRIDE: numbers[0]: the scale (-1: the time of day's again)
+		FlatSoundsPaused,    // SUSPEND_ / RESUME_BACKGROUND_SOUNDS: flag (paused)
+		RadarRefresh,        // REFRESH_RADAR: the radar's terrain drawn again
 	};
 
 	Kind kind{Kind::MusicTrack};
@@ -110,7 +120,10 @@ inline void AddPresentationVocabulary(engine::scripting::Vocabulary &vocabulary,
 		command.flag = false;
 		out->push_back(command);
 	});
+	// DISABLE_BORDER_SHROUD / ENABLE_BORDER_SHROUD: doSetBorderShroud (W3DShroud::setBorderShroudLevel: the map's border
+	// clear, or shrouded again).
 	vocabulary.AddAction("DISABLE_BORDER_SHROUD", [out](ScriptCallContext &) { out->push_back({Kind::BorderShroudDisabled}); });
+	vocabulary.AddAction("ENABLE_BORDER_SHROUD", [out](ScriptCallContext &) { out->push_back({Kind::BorderShroudEnabled}); });
 	vocabulary.AddAction("OPTIONS_SET_DRAWICON_UI_MODE", [out](ScriptCallContext &c) { out->push_back({Kind::DrawIconUi, {}, 0, Integer(c, 0) != 0}); });
 	vocabulary.AddAction("OPTIONS_SET_OCCLUSION_MODE", [out](ScriptCallContext &c) { out->push_back({Kind::OcclusionMode, {}, 0, Integer(c, 0) != 0}); });
 	vocabulary.AddAction("OPTIONS_SET_PARTICLE_CAP_MODE",
@@ -232,6 +245,48 @@ inline void AddPresentationVocabulary(engine::scripting::Vocabulary &vocabulary,
 			command.subject = Text(c, 0);
 			out->push_back(std::move(command));
 		});
+	// CAMEO_FLASH(command button, seconds): doCameoFlash (the button's flash count, set on the client).
+	vocabulary.AddAction("CAMEO_FLASH", [out](ScriptCallContext &c) { out->push_back({Kind::CameoFlash, Text(c, 0), Integer(c, 1)}); });
+	// DISPLAY_TEXT(label): doDisplayText -> InGameUI::message.
+	vocabulary.AddAction("DISPLAY_TEXT", [out](ScriptCallContext &c) { out->push_back({Kind::DisplayText, Text(c, 0)}); });
+	// DISPLAY_CINEMATIC_TEXT(label, font, seconds): doDisplayCinematicText.
+	vocabulary.AddAction("DISPLAY_CINEMATIC_TEXT", [out](ScriptCallContext &c) {
+		ClientScriptCommand command{Kind::CinematicText, Text(c, 0), Integer(c, 2)};
+		command.subject = Text(c, 1);
+		out->push_back(std::move(command));
+	});
+	// INGAME_POPUP_MESSAGE(label, x percent, y percent, width, pause): doInGamePopupMessage -> InGameUI::popupMessage.
+	vocabulary.AddAction("INGAME_POPUP_MESSAGE", [out](ScriptCallContext &c) {
+		ClientScriptCommand command{Kind::PopupMessage, Text(c, 0), 0, Integer(c, 4) != 0};
+		for (std::size_t index = 0; index < 3; ++index)
+			command.numbers[index] = Engine::Math::Fixed::FromInt(Integer(c, index + 1));
+		out->push_back(std::move(command));
+	});
+	// DRAW_SKYBOX_BEGIN / END: doSkyBox (GlobalData m_drawSkyBox); SHOW_WEATHER(on): doWeather (SnowManager::setVisible).
+	vocabulary.AddAction("DRAW_SKYBOX_BEGIN", [out](ScriptCallContext &) { out->push_back({Kind::SkyBox, {}, 0, true}); });
+	vocabulary.AddAction("DRAW_SKYBOX_END", [out](ScriptCallContext &) { out->push_back({Kind::SkyBox, {}, 0, false}); });
+	vocabulary.AddAction("SHOW_WEATHER", [out](ScriptCallContext &c) { out->push_back({Kind::Weather, {}, 0, Integer(c, 0) != 0}); });
+	// SET_INFANTRY_LIGHTING_OVERRIDE(scale) / RESET_INFANTRY_LIGHTING_OVERRIDE: doSetInfantryLightingOverride(scale / -1)
+	// (GlobalData m_scriptOverrideInfantryLightScale).
+	vocabulary.AddAction("SET_INFANTRY_LIGHTING_OVERRIDE", [out](ScriptCallContext &c) {
+		ClientScriptCommand command{Kind::InfantryLighting};
+		command.numbers[0] = Number(c, 0);
+		out->push_back(command);
+	});
+	vocabulary.AddAction("RESET_INFANTRY_LIGHTING_OVERRIDE", [out](ScriptCallContext &) {
+		ClientScriptCommand command{Kind::InfantryLighting};
+		command.numbers[0] = Engine::Math::Fixed::FromInt(-1);
+		out->push_back(command);
+	});
+	// SUSPEND_BACKGROUND_SOUNDS / RESUME_BACKGROUND_SOUNDS: TheAudio->pauseAudio / resumeAudio(AudioAffect_Sound).
+	vocabulary.AddAction("SUSPEND_BACKGROUND_SOUNDS", [out](ScriptCallContext &) { out->push_back({Kind::FlatSoundsPaused, {}, 0, true}); });
+	vocabulary.AddAction("RESUME_BACKGROUND_SOUNDS", [out](ScriptCallContext &) { out->push_back({Kind::FlatSoundsPaused, {}, 0, false}); });
+	// SOUND_AMBIENT_PAUSE / SOUND_AMBIENT_RESUME: doAmbientSoundsPause -> AudioManager::pauseAmbient, which the original's
+	// Miles audio manager leaves empty: they do nothing.
+	vocabulary.AddAction("SOUND_AMBIENT_PAUSE", [](ScriptCallContext &) {});
+	vocabulary.AddAction("SOUND_AMBIENT_RESUME", [](ScriptCallContext &) {});
+	// REFRESH_RADAR: doRadarRefresh -> W3DRadar::refreshTerrain (the terrain picture built again).
+	vocabulary.AddAction("REFRESH_RADAR", [out](ScriptCallContext &) { out->push_back({Kind::RadarRefresh}); });
 	// SHOW_MILITARY_CAPTION(briefing label, milliseconds): ScriptActions::doMilitaryCaption -> InGameUI::militarySubtitle.
 	vocabulary.AddAction("SHOW_MILITARY_CAPTION", [out](ScriptCallContext &c) { out->push_back({Kind::MilitaryCaption, Text(c, 0), Integer(c, 1)}); });
 }

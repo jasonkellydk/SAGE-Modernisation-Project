@@ -1,4 +1,5 @@
 export module games.generalszh.presentation.rendering.terrain_rendering;
+import Graphics.Resources.MipChain;
 import std;
 
 import engine.level.model.level;
@@ -11,6 +12,7 @@ import games.generalszh.content.terrain.terrain_type;
 export import games.generalszh.presentation.effects.light_pulses;
 export import games.generalszh.presentation.effects.scorch_marks;
 export import games.generalszh.presentation.objects.components.track_marks;
+export import games.generalszh.presentation.rendering.shroud_pixels;
 import Graphics.Scene.Tracks.Geometry;
 import games.generalszh.presentation.rendering.texture_files;
 import Graphics.Scene.Scorches.Geometry;
@@ -92,10 +94,9 @@ public:
 			error = "terrain atlas is empty";
 			return false;
 		}
-		m_atlas = device.Create_Texture_Initialized(
-			{m_textures.atlas.width, m_textures.atlas.height, 1, Graphics::RHITextureFormat::RGBA8_UNorm,
-				static_cast<std::uint32_t>(Graphics::RHITextureUsage::ShaderResource)},
-			{std::as_bytes(std::span(m_textures.atlas.pixels)), m_textures.atlas.width * 4});
+		// TerrainTextureClass: the tiles' texture with three mip levels (MIP_LEVELS_3), box filtered (D3DXFilterTexture).
+		m_atlas = Graphics::Create_Mipped_Texture(device, m_textures.atlas.width, m_textures.atlas.height,
+			std::as_bytes(std::span(m_textures.atlas.pixels)), m_textures.atlas.width * 4, 3);
 		if (!m_atlas.Is_Valid())
 		{
 			error = "terrain atlas upload failed";
@@ -162,6 +163,18 @@ public:
 						Engine::Math::ToFloat(radius), static_cast<std::uint32_t>(std::max<std::int64_t>(*type, 0))},
 					false);
 			}
+		// CloudMapTerrainTextureClass: the cloud shadows' texture.
+		const TextureImage cloudImage = LoadArtTexture(files, "TSCloudMed.tga");
+		if (cloudImage.Valid())
+			m_cloudTexture = device.Create_Texture_Initialized(
+				{cloudImage.width, cloudImage.height, 1, Graphics::RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(Graphics::RHITextureUsage::ShaderResource)},
+				{std::as_bytes(std::span(cloudImage.pixels)), cloudImage.width * 4});
+		// LightMapTerrainTextureClass: the light map (the map's macro texture; none: TSNoiseUrb.tga).
+		const TextureImage lightMapImage = LoadArtTexture(files, "TSNoiseUrb.tga");
+		if (lightMapImage.Valid())
+			m_lightMapTexture = device.Create_Texture_Initialized(
+				{lightMapImage.width, lightMapImage.height, 1, Graphics::RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(Graphics::RHITextureUsage::ShaderResource)},
+				{std::as_bytes(std::span(lightMapImage.pixels)), lightMapImage.width * 4});
 		const TextureImage scorchImage = LoadArtTexture(files, "EXScorch01.tga");
 		if (scorchImage.Valid())
 			m_scorchTexture = device.Create_Texture_Initialized(
@@ -185,10 +198,38 @@ public:
 		return true;
 	}
 
-	bool Draw(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const ShownLight> lights = {}) const noexcept
+	// `clouds`: the cloud shadows' projection (scale x, scale y, offset x, offset y) while they show; none: no clouds.
+	// `lightMap`: the detail's UseLightMap.
+	bool Draw(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const ShownLight> lights = {},
+		const ShroudBinding *shroud = nullptr, const std::array<float, 4> *clouds = nullptr, bool lightMap = false) const noexcept
 	{
 		Graphics::TerrainDrawParameters parameters;
 		parameters.view_projection = viewProjection;
+		// TerrainShader2Stage's cloud pass (ST_TERRAIN_BASE_NOISE1): the cloud texture multiplied over the terrain.
+		const bool clouded = clouds != nullptr && m_cloudTexture.Is_Valid();
+		if (clouded)
+		{
+			parameters.cloud_projection = *clouds;
+			parameters.features[0] = 1.0f;
+		}
+		// TerrainShader2Stage's light map pass (ST_TERRAIN_BASE_NOISE2 / NOISE12: updateNoise2): the light map multiplied
+		// over the terrain (D3DBLEND_DESTCOLOR, D3DTA_TEXTURE modulate), mapped by world x and y at STRETCH_FACTOR
+		// (1 / (63 * MAP_XY_FACTOR / 2): a texture over 31.5 cells), wrapping, never moving.
+		const bool lit = lightMap && m_lightMapTexture.Is_Valid();
+		if (lit)
+		{
+			constexpr float stretch = 1.0f / (63.0f * 10.0f / 2.0f);
+			parameters.lightmap_projection = {stretch, stretch, 0.0f, 0.0f};
+			parameters.features[1] = 1.0f;
+		}
+		// W3DShroud: the terrain multiplied by the viewer's shroud (its projected texture).
+		const bool shrouded = shroud != nullptr && shroud->Active();
+		if (shrouded)
+		{
+			parameters.shroud_projection = shroud->projection;
+			parameters.options[1] = 1.0f;
+		}
+		const Graphics::RHITextureHandle shroudTexture = shrouded ? shroud->texture : Graphics::RHITextureHandle{};
 		// BaseHeightMapRenderObjClass::computeVertexLighting's dynamic lights (point lights: position and far range,
 		// diffuse and mid range, ambient) over the terrain's own lighting, as many as the terrain pass takes.
 		std::size_t count = 0;
@@ -201,19 +242,21 @@ public:
 		}
 		parameters.light_options[0] = static_cast<float>(count);
 		// Base and blend stages both sample the tile atlas.
-		const std::array<Graphics::RHITextureHandle, 5> textures{m_atlas, m_atlas, {}, {}, {}};
+		const std::array<Graphics::RHITextureHandle, 5> textures{m_atlas, m_atlas, clouded ? m_cloudTexture : Graphics::RHITextureHandle{},
+			lit ? m_lightMapTexture : Graphics::RHITextureHandle{}, shroudTexture};
 		if (!Graphics::Get_Terrain_Renderer().Render(commands, Graphics::TerrainSurfacePass::Surface, parameters, textures))
 			return false;
 		if (m_overlayCells == 0)
 			return true;
 		parameters.features[3] = 3;
-		const std::array<Graphics::RHITextureHandle, 5> overlayTextures{m_atlas, {}, {}, {}, {}};
+		const std::array<Graphics::RHITextureHandle, 5> overlayTextures{m_atlas, {}, {}, {}, shroudTexture};
 		return Graphics::Get_Terrain_Overlay_Renderer().Render(commands, Graphics::TerrainSurfacePass::Overlay, parameters, overlayTextures);
 	}
 
 	// W3DScorch::drawScorches: the map's static marks, then the gameplay ones, each as one terrain-hugging mesh (newest
 	// first; the gameplay mesh rebuilt when its marks change).
-	bool DrawScorches(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, const ScorchMarks *scorches)
+	bool DrawScorches(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, const ScorchMarks *scorches,
+		const ShroudBinding *shroud = nullptr)
 	{
 		if (!m_scorchTexture.Is_Valid() || m_grid.width < 2)
 			return true;
@@ -228,11 +271,14 @@ public:
 			if (!BuildScorches(*scorches, m_scorchMesh, m_scorchIndices))
 				return false;
 		}
+		// ScorchGeometry winds its triangles counter-clockwise seen from above (as the tracks' strips): those faces front.
 		Graphics::SurfaceStyle style;
 		style.cull = Graphics::RHICullMode::Back;
+		style.front_counter_clockwise = true;
 		Graphics::SurfaceParameters parameters;
 		parameters.view_projection = viewProjection;
-		const std::array<Graphics::RHITextureHandle, 4> textures{m_scorchTexture, {}, {}, {}};
+		const Graphics::RHITextureHandle shroudTexture = Shroud(parameters, shroud);
+		const std::array<Graphics::RHITextureHandle, 4> textures{m_scorchTexture, {}, {}, shroudTexture};
 		auto &renderer = Graphics::Get_Surface_Renderer();
 		bool drawn = true;
 		if (m_staticMesh.Is_Valid() && m_staticIndices != 0)
@@ -242,31 +288,86 @@ public:
 		return drawn;
 	}
 
+	// A radius decal (W3DProjectedShadowManager's SHADOW_ALPHA_DECAL / SHADOW_ADDITIVE_DECAL, the texture's square of
+	// twice the radius laid on the terrain, clamped at its edges): an alpha decal blends its colour at its opacity; an
+	// additive one adds its colour scaled by its opacity (Shadow::setOpacity / setColor).
+	struct RadiusDecalDraw
+	{
+		std::string texture;
+		bool additive{false};
+		std::array<float, 2> center{};
+		float radius{0.0f};
+		std::array<float, 3> color{1, 1, 1};
+		std::int32_t opacity{255};
+	};
+	bool DrawRadiusDecal(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, const RadiusDecalDraw &decal,
+		const ShroudBinding *shroud = nullptr)
+	{
+		if (m_grid.width < 2 || !(decal.radius > 0.0f))
+			return true;
+		const Graphics::RHITextureHandle texture = TrackTexture(decal.texture);
+		if (!texture.Is_Valid())
+			return true;
+		const float opacity = static_cast<float>(std::clamp(decal.opacity, 0, 255)) / 255.0f;
+		const std::array<float, 4> color = decal.additive
+			? std::array<float, 4>{decal.color[0] * opacity, decal.color[1] * opacity, decal.color[2] * opacity, 1.0f}
+			: std::array<float, 4>{decal.color[0], decal.color[1], decal.color[2], opacity};
+		Graphics::ScorchGeometry geometry;
+		const int cellsAcross = m_grid.width - 1;
+		Graphics::ScorchDescription mark{{decal.center[0], decal.center[1]}, decal.radius, 0};
+		mark.whole_texture = true;
+		geometry.Append(mark, m_grid, color,
+			[&](int x, int y) { return m_heights[static_cast<std::size_t>(std::clamp(y, 0, m_grid.height - 1)) * m_grid.width + std::clamp(x, 0, m_grid.width - 1)]; },
+			[&](int x, int y) {
+				const std::size_t cell = static_cast<std::size_t>(std::clamp(y, 0, m_grid.height - 2)) * cellsAcross + std::clamp(x, 0, cellsAcross - 1);
+				return cell < m_diagonals.size() && m_diagonals[cell] != 0;
+			}, std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint32_t>::max());
+		if (geometry.indices.empty())
+			return true;
+		auto &renderer = Graphics::Get_Surface_Renderer();
+		if (m_decalMesh.Is_Valid())
+		{
+			if (!renderer.Update_Mesh(m_decalMesh, geometry.vertices, geometry.indices))
+				return false;
+		}
+		else
+			m_decalMesh = renderer.Create_Mesh(geometry.vertices, geometry.indices);
+		Graphics::SurfaceStyle style;
+		style.cull = Graphics::RHICullMode::Back;
+		style.front_counter_clockwise = true; // ScorchGeometry's winding (else every radius decal was culled away)
+		style.clamp_texture = true;
+		style.blend = decal.additive ? Graphics::RHIBlendMode::Additive : Graphics::RHIBlendMode::Alpha;
+		Graphics::SurfaceParameters parameters;
+		parameters.view_projection = viewProjection;
+		// Under the viewer's shroud, as the terrain's other decals (W3DShroud over the terrain pass).
+		const Graphics::RHITextureHandle shroudTexture = Shroud(parameters, shroud);
+		const std::array<Graphics::RHITextureHandle, 4> textures{texture, {}, {}, shroudTexture};
+		return renderer.Draw(commands, m_decalMesh, style, parameters, textures);
+	}
+
 	// TerrainTracksRenderObjClassSystem::flush: each track with two or more edges as one strip (its older edges past the
 	// opaque ones fading with distance down the track), its texture from Art/Textures, back faces culled.
-	bool DrawTracks(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const TrackView> tracks)
+	bool DrawTracks(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const TrackView> tracks,
+		const ShroudBinding *shroud = nullptr)
 	{
 		Graphics::SurfaceStyle style;
 		style.cull = Graphics::RHICullMode::Back;
 		style.front_counter_clockwise = true;
 		Graphics::SurfaceParameters parameters;
 		parameters.view_projection = viewProjection;
+		const Graphics::RHITextureHandle shroudTexture = Shroud(parameters, shroud);
 		auto &renderer = Graphics::Get_Surface_Renderer();
-		std::vector<Graphics::TrackEdge> edges;
 		Graphics::TrackGeometry geometry;
 		bool drawn = true;
 		std::size_t used = 0;
 		for (const TrackView &track : tracks)
 		{
-			if (track.edges.size() < 2)
+			if (track.left.size() < 2)
 				continue;
 			const Graphics::RHITextureHandle texture = TrackTexture(track.texture);
 			if (!texture.Is_Valid())
 				continue;
-			edges.clear();
-			for (const TrackEdge &edge : track.edges)
-				edges.push_back({edge.ends, edge.uv, edge.alpha});
-			geometry.Build(edges, static_cast<int>(track.maxEdges), static_cast<int>(track.maxOpaqueEdges), m_trackColor);
+			geometry.Build({track.left, track.right, track.v, track.alpha}, static_cast<int>(track.maxEdges), static_cast<int>(track.maxOpaqueEdges), m_trackColor);
 			if (used == m_trackMeshes.size())
 				m_trackMeshes.emplace_back();
 			Graphics::SurfaceMeshHandle &mesh = m_trackMeshes[used++];
@@ -277,10 +378,20 @@ public:
 			}
 			else
 				mesh = renderer.Create_Mesh(geometry.vertices, geometry.indices);
-			const std::array<Graphics::RHITextureHandle, 4> textures{texture, {}, {}, {}};
+			const std::array<Graphics::RHITextureHandle, 4> textures{texture, {}, {}, shroudTexture};
 			drawn = renderer.Draw(commands, mesh, style, parameters, textures) && drawn;
 		}
 		return drawn;
+	}
+
+	// Surfaces on the terrain (scorches, tracks) take the shroud as the terrain does; the texture for their shroud slot.
+	static Graphics::RHITextureHandle Shroud(Graphics::SurfaceParameters &parameters, const ShroudBinding *shroud) noexcept
+	{
+		if (shroud == nullptr || !shroud->Active())
+			return {};
+		parameters.shroud = 1.0f;
+		parameters.shroud_projection = shroud->projection;
+		return shroud->texture;
 	}
 
 public:
@@ -335,10 +446,13 @@ private:
 	std::vector<float> m_heights;
 	std::vector<std::uint8_t> m_diagonals;
 	Graphics::RHITextureHandle m_scorchTexture{};
+	Graphics::RHITextureHandle m_cloudTexture{};
+	Graphics::RHITextureHandle m_lightMapTexture{};
 	std::array<float, 4> m_scorchColor{1, 1, 1, 1};
 	Graphics::SurfaceMeshHandle m_scorchMesh{};
 	std::size_t m_scorchIndices{0};
 	std::uint64_t m_scorchVersion{0};
+	Graphics::SurfaceMeshHandle m_decalMesh{}; // the radius decal's, rebuilt each frame it is drawn
 	// The map's own scorch marks (placed objects with a scorchType: W3DTerrainVisual's addStaticScorch).
 	ScorchMarks m_staticMarks;
 	Graphics::SurfaceMeshHandle m_staticMesh{};

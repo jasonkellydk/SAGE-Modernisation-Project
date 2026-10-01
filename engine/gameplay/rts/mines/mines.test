@@ -7,6 +7,8 @@
 
 import engine.gameplay.common.health.components.subdual;
 import engine.gameplay.rts.mines.systems.minefield_system;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
 import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.common.spatial.systems.spatial_index_system;
@@ -40,6 +42,8 @@ struct Field
 		world.RegisterComponent<HealthFloor>();
 		world.RegisterComponent<Subdual>();
 		world.RegisterComponent<Minefield>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<AttackTarget>();
 		world.RegisterComponent<MineSafe>();
 		world.RegisterComponent<Dying>();
 		world.RegisterComponent<SelfHealing>();
@@ -58,12 +62,19 @@ struct Field
 		relationships.Set(0, 2, Relationship::Enemies);
 		relationships.Set(2, 0, Relationship::Enemies);
 		world.EmplaceResource<ShotQueue>();
+		world.EmplaceResource<MineShots>();
 		world.EmplaceResource<IncomingDamage>();
 		world.EmplaceResource<ArmorCatalog>();
 		world.EmplaceResource<Deaths>();
 		world.EmplaceResource<Hits>();
 		world.EmplaceResource<SecondLives>();
 		world.EmplaceResource<MineSettings>(MineSettings{Unresistable, 0, 30});
+		{
+			WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+			WeaponDefinition clearing;
+			clearing.anti = weapon_anti::Mine | weapon_anti::Ground;
+			clearingWeapon = weapons.Add(clearing);
+		}
 		if (build)
 			mine = Mine(500, true);
 		registry.Register(index);
@@ -141,6 +152,7 @@ struct Field
 	ecs::SystemRegistry registry;
 	std::unique_ptr<ecs::Scheduler> scheduler;
 	std::uint64_t tick{0};
+	std::uint32_t clearingWeapon{0};
 };
 }
 
@@ -287,6 +299,34 @@ BOOST_AUTO_TEST_CASE(mines_are_the_same_on_any_number_of_workers_and_after_a_che
 		loaded.Step();
 		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
 	}
+}
+
+// MinefieldBehavior::onCollide / update with MAX_IMMUNITY: an enemy clearing mines (attacking something with a
+// WEAPON_ANTI_MINE weapon in hand: isClearingMines, with a goal object) that stands in a mine is made immune to it
+// instead of setting it off, and stays immune while it keeps touching it, even once it stops clearing. Clear of the mine
+// for more than 2 frames, its immunity lapses, and touching the mine again (not clearing) sets it off.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mine_clearer_is_immune_while_it_touches_the_mine)
+{
+	Field field(2);
+	const ecs::Entity other = field.Body(2, 900, 5);
+	const ecs::Entity clearer = field.Body(2, 535, 10);
+	field.world.Add<Armament>(clearer);
+	field.world.Get<Armament>(clearer)->weapon = field.clearingWeapon;
+	field.world.Add<AttackTarget>(clearer);
+	field.world.Get<AttackTarget>(clearer)->target = other;
+	BOOST_TEST(field.Step().empty());
+	BOOST_TEST((field.Data(field.mine).immunes[0].who == clearer));
+	*field.world.Get<AttackTarget>(clearer) = AttackTarget{};
+	for (int tick = 0; tick < 5; ++tick)
+		BOOST_TEST(field.Step().empty());
+	BOOST_TEST(field.Data(field.mine).remaining == 8u);
+	field.world.Get<Transform>(clearer)->position.x = Fixed::FromInt(700);
+	for (int tick = 0; tick < 3; ++tick)
+		field.Step();
+	BOOST_TEST((field.Data(field.mine).immunes[0].who == ecs::Entity{}));
+	field.world.Get<Transform>(clearer)->position.x = Fixed::FromInt(535);
+	BOOST_TEST(field.Step().size() == 1u);
+	BOOST_TEST(field.Data(field.mine).remaining == 7u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -8,6 +8,8 @@ export import engine.gameplay.common.weapons.definitions.weapon;
 export import games.generalszh.content.combat.weapon_bonus_content;
 export import engine.gameplay.rts.combat.components.turret;
 export import games.generalszh.content.objects.object_definition;
+export import games.generalszh.content.global.radius_decal;
+import games.generalszh.content.combat.loadout_content;
 
 // Zero Hour combat content: damage type names, "Armor" and "Weapon" blocks
 // (Data/INI/Armor.ini, Data/INI/Weapon.ini) bound onto the engine's armor
@@ -33,16 +35,34 @@ struct WeaponContent
 {
 	engine::gameplay::WeaponDefinition simulation;
 	std::string projectileObject;
-	std::string fireFX;
-	std::string detonationFX;
-	std::string fireOCL;       // created where it fires
-	std::string detonationOCL; // created where it lands (napalm fire fields, ...)
+	// By its firer's veterancy level (REGULAR, VETERAN, ELITE, HEROIC): FireFX and the rest set every level, their
+	// Veterancy* lines one level each, in the order given (empty or None: none).
+	std::array<std::string, 4> fireFXs;
+	std::array<std::string, 4> detonationFXs;
+	std::array<std::string, 4> fireOCLs;       // created where it fires
+	std::array<std::string, 4> detonationOCLs; // created where it lands (napalm fire fields, ...)
 	std::string fireSound;
-	std::string exhaust;       // ProjectileExhaust: the particle system its missile trails once lit
+	// PlayFXWhenStealthed: its fire FX shows even when its firer cannot be seen (stealthed from the one watching).
+	bool playFXWhenStealthed{false};
+	// ShowsAmmoPips: the pips of its clip show under a selected firer's health bar (Drawable::drawAmmo).
+	bool showsAmmoPips{false};
+	// WeaponRecoil (INI::parseAngleReal, degrees): how hard firing rocks its firer's body back from the shot.
+	Engine::Math::Fixed weaponRecoil;
+	std::array<std::string, 4> exhausts;       // ProjectileExhaust: the particle system its missile trails once lit
+
+	const std::string &FireFX(std::uint8_t level) const noexcept { return fireFXs[std::min<std::size_t>(level, 3)]; }
+	const std::string &DetonationFX(std::uint8_t level) const noexcept { return detonationFXs[std::min<std::size_t>(level, 3)]; }
+	const std::string &FireOCL(std::uint8_t level) const noexcept { return fireOCLs[std::min<std::size_t>(level, 3)]; }
+	const std::string &DetonationOCL(std::uint8_t level) const noexcept { return detonationOCLs[std::min<std::size_t>(level, 3)]; }
+	const std::string &Exhaust(std::uint8_t level) const noexcept { return exhausts[std::min<std::size_t>(level, 3)]; }
 	std::string laser;         // LaserName: the beam object drawn from its LaserBoneName to what it hits
 	std::string laserBone;
+	std::string projectileStream; // ProjectileStreamName: the stream object drawn through its projectiles in flight
+	std::string historicBonusWeapon; // HistoricBonusWeapon: fired where enough of its hits land together (none: empty)
 	// Its own WeaponBonus lines (WeaponTemplate::m_extraBonus), when it has any.
 	std::optional<engine::gameplay::WeaponBonusSet> extraBonus;
+	// Its ScatterTarget lines (WeaponTemplate::m_scatterTargets), unscaled, in order.
+	std::vector<Engine::Math::FixedVector2> scatterTargets;
 };
 
 // How an object fights, read from its modules and sets.
@@ -69,6 +89,8 @@ struct ObjectCombat
 	std::string primaryWeapon; // the PRIMARY weapon of the set without conditions
 	// Its PRIMARY, SECONDARY and TERTIARY weapons (empty: none).
 	std::array<std::string, 3> slotWeapons;
+	// That set's AutoChooseSources and PreferredAgainst.
+	engine::gameplay::SlotRules slotRules;
 	// Which slots each turret aims (ControlledWeaponSlots, a bit per slot).
 	std::uint8_t turretSlots{0};
 	std::uint8_t altTurretSlots{0};
@@ -241,6 +263,9 @@ struct NeutronMissileContent
 	engine::gameplay::NeutronMissileDefinition flight;
 	std::string launchFX;
 	std::string ignitionFX;
+	// DeliveryDecal and DeliveryDecalRadius: laid on its target once fired at it.
+	RadiusDecalLook deliveryDecal;
+	Engine::Math::Fixed deliveryDecalRadius;
 };
 
 std::optional<NeutronMissileContent> ReadNeutronMissile(const ObjectDefinition &object, const engine::time::FixedStep &step)
@@ -277,6 +302,9 @@ std::optional<NeutronMissileContent> ReadNeutronMissile(const ObjectDefinition &
 			out.launchFX = std::string(fx->Value());
 		if (const engine::config::Node *fx = module.block->Find("IgnitionFX"); fx != nullptr && !fx->values.empty())
 			out.ignitionFX = std::string(fx->Value());
+		if (const engine::config::Node *decal = module.block->Find("DeliveryDecal"))
+			out.deliveryDecal = ReadRadiusDecal(*decal, step.TicksPerSecond());
+		out.deliveryDecalRadius = real("DeliveryDecalRadius", Engine::Math::Fixed{});
 		return out;
 	}
 	return std::nullopt;
@@ -347,7 +375,38 @@ std::uint64_t Ticks(std::int64_t milliseconds, const engine::time::FixedStep &st
 	return static_cast<std::uint64_t>((milliseconds * static_cast<std::int64_t>(step.TicksPerSecond()) + 999) / 1000);
 }
 
+// Degrees -> signed turn units, -180 and 180 (and beyond) the ends of the range.
+std::int32_t SignedTurn(Engine::Math::Fixed degrees)
+{
+	if (degrees <= Engine::Math::Fixed::FromInt(-180))
+		return std::numeric_limits<std::int32_t>::min();
+	if (degrees >= Engine::Math::Fixed::FromInt(180))
+		return std::numeric_limits<std::int32_t>::max();
+	return static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(degrees).units);
+}
+
 using WeaponHandler = std::function<void(const Node &, WeaponContent &, BindContext &)>;
+
+// parseAllVetLevelsFXList / parseAllVetLevelsAsciiString / parseAllVetLevelsPSys: the name at every veterancy level;
+// parsePerVetLevel*: "<LEVEL> <name>" at that level (TheVeterancyNames). None: none.
+std::string NameOrNone(std::string_view name) { return SameText(name, "None") ? std::string{} : std::string(name); }
+
+WeaponHandler AllLevels(std::array<std::string, 4> WeaponContent::*member)
+{
+	return [member](const Node &node, WeaponContent &out, BindContext &) { (out.*member).fill(NameOrNone(node.Value())); };
+}
+
+WeaponHandler OneLevel(std::array<std::string, 4> WeaponContent::*member)
+{
+	return [member](const Node &node, WeaponContent &out, BindContext &) {
+		static constexpr std::array<std::string_view, 4> Levels{"REGULAR", "VETERAN", "ELITE", "HEROIC"};
+		if (node.values.size() < 2)
+			return;
+		for (std::size_t level = 0; level < Levels.size(); ++level)
+			if (SameText(node.Value(0), Levels[level]))
+				(out.*member)[level] = NameOrNone(node.Value(1));
+	};
+}
 
 WeaponHandler FixedField(Engine::Math::Fixed engine::gameplay::WeaponDefinition::*member)
 {
@@ -415,6 +474,79 @@ engine::config::DefinitionTable<WeaponContent> BuildWeaponCatalog(const engine::
 		.On("MinimumAttackRange", detail::FixedField(&WeaponDefinition::minimumRange))
 		.On("RequestAssistRange", detail::FixedField(&WeaponDefinition::requestAssistRange))
 		.On("ScatterRadius", detail::FixedField(&WeaponDefinition::scatterRadius))
+		.On("ScatterRadiusVsInfantry", detail::FixedField(&WeaponDefinition::infantryScatter))
+		// INI::parseAngleReal (degrees); the limits kept within a half turn either way.
+		.On("MinTargetPitch", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadFixed(node, bind))
+				out.simulation.minTargetPitch = detail::SignedTurn(*value);
+		})
+		.On("MaxTargetPitch", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadFixed(node, bind))
+				out.simulation.maxTargetPitch = detail::SignedTurn(*value);
+		})
+		.On("AllowAttackGarrisonedBldgs", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.simulation.allowAttackGarrisoned = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		.On("MinWeaponSpeed", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadPerSecond(node, bind))
+				out.simulation.minWeaponSpeed = *value;
+		})
+		.On("ScaleWeaponSpeed", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.simulation.scaleWeaponSpeed = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		.On("ShotsPerBarrel", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadInt(node, bind))
+				out.simulation.shotsPerBarrel = static_cast<std::uint32_t>(std::clamp<std::int64_t>(*value, 1, 255));
+		})
+		.On("LeechRangeWeapon", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.simulation.leechRange = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		.On("ShowsAmmoPips", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.showsAmmoPips = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		.On("WeaponRecoil", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadFixed(node, bind))
+				out.weaponRecoil = *value;
+		})
+		.On("PlayFXWhenStealthed", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.playFXWhenStealthed = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		// INI::parseAngleReal (degrees): below PI, a cone.
+		.On("RadiusDamageAngle", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto degrees = engine::config::ReadFixed(node, bind))
+			{
+				out.simulation.coned = *degrees < Engine::Math::Fixed::FromInt(180);
+				out.simulation.coneCosine = Engine::Math::Cos(Engine::Math::TurnFromDegrees(*degrees));
+			}
+		})
+		.On("SuspendFXDelay", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadFixed(node, bind))
+				out.simulation.suspendFxTicks = detail::Ticks(value->Ceil(), bind.step);
+		})
+		.On("MissileCallsOnDie", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.simulation.missileCallsOnDie = !node.values.empty() && engine::config::values::ParseBool(node.Value()).value_or(false);
+		})
+		.On("ContinueAttackRange", detail::FixedField(&WeaponDefinition::continueAttackRange))
+		.On("ScatterTargetScalar", detail::FixedField(&WeaponDefinition::scatterTargetScalar))
+		// WeaponTemplate::parseScatterTarget: each line adds one (INI::parseCoord2D, "X:0.1 Y:-0.2"; a missing one is 0).
+		.On("ScatterTarget", [](const Node &node, WeaponContent &out, BindContext &) {
+			if (out.scatterTargets.size() >= engine::gameplay::ScatterTargetMax)
+				return;
+			Engine::Math::FixedVector2 target;
+			for (std::size_t index = 0; index < node.values.size(); ++index)
+			{
+				std::string_view token = node.values[index];
+				Engine::Math::Fixed *axis = token.starts_with("X:") || token.starts_with("x:") ? &target.x
+					: token.starts_with("Y:") || token.starts_with("y:") ? &target.y : nullptr;
+				if (axis == nullptr)
+					continue;
+				token.remove_prefix(2);
+				if (token.empty() && index + 1 < node.values.size())
+					token = node.values[++index];
+				*axis = engine::config::values::ParseFixed(token).value_or(Engine::Math::Fixed{});
+			}
+			out.scatterTargets.push_back(target);
+		})
 		.On("WeaponSpeed", [](const Node &node, WeaponContent &out, BindContext &bind) {
 			if (const auto value = engine::config::ReadPerSecond(node, bind))
 				out.simulation.speed = *value;
@@ -548,15 +680,21 @@ engine::config::DefinitionTable<WeaponContent> BuildWeaponCatalog(const engine::
 			out.projectileObject = std::string(node.Value());
 			out.simulation.projectile = !out.projectileObject.empty() && !detail::SameText(out.projectileObject, "NONE");
 		})
-		.On("FireFX", [](const Node &node, WeaponContent &out, BindContext &) { out.fireFX = std::string(node.Value()); })
-		.On("ProjectileDetonationFX", [](const Node &node, WeaponContent &out, BindContext &) { out.detonationFX = std::string(node.Value()); })
+		.On("FireFX", detail::AllLevels(&WeaponContent::fireFXs))
+		.On("ProjectileDetonationFX", detail::AllLevels(&WeaponContent::detonationFXs))
+		.On("VeterancyFireFX", detail::OneLevel(&WeaponContent::fireFXs))
+		.On("VeterancyProjectileDetonationFX", detail::OneLevel(&WeaponContent::detonationFXs))
+		.On("VeterancyFireOCL", detail::OneLevel(&WeaponContent::fireOCLs))
+		.On("VeterancyProjectileDetonationOCL", detail::OneLevel(&WeaponContent::detonationOCLs))
+		.On("VeterancyProjectileExhaust", detail::OneLevel(&WeaponContent::exhausts))
 		.On("AutoReloadsClip", [](const Node &node, WeaponContent &out, BindContext &) {
 			out.simulation.reloadsAtBase = detail::SameText(node.Value(), "RETURN_TO_BASE");
+			out.simulation.noReload = detail::SameText(node.Value(), "NO");
 		})
-		.On("FireOCL", [](const Node &node, WeaponContent &out, BindContext &) { out.fireOCL = std::string(node.Value()); })
-		.On("ProjectileDetonationOCL", [](const Node &node, WeaponContent &out, BindContext &) { out.detonationOCL = std::string(node.Value()); })
+		.On("FireOCL", detail::AllLevels(&WeaponContent::fireOCLs))
+		.On("ProjectileDetonationOCL", detail::AllLevels(&WeaponContent::detonationOCLs))
 		.On("FireSound", [](const Node &node, WeaponContent &out, BindContext &) { out.fireSound = std::string(node.Value()); })
-		.On("ProjectileExhaust", [](const Node &node, WeaponContent &out, BindContext &) { out.exhaust = std::string(node.Value()); })
+		.On("ProjectileExhaust", detail::AllLevels(&WeaponContent::exhausts))
 		.On("LaserName", [](const Node &node, WeaponContent &out, BindContext &) { out.laser = std::string(node.Value()); })
 		.On("ProjectileCollidesWith", [](const Node &node, WeaponContent &out, BindContext &) {
 			static constexpr std::pair<std::string_view, std::uint32_t> names[] = {{"ALLIES", engine::gameplay::weapon_collides::Allies},
@@ -572,21 +710,28 @@ engine::config::DefinitionTable<WeaponContent> BuildWeaponCatalog(const engine::
 						out.simulation.collides |= bit;
 		})
 		.On("LaserBoneName", [](const Node &node, WeaponContent &out, BindContext &) { out.laserBone = std::string(node.Value()); })
+		.On("ProjectileStreamName", [](const Node &node, WeaponContent &out, BindContext &) { out.projectileStream = std::string(node.Value()); })
+		// WeaponTemplate's historic bonus: HistoricBonusTime (parseDurationUnsignedInt), Radius, Count and Weapon.
+		.On("HistoricBonusTime", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadFixed(node, bind))
+				out.simulation.historicBonusTicks = detail::Ticks(value->Ceil(), bind.step);
+		})
+		.On("HistoricBonusRadius", detail::FixedField(&WeaponDefinition::historicBonusRadius))
+		.On("HistoricBonusCount", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadInt(node, bind))
+				out.simulation.historicBonusCount = static_cast<std::uint32_t>(std::max<std::int64_t>(*value, 0));
+		})
+		.On("HistoricBonusWeapon", [](const Node &node, WeaponContent &out, BindContext &) {
+			if (!node.Value().empty() && node.Value() != "None")
+				out.historicBonusWeapon = std::string(node.Value());
+		})
 		.On("WeaponBonus", [](const Node &node, WeaponContent &out, BindContext &bind) {
 			if (!out.extraBonus)
 				out.extraBonus.emplace();
 			ReadWeaponBonus(node, *out.extraBonus, bind);
 		});
-	// Recognised; ported with shock waves, scatter targets, bonuses, lasers, OCLs and veterancy.
-	for (const char *key : {"ScatterTargetScalar",
-			 "ScatterRadiusVsInfantry", "MinWeaponSpeed", "ScaleWeaponSpeed", "WeaponRecoil", "MinTargetPitch",
-			 "MaxTargetPitch", "RadiusDamageAngle",
-			 "VeterancyFireFX", "VeterancyProjectileDetonationFX", "VeterancyFireOCL", "VeterancyProjectileDetonationOCL",
-			 "VeterancyProjectileExhaust",
-			 "ShotsPerBarrel", "ProjectileStreamName",
-			 "HistoricBonusTime", "HistoricBonusRadius", "HistoricBonusCount", "HistoricBonusWeapon", "LeechRangeWeapon",
-			 "ScatterTarget", "CapableOfFollowingWaypoints", "ShowsAmmoPips", "AllowAttackGarrisonedBldgs", "PlayFXWhenStealthed",
-			 "ContinueAttackRange", "SuspendFXDelay", "MissileCallsOnDie"})
+	// Recognised, not ported yet.
+	for (const char *key : {"CapableOfFollowingWaypoints"})
 		schema.Ignore(key);
 	engine::config::DefinitionTable<WeaponContent> weapons;
 	engine::config::BindBlocks(document, "Weapon", schema, weapons, context, engine::config::Redefinition::Replace);
@@ -786,6 +931,7 @@ ObjectCombat ReadObjectCombat(const ObjectDefinition &object, const engine::time
 						combat.slotWeapons[index] = std::string(child.Value(1));
 				}
 			combat.primaryWeapon = combat.slotWeapons[0];
+			combat.slotRules = ReadSlotRules(*set);
 		}
 	return combat;
 }

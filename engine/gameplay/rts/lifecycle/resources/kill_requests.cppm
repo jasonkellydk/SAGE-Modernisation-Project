@@ -14,6 +14,7 @@ struct TypedKill
 	ecs::Entity entity;
 	std::uint32_t damageType{0};
 	std::uint32_t deathType{0};
+	ecs::Entity killer; // scoreTheKill: whose kill it counts as (none: nobody's)
 };
 
 struct KillRequests

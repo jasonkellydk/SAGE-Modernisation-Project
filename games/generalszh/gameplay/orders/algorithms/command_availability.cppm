@@ -118,6 +118,19 @@ inline ButtonState CommandAvailability(GameWorld &game, ecs::Entity entity, cons
 	if ((button.options & bo::NotQueueable) != 0 && queue != nullptr && queue->count > 0)
 		return ButtonState::Restricted;
 	const bool queueMaxed = queue != nullptr && queue->count >= gp::ProductionQueue::MaxEntries;
+	// COMBATDROP: nobody aboard who can rappel (getRappellerCount: KINDOF_CAN_RAPPEL riders), restricted.
+	if (button.commandName == "COMBATDROP")
+	{
+		std::size_t rappellers = 0;
+		for (const ecs::Entity rider : game.manifest.Aboard(entity))
+			if (const auto *ref = world.Get<gp::DefinitionRef>(rider); ref != nullptr && game.templates.DefinitionAt(ref->index).Is("CAN_RAPPEL"))
+				++rappellers;
+		if (rappellers == 0)
+			return ButtonState::Restricted;
+	}
+	// EXIT_CONTAINER: a rider's inventory button is greyed while its container is subdued (DISABLED_SUBDUED).
+	if (button.commandName == "EXIT_CONTAINER" && (mask & gp::disabled_type::Subdued) != 0)
+		return ButtonState::Restricted;
 	switch (button.command)
 	{
 	case ButtonCommand::UnitBuild:

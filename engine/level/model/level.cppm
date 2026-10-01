@@ -229,6 +229,8 @@ struct Level
 	TerrainSurface surface;
 	std::vector<Placement> placements;
 	std::vector<Marker> markers;
+	// Every marker link (from, to) in the order the level gives them (each marker's `links` keeps only its own).
+	std::vector<std::array<std::uint32_t, 2>> markerLinks;
 	std::vector<Region> regions;
 	Lighting lighting;
 	Scenario scenario;

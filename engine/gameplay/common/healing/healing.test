@@ -130,7 +130,7 @@ BOOST_AUTO_TEST_CASE(a_self_healer_heals_while_hurt_and_waits_after_a_hit)
 	Field field(2);
 	const ecs::Entity truck = field.Unit(0, 100, 50, 100);
 	field.world.Add<SelfHealing>(truck);
-	*field.world.Get<SelfHealing>(truck) = {Fixed::FromInt(2), 30, 60, 0};
+	field.world.Get<SelfHealing>(truck)->Add({Fixed::FromInt(2), 30, 60, 0});
 	for (int step = 0; step < 90; ++step)
 		field.Step();
 	BOOST_TEST(field.HitPoints(truck) == 56); // ticks 1, 31, 61
@@ -161,9 +161,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_self_healing_runs_only_while_disabled_the_way
 	const ecs::Entity healer = field.Unit(0, 100, 50, 100);
 	const ecs::Entity plant = field.Unit(0, 300, 50, 100);
 	field.world.Add<SelfHealing>(healer);
-	*field.world.Get<SelfHealing>(healer) = {Fixed::FromInt(2), 3, 0, 0};
+	field.world.Get<SelfHealing>(healer)->Add({Fixed::FromInt(2), 3, 0, 0});
 	field.world.Add<SelfHealing>(plant);
-	*field.world.Get<SelfHealing>(plant) = {Fixed::FromInt(2), 3, 0, 0, disabled_type::Underpowered};
+	field.world.Get<SelfHealing>(plant)->Add({Fixed::FromInt(2), 3, 0, 0, disabled_type::Underpowered});
 	for (const ecs::Entity entity : {healer, plant})
 		field.world.Add<Disabled>(entity);
 	field.world.Get<Disabled>(healer)->mask = disabled_type::Underpowered;

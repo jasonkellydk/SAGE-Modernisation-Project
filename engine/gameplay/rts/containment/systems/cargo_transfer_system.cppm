@@ -1,6 +1,11 @@
 export module engine.gameplay.rts.containment.systems.cargo_transfer_system;
+import Engine.Core.Math.FixedRandom;
+import engine.gameplay.common.random.resources.random_seed;
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.common.physics.algorithms.forces;
 import std;
 
+export import engine.gameplay.rts.containment.components.drop_homing;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.containment.resources.drop_settings;
 export import engine.gameplay.rts.containment.components.transport;
@@ -30,9 +35,10 @@ struct CargoTransferSystem
 {
 	using Query = ecs::Query<ecs::Read<Transport>>;
 	using Lookup = ecs::Lookup<ecs::Read<Transport>, ecs::Read<Transform>, ecs::Read<CargoSize>, ecs::Read<Passenger>, ecs::Read<MoveOrder>,
-		ecs::Read<AttackTarget>, ecs::Read<Targetable>, ecs::Read<PhysicsBody>, ecs::Read<Aggression>, ecs::Read<Owner>, ecs::Read<ExitIntent>>;
+		ecs::Read<AttackTarget>, ecs::Read<Targetable>, ecs::Read<PhysicsBody>, ecs::Read<Aggression>, ecs::Read<Owner>, ecs::Read<ExitIntent>,
+		ecs::Read<DropHoming>, ecs::Read<Garrison>, ecs::Read<Attitude>>;
 	using Resources = ecs::Resources<ecs::Read<DropSettings>, ecs::Read<BoardRequests>, ecs::Read<ExitRequests>, ecs::Read<RiderExits>, ecs::Read<DropExits>,
-		ecs::Read<IntentExits>, ecs::Write<CargoManifest>, ecs::Read<GroundHeight>>;
+		ecs::Read<PlacedExits>, ecs::Read<IntentExits>, ecs::Write<CargoManifest>, ecs::Read<GroundHeight>, ecs::Read<RandomSeed>>;
 
 	// How fast a parachute comes down (units per tick).
 
@@ -83,7 +89,9 @@ struct CargoTransferSystem
 			const CargoSize *size = lookup.Get<CargoSize>(request.passenger);
 			const std::uint32_t slots = network ? 1u : size != nullptr ? size->slots : 1u;
 			std::uint32_t &used = network ? headsIn(request.transport, *network) : load(request.transport, *transport);
-			if (used + slots > transport->definition.slots)
+			// A rider-change container (RiderChangeContain::isValidContainerFor: capacity unchecked) takes a new rider when full:
+			// the game has the new one throw the old one off.
+			if (used + slots > transport->definition.slots && !transport->definition.deletesRiders)
 				return;
 			used += slots;
 			commands.Add<Passenger>(request.passenger, Passenger{request.transport, slots, 0, tick});
@@ -110,6 +118,37 @@ struct CargoTransferSystem
 		std::uint32_t door = 0;
 		std::vector<ecs::Entity> doorsOpened; // carriers someone got out of this tick (exitObjectViaDoor)
 		// The next passenger out of an unloading transport, then those let out by name (healed).
+		const std::uint64_t seed = context.Read<RandomSeed>().value ^ 0x6A77u;
+		// TransportContain::onRemoving: ExitBone puts it where that bone of the carrier is (turned with the carrier's
+		// facing); OrientLikeContainerOnExit turns it the carrier's way, upright; KeepContainerVelocityOnExit pushes it
+		// with the carrier's velocity times its mass (applyMotiveForce) and pitches it at its CenterOfMassOffset times
+		// ExitPitchRate. `velocity`: the carrier's (a delivery's: how far it went this tick; else its body's). True when it
+		// changed the body.
+		const auto removing = [&](const Transport &transport, const Transform &from, ecs::Entity passenger, Transform &placed,
+								  std::optional<PhysicsBody> &body, const Engine::Math::FixedVector3 &velocity) {
+			const TransportDefinition &definition = transport.definition;
+			if (definition.hasExitBone != 0)
+			{
+				const Engine::Math::Fixed c = Engine::Math::Cos(from.facing), s = Engine::Math::Sin(from.facing);
+				const Engine::Math::FixedVector3 &bone = definition.exitBone;
+				placed.position = from.position + Engine::Math::FixedVector3{bone.x * c - bone.y * s, bone.x * s + bone.y * c, bone.z};
+			}
+			if (definition.orientOnExit)
+			{
+				placed.facing = from.facing;
+				if (lookup.Get<Attitude>(passenger) != nullptr)
+					commands.Set<Attitude>(passenger, Attitude{});
+			}
+			if (!definition.keepVelocityOnExit || !body.has_value())
+				return false;
+			ApplyMotiveForce(*body, velocity * body->mass, context.Tick());
+			body->pitchRate = static_cast<std::int32_t>(Engine::Math::TurnFromRadians(body->centerOfMassOffset * definition.exitPitchRate).units);
+			return true;
+		};
+		const auto carrierVelocity = [&](ecs::Entity carrier) {
+			const PhysicsBody *body = lookup.Get<PhysicsBody>(carrier);
+			return body != nullptr ? body->velocity : Engine::Math::FixedVector3{};
+		};
 		const auto exit = [&](ecs::Entity carrier, ecs::Entity passenger, const DropExit *placement = nullptr) {
 			const Transport *transport = lookup.Get<Transport>(carrier);
 			const Transform *from = lookup.Get<Transform>(carrier);
@@ -145,17 +184,62 @@ struct CargoTransferSystem
 					placed.position.z += placement->offset.z;
 					if (placement->moves && lookup.Get<MoveOrder>(passenger) != nullptr)
 						commands.Set<MoveOrder>(passenger, MoveToPoint(placement->moveTo));
+					// DeliverPayloadAIUpdate: a smart bomb is told its spot (SmartBombTargetHomingUpdate::SetTargetPosition).
+					if (const DropHoming *homing = lookup.Get<DropHoming>(passenger))
+					{
+						DropHoming told = *homing;
+						told.target = placement->moveTo;
+						told.received = 1;
+						commands.Set<DropHoming>(passenger, told);
+					}
 				}
-				commands.Set<Transform>(passenger, placed);
 				const PhysicsBody *body = lookup.Get<PhysicsBody>(passenger);
+				std::optional<PhysicsBody> pushed;
+				if (body != nullptr)
+					pushed = *body;
+				// DeliveringState::update: InheritTransportVelocity, the carrier's velocity applied to it as a force.
+				const bool inherited = placement != nullptr && placement->inherit && pushed.has_value();
+				if (inherited)
+					ApplyForce(*pushed, placement->velocity);
+				const bool kept = removing(*transport, *from, passenger, placed, pushed, placement != nullptr ? placement->velocity : carrierVelocity(carrier));
+				commands.Set<Transform>(passenger, placed);
+				if (inherited || kept)
+					commands.Set<PhysicsBody>(passenger, *pushed);
 				if (body == nullptr || body->Has(physics_flag::Locomotive))
 					commands.Add<Descent>(passenger, Descent{drop.fallRate});
+				return;
+			}
+			// GarrisonContain::exitObjectViaDoor with its evacuation to one side (EVAC_TO_LEFT / EVAC_TO_RIGHT): out at a random
+			// spot beside it (along its length within a quarter of its half length, out from half to twice its half width),
+			// walking on to a random spot ten half widths out on that side; the building's frame turns them.
+			if (const Garrison *garrison = lookup.Get<Garrison>(carrier); garrison != nullptr && (garrison->evac == 1 || garrison->evac == 2))
+			{
+				using Engine::Math::Fixed;
+				auto random = Engine::Math::Stream(seed, {context.Tick(), passenger.index, passenger.generation, 0xE7ACu});
+				const Fixed sign = garrison->evac == 1 ? Fixed::One() : Fixed{} - Fixed::One();
+				const Fixed length = garrison->halfLength, width = garrison->halfWidth;
+				const Fixed doorX = Engine::Math::UniformFixed(random, Fixed{} - length / Fixed::FromInt(4), length / Fixed::FromInt(4));
+				const Fixed doorY = Engine::Math::UniformFixed(random, width / Fixed::FromInt(2), width * Fixed::FromInt(2)) * sign;
+				const Fixed walkX = Engine::Math::UniformFixed(random, Fixed{} - length, length);
+				const Fixed walkY = width * Fixed::FromInt(10) * sign;
+				const Fixed c = Engine::Math::Cos(from->facing), s = Engine::Math::Sin(from->facing);
+				const auto place = [&](Fixed x, Fixed y) { return Engine::Math::FixedVector2{from->position.x + x * c - y * s, from->position.y + x * s + y * c}; };
+				const auto start = place(doorX, doorY);
+				commands.Set<Transform>(passenger, Transform{{start.x, start.y, from->position.z}, from->facing});
+				if (lookup.Get<MoveOrder>(passenger) != nullptr)
+					commands.Set<MoveOrder>(passenger, MoveToPoint(place(walkX, walkY)));
 				return;
 			}
 			// Out beside the transport, stepping clear of it.
 			const auto side = Engine::Math::Direction(from->facing + Engine::Math::TurnAngle{0x40000000u * (++door % 4)});
 			const auto out = from->position.XY() + side * Engine::Math::Fixed::FromInt(15);
-			commands.Set<Transform>(passenger, Transform{{out.x, out.y, ground.At(out)}, from->facing});
+			Transform placed{{out.x, out.y, ground.At(out)}, from->facing};
+			std::optional<PhysicsBody> pushed;
+			if (const PhysicsBody *body = lookup.Get<PhysicsBody>(passenger))
+				pushed = *body;
+			if (removing(*transport, *from, passenger, placed, pushed, carrierVelocity(carrier)))
+				commands.Set<PhysicsBody>(passenger, *pushed);
+			commands.Set<Transform>(passenger, placed);
 			if (lookup.Get<MoveOrder>(passenger) != nullptr)
 				commands.Set<MoveOrder>(passenger, MoveToPoint(out + side * Engine::Math::Fixed::FromInt(20)));
 		};
@@ -163,6 +247,26 @@ struct CargoTransferSystem
 		riderExits.ForEach([&](const RiderExit &request) { exit(request.transport, manifest.Take(request.transport, request.rider)); });
 		context.Read<IntentExits>().ForEach([&](const RiderExit &request) { exit(request.transport, manifest.Take(request.transport, request.rider)); });
 		context.Read<DropExits>().ForEach([&](const DropExit &dropped) { exit(dropped.transport, manifest.TakeNext(dropped.transport), &dropped); });
+		context.Read<PlacedExits>().ForEach([&](const PlacedExit &placed) {
+			const ecs::Entity rider = manifest.Take(placed.transport, placed.rider);
+			if (!lookup.IsAlive(rider))
+				return;
+			exit(placed.transport, rider);
+			// Not stepping clear of it on foot nor sinking: where it is put, its own AI to say what next.
+			commands.Set<Transform>(rider, Transform{placed.at, placed.facing});
+			if (lookup.Get<MoveOrder>(rider) != nullptr)
+				commands.Set<MoveOrder>(rider, MoveOrder{});
+			commands.Remove<Descent>(rider);
+			if (const PhysicsBody *body = lookup.Get<PhysicsBody>(rider))
+			{
+				PhysicsBody free = *body;
+				free.velocity = {};
+				free.acceleration = {};
+				free.Set(physics_flag::AllowToFall, true);
+				free.Set(physics_flag::PhysicsDriven, true);
+				commands.Set<PhysicsBody>(rider, free);
+			}
+		});
 
 		for (const auto &[entity, network] : networked)
 			for (const auto &[id, count] : heads)

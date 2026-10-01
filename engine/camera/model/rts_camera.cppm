@@ -1482,4 +1482,10 @@ private:
 
 	CameraView m_view;
 };
+
+// How much faster than the game's speed the view's time multiplier runs it (View::setTimeMultiplier, a scripted camera's
+// CAMERA_MOD_SET_FINAL_SPEED_MULTIPLIER or SET_VISUAL_SPEED_MULTIPLIER): above 1, W3DDisplay::draw drew one frame in that
+// many and FramePacer lifted the frame-rate limit, the logic running that many frames for each one drawn while the
+// view itself moved on at its drawn frames; at 1 or below, as usual.
+inline int FastForwardFactor(int timeMultiplier) noexcept { return timeMultiplier > 1 ? timeMultiplier : 1; }
 } // namespace engine::camera

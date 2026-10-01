@@ -289,6 +289,52 @@ public:
 		return true;
 	}
 
+	// The window's enabled image `cell` (winSetEnabledImage(cell, ...): a background, a progress bar's centre at 6) is the
+	// one `source` names, sized as `size` gives it; empty: the layout's own image there.
+	bool BindCellImage(std::string_view window, std::size_t cell, engine::gui::mvvm::Observable<std::string> &source,
+		std::function<ImageRef(std::string_view)> resolve, std::function<std::optional<std::pair<int, int>>(std::string_view)> size)
+	{
+		WNDWindow *found = m_document.Find_Window(window);
+		if (found == nullptr || cell >= WND_Draw_Cell_Count)
+			return Missing(window);
+		const std::string name(window);
+		const WNDDrawCell authored = found->draw_states[0].cells[cell];
+		const auto id = source.Subscribe([this, name, cell, authored, resolve = std::move(resolve), size = std::move(size)](const std::string &image) {
+			if (WNDWindow *target = m_document.Find_Window(name))
+			{
+				WNDDrawCell &shown = target->draw_states[0].cells[cell];
+				if (image.empty())
+					shown = authored;
+				else
+				{
+					shown.image_name = image;
+					shown.image = resolve ? resolve(image) : ImageRef{};
+					const auto extent = size ? size(image) : std::nullopt;
+					shown.image_width = extent ? static_cast<std::uint32_t>(extent->first) : 0u;
+					shown.image_height = extent ? static_cast<std::uint32_t>(extent->second) : 0u;
+				}
+			}
+			m_dirty = true;
+		});
+		m_releases.push_back([&source, id] { source.Unsubscribe(id); });
+		return true;
+	}
+
+	// A push button's overlay image (GadgetButtonDrawOverlayImage) is the one `source` names (empty: none).
+	bool BindOverlay(std::string_view window, engine::gui::mvvm::Observable<std::string> &source, std::function<ImageRef(std::string_view)> resolve)
+	{
+		if (m_document.Find_Window(window) == nullptr)
+			return Missing(window);
+		const std::string name(window);
+		const auto id = source.Subscribe([this, name, resolve = std::move(resolve)](const std::string &image) {
+			if (WNDWindow *target = m_document.Find_Window(name))
+				target->overlay_image = image.empty() || !resolve ? ImageRef{} : resolve(image);
+			m_dirty = true;
+		});
+		m_releases.push_back([&source, id] { source.Unsubscribe(id); });
+		return true;
+	}
+
 	// A push button's clock follows `perMille` (0..1000, shown as whole percent as the original's Int percent), swept
 	// in `color`; `remaining`: the inverse clock (the part still to go darkened).
 	bool BindClock(std::string_view window, engine::gui::mvvm::Observable<std::uint32_t> &perMille, Graphics::Color2D color, bool remaining)

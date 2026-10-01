@@ -13,7 +13,7 @@ import engine.gameplay.rts.stealth.components.stealth;
 // A team's common target (Team::m_commonAttackTarget, teamAttackCommonTarget): the first victim a member of a team that
 // attacks together fires at (AIAttackFireWeaponState::onEnter: setTeamTargetObject while the team has none) becomes
 // the team's, for a computer player not on easy; the others then go for it (getNextMoodTarget; the tunnel guards).
-// getTeamTargetObject lets it go once it is dead, hidden (stealthed and undetected; disguises are not ported), aboard
+// getTeamTargetObject lets it go once it is dead, hidden (stealthed, undetected and not disguised), aboard
 // something or an aircraft.
 export namespace generalszh::gameplay
 {
@@ -38,7 +38,7 @@ inline bool CommonTargetValid(const GameWorld &game, ecs::Entity target)
 	namespace gp = engine::gameplay;
 	if (target == ecs::Entity{} || EffectivelyDead(game, target) || game.world.Has<gp::OffMap>(target))
 		return false;
-	if (const auto *stealth = game.world.Get<gp::Stealth>(target); stealth != nullptr && stealth->Hidden())
+	if (const auto *stealth = game.world.Get<gp::Stealth>(target); stealth != nullptr && stealth->HiddenUndisguised())
 		return false;
 	const auto *targetable = game.world.Get<gp::Targetable>(target);
 	return targetable == nullptr || (targetable->classes & gp::target_class::Aircraft) == 0;

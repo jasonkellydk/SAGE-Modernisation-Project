@@ -48,6 +48,22 @@ struct ControlBarSchemeContent
 		const auto found = namedImages.find(key);
 		return found == namedImages.end() ? std::string_view{} : std::string_view(found->second);
 	}
+
+	// ControlBar::setUpDownImages: the minimise button's (ButtonLarge) images, enabled, pointed at and pressed while
+	// pointed at: the scheme's ToggleButtonUp* while the bar is minimised (CONTROL_BAR_STAGE_LOW), its ToggleButtonDown*
+	// at any other stage. (Its MinMaxButton* images are never applied: ControlBarScheme::init has them commented out.)
+	struct ToggleImages
+	{
+		std::string_view enabled, hilite, hiliteSelected;
+	};
+	ToggleImages MinimizeButtonImages(bool minimised) const
+	{
+		return minimised ? ToggleImages{Image("ToggleButtonUpOn"), Image("ToggleButtonUpIn"), Image("ToggleButtonUpPushed")}
+			: ToggleImages{Image("ToggleButtonDownOn"), Image("ToggleButtonDownIn"), Image("ToggleButtonDownPushed")};
+	}
+
+	// The right HUD's own image (RightHUDImage: ControlBarScheme::init -> updateRightHUDImage).
+	std::string_view RightHudImage() const { return Image("RightHUDImage"); }
 };
 
 struct ControlBarSchemes

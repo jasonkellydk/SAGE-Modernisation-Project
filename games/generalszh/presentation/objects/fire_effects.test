@@ -1,0 +1,178 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.algorithms.tick_effects;
+import games.generalszh.presentation.interaction.resources.interaction_resources;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.combat.resources.shots;
+import engine.gameplay.rts.combat.systems.auto_fire_system;
+import engine.gameplay.common.identity.components.owner;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(fire_effects)
+
+// Weapon::fireWeaponTemplate's fire FX and Object::isLogicallyVisible: a Crusader's CrusaderTankGun fire FX (WeaponFX_GenericTankGunNoTracer) is asked for
+// where it fired; stealthed and not detected, a GLA player watching (not its ally) gets none, while America (its own)
+// still does; detected again, the GLA watcher sees it too. (A mine, or a weapon with PlayFXWhenStealthed, always shows.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stealthed_firer_shows_no_fire_fx_to_its_enemies)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", at, {}, america);
+	const ecs::Entity target = game.Place("GLATankScorpion", at + FixedVector2{Fixed::FromInt(100), Fixed{}}, {}, gla);
+	auto &health = *world.Get<gp::Health>(target);
+	health.maximum = health.current = Fixed::FromInt(100000);
+	world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+	gameplay::OrderAttack(game.Game(), tank, target);
+	bool fired = false;
+	for (int tick = 0; tick < 200 && !fired; ++tick)
+	{
+		game.Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { fired = fired || shot.source == tank; });
+	}
+	BOOST_TEST_REQUIRE(fired);
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<LookCatalog>();
+	auto &local = world.EmplaceResource<LocalPlayer>();
+	const auto asked = [&](std::uint32_t watcher) {
+		local = LocalPlayer{watcher, true};
+		auto &fx = world.Resource<FxRequests>();
+		fx.pending.clear();
+		QueueTickEffects(fx, world.Resource<LookCatalog>(), game);
+		bool any = false;
+		for (const auto &request : fx.pending)
+			any = any || (request.firedBy == tank && request.fx == "WeaponFX_GenericTankGunNoTracer");
+		return any;
+	};
+	const std::uint32_t glaPlayer = game.Teams().TeamAt(gla).owner, americaPlayer = game.Teams().TeamAt(america).owner;
+	BOOST_TEST(asked(glaPlayer));
+	if (!world.Has<gp::Stealth>(tank))
+		world.Add<gp::Stealth>(tank);
+	world.Get<gp::Stealth>(tank)->flags = gp::stealth_flag::CanStealth | gp::stealth_flag::Stealthed;
+	BOOST_TEST(!asked(glaPlayer));
+	BOOST_TEST(asked(americaPlayer));
+	world.Get<gp::Stealth>(tank)->Set(gp::stealth_flag::Detected, true);
+	BOOST_TEST(asked(glaPlayer));
+}
+
+// FireWeaponUpdate's forceFireWeapon and Weapon::m_suspendFXFrame (SuspendFXDelay): the shipped NukeRadiationFieldWeapon
+// object fires its NukeRadiationFieldWeapon (DelayBetweenShots 750, SuspendFXDelay 10000 = 300 frames) at itself; its
+// pulses show no FX until 300 frames after it was made, then WeaponFX_LargeRadiationFieldWeapon at each, sized by its
+// PrimaryDamageRadius 200 (UseCallersRadius).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_radiation_field_holds_its_fx_back_at_first)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<LookCatalog>();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	world.EmplaceResource<LocalPlayer>(LocalPlayer{game.Teams().TeamAt(gla).owner, true});
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const std::uint64_t made = game.CurrentTick();
+	const ecs::Entity field = game.Place("NukeRadiationFieldWeapon", low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)}, {}, gla);
+	std::size_t quietPulses = 0, shownPulses = 0;
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		game.Tick();
+		bool pulsed = false;
+		world.Resource<gp::AutoShots>().ForEach([&](const gp::Shot &shot) { pulsed = pulsed || shot.source == field; });
+		if (!pulsed)
+			continue;
+		auto &fx = world.Resource<FxRequests>();
+		fx.pending.clear();
+		QueueTickEffects(fx, world.Resource<LookCatalog>(), game);
+		const FxRequest *shown = nullptr;
+		for (const auto &request : fx.pending)
+			if (request.firedBy == field)
+				shown = &request;
+		if (game.CurrentTick() < made + 300)
+		{
+			BOOST_TEST(shown == nullptr);
+			++quietPulses;
+		}
+		else
+		{
+			BOOST_TEST_REQUIRE(shown != nullptr);
+			BOOST_TEST(shown->fx == "WeaponFX_LargeRadiationFieldWeapon");
+			BOOST_TEST(shown->radius == 200.0f);
+			++shownPulses;
+		}
+	}
+	BOOST_TEST(quietPulses > 0u);
+	BOOST_TEST(shownPulses > 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

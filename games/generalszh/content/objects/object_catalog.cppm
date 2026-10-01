@@ -39,7 +39,24 @@ bool AddModule(const Node &node, ObjectDefinition &out, BindContext &context, Mo
 	// modules of the same slot unless those were declared inheritable.
 	// The original narrows this by module interface category; that rule is
 	// applied once module types carry their categories (see the ledger).
-	std::erase_if(out.modules, [&](const ModuleEntry &entry) { return entry.copied && !entry.inheritable && entry.slot == slot; });
+	// A copied default module overrideable by like kind (ModuleInfo::clearCopiedFromDefaultEntries: the default
+	// StealthUpdate the GPS scrambler grants) goes only when one of its type is declared, or when the object, as its
+	// kinds stand so far, is one the scrambler never cloaks (aircraft, shrubbery, structures, boats, bridges and the
+	// like) or none of its candidates (SCORE, VEHICLE, INFANTRY, PORTABLE_STRUCTURE).
+	const std::string_view declared = node.values[0];
+	const auto likeKindGoes = [&](const ModuleEntry &entry) {
+		static constexpr std::array<KindOfName, 16> immune{"AIRCRAFT", "SHRUBBERY", "OPTIMIZED_TREE", "STRUCTURE", "DRAWABLE_ONLY", "MOB_NEXUS",
+			"IGNORED_IN_GUI", "CLEARED_BY_BUILD", "DEFENSIVE_WALL", "BALLISTIC_MISSILE", "SUPPLY_SOURCE", "BOAT", "INERT", "BRIDGE",
+			"LANDMARK_BRIDGE", "BRIDGE_TOWER"};
+		static constexpr std::array<KindOfName, 4> candidates{"SCORE", "VEHICLE", "INFANTRY", "PORTABLE_STRUCTURE"};
+		const auto any = [&](const auto &kinds) { return std::ranges::any_of(kinds, [&](KindOfName kind) { return HasKindOf(out.kinds, kind.bit); }); };
+		return entry.type == declared || any(immune) || !any(candidates);
+	};
+	std::erase_if(out.modules, [&](const ModuleEntry &entry) {
+		if (!entry.copied || entry.inheritable || entry.slot != slot)
+			return false;
+		return !entry.overrideableByLikeKind || likeKindGoes(entry);
+	});
 	ModuleEntry entry;
 	entry.slot = slot;
 	entry.type = std::string(node.values[0]);
@@ -86,6 +103,10 @@ void AddSounds(Schema<ObjectDefinition> &schema)
 		for (const Node &entry : node.children)
 			out.sounds.insert_or_assign(std::string(entry.key), std::string(entry.Value()));
 	});
+	schema.On("UnitSpecificFX", [](const Node &node, ObjectDefinition &out, BindContext &) {
+		for (const Node &entry : node.children)
+			out.unitFx.insert_or_assign(std::string(entry.key), std::string(entry.Value()));
+	});
 }
 
 void AddCommon(Schema<ObjectDefinition> &schema)
@@ -94,6 +115,11 @@ void AddCommon(Schema<ObjectDefinition> &schema)
 	schema.String("DisplayName", &ObjectDefinition::displayName)
 		.String("ButtonImage", &ObjectDefinition::buttonImage)
 		.String("SelectPortrait", &ObjectDefinition::selectPortrait)
+		.On("UpgradeCameo1", [](const Node &node, ObjectDefinition &out, BindContext &) { out.upgradeCameos[0] = std::string(node.Value()); })
+		.On("UpgradeCameo2", [](const Node &node, ObjectDefinition &out, BindContext &) { out.upgradeCameos[1] = std::string(node.Value()); })
+		.On("UpgradeCameo3", [](const Node &node, ObjectDefinition &out, BindContext &) { out.upgradeCameos[2] = std::string(node.Value()); })
+		.On("UpgradeCameo4", [](const Node &node, ObjectDefinition &out, BindContext &) { out.upgradeCameos[3] = std::string(node.Value()); })
+		.On("UpgradeCameo5", [](const Node &node, ObjectDefinition &out, BindContext &) { out.upgradeCameos[4] = std::string(node.Value()); })
 		.String("EditorSorting", &ObjectDefinition::editorSorting)
 		.Fixed("VisionRange", &ObjectDefinition::visionRange)
 		.Fixed("ShroudClearingRange", &ObjectDefinition::shroudClearingRange)
@@ -193,6 +219,7 @@ Schema<ObjectDefinition> ObjectSchema()
 		})
 		.Fixed("Scale", &ObjectDefinition::scale)
 		.Fixed("InstanceScaleFuzziness", &ObjectDefinition::instanceScaleFuzziness)
+		.Fixed("FenceWidth", &ObjectDefinition::fenceWidth)
 		.Integer("ThreatValue", &ObjectDefinition::threat)
 		.Fixed("StructureRubbleHeight", &ObjectDefinition::structureRubbleHeight)
 		.On("KindOf", [](const Node &node, ObjectDefinition &out, BindContext &context) {

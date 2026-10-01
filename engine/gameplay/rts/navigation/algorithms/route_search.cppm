@@ -3,6 +3,7 @@ import std;
 
 export import engine.gameplay.rts.navigation.resources.navigation_grid;
 export import engine.gameplay.rts.navigation.algorithms.clearance;
+export import engine.gameplay.rts.navigation.algorithms.unit_movement;
 
 // Ground routes over a clearance plane, deterministic and allocation free
 // once warm (the scratch is reused, stamped by generation):
@@ -20,9 +21,14 @@ export import engine.gameplay.rts.navigation.algorithms.clearance;
 //   (then the cheapest to get to).
 //   Smoothing: from each kept point, on to the farthest later point in
 //   straight sight (every cell the segment passes through, corners included,
-//   open), so routes run straight across open ground and turn at corners.
+//   open, and with the units no unit standing fixed in the mover's footprint
+//   there), so routes run straight across open ground and turn at corners.
 // Points are cell centres; the first is where the mover is, the last the
 // goal itself when that was reached.
+// With the units (RouteUnits: Pathfinder::examineNeighboringCells over checkForMovement): a cell a unit that is no ally
+// stands fixed in (and the mover does not crush) is closed; one an ally stands fixed in costs 3 diagonal steps (42) more
+// and marks the route blocked by allies; one an ally passes through within 10 cells of the start costs 42 more. A mover
+// starting among units it may not pass tunnels (as from a blocked start) until it reaches a cell it may.
 export namespace engine::gameplay
 {
 struct RouteMover
@@ -37,40 +43,94 @@ struct RouteMover
 
 struct RouteScratch
 {
-	std::vector<std::uint32_t> cost;
-	std::vector<std::int32_t> parent;
-	std::vector<std::uint32_t> seen;   // generation a cell was reached in
-	std::vector<std::uint32_t> closed; // generation it was expanded in
+	// A cell's search state in one record (one cache line holds four cells' worth, not four arrays' worth of misses).
+	struct Node
+	{
+		std::uint32_t cost;
+		std::int32_t parent;
+		std::uint32_t seen;   // generation it was reached in
+		std::uint32_t closed; // generation it was expanded in
+		std::int32_t x, y;    // where the cell is (set when it is reached)
+		std::uint8_t layer;
+		std::uint8_t allyBlocked; // an ally stands fixed in its footprint (setBlockedByAlly)
+	};
+	std::vector<Node> nodes;
 	std::uint32_t generation{0};
 	struct Entry
 	{
 		std::uint32_t f, h;
 		std::int32_t cell;
+		// Where it is (carried, not decoded from the index): layer and cell coordinates.
+		std::int32_t x, y;
+		std::uint8_t layer;
+		// Keys are unique (a cell is pushed again only with a lower cost), so the order is total.
 		bool operator>(const Entry &other) const noexcept
 		{
 			return f != other.f ? f > other.f : h != other.h ? h > other.h : cell > other.cell;
 		}
 	};
 	std::vector<Entry> heap;
+	// The open set as packed keys (f, then h, then cell, in one integer) in a 4-ary heap, when they fit 64 bits: the
+	// same order as `heap`, the cheapest compares and moves.
+	std::vector<std::uint64_t> keys;
 	std::vector<std::int32_t> cells;
+
+	void PushKey(std::uint64_t key)
+	{
+		keys.push_back(key);
+		std::size_t at = keys.size() - 1;
+		while (at > 0)
+		{
+			const std::size_t parent = (at - 1) / 4;
+			if (keys[parent] <= key)
+				break;
+			keys[at] = keys[parent];
+			at = parent;
+		}
+		keys[at] = key;
+	}
+	std::uint64_t PopKey()
+	{
+		const std::uint64_t top = keys.front();
+		const std::uint64_t last = keys.back();
+		keys.pop_back();
+		const std::size_t count = keys.size();
+		if (count == 0)
+			return top;
+		std::size_t at = 0;
+		for (;;)
+		{
+			const std::size_t first = at * 4 + 1;
+			if (first >= count)
+				break;
+			std::size_t least = first;
+			const std::size_t end = std::min(first + 4, count);
+			for (std::size_t child = first + 1; child < end; ++child)
+				least = keys[child] < keys[least] ? child : least;
+			if (keys[least] >= last)
+				break;
+			keys[at] = keys[least];
+			at = least;
+		}
+		keys[at] = last;
+		return top;
+	}
 
 	void Prepare(std::size_t count)
 	{
-		if (cost.size() != count)
+		if (nodes.size() != count)
 		{
-			cost.assign(count, 0);
-			parent.assign(count, -1);
-			seen.assign(count, 0);
-			closed.assign(count, 0);
+			nodes.assign(count, Node{0, -1, 0, 0, 0, 0, 0, 0});
 			generation = 0;
 		}
 		if (++generation == 0)
 		{
-			std::fill(seen.begin(), seen.end(), 0u);
-			std::fill(closed.begin(), closed.end(), 0u);
+			for (Node &node : nodes)
+				node.seen = node.closed = 0;
 			generation = 1;
 		}
 		heap.clear();
+		keys.clear();
 		cells.clear();
 	}
 };
@@ -81,6 +141,7 @@ struct FoundRoute
 	std::vector<std::uint8_t> layers; // each point's layer
 	bool reachedGoal{false};
 	bool exhausted{false}; // the budget ran out first
+	bool blockedByAlly{false}; // a cell along it has an ally standing fixed in the mover's footprint (Path::getBlockedByAlly)
 };
 
 namespace route_detail
@@ -141,8 +202,13 @@ bool InSight(std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1,
 }
 }
 
-inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &plane, RouteMover mover, Engine::Math::FixedVector2 from,
-	Engine::Math::FixedVector2 to, RouteScratch &scratch, std::uint8_t fromLayer = GroundLayer, std::uint8_t toLayer = GroundLayer)
+// The search both kinds of route share: toward a goal (`towardGoal`: A* to `to`, as above), or out from the start until a
+// ground cell other than the start that `accept(x, y)` takes (no goal: cost alone orders the search, Dijkstra; nothing
+// accepted within the budget: no route).
+template<typename Accept>
+inline FoundRoute SearchRoute(const NavigationGrid &grid, const ClearancePlane &plane, RouteMover mover, Engine::Math::FixedVector2 from,
+	Engine::Math::FixedVector2 to, RouteScratch &scratch, std::uint8_t fromLayer, std::uint8_t toLayer, const RouteUnits *units, bool towardGoal,
+	Accept &&accept)
 {
 	using namespace route_detail;
 	FoundRoute route;
@@ -159,6 +225,7 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 	const std::int32_t startX = clampX(CellOf(from.x)), startY = clampY(CellOf(from.y));
 	std::int32_t goalX = clampX(CellOf(to.x)), goalY = clampY(CellOf(to.y));
 	const bool ignoring = mover.ignored != ecs::Entity{};
+	bool unitTunnel = false; // among units it may not pass (m_isTunneling from checkForMovement)
 	// The ignored obstacle's own cells, and those it alone leaves too tight for the mover (within its reach of one of
 	// them, owned by no other obstacle), are open: it walks out of it, or into it.
 	const auto nearIgnored = [&](std::int32_t x, std::int32_t y) {
@@ -213,7 +280,7 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 		}
 		return false;
 	};
-	if (!openOn(toLayer, goalX, goalY))
+	if (towardGoal && !openOn(toLayer, goalX, goalY))
 		if (!adjust(toLayer) && toLayer != GroundLayer)
 		{
 			toLayer = GroundLayer;
@@ -251,56 +318,144 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 	// A start on a deck outside its cells stands on the ground.
 	if (fromLayer != GroundLayer && !grid.Decks()[fromLayer - 1].Contains(startX, startY))
 		fromLayer = GroundLayer;
-	const std::int32_t start = index(fromLayer, startX, startY), goal = index(toLayer, goalX, goalY);
-	scratch.cost[static_cast<std::size_t>(start)] = 0;
-	scratch.parent[static_cast<std::size_t>(start)] = -1;
-	scratch.seen[static_cast<std::size_t>(start)] = generation;
-	const std::uint32_t startH = Octile(startX, startY, goalX, goalY);
-	scratch.heap.push_back({startH, startH, start});
+	const std::int32_t start = index(fromLayer, startX, startY), goal = towardGoal ? index(toLayer, goalX, goalY) : -1;
+	RouteScratch::Node *const nodes = scratch.nodes.data();
+	nodes[start].cost = 0;
+	nodes[start].parent = -1;
+	nodes[start].seen = generation;
+	const std::uint32_t startH = towardGoal ? Octile(startX, startY, goalX, goalY) : 0u;
+	// Packed keys: f below 14 per step of the deepest path the budget allows plus the largest octile distance, h below
+	// that distance, the cell below the index space.
+	const std::uint64_t hLimit = 14u * (static_cast<std::uint64_t>(width) + static_cast<std::uint64_t>(height) + 2u);
+	const std::uint64_t fLimit = hLimit + 14u * (static_cast<std::uint64_t>(mover.budget) + 2u) + 14u;
+	const unsigned cellBits = static_cast<unsigned>(std::bit_width(static_cast<std::uint64_t>(grid.CellCount())));
+	const unsigned hBits = static_cast<unsigned>(std::bit_width(hLimit));
+	const unsigned fBits = static_cast<unsigned>(std::bit_width(fLimit));
+	const bool packed = cellBits + hBits + fBits <= 64 && Octile(0, 0, width, height) < hLimit;
+	const std::uint64_t cellMask = (std::uint64_t{1} << cellBits) - 1u, hMask = (std::uint64_t{1} << hBits) - 1u;
+	const auto pushOpen = [&](std::uint32_t f, std::uint32_t h, std::int32_t cell, std::int32_t cx, std::int32_t cy, std::uint8_t layer) {
+		if (packed)
+		{
+			RouteScratch::Node &node = scratch.nodes[static_cast<std::size_t>(cell)];
+			node.x = cx;
+			node.y = cy;
+			node.layer = layer;
+			scratch.PushKey((static_cast<std::uint64_t>(f) << (hBits + cellBits)) | (static_cast<std::uint64_t>(h) << cellBits) | static_cast<std::uint64_t>(cell));
+		}
+		else
+		{
+			scratch.heap.push_back({f, h, cell, cx, cy, layer});
+			std::push_heap(scratch.heap.begin(), scratch.heap.end(), std::greater<RouteScratch::Entry>{});
+		}
+	};
+	const auto openEmpty = [&] { return packed ? scratch.keys.empty() : scratch.heap.empty(); };
+	const auto popOpen = [&]() -> RouteScratch::Entry {
+		if (packed)
+		{
+			const std::uint64_t key = scratch.PopKey();
+			const auto cell = static_cast<std::int32_t>(key & cellMask);
+			const RouteScratch::Node &node = scratch.nodes[static_cast<std::size_t>(cell)];
+			return {static_cast<std::uint32_t>(key >> (hBits + cellBits)), static_cast<std::uint32_t>((key >> cellBits) & hMask), cell, node.x, node.y, node.layer};
+		}
+		std::pop_heap(scratch.heap.begin(), scratch.heap.end(), std::greater<RouteScratch::Entry>{});
+		const RouteScratch::Entry entry = scratch.heap.back();
+		scratch.heap.pop_back();
+		return entry;
+	};
+	pushOpen(startH, startH, start, startX, startY, fromLayer);
+	nodes[start].allyBlocked = 0;
+	// A start among units it may not pass: it tunnels out (checkForMovement on the start cell).
+	if (units != nullptr && fromLayer == GroundLayer && CheckForMovement(*units, startX, startY, mover.radius).enemyFixed)
+		unitTunnel = true;
 	std::int32_t best = start;
 	std::uint32_t bestH = startH, bestCost = 0;
 	bool found = false;
+	std::int32_t accepted = -1;
 	std::uint32_t expanded = 0;
 	static constexpr std::array<std::array<std::int32_t, 2>, 8> steps{{{1, 0}, {0, 1}, {-1, 0}, {0, -1}, {1, 1}, {-1, 1}, {-1, -1}, {1, -1}}};
-	const auto later = std::greater<RouteScratch::Entry>{};
-	const auto relax = [&](std::size_t at, std::int32_t from, std::size_t next, std::uint32_t step, std::int32_t nx, std::int32_t ny) {
-		if (scratch.closed[next] == generation)
-			return;
-		const std::uint32_t candidate = scratch.cost[at] + step;
-		if (scratch.seen[next] == generation && candidate >= scratch.cost[next])
-			return;
-		scratch.seen[next] = generation;
-		scratch.cost[next] = candidate;
-		scratch.parent[next] = from;
-		const std::uint32_t h = Octile(nx, ny, goalX, goalY);
-		scratch.heap.push_back({candidate + h, h, static_cast<std::int32_t>(next)});
-		std::push_heap(scratch.heap.begin(), scratch.heap.end(), later);
-	};
-	while (!scratch.heap.empty())
+	// The units about a ground cell the search steps to: closed (nullopt) to a mover not tunnelling, else what they add to
+	// its cost (and whether allies stand fixed there).
+	struct UnitStep
 	{
-		std::pop_heap(scratch.heap.begin(), scratch.heap.end(), later);
-		const RouteScratch::Entry entry = scratch.heap.back();
-		scratch.heap.pop_back();
+		std::uint32_t extra{0};
+		std::uint8_t allyBlocked{0};
+	};
+	const auto unitStep = [&](std::int32_t nx, std::int32_t ny, bool tunnelling) -> std::optional<UnitStep> {
+		if (units == nullptr)
+			return UnitStep{};
+		const MovementCheck check = CheckForMovement(*units, nx, ny, mover.radius);
+		if (check.enemyFixed)
+		{
+			if (!tunnelling && !unitTunnel)
+				return std::nullopt;
+		}
+		else
+			unitTunnel = false;
+		UnitStep step;
+		if (check.allyMoving && std::abs(nx - startX) < 10 && std::abs(ny - startY) < 10)
+			step.extra += 42u;
+		if (check.allyFixedCount > 0)
+		{
+			step.extra += 42u;
+			step.allyBlocked = units->throughUnits ? 0 : 1;
+		}
+		return step;
+	};
+	const auto relax = [&](std::uint32_t atCost, std::int32_t from, std::size_t next, std::uint32_t step, std::int32_t nx, std::int32_t ny, std::uint8_t layer,
+						   UnitStep unit = {}) {
+		RouteScratch::Node &node = nodes[next];
+		if (node.closed == generation)
+			return;
+		node.allyBlocked = unit.allyBlocked;
+		const std::uint32_t candidate = atCost + step + unit.extra;
+		if (node.seen == generation && candidate >= node.cost)
+			return;
+		node.seen = generation;
+		node.cost = candidate;
+		node.parent = from;
+		const std::uint32_t h = towardGoal ? Octile(nx, ny, goalX, goalY) : 0u;
+		pushOpen(candidate + h, h, static_cast<std::int32_t>(next), nx, ny, layer);
+	};
+	// A ground cell open for the mover: the open test above, with the room and type read straight from their arrays.
+	const std::uint8_t *const room = plane.room.data();
+	const auto groundOpen = [&](std::int32_t x, std::int32_t y) {
+		if (x < 0 || y < 0 || x >= width || y >= height)
+			return false;
+		return (room[grid.Index(x, y)] > mover.radius && grid.Type(x, y) != PathfindCellType::BridgeImpassable) || (ignoring && nearIgnored(x, y));
+	};
+	// Interior ground cells (a step from every edge), for a mover ignoring nothing: the neighbours' index offsets, in
+	// `steps` order, and their openness straight from the room and type arrays (no bounds tests, no branches).
+	const PathfindCellType *const types = grid.Types().data();
+	const std::array<std::ptrdiff_t, 8> stepOffsets{1, width, -1, -width, width + 1, width - 1, -width - 1, -width + 1};
+	const std::uint8_t radius = mover.radius;
+	const auto interiorOpen = [&](std::size_t cell) {
+		return (room[cell] > radius) & (types[cell] != PathfindCellType::BridgeImpassable);
+	};
+	while (!openEmpty())
+	{
+		const RouteScratch::Entry entry = popOpen();
 		const auto at = static_cast<std::size_t>(entry.cell);
-		if (scratch.closed[at] == generation)
+		if (nodes[at].closed == generation)
 			continue;
-		scratch.closed[at] = generation;
+		nodes[at].closed = generation;
 		if (++expanded > mover.budget)
 		{
 			route.exhausted = true;
 			break;
 		}
-		const Place here = decode(entry.cell);
+		const Place here{entry.layer, entry.x, entry.y};
 		const std::int32_t x = here.x, y = here.y;
-		if (entry.h < bestH || (entry.h == bestH && scratch.cost[at] < bestCost))
+		const std::uint32_t atCost = nodes[at].cost;
+		if (entry.h < bestH || (entry.h == bestH && atCost < bestCost))
 		{
 			best = entry.cell;
 			bestH = entry.h;
-			bestCost = scratch.cost[at];
+			bestCost = atCost;
 		}
-		if (entry.cell == goal)
+		if (entry.cell == goal || (!towardGoal && here.layer == GroundLayer && entry.cell != start && accept(x, y)))
 		{
 			found = true;
+			accepted = entry.cell;
 			break;
 		}
 		if (here.layer != GroundLayer)
@@ -315,37 +470,70 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 					continue;
 				if (direction >= 4 && (!openOn(here.layer, x + dx, y) || !openOn(here.layer, x, y + dy)))
 					continue;
-				relax(at, entry.cell, static_cast<std::size_t>(index(here.layer, nx, ny)), direction >= 4 ? 14u : 10u, nx, ny);
+				relax(atCost, entry.cell, static_cast<std::size_t>(index(here.layer, nx, ny)), direction >= 4 ? 14u : 10u, nx, ny, here.layer);
 			}
 			if (deck.toGround[deck.Index(x, y)] != 0 && open(x, y))
-				relax(at, entry.cell, static_cast<std::size_t>(index(GroundLayer, x, y)), 0u, x, y);
+				relax(atCost, entry.cell, static_cast<std::size_t>(index(GroundLayer, x, y)), 0u, x, y, GroundLayer);
 			continue;
 		}
+		if (!ignoring && !unitTunnel && x > 0 && y > 0 && x < width - 1 && y < height - 1 && interiorOpen(at))
+		{
+			// Not tunnelling (its own cell is open): each open neighbour, a diagonal only past two open straight ones.
+			std::array<bool, 8> neighbourOpen;
+			for (std::size_t direction = 0; direction < 8; ++direction)
+				neighbourOpen[direction] = interiorOpen(static_cast<std::size_t>(static_cast<std::ptrdiff_t>(at) + stepOffsets[direction]));
+			for (std::size_t direction = 0; direction < 4; ++direction)
+				if (neighbourOpen[direction])
+					if (const auto unit = unitStep(x + steps[direction][0], y + steps[direction][1], false))
+						relax(atCost, entry.cell, static_cast<std::size_t>(static_cast<std::ptrdiff_t>(at) + stepOffsets[direction]), 10u, x + steps[direction][0],
+							y + steps[direction][1], GroundLayer, *unit);
+			for (std::size_t direction = 4; direction < 8; ++direction)
+			{
+				const auto &[dx, dy] = steps[direction];
+				if (neighbourOpen[direction] & neighbourOpen[dx > 0 ? 0 : 2] & neighbourOpen[dy > 0 ? 1 : 3])
+					if (const auto unit = unitStep(x + dx, y + dy, false))
+						relax(atCost, entry.cell, static_cast<std::size_t>(static_cast<std::ptrdiff_t>(at) + stepOffsets[direction]), 14u, x + dx, y + dy, GroundLayer, *unit);
+			}
+			if (decks != 0)
+				if (const std::uint8_t layer = grid.DeckLink(x, y); layer != GroundLayer && layer <= decks && openOn(layer, x, y))
+					relax(atCost, entry.cell, static_cast<std::size_t>(index(layer, x, y)), 0u, x, y, layer);
+			continue;
+		}
+		// Tunnelling: from a blocked cell (the start, or one tunnelled into), on through a structure's cells and the
+		// usable ones too tight for it beside them, until it reaches room enough.
+		const bool tunnelling = !groundOpen(x, y);
+		const auto structure = [&](std::int32_t cx, std::int32_t cy) {
+			return cx >= 0 && cy >= 0 && cx < width && cy < height && (grid.Type(cx, cy) == PathfindCellType::Obstacle || room[grid.Index(cx, cy)] > 0);
+		};
+		// The eight neighbours' openness, each looked up once (a diagonal's corner test reuses its two straight ones).
+		std::array<bool, 8> neighbourOpen;
+		for (std::size_t direction = 0; direction < steps.size(); ++direction)
+			neighbourOpen[direction] = groundOpen(x + steps[direction][0], y + steps[direction][1]);
 		for (std::size_t direction = 0; direction < steps.size(); ++direction)
 		{
 			const auto &[dx, dy] = steps[direction];
 			const std::int32_t nx = x + dx, ny = y + dy;
-			// Tunnelling: from a blocked cell (the start, or one tunnelled into), on through a structure's cells and the
-			// usable ones too tight for it beside them, until it reaches room enough.
-			const bool tunnelling = !open(x, y);
-			const auto structure = [&](std::int32_t cx, std::int32_t cy) {
-				return cx >= 0 && cy >= 0 && cx < width && cy < height &&
-					(grid.Type(cx, cy) == PathfindCellType::Obstacle || plane.room[grid.Index(cx, cy)] > 0);
-			};
-			if (!open(nx, ny) && !(tunnelling && structure(nx, ny)))
+			if (!neighbourOpen[direction] && !(tunnelling && structure(nx, ny)))
 				continue;
-			if (!tunnelling && direction >= 4 && (!open(x + dx, y) || !open(x, y + dy)))
+			// Beside a diagonal: (x + dx, y) is straight neighbour 0 or 2, (x, y + dy) is 1 or 3.
+			if (!tunnelling && direction >= 4 && (!neighbourOpen[dx > 0 ? 0 : 2] || !neighbourOpen[dy > 0 ? 1 : 3]))
 				continue;
-			relax(at, entry.cell, static_cast<std::size_t>(index(GroundLayer, nx, ny)), direction >= 4 ? 14u : 10u, nx, ny);
+			if (const auto unit = unitStep(nx, ny, tunnelling))
+				relax(atCost, entry.cell, static_cast<std::size_t>(index(GroundLayer, nx, ny)), direction >= 4 ? 14u : 10u, nx, ny, GroundLayer, *unit);
 		}
 		// Up on to a deck at the ground cell an entry links to.
 		if (decks != 0)
 			if (const std::uint8_t layer = grid.DeckLink(x, y); layer != GroundLayer && layer <= decks && openOn(layer, x, y))
-				relax(at, entry.cell, static_cast<std::size_t>(index(layer, x, y)), 0u, x, y);
+				relax(atCost, entry.cell, static_cast<std::size_t>(index(layer, x, y)), 0u, x, y, layer);
 	}
-	const std::int32_t end = found ? goal : best;
-	for (std::int32_t cell = end; cell != -1; cell = scratch.parent[static_cast<std::size_t>(cell)])
+	if (!towardGoal && !found)
+		return route;
+	const std::int32_t end = found ? accepted : best;
+	for (std::int32_t cell = end; cell != -1; cell = nodes[static_cast<std::size_t>(cell)].parent)
+	{
 		scratch.cells.push_back(cell);
+		route.blockedByAlly = route.blockedByAlly || nodes[static_cast<std::size_t>(cell)].allyBlocked != 0;
+	}
 	std::reverse(scratch.cells.begin(), scratch.cells.end());
 	route.reachedGoal = found;
 	// Smoothing: from each kept cell, on to the farthest later cell in sight on the same layer (a change of layer is kept
@@ -364,7 +552,18 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 		{
 			const Place c = decode(scratch.cells[candidate]);
 			// The anchor itself may be blocked (a mover walking out): judge the sight from the next cell on.
-			if (InSight(a.x, a.y, c.x, c.y, [&](std::int32_t sx, std::int32_t sy) { return (sx == a.x && sy == a.y) || openOn(a.layer, sx, sy); }))
+			// Pathfinder::isLinePassable (linePassableCallback): a unit standing fixed across the line (an ally or not) breaks it.
+			const auto passable = [&](std::int32_t sx, std::int32_t sy) {
+				if (sx == a.x && sy == a.y)
+					return true;
+				if (!openOn(a.layer, sx, sy))
+					return false;
+				if (units == nullptr || a.layer != GroundLayer)
+					return true;
+				const MovementCheck check = CheckForMovement(*units, sx, sy, mover.radius);
+				return check.allyFixedCount == 0 && !check.enemyFixed;
+			};
+			if (InSight(a.x, a.y, c.x, c.y, passable))
 			{
 				next = candidate;
 				break;
@@ -375,7 +574,7 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 		route.layers.push_back(n.layer);
 		anchor = next;
 	}
-	if (found)
+	if (found && towardGoal)
 	{
 		if (route.points.size() == 1)
 		{
@@ -386,6 +585,13 @@ inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &pl
 			route.points.back() = to;
 	}
 	return route;
+}
+
+inline FoundRoute FindRoute(const NavigationGrid &grid, const ClearancePlane &plane, RouteMover mover, Engine::Math::FixedVector2 from,
+	Engine::Math::FixedVector2 to, RouteScratch &scratch, std::uint8_t fromLayer = GroundLayer, std::uint8_t toLayer = GroundLayer,
+	const RouteUnits *units = nullptr)
+{
+	return SearchRoute(grid, plane, mover, from, to, scratch, fromLayer, toLayer, units, true, [](std::int32_t, std::int32_t) { return false; });
 }
 
 // The layer a destination is on (the original's getLayerForDestination, for a point with no height of its own): the

@@ -1,6 +1,10 @@
 export module games.generalszh.presentation.objects.algorithms.presentation_schedule;
+import games.generalszh.presentation.objects.systems.scenery_systems;
 import std;
 
+export import games.generalszh.presentation.objects.systems.firestorm_presentation_systems;
+export import games.generalszh.presentation.objects.systems.bone_fx_presentation_systems;
+export import games.generalszh.presentation.objects.systems.projectile_stream_systems;
 export import engine.ecs.core.world;
 export import engine.ecs.system.system;
 export import games.generalszh.presentation.objects.systems.vehicle_motion_systems;
@@ -36,12 +40,29 @@ void RegisterPresentationComponents(ecs::World &world)
 	RegisterObjectPresentation(world);
 }
 
-inline void RegisterPresentationTick(ecs::SystemRegistry &tick, MotionSampleSystem &motion, PoseSampleSystem &pose, DetectorPingSystem &pings,
-	ExhaustSampleSystem &exhausts, HitFxSystem &hits, MissileIgnitionSystem &ignitions,
-	HarvestPresentationSystem &harvest, CratePresentationSystem &crates, PromotionPresentationSystem &promotions, ChassisSystem &chassis,
-	TrackLayingSystem &tracks, TreeContactSystem &treeContacts, CashPresentationSystem &cash, DisabledSoundSystem &disabledSounds, EmpSparkSystem &empSparks,
-	AutoDepositPresentationSystem &autoDeposits, AbilityFeedbackSystem &abilities, UplinkStatusSystem &uplinks, AttachedParticleClearSystem &particleClears)
+inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 {
+	// Its systems are stateless: one shared instance each.
+	static MotionSampleSystem motion;
+	static PoseSampleSystem pose;
+	static DetectorPingSystem pings;
+	static ExhaustSampleSystem exhausts;
+	static HitFxSystem hits;
+	static MissileIgnitionSystem ignitions;
+	static HarvestPresentationSystem harvest;
+	static CratePresentationSystem crates;
+	static PromotionPresentationSystem promotions;
+	static ChassisSystem chassis;
+	static TrackLayingSystem tracks;
+	static TreeContactSystem treeContacts;
+	static SceneryContactSystem sceneryContacts;
+	static CashPresentationSystem cash;
+	static DisabledSoundSystem disabledSounds;
+	static EmpSparkSystem empSparks;
+	static AutoDepositPresentationSystem autoDeposits;
+	static AbilityFeedbackSystem abilities;
+	static UplinkStatusSystem uplinks;
+	static AttachedParticleClearSystem particleClears;
 	// Things falling past their DestroyAttachedParticlesAtHeight lose their riding systems, after the tick's new ones.
 	tick.Register(particleClears);
 	tick.OrderBefore<AttachedParticleClearSystem, EmpSparkSystem>();
@@ -84,14 +105,38 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick, MotionSampleSyst
 	tick.OrderBefore<CratePresentationSystem, TreeContactSystem>();
 	tick.OrderBefore<MissileIgnitionSystem, TreeContactSystem>();
 	tick.OrderBefore<HitFxSystem, TreeContactSystem>();
+	// The client's own trees, likewise (after the object trees: both may play topple FX).
+	tick.Register(sceneryContacts);
+	tick.OrderBefore<TreeContactSystem, SceneryContactSystem>();
 	tick.Register(pings);
 	tick.Register(exhausts);
 }
 
-inline void RegisterPresentationFrame(ecs::SystemRegistry &frame, TreadRollSystem &treads, WheelRollSystem &wheels, MotionEmitterSystem &emitters, ObjectPresentationSystem &objects, EffectAttachmentSystem &attachments, DamageEffectSystem &damage, FireFxPlacementSystem &fire, FxPlaybackSystem &fx, ExhaustSystem &exhausts, LaserSystem &lasers, DynamicLightSystem &lights, TrackFadeSystem &trackFade,
-	TreeBreezeSystem &treeBreeze, TreeBendSystem &treeBend, DebrisAnimationSystem &debris, MountedDrawSystem &mounted, TintStatusSystem &tints,
-	ObjectIconSystem &icons, UplinkEffectSystem &uplinks, RiderTintSystem &riderTints)
+inline void RegisterPresentationFrame(ecs::SystemRegistry &frame)
 {
+	// Its systems are stateless: one shared instance each.
+	static TreadRollSystem treads;
+	static WheelRollSystem wheels;
+	static MotionEmitterSystem emitters;
+	static ObjectPresentationSystem objects;
+	static EffectAttachmentSystem attachments;
+	static DamageEffectSystem damage;
+	static FireFxPlacementSystem fire;
+	static FxPlaybackSystem fx;
+	static ExhaustSystem exhausts;
+	static LaserSystem lasers;
+	static DynamicLightSystem lights;
+	static TrackFadeSystem trackFade;
+	static TreeBreezeSystem treeBreeze;
+	static TreeBendSystem treeBend;
+	static SceneryBendSystem sceneryBend;
+	static SceneryDrawSystem sceneryDraw;
+	static DebrisAnimationSystem debris;
+	static MountedDrawSystem mounted;
+	static TintStatusSystem tints;
+	static ObjectIconSystem icons;
+	static UplinkEffectSystem uplinks;
+	static RiderTintSystem riderTints;
 	// The uplinks' effects after the weapons' lasers began the frame's beams, their flares with the riding systems.
 	frame.Register(uplinks);
 	frame.OrderBefore<ObjectPresentationSystem, UplinkEffectSystem>();
@@ -126,6 +171,17 @@ inline void RegisterPresentationFrame(ecs::SystemRegistry &frame, TreadRollSyste
 	frame.Register(objects);
 	// Mounted portable structures join the frame once their carriers are placed.
 	frame.Register(mounted);
+	// The client's scenery falls and leans with the object trees (its bounce FX before FX play), then joins the frame
+	// once the objects have made its slots.
+	frame.Register(sceneryBend);
+	frame.OrderBefore<TreeBendSystem, SceneryBendSystem>();
+	frame.OrderBefore<SceneryBendSystem, FxPlaybackSystem>();
+	frame.OrderBefore<SceneryBendSystem, DebrisAnimationSystem>();
+	frame.Register(sceneryDraw);
+	frame.OrderBefore<SceneryBendSystem, SceneryDrawSystem>();
+	frame.OrderBefore<TreeBreezeSystem, SceneryDrawSystem>();
+	frame.OrderBefore<ObjectPresentationSystem, SceneryDrawSystem>();
+	frame.OrderBefore<SceneryDrawSystem, MountedDrawSystem>();
 	frame.Register(attachments);
 	frame.Register(damage);
 	frame.Register(fire);
@@ -154,5 +210,50 @@ inline void RegisterPresentationFrame(ecs::SystemRegistry &frame, TreadRollSyste
 	frame.OrderBefore<ObjectPresentationSystem, LaserSystem>();
 	frame.OrderBefore<ExhaustSystem, LaserSystem>();
 	frame.OrderBefore<LaserSystem, DamageEffectSystem>();
+}
+
+// The weapons' projectile streams, drawn into the frame's beams after the lasers began them and the uplinks added theirs,
+// through the projectiles as presented.
+inline void RegisterProjectileStreams(ecs::SystemRegistry &frame)
+{
+	// Its systems are stateless: one shared instance each.
+	static ProjectileStreamSystem streams;
+	frame.Register(streams);
+	frame.OrderBefore<ObjectPresentationSystem, ProjectileStreamSystem>();
+	frame.OrderBefore<UplinkEffectSystem, ProjectileStreamSystem>();
+	frame.OrderBefore<LaserSystem, ProjectileStreamSystem>();
+}
+
+// BoneFXUpdate's particle systems: started once a tick after the other tick systems cleared or started theirs, riding
+// on their objects each frame once the objects are presented, with the other riding systems.
+inline void RegisterBoneFx(ecs::SystemRegistry &tick, ecs::SystemRegistry &frame)
+{
+	// Its systems are stateless: one shared instance each.
+	static BoneParticleSystem particles;
+	static BoneFxRideSystem riding;
+	tick.Register(particles);
+	tick.OrderBefore<AttachedParticleClearSystem, BoneParticleSystem>();
+	tick.OrderBefore<AutoDepositPresentationSystem, BoneParticleSystem>();
+	tick.OrderBefore<ChassisSystem, BoneParticleSystem>();
+	tick.OrderBefore<DetectorPingSystem, BoneParticleSystem>();
+	frame.Register(riding);
+	frame.OrderBefore<ObjectPresentationSystem, BoneFxRideSystem>();
+	frame.OrderBefore<EffectAttachmentSystem, BoneFxRideSystem>();
+	frame.OrderBefore<UplinkEffectSystem, BoneFxRideSystem>();
+	frame.OrderBefore<LaserSystem, BoneFxRideSystem>();
+	frame.OrderBefore<BoneFxRideSystem, DamageEffectSystem>();
+}
+
+// The firestorms' particle systems, started and sized before the other riding and FX systems touch the particle world.
+inline void RegisterFirestorms(ecs::SystemRegistry &frame)
+{
+	// Its systems are stateless: one shared instance each.
+	static FirestormPresentationSystem firestorms;
+	frame.Register(firestorms);
+	frame.OrderBefore<FirestormPresentationSystem, EffectAttachmentSystem>();
+	frame.OrderBefore<FirestormPresentationSystem, ExhaustSystem>();
+	frame.OrderBefore<FirestormPresentationSystem, LaserSystem>();
+	frame.OrderBefore<FirestormPresentationSystem, UplinkEffectSystem>();
+	frame.OrderBefore<FirestormPresentationSystem, MotionEmitterSystem>();
 }
 }

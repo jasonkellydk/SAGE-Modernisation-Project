@@ -64,13 +64,16 @@ struct LightPulseNugget
 	std::uint32_t decreaseMs{0};
 };
 
+// TracerFXNugget (its constructor's defaults): the drawable it makes (TracerName), its speed a frame (Speed: a second in
+// the INI; 0: its caller's), DecayAt, Length, Width, Color and Probability. BoneName is read and never used.
 struct TracerNugget
 {
+	std::string name{"GenericTracer"};
 	std::string bone;
-	float speed{0.0f}; // per second
-	float decayAt{0.0f};
-	float length{0.0f};
-	float width{0.0f};
+	float speed{0.0f}; // a frame
+	float decayAt{1.0f};
+	float length{10.0f};
+	float width{1.0f};
 	std::array<float, 3> color{1, 1, 1};
 	float probability{1.0f};
 };
@@ -323,8 +326,10 @@ void ReadNugget(const Node &node, FxList &list)
 		{
 			if (c.key == "BoneName")
 				tracer.bone = std::string(c.Value());
+			else if (c.key == "TracerName")
+				tracer.name = std::string(c.Value());
 			else if (c.key == "Speed")
-				tracer.speed = At(c, 0);
+				tracer.speed = At(c, 0) / 30.0f; // INI::parseVelocityReal
 			else if (c.key == "DecayAt")
 				tracer.decayAt = At(c, 0);
 			else if (c.key == "Length")

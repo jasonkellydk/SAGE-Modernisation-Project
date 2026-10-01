@@ -69,6 +69,27 @@ struct Enter
 	ecs::Entity target;
 };
 
+// Go on building a structure left unfinished (MSG_RESUME_CONSTRUCTION: groupResumeConstruction -> aiResumeConstruction).
+struct ResumeConstruction
+{
+	std::vector<ecs::Entity> units;
+	ecs::Entity target;
+};
+
+// Repair a structure (MSG_DO_REPAIR: groupRepair -> aiRepair).
+struct Repair
+{
+	std::vector<ecs::Entity> units;
+	ecs::Entity target;
+};
+
+// Go into a heal pad to be healed (MSG_GET_HEALED: groupGetHealed -> aiGetHealed).
+struct GetHealed
+{
+	std::vector<ecs::Entity> units;
+	ecs::Entity target;
+};
+
 // A player's guard order (MSG_DO_GUARD_POSITION / MSG_DO_GUARD_OBJECT from the control bar's GUARD buttons): the units
 // guard a spot or an object, in a GuardMode (0 normal, 1 without pursuit, 2 flying units only).
 struct GuardPosition
@@ -197,6 +218,12 @@ struct Sell
 	ecs::Entity building;
 };
 
+// Cancel a structure still under construction (MSG_DOZER_CANCEL_CONSTRUCT: GameLogic::onDozerCancelConstruct).
+struct CancelConstruction
+{
+	ecs::Entity building;
+};
+
 // Have a dozer or worker build a structure (DozerAIUpdate::construct): what, where, facing which way (turn units).
 struct BuildStructure
 {
@@ -232,8 +259,58 @@ struct SelfDestruct
 	bool transferToAlly{true};
 };
 
+// MSG_COMBATDROP_AT_OBJECT (target set: dropping into it) or MSG_COMBATDROP_AT_LOCATION (at `position`).
+struct CombatDrop
+{
+	std::vector<ecs::Entity> units;
+	ecs::Entity target;
+	FixedVector2 position;
+};
+
+// A player's beacon at a spot (MSG_PLACE_BEACON).
+struct PlaceBeacon
+{
+	FixedVector2 position;
+};
+
+// A player's MSG_REMOVE_BEACON over its selection: its own beacons go, another's it hides from itself.
+struct RemoveBeacon
+{
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_SET_BEACON_TEXT over its selection (UTF-8; empty: no caption).
+struct SetBeaconText
+{
+	std::vector<ecs::Entity> units;
+	std::string text;
+};
+
+// The local presentation's music (AudioManager): the track playing and how often it has played through since it was
+// set, reported whenever that changes so a single-player mission's MUSIC_TRACK_HAS_COMPLETED can ask it.
+struct MusicProgress
+{
+	std::string track;
+	std::uint32_t completions{0};
+};
+
+// A player's MSG_EXECUTE_RAILED_TRANSPORT (the EXECUTE_RAILED_TRANSPORT button): each railed transport of the selection
+// sets off along its next path (AIGroup::groupExecuteRailedTransport).
+struct ExecuteRailedTransport
+{
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_EXIT (a rider's button in the selected container's inventory: GUI_COMMAND_EXIT_CONTAINER): that rider,
+// one of the sender's, gets out of the selected container (GameLogic::onExit: aiExit(container, CMD_FROM_PLAYER)).
+struct Exit
+{
+	ecs::Entity rider;
+	ecs::Entity container;
+};
+
 using GameCommand = std::variant<MoveTo, Attack, Stop, Dock, UseSpecialPower, SignalUi, ResearchUpgrade, CancelResearch, Sell, BuildStructure, WorkOn,
-	QueueUnit, CancelUnit, KillAllEnemies, UseSpecialPowerAtObject, PurchaseScience, ToggleOvercharge, SwitchWeapon, SelfDestruct, AttackPosition, GetRepaired, SpecialPowerDestination, Enter, EnableRetaliation, GuardPosition, GuardObject, SetRallyPoint, Evacuate, AttackMoveTo, FireWeapon>;
+	QueueUnit, CancelUnit, KillAllEnemies, UseSpecialPowerAtObject, PurchaseScience, ToggleOvercharge, SwitchWeapon, SelfDestruct, AttackPosition, GetRepaired, SpecialPowerDestination, Enter, EnableRetaliation, GuardPosition, GuardObject, SetRallyPoint, Evacuate, AttackMoveTo, FireWeapon, PlaceBeacon, RemoveBeacon, SetBeaconText, CombatDrop, MusicProgress, ResumeConstruction, Repair, GetHealed, ExecuteRailedTransport, Exit, CancelConstruction>;
 }
 
 export namespace engine::events
@@ -311,6 +388,33 @@ struct MessageTraits<generalszh::commands::Enter>
 };
 
 template<>
+struct MessageTraits<generalszh::commands::ResumeConstruction>
+{
+	static constexpr std::string_view StableName = "generalszh.command.resume_construction";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::Repair>
+{
+	static constexpr std::string_view StableName = "generalszh.command.repair";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::GetHealed>
+{
+	static constexpr std::string_view StableName = "generalszh.command.get_healed";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
 struct MessageTraits<generalszh::commands::SignalUi>
 {
 	static constexpr std::string_view StableName = "generalszh.command.signal_ui";
@@ -374,6 +478,69 @@ struct MessageTraits<generalszh::commands::EnableRetaliation>
 };
 
 template<>
+struct MessageTraits<generalszh::commands::CombatDrop>
+{
+	static constexpr std::string_view StableName = "generalszh.command.combat_drop";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::PlaceBeacon>
+{
+	static constexpr std::string_view StableName = "generalszh.command.place_beacon";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::RemoveBeacon>
+{
+	static constexpr std::string_view StableName = "generalszh.command.remove_beacon";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::ExecuteRailedTransport>
+{
+	static constexpr std::string_view StableName = "generalszh.command.execute_railed_transport";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::Exit>
+{
+	static constexpr std::string_view StableName = "generalszh.command.exit";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::MusicProgress>
+{
+	static constexpr std::string_view StableName = "generalszh.command.music_progress";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::SetBeaconText>
+{
+	static constexpr std::string_view StableName = "generalszh.command.set_beacon_text";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
 struct MessageTraits<generalszh::commands::SelfDestruct>
 {
 	static constexpr std::string_view StableName = "generalszh.command.self_destruct";
@@ -404,6 +571,15 @@ template<>
 struct MessageTraits<generalszh::commands::Sell>
 {
 	static constexpr std::string_view StableName = "generalszh.command.sell";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::CancelConstruction>
+{
+	static constexpr std::string_view StableName = "generalszh.command.cancel_construction";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr MessageKind Kind = MessageKind::Command;
 	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
@@ -612,7 +788,7 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				detail::Put(writer, value.units);
 				detail::Put(writer, value.depot);
 			}
-			else if constexpr (std::is_same_v<T, Enter>)
+			else if constexpr (std::is_same_v<T, Enter> || std::is_same_v<T, ResumeConstruction> || std::is_same_v<T, Repair> || std::is_same_v<T, GetHealed>)
 			{
 				detail::Put(writer, value.units);
 				detail::Put(writer, value.target);
@@ -636,7 +812,7 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				detail::Put(writer, value.building);
 				writer.Text(value.upgrade);
 			}
-			else if constexpr (std::is_same_v<T, Sell>)
+			else if constexpr (std::is_same_v<T, Sell> || std::is_same_v<T, CancelConstruction>)
 				detail::Put(writer, value.building);
 			else if constexpr (std::is_same_v<T, QueueUnit>)
 			{
@@ -664,6 +840,33 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				return; // nothing but its sender
 			else if constexpr (std::is_same_v<T, SelfDestruct>)
 				writer.Flag(value.transferToAlly);
+			else if constexpr (std::is_same_v<T, PlaceBeacon>)
+				detail::Put(writer, value.position);
+			else if constexpr (std::is_same_v<T, CombatDrop>)
+			{
+				detail::Put(writer, value.units);
+				detail::Put(writer, value.target);
+				detail::Put(writer, value.position);
+			}
+			else if constexpr (std::is_same_v<T, RemoveBeacon>)
+				detail::Put(writer, value.units);
+			else if constexpr (std::is_same_v<T, SetBeaconText>)
+			{
+				detail::Put(writer, value.units);
+				writer.Text(value.text);
+			}
+			else if constexpr (std::is_same_v<T, ExecuteRailedTransport>)
+				detail::Put(writer, value.units);
+			else if constexpr (std::is_same_v<T, Exit>)
+			{
+				detail::Put(writer, value.rider);
+				detail::Put(writer, value.container);
+			}
+			else if constexpr (std::is_same_v<T, MusicProgress>)
+			{
+				writer.Text(value.track);
+				writer.U32(value.completions);
+			}
 			else if constexpr (std::is_same_v<T, EnableRetaliation>)
 				writer.Flag(value.enabled);
 			else if constexpr (std::is_same_v<T, PurchaseScience>)
@@ -773,6 +976,20 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 		const auto target = detail::GetEntity(reader);
 		if (units && target)
 			command = Enter{std::move(*units), *target};
+	}
+	else if (envelope.type == TypeOf<ResumeConstruction>() || envelope.type == TypeOf<Repair>() || envelope.type == TypeOf<GetHealed>())
+	{
+		auto units = detail::GetUnits(reader);
+		const auto target = detail::GetEntity(reader);
+		if (units && target)
+		{
+			if (envelope.type == TypeOf<ResumeConstruction>())
+				command = ResumeConstruction{std::move(*units), *target};
+			else if (envelope.type == TypeOf<Repair>())
+				command = Repair{std::move(*units), *target};
+			else
+				command = GetHealed{std::move(*units), *target};
+		}
 	}
 	else if (envelope.type == TypeOf<Stop>())
 	{
@@ -896,6 +1113,50 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 		if (const auto transfer = reader.Flag())
 			command = SelfDestruct{*transfer};
 	}
+	else if (envelope.type == TypeOf<CombatDrop>())
+	{
+		auto units = detail::GetUnits(reader);
+		const auto target = detail::GetEntity(reader);
+		const auto position = detail::GetPoint(reader);
+		if (units && target && position)
+			command = CombatDrop{std::move(*units), *target, *position};
+	}
+	else if (envelope.type == TypeOf<PlaceBeacon>())
+	{
+		if (const auto position = detail::GetPoint(reader))
+			command = PlaceBeacon{*position};
+	}
+	else if (envelope.type == TypeOf<RemoveBeacon>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = RemoveBeacon{std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<SetBeaconText>())
+	{
+		auto units = detail::GetUnits(reader);
+		auto text = reader.Text();
+		if (units && text && text->size() <= 1024)
+			command = SetBeaconText{std::move(*units), std::move(*text)};
+	}
+	else if (envelope.type == TypeOf<ExecuteRailedTransport>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = ExecuteRailedTransport{std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<Exit>())
+	{
+		const auto rider = detail::GetEntity(reader);
+		const auto container = detail::GetEntity(reader);
+		if (rider && container)
+			command = Exit{*rider, *container};
+	}
+	else if (envelope.type == TypeOf<MusicProgress>())
+	{
+		auto track = reader.Text();
+		const auto completions = reader.U32();
+		if (track && completions && track->size() <= 256)
+			command = MusicProgress{std::move(*track), *completions};
+	}
 	else if (envelope.type == TypeOf<EnableRetaliation>())
 	{
 		if (const auto enabled = reader.Flag())
@@ -905,6 +1166,11 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 	{
 		if (const auto building = detail::GetEntity(reader))
 			command = Sell{*building};
+	}
+	else if (envelope.type == TypeOf<CancelConstruction>())
+	{
+		if (const auto building = detail::GetEntity(reader))
+			command = CancelConstruction{*building};
 	}
 	else if (envelope.type == TypeOf<QueueUnit>())
 	{

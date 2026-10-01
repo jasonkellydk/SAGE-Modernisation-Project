@@ -15,6 +15,9 @@ import games.generalszh.gameplay.abilities.resources.sticky_bomb_cues;
 import games.generalszh.gameplay.bridges.resources.bridge_cues;
 import games.generalszh.gameplay.hacking.resources.hack_cues;
 import games.generalszh.gameplay.battleplans.resources.battle_plan_cues;
+import games.generalszh.gameplay.railroad.resources.rail_network;
+import engine.gameplay.rts.delivery.components.delivery;
+import engine.gameplay.rts.stealth.resources.detections;
 
 // Sound's part of presentation: its side table, its systems in the frame
 // schedule (after the objects are presented and the frame's FX have asked
@@ -25,11 +28,24 @@ void RegisterSoundComponents(ecs::World &world)
 {
 	world.RegisterComponent<SoundLoops>();
 	world.RegisterComponent<UplinkSounds>();
+	world.RegisterComponent<TrainSoundLoop>();
 	world.RegisterComponent<FireSoundLoop>();
 }
 
-inline void RegisterSoundFrame(ecs::SystemRegistry &frame, SoundLoopSystem &loops, AudioMixSystem &mix, UplinkSoundSystem &uplinks, FireLoopSystem &fireLoops)
+inline void RegisterSoundFrame(ecs::SystemRegistry &frame)
 {
+	// Its systems are stateless: one shared instance each.
+	static SoundLoopSystem loops;
+	static AudioMixSystem mix;
+	static UplinkSoundSystem uplinks;
+	static FireLoopSystem fireLoops;
+	static TrainSoundSystem trains;
+	// Locomotives' running loops, with the objects' loops, before the mix.
+	frame.Register(trains);
+	frame.OrderBefore<SoundLoopSystem, TrainSoundSystem>();
+	frame.OrderBefore<UplinkSoundSystem, TrainSoundSystem>();
+	frame.OrderBefore<FireLoopSystem, TrainSoundSystem>();
+	frame.OrderBefore<TrainSoundSystem, AudioMixSystem>();
 	// The weapons' looping fire sounds, with the objects' loops, before the mix.
 	frame.Register(fireLoops);
 	frame.OrderBefore<SoundLoopSystem, FireLoopSystem>();
@@ -73,6 +89,18 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 			if (const std::string_view sound = view.Definition(move.riderDefinition).Sound("SoundFallingFromPlane"); !sound.empty())
 				sounds.pending.push_back({std::string(sound), at(move.riderAt)});
 	}
+	// StealthUpdate::changeVisualDisguise: the disguiser's own DisguiseStarted as it takes a look; losing it,
+	// DisguiseRevealedSuccess with a victim, else DisguiseRevealedFailure (its per-unit sounds, on it).
+	if (const auto *disguises = view.World().FindResource<engine::gameplay::DisguiseEvents>())
+		disguises->ForEach([&](const engine::gameplay::DisguiseEvent &event) {
+			const auto definition = view.DefinitionOf(event.entity);
+			if (!definition)
+				return;
+			const std::string_view sound = view.Definition(*definition).Sound(
+				event.disguised != 0 ? "DisguiseStarted" : event.success != 0 ? "DisguiseRevealedSuccess" : "DisguiseRevealedFailure");
+			if (!sound.empty() && sound != "NoSound")
+				sounds.pending.push_back({std::string(sound), at(event.position)});
+		});
 	// Deaths' own sounds (CrushDie's crush sounds, EjectPilotDie's voice), for their player.
 	const auto *roster = view.World().FindResource<engine::gameplay::TeamRoster>();
 	for (const auto &event : view.DeathEvents())
@@ -81,6 +109,16 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 				{Engine::Math::ToFloat(event.position.x), Engine::Math::ToFloat(event.position.y), Engine::Math::ToFloat(event.position.z)},
 				roster != nullptr && event.team != engine::gameplay::NoTeam && event.team < roster->TeamCount() ? roster->TeamAt(event.team).owner
 																												 : SoundRequest::NoOwner});
+	// Trains (RailroadBehavior): whistles, clickety-clacks at the car's speed / 10 (a setVolume of what it was), impacts
+	// for their victims' players.
+	if (const auto *trains = view.World().FindResource<generalszh::gameplay::RailroadCues>())
+		for (const generalszh::gameplay::RailroadCue &cue : trains->list)
+		{
+			SoundRequest request{cue.sound, at(cue.at), cue.player};
+			if (cue.kind != generalszh::gameplay::RailroadCue::Kind::Whistle)
+				request.volume = std::max(0.0f, Engine::Math::ToFloat(cue.volume));
+			sounds.pending.push_back(std::move(request));
+		}
 	// Sticky bombs (StickyBombUpdate): a bomb's StickyBombCreated where it was stuck on, its UnitBombPing each second.
 	if (const auto *bombs = view.World().FindResource<generalszh::gameplay::StickyBombCues>())
 		for (const generalszh::gameplay::StickyBombCue &cue : bombs->list)
@@ -92,6 +130,15 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 			if (!sound.empty() && sound != "NoSound")
 				sounds.pending.push_back({std::string(sound), at(cue.at), cue.player});
 		}
+	// Payload carriers (DeliverPayloadAIUpdate::update): a dive's StartDive (UnitSpecificSounds) where it starts.
+	if (const auto *runs = view.World().FindResource<engine::gameplay::DeliveryCues>())
+		runs->ForEach([&](const engine::gameplay::DeliveryCue &cue) {
+			if (cue.kind != engine::gameplay::DeliveryCue::Kind::StartDive)
+				return;
+			const std::string_view sound = view.Definition(cue.definition).Sound("StartDive");
+			if (!sound.empty() && sound != "NoSound")
+				sounds.pending.push_back({std::string(sound), at(cue.at)});
+		});
 	// Bridges (BridgeBehavior::onBodyDamageStateChange): DamagedToSound / RepairedToSound where the bridge stands.
 	if (const auto *bridges = view.World().FindResource<generalszh::gameplay::BridgeCues>())
 		for (const generalszh::gameplay::BridgeCue &cue : bridges->list)

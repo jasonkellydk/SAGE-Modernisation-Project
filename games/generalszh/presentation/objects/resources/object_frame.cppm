@@ -27,6 +27,10 @@ struct PresentedObject
 	bool moving{false};
 	bool turning{false}; // its turret turned in the last tick
 	bool drawn{true};    // its model is drawn this frame (not hidden by stealth, not a fallen tree gone)
+	float animationSeconds{0.0f}; // how far into its look's animation (as its ObjectInstance)
+	float animationStart{0.0f};
+	// Its drawn world transform (row-major 4x4, as its ObjectInstance's): a camera riding one of its bones (slave mode).
+	std::array<float, 16> world{};
 };
 
 // The drawing of a portable structure mounted on a carrier (W3DDependencyModelDraw), drawn only if its carrier is

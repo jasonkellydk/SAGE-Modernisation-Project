@@ -1,11 +1,13 @@
 #include <boost/test/unit_test.hpp>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
 
 import games.generalszh.presentation.objects.algorithms.look_setup;
+import engine.gameplay.rts.harvesting.components.resource_store;
 
 using namespace generalszh::presentation;
 
@@ -65,6 +67,71 @@ BOOST_AUTO_TEST_CASE(legacy_parity_upgraded_parts_draw_through_a_copy_of_the_loo
 	BOOST_TEST(truck.WithParts(2, std::vector<std::uint8_t>{0}) != copy);    // the first set alone: its own copy
 	KnowPartLooks(catalog, world); // nothing new
 	BOOST_TEST(catalog.looks.size() == 11u);
+}
+
+// Legacy parity (W3DSupplyDraw.cpp, updateDrawModuleSupplyStatus: SupplyBonePrefix SUP, its model's SUP01.. family
+// counted once (getPristineBonePositions), ceil(bones x (current / (float)max)) shown, the rest hidden): a warehouse of
+// 10 bones and 1000 starting boxes shows them all full; at 301 boxes ceil(3.01) is 4 (SUP05..SUP10 hidden, through a
+// copy of its own looks); at 300, 3 (0.3f x 10 is 3 in floats); empty, none; a second warehouse at 301 shares the copy.
+// Before its model is loaded nothing is counted.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_pile_shows_its_boxes_as_its_stock_stands)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::ResourceStore>();
+	world.FinalizeComponents();
+	LookCatalog catalog;
+	catalog.byDefinition.resize(1);
+	catalog.known = {1};
+	catalog.looks = {{0, 0}, {0, 1}};
+	catalog.lookModels = {"WAREHOUSE", "WAREHOUSE"};
+	DefinitionLooks &pile = catalog.byDefinition[0];
+	pile.ownLookFirst = 0;
+	pile.ownLookCount = 2;
+	pile.supplyBonePrefix = "SUP";
+	bool loaded = false;
+	BonePoses bones;
+	bones.pose = [&](std::string_view, std::string_view) { BoneLookup lookup; lookup.ready = loaded; return lookup; };
+	bones.locate = [&](std::string_view model, std::string_view bone, bool family) {
+		BOOST_TEST(model == "WAREHOUSE");
+		BOOST_TEST(bone == "SUP");
+		BOOST_TEST(family);
+		return std::vector<std::array<float, 3>>(10);
+	};
+	const auto make = [&](std::uint32_t boxes) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::ResourceStore>(entity);
+		*world.Get<gp::ResourceStore>(entity) = {boxes, 1000};
+		return entity;
+	};
+	make(1000);
+	make(301);
+	KnowSupplyLooks(catalog, world, bones);
+	BOOST_TEST(pile.supplyBones == -1);
+	loaded = true;
+	KnowSupplyLooks(catalog, world, bones);
+	BOOST_TEST(pile.supplyBones == 10);
+	BOOST_TEST(pile.SupplyShown(1000, 1000) == 10u);
+	BOOST_TEST(pile.SupplyShown(301, 1000) == 4u);
+	BOOST_TEST(pile.SupplyShown(300, 1000) == 3u);
+	BOOST_TEST(pile.SupplyShown(0, 1000) == 0u);
+	BOOST_TEST(pile.WithSupply(1, 10) == 1u); // full: as it is
+	const std::uint32_t copy = pile.WithSupply(1, 4);
+	BOOST_TEST_REQUIRE(copy == 3u);
+	BOOST_TEST(catalog.looks[copy].state == 1u);
+	const auto &parts = catalog.partOverrides[catalog.looks[copy].parts];
+	BOOST_TEST_REQUIRE(parts.size() == 6u);
+	BOOST_TEST(parts.front().first == "SUP05");
+	BOOST_TEST(parts.back().first == "SUP10");
+	BOOST_TEST(!parts.front().second);
+	make(301);
+	make(300);
+	make(0);
+	KnowSupplyLooks(catalog, world, bones);
+	BOOST_TEST(catalog.looks.size() == 2u + 2u * 3u); // 4 shared; 3 and 0 made
+	BOOST_TEST(catalog.partOverrides[catalog.looks[pile.WithSupply(0, 0)].parts].size() == 10u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

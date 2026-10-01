@@ -1,0 +1,99 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationOverlay
+#include <boost/test/included/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.hud.algorithms.overlay_extract;
+import games.generalszh.presentation.objects.components.object_icons;
+import games.generalszh.presentation.objects.resources.presentation_resources;
+import games.generalszh.presentation.objects.resources.look_catalog;
+import games.generalszh.presentation.interaction.resources.interaction_resources;
+import engine.gameplay.common.spatial.systems.snapshot_system;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.rts.construction.components.construction_progress;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.construction.components.sale;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(overlay_extract)
+
+// Drawable::drawIconUI -> drawConstructPercent (Drawable.cpp) for everything drawn: a structure under construction and
+// not being sold shows CONTROLBAR:UnderConstructionDesc with its percent ("%.0f": 37.6 shows 38) in white, its centre at
+// its geometry's centre (getZDeltaToCenterPosition: half its height up) projected, whether or not it has a health box;
+// nothing once built or while sold, nor when that point lands off the screen's left edge. (The view: an eye at the
+// origin looking along +y, 90 degrees across: (0, 100, 25) is at (400, 225) on 800 x 600.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_built_shows_its_percent)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Experience>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::ConstructionProgress>();
+	world.RegisterComponent<gp::UnderConstruction>();
+	world.RegisterComponent<gp::Sale>();
+	world.RegisterComponent<ObjectIcons>(); // a side table
+	world.FinalizeComponents();
+	InteractionView &view = world.EmplaceResource<InteractionView>();
+	view.valid = true;
+	world.EmplaceResource<PresentationFrame>();
+	world.EmplaceResource<LookCatalog>();
+	auto &catalog = world.EmplaceResource<SelectionCatalog>();
+	catalog.byDefinition.resize(1);
+	catalog.byDefinition[0].center = 25.0f; // a box 50 high
+	auto &visible = world.EmplaceResource<gp::VisibleObjects>();
+	const auto place = [&](float x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::ConstructionProgress>(entity);
+		world.Get<gp::ConstructionProgress>(entity)->percent = Fixed::FromRaw(2464153); // 37.6
+		world.Add<gp::UnderConstruction>(entity);
+		gp::VisibleObject object;
+		object.entity = entity;
+		object.transform.position = {Fixed::FromInt(static_cast<std::int64_t>(x)), Fixed::FromInt(100), Fixed{}};
+		visible.SlotAt(0).push_back(object);
+		return entity;
+	};
+	visible.Reset(1);
+	const ecs::Entity site = place(0.0f);
+	const ecs::Entity offLeft = place(-101.0f); // projects left of x = 1
+	(void)offLeft;
+	generalszh::content::Anim2DTemplates animations;
+	OverlaySource source;
+	source.animations = &animations;
+	source.constructionPattern = u"Building: %.0f%%";
+	InGameOverlay overlay;
+	ExtractObjectIcons(world, source, overlay);
+	BOOST_TEST_REQUIRE(overlay.texts.size() == 1u);
+	BOOST_TEST((overlay.texts[0].text == u"Building: 38%"));
+	BOOST_TEST(overlay.texts[0].x == 400.0f);
+	BOOST_TEST(overlay.texts[0].y == 225.0f);
+	BOOST_TEST((overlay.texts[0].color == std::array<float, 4>{1, 1, 1, 1}));
+
+	// Being sold: nothing; built: nothing; icon UI off (a script): nothing.
+	world.Add<gp::Sale>(site);
+	InGameOverlay sold;
+	ExtractObjectIcons(world, source, sold);
+	BOOST_TEST(sold.texts.empty());
+	world.Remove<gp::Sale>(site);
+	world.Remove<gp::UnderConstruction>(site);
+	InGameOverlay built;
+	ExtractObjectIcons(world, source, built);
+	BOOST_TEST(built.texts.empty());
+	world.Add<gp::UnderConstruction>(site);
+	source.drawIconUi = false;
+	InGameOverlay hidden;
+	ExtractObjectIcons(world, source, hidden);
+	BOOST_TEST(hidden.texts.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

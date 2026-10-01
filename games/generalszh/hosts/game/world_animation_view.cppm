@@ -41,6 +41,8 @@ public:
 				const int width = static_cast<int>(definition->width), height = static_cast<int>(definition->height);
 				const auto rect = image.placement == OverlayImage::Placement::Veterancy
 					? presentation::PlaceVeterancy(static_cast<int>(image.x), static_cast<int>(image.y), image.healthBoxWidth, image.zoom, width, height)
+					: image.placement == OverlayImage::Placement::AmmoPip
+					? presentation::PlaceAmmoPip(image.region, image.pipCenterY, image.pipOffset, image.pipBounding, width, height, image.pip)
 					: presentation::PlaceIcon(image.icon, image.region, width, height, image.iconScale);
 				const float left = static_cast<float>(rect.x), top = static_cast<float>(rect.y);
 				m_list.Add_Image(m_catalog.Resolve(image.image), {left, top, left + static_cast<float>(rect.width), top + static_cast<float>(rect.height)},

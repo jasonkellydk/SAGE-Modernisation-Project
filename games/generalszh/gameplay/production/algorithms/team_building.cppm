@@ -1,9 +1,15 @@
 export module games.generalszh.gameplay.production.algorithms.team_building;
+import engine.gameplay.common.random.resources.random_seed;
+import engine.gameplay.rts.slaves.algorithms.enslave;
+import engine.gameplay.rts.slaves.components.spawn_points;
+import engine.gameplay.common.status.algorithms.disable_now;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import engine.gameplay.rts.navigation.components.ignored_obstacle;
 import std;
 import engine.gameplay.rts.production.components.rally_point;
 import engine.gameplay.rts.movement.components.move_path;
+import engine.gameplay.rts.navigation.components.navigation;
+import games.generalszh.gameplay.movement.algorithms.goal_claim_rules;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 import games.generalszh.gameplay.objects.algorithms.object_factory;
@@ -28,24 +34,38 @@ import engine.gameplay.rts.slaves.components.spawner;
 import engine.gameplay.common.identity.components.team_member;
 import games.generalszh.gameplay.ai.components.mob_member;
 export import engine.gameplay.rts.slaves.resources.spawn_requests;
+import games.generalszh.gameplay.stealth.algorithms.supply_stealth;
 export namespace generalszh::gameplay
 {
 // exitObjectViaDoor's exit path (aiFollowExitProductionPath): out to the natural rally point, then on to the rally point
-// its player set, if one (m_rallyPointExists).
+// its player set (m_rallyPointExists), adjusted off others' claims (adjustDestination) for a ground mover; a rally point
+// nothing near will do, or a mover not on the ground, leaves the natural rally point the path's only point. A leg with
+// more after it claims no goal; a lone natural rally point is claimed as it is once its route is planned
+// (AIFollowPathState: AI_FOLLOW_EXITPRODUCTION_PATH adjusts nothing on entering, then claims its path's end).
 inline void FollowOnToRallyPoint(GameWorld &game, ecs::Entity unit, ecs::Entity factory, Engine::Math::FixedVector2 natural)
 {
 	namespace gp = engine::gameplay;
+	if (!game.world.IsAlive(unit))
+		return;
+	auto *order = game.world.Get<gp::MoveOrder>(unit);
+	if (order != nullptr)
+		order->claim = gp::GoalClaim::Keep;
 	const auto *rally = game.world.IsAlive(factory) ? game.world.Get<gp::RallyPoint>(factory) : nullptr;
-	if (rally == nullptr || !game.world.IsAlive(unit))
+	if (rally == nullptr || !game.world.Has<gp::NavigationAgent>(unit))
+		return;
+	const auto point = AdjustDestinationFor(game.world, unit, rally->at);
+	if (!point)
 		return;
 	gp::MovePath path;
 	path.count = 2;
 	path.next = 1; // the first leg is under way
 	path.points[0] = natural;
-	path.points[1] = rally->at;
+	path.points[1] = *point;
 	if (!game.world.Has<gp::MovePath>(unit))
 		game.world.Add<gp::MovePath>(unit);
 	*game.world.Get<gp::MovePath>(unit) = path;
+	if (order != nullptr)
+		order->claim = gp::GoalClaim::None;
 }
 
 namespace team_building_detail
@@ -107,6 +127,7 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 			out.push_back(entity);
 			SetProducer(game, entity, produced.factory); // ProductionUpdate::update: setProducer(creationBuilding)
 			OnBuildComplete(game, entity); // ProductionUpdate: the game side of its create modules
+			CreateModulesBuildComplete(game, entity);
 		}
 		// A jet made at an airfield starts in the hangar of a free space and taxies to it.
 		if (gameplay::Jet *jet = game.world.IsAlive(entity) ? game.world.Get<gameplay::Jet>(entity) : nullptr)
@@ -123,6 +144,15 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 					jet->since = game.tick;
 					jet->leg = 1;
 					jet->goal = spot.parking.XY();
+					// Off a flight deck's hangar (FlightDeckBehavior::exitObjectViaDoor): out by its runway's creation points,
+					// then to its prep point (aiFollowExitProductionPath: TAXI_FROM_HANGAR).
+					if (field->frontRow != 0 && spot.runway < field->runwayCount)
+					{
+						const gameplay::RunwayPath &runway = field->runways[spot.runway];
+						jet->route = 1;
+						jet->leg = 0;
+						jet->goal = runway.creationCount > 1 ? runway.creation[1].XY() : spot.prep.XY();
+					}
 					if (auto *motion = game.world.Get<gameplay::Locomotion>(entity))
 						motion->locomotor = jet->taxi;
 					continue;
@@ -139,8 +169,11 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 			}
 		// SupplyCenterProductionExitUpdate: a supply truck out of a supply centre goes harvesting (setForceWantingState).
 		if (production && production->supplyExit && game.world.IsAlive(entity))
+		{
 			if (auto *harvester = game.world.Get<gameplay::Harvester>(entity))
 				harvester->forceWanting = true;
+			GrantExitStealth(game, produced.factory, entity, production->exitStealthTicks);
+		}
 	}
 	return out;
 }
@@ -184,13 +217,37 @@ ecs::Entity SpawnFrom(GameWorld &game, const engine::gameplay::SpawnRequest &req
 				}
 			}
 	}
+	// SpawnPointProductionExitUpdate::exitObjectViaDoor: on the first free place (its bone in the spawner's frame), facing
+	// its way; held there for good.
+	std::optional<std::uint32_t> place;
+	const std::vector<content::RestBone> *places = game.templates.SpawnPointsOf(world.Get<gameplay::DefinitionRef>(request.spawner)->index);
+	if (const auto *points = world.Get<gameplay::SpawnPoints>(request.spawner); points != nullptr && places != nullptr)
+	{
+		place = points->Free();
+		if (!place || *place >= places->size())
+			return {};
+		at = InFrameOf(frame, (*places)[*place].position);
+		facing = frame.facing + (*places)[*place].facing;
+	}
 	const ecs::Entity entity = SpawnObject(game, unit.name, at, facing, team, "");
 	if (!world.IsAlive(entity))
 		return {};
 	SetProducer(game, entity, request.spawner); // createSpawn: newSpawn->setProducer(parent)
-	// SlavedUpdateInterface::onEnslave: a mob member knows its nexus.
+	if (place)
+	{
+		world.Get<gameplay::SpawnPoints>(request.spawner)->occupier[*place] = entity;
+		gameplay::DisableNow(world, entity, gameplay::disabled_type::Held, gameplay::DisabledForever);
+	}
+	// SlavedUpdateInterface::onEnslave: a mob member knows its nexus; a SlavedUpdate's slave (a Stinger Site's soldier)
+	// takes its spawner as master (startSlavedEffects: its guard point).
 	if (auto *member = world.Get<MobMember>(entity))
 		member->nexus = request.spawner;
+	if (auto *slave = world.Get<gameplay::Slaved>(entity))
+	{
+		const auto *master = world.Get<gameplay::DefinitionRef>(request.spawner);
+		const Fixed masterRadius = master != nullptr ? content::BoundingCircleRadius(game.templates.DefinitionAt(master->index).geometry) : Fixed{};
+		gameplay::Enslave(*slave, request.spawner, masterRadius, world.Resource<gameplay::RandomSeed>().value, game.tick, entity);
+	}
 	spawner = world.Get<gameplay::Spawner>(request.spawner);
 	spawner->spawned[spawner->spawnedCount++] = entity;
 	if (budding)
@@ -198,7 +255,7 @@ ecs::Entity SpawnFrom(GameWorld &game, const engine::gameplay::SpawnRequest &req
 		if (auto *order = world.Get<gameplay::MoveOrder>(entity))
 			*order = gameplay::MoveToPoint(at); // aiMoveToPosition: it cannot stay where another is
 	}
-	else if (production && production->hasExit)
+	else if (production && production->hasExit && !place)
 		if (auto *order = world.Get<gameplay::MoveOrder>(entity))
 		{
 			*order = gameplay::MoveToPoint(InFrameOf(frame, production->rallyPoint));
@@ -207,8 +264,11 @@ ecs::Entity SpawnFrom(GameWorld &game, const engine::gameplay::SpawnRequest &req
 			world.Get<gameplay::IgnoredObstacle>(entity)->obstacle = request.spawner; // it walks out through its spawner
 		}
 	if (production && production->supplyExit)
+	{
 		if (auto *harvester = world.Get<gameplay::Harvester>(entity))
 			harvester->forceWanting = true;
+		GrantExitStealth(game, request.spawner, entity, production->exitStealthTicks);
+	}
 	return entity;
 }
 }

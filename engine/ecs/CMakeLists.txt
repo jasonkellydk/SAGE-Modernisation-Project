@@ -17,6 +17,7 @@ set(ENGINE_ECS_MODULES
 	query/query_cache.cppm
 	system/system.cppm
 	system/chunk_outputs.cppm
+	system/job_pool.cppm
 	scheduler/scheduler.cppm
 	storage/archetype.cppm
 	storage/chunk.cppm

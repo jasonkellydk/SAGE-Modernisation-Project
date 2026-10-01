@@ -80,6 +80,8 @@ template<>
 struct SystemTraits<engine::gameplay::SnapshotSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.snapshot";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
 	using Before = SystemTypeList<>;
 	using After = SystemTypeList<>;

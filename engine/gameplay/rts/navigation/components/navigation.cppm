@@ -19,6 +19,9 @@ struct NavigationAgent
 {
 	std::uint8_t surfaces{locomotor_surface::Ground};
 	std::uint8_t radius{0};
+	// Whether its footprint is centred in its cell (getRadiusAndCenter: an odd number of cells across, or capped),
+	// else about a cell corner.
+	std::uint8_t centered{1};
 };
 
 struct NavigationObstacle
@@ -39,7 +42,9 @@ struct Route
 	std::uint8_t next{0};
 	bool complete{false}; // its last point is the destination (or as near as it could get)
 	bool planned{false};
-	std::uint8_t reserved[4]{}; // no padding: checkpoints hold its bytes
+	// An ally stands fixed along it, in the mover's way (Path::getBlockedByAlly): the allies are asked to make way.
+	bool blockedByAlly{false};
+	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
 	std::uint64_t plannedTick{0};
 };
 
@@ -54,11 +59,11 @@ template<>
 struct ComponentTraits<engine::gameplay::NavigationAgent>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.navigation_agent";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::NavigationAgent &value, StateHasher &hasher) noexcept
 	{
-		hasher.AppendU64((std::uint64_t{value.surfaces} << 8) | value.radius);
+		hasher.AppendU64((std::uint64_t{value.centered} << 16) | (std::uint64_t{value.surfaces} << 8) | value.radius);
 	}
 };
 
@@ -81,7 +86,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Route>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.route";
-	static constexpr std::uint32_t Version = 2;
+	static constexpr std::uint32_t Version = 3;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Route &value, StateHasher &hasher) noexcept
 	{
@@ -94,7 +99,7 @@ struct ComponentTraits<engine::gameplay::Route>
 			if (value.layers[index] != engine::gameplay::GroundLayer)
 				hasher.AppendU64(value.layers[index]);
 		}
-		hasher.AppendU64((std::uint64_t{value.count} << 24) | (std::uint64_t{value.next} << 16) | (value.complete ? 2u : 0u) | (value.planned ? 1u : 0u));
+		hasher.AppendU64((std::uint64_t{value.count} << 24) | (std::uint64_t{value.next} << 16) | (value.blockedByAlly ? 4u : 0u) | (value.complete ? 2u : 0u) | (value.planned ? 1u : 0u));
 		hasher.AppendU64(value.plannedTick);
 	}
 };

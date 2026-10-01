@@ -38,7 +38,8 @@ struct ProductionQueue
 	std::uint32_t count{0};
 	std::uint32_t capacity{MaxEntries};
 	std::uint32_t nextId{1}; // the next production id it hands out
-	std::uint32_t reserved{0};
+	// The disabled types it still builds under (ProductionUpdate DisabledTypesToProcess; default DISABLED_HELD, 1 << 3).
+	std::uint32_t runsWhileDisabled{1u << 3};
 
 	bool Full() const noexcept { return count >= capacity || count >= MaxEntries; }
 
@@ -76,7 +77,7 @@ template<>
 struct ComponentTraits<engine::gameplay::ProductionQueue>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.production_queue";
-	static constexpr std::uint32_t Version = 5;
+	static constexpr std::uint32_t Version = 6;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }

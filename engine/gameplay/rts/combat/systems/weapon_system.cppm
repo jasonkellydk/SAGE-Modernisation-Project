@@ -4,6 +4,8 @@ import std;
 export import engine.gameplay.common.status.components.disabled;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.algorithms.attack_goal;
+export import engine.gameplay.rts.combat.algorithms.target_pitch;
+export import engine.gameplay.rts.combat.algorithms.weapon_fitness;
 export import engine.gameplay.rts.construction.components.under_construction;
 export import engine.gameplay.rts.construction.components.sale;
 export import engine.gameplay.common.random.resources.random_seed;
@@ -16,6 +18,8 @@ export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.weapons.components.weapon_slots;
 export import engine.gameplay.rts.combat.components.firing_tracker;
 export import engine.gameplay.common.status.components.status_flags;
+export import engine.gameplay.common.spatial.resources.ground_height;
+export import engine.gameplay.rts.veterancy.components.experience;
 import Engine.Core.Math.FixedRandom;
 
 // Fires armed entities at their targets, chunk-parallel: bodies without a
@@ -32,35 +36,65 @@ export namespace engine::gameplay
 {
 namespace weapon_detail
 {
-// WeaponSet::chooseBestWeaponForTarget (PREFER_MOST_DAMAGE): of the slots whose weapon may target the victim
-// and would hurt it (an unresistable one may do none), the most damaging one that is ready; none ready, the most
-// damaging one that is not (reloading, or its turret still turning onto the victim); ties go to the earlier slot.
-// None fits: the slot in use stays.
-inline std::uint8_t ChooseSlot(const WeaponSlots &set, const WeaponCatalog &weapons, const SpatialEntry &victim, std::uint64_t tick,
-	const Turret *turret, const AltTurret *alt, std::uint32_t unresistable) noexcept
+// What chooseBestWeaponForTarget weighs about the attack: who ordered it, the firer's weapon bonus conditions, and for an
+// object victim its fitness (none: a spot on the ground) and, its set pitch limited, both bodies.
+struct SlotChoice
 {
-	// A locked weapon stays in hand.
+	CommandSource source{CommandSource::Ai};
+	std::uint32_t conditions{0};
+	const VictimFitness *victim{nullptr};
+	const PitchBody *from{nullptr};
+	const PitchBody *body{nullptr};
+};
+
+// WeaponSet::chooseBestWeaponForTarget (PREFER_MOST_DAMAGE): a locked weapon stays in hand; at a spot on the ground, the
+// PRIMARY. Else of the slots its command source may pick (AutoChooseSources: retail tests the mask against
+// CMD_DEFAULT_SWITCH_WEAPON's value, 4, which is FROM_AI's bit, so a slot FROM_AI may pick any source may), not out of
+// ammo for good, whose weapon may target the victim, pitch to it (isWithinTargetPitch) and is reckoned to hurt it
+// (estimateWeaponDamage with the firer's bonus; an unresistable one may do none): the most damaging ready one; none
+// ready, the most damaging one that is not (reloading, or its turret still turning onto the victim); ties to the
+// earlier slot. A slot preferred against the victim (PreferredAgainst: it is every kind named) is the most damaging
+// there is, and ready unless out of ammo. None fits: the PRIMARY.
+inline std::uint8_t ChooseSlot(const WeaponSlots &set, const WeaponCatalog &weapons, const ArmorCatalog &armors, const SpatialEntry &victim,
+	std::uint64_t tick, const Turret *turret, const AltTurret *alt, const SlotChoice &choice) noexcept
+{
 	if (set.locked < WeaponSlotCount)
 		return set.locked;
+	if (choice.victim == nullptr)
+		return 0;
+	constexpr std::uint8_t FromAiBit = 1u << static_cast<std::uint8_t>(CommandSource::Ai);
+	const Engine::Math::Fixed huge = Engine::Math::Fixed::FromRaw(std::numeric_limits<std::int64_t>::max());
 	bool found = false, foundBackup = false;
 	Engine::Math::Fixed best, bestBackup;
 	std::uint8_t decision = 0, backup = 0;
 	for (int index = static_cast<int>(WeaponSlotCount) - 1; index >= 0; --index)
 	{
 		const WeaponSlot &slot = set.slots[static_cast<std::size_t>(index)];
-		if (slot.weapon == WeaponCatalog::None || slot.readyTick == OutOfAmmo)
+		if (slot.weapon == WeaponCatalog::None)
+			continue;
+		if ((slot.sources >> static_cast<std::uint8_t>(choice.source) & 1u) == 0 && (slot.sources & FromAiBit) == 0)
+			continue;
+		if (slot.readyTick == OutOfAmmo)
 			continue;
 		const WeaponDefinition &weapon = weapons.At(slot.weapon);
 		if (!CanTarget(weapon, victim.classes))
 			continue;
-		const Engine::Math::Fixed damage = weapon.primaryDamage;
-		if (damage <= Engine::Math::Fixed{} && weapon.damageType != unresistable)
+		if (choice.from != nullptr && choice.body != nullptr && !WithinTargetPitch(weapon, *choice.from, *choice.body))
 			continue;
+		Engine::Math::Fixed damage = EstimateWeaponDamage(weapon, weapon.primaryDamage * weapons.Bonus(weapon, choice.conditions).Get(WeaponBonusField::Damage),
+			*choice.victim, weapons, armors);
 		bool ready = tick >= slot.readyTick;
 		// isWeaponSlotOnTurretAndAimingAtTarget: its turret is still turning onto the victim.
 		const Turret *aimer = slot.aim == SlotAim::Turret ? turret : slot.aim == SlotAim::AltTurret && alt != nullptr ? &alt->turret : nullptr;
 		if (aimer != nullptr && aimer->state == TurretState::Aim && !aimer->aligned)
 			ready = false;
+		if (damage <= Engine::Math::Fixed{} && weapon.damageType != weapons.unresistable)
+			continue;
+		if (slot.preferred != 0 && (victim.classes & slot.preferred) == slot.preferred)
+		{
+			damage = huge;
+			ready = true;
+		}
 		if (ready)
 		{
 			if (!found || damage >= best)
@@ -77,7 +111,7 @@ inline std::uint8_t ChooseSlot(const WeaponSlots &set, const WeaponCatalog &weap
 			foundBackup = true;
 		}
 	}
-	return found ? decision : foundBackup ? backup : set.current;
+	return found ? decision : foundBackup ? backup : std::uint8_t{0};
 }
 }
 
@@ -85,14 +119,17 @@ struct WeaponSystem
 {
 	using Query = ecs::Query<ecs::Write<Armament>, ecs::Write<Transform>, ecs::Write<AttackTarget>, ecs::Read<Owner>, ecs::Optional<DefinitionRef>,
 		ecs::Optional<Turret>, ecs::Optional<AltTurret>, ecs::OptionalWrite<WeaponSlots>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
-		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::OptionalWrite<FiringTracker>, ecs::Exclude<UnderConstruction>,
+		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::OptionalWrite<FiringTracker>, ecs::Optional<BodyExtent>, ecs::Optional<Experience>, ecs::Exclude<UnderConstruction>,
 		ecs::Exclude<Sale>>; // isAbleToAttack: not unbuilt or sold
 	// What it shoots at is marked (FAERIE_FIRE) or not.
-	using Lookup = ecs::Lookup<ecs::Read<StatusFlags>>;
+	// (And how tall its victim stands, for a weapon's pitch limits.)
+	using Lookup = ecs::Lookup<ecs::Read<StatusFlags>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>, ecs::Read<Experience>>;
 	using Resources = ecs::Resources<ecs::Read<RandomSeed>, ecs::Read<SpatialIndex>, ecs::Read<WeaponCatalog>, ecs::Read<LaunchLayouts>,
-		ecs::Write<FiredShots>, ecs::Write<TemporaryWeaponFires>>;
+		ecs::Write<FiredShots>, ecs::Write<TemporaryWeaponFires>, ecs::Read<GroundHeight>, ecs::Read<ArmorCatalog>, ecs::Write<Disarms>,
+		ecs::Read<DirectShots>>;
 
-	// The tick's shots start empty, with one slot after the chunks' for the weapons fired on their own
+	// The tick's shots start empty, with one slot after the chunks' for the shots fired straight from their weapons by
+	// behaviours earlier in the tick (DirectShots) and the weapons fired on their own
 	// (createAndFireTempWeapon -> Weapon::fireWeapon from the source at the spot: carried by its projectile when it
 	// has one, else landing after its travel).
 	void BeforeChunks(Query &query, ecs::SystemContext &context)
@@ -100,8 +137,12 @@ struct WeaponSystem
 		FiredShots &fired = context.Write<FiredShots>();
 		const std::size_t chunks = query.PreparedChunkCount();
 		fired.Reset(chunks + 1);
+		context.Write<Disarms>().Reset(chunks);
 		const WeaponCatalog &weapons = context.Read<WeaponCatalog>();
 		const std::uint64_t tick = context.Tick();
+		const auto lookup = context.Lookup<Lookup>();
+		// The shots behaviours fired from their objects' own weapons earlier this tick (DirectShots), as they were.
+		context.Read<DirectShots>().ForEach([&](const Shot &shot) { fired.SlotAt(chunks).push_back(shot); });
 		for (const TemporaryWeaponFire &fire : context.Write<TemporaryWeaponFires>().Take())
 		{
 			if (fire.weapon == WeaponCatalog::None)
@@ -113,6 +154,9 @@ struct WeaponSystem
 			Shot shot{fire.source, {}, fire.weapon, fire.sourcePlayer, fire.origin, fire.aim, tick,
 				weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel};
 			shot.launchYaw = Engine::Math::Atan2(toward.y, toward.x);
+			// (createAndFireTempWeapon: fired by its source, at its veterancy.)
+			if (const Experience *experience = lookup.IsAlive(fire.source) ? lookup.Get<Experience>(fire.source) : nullptr)
+				shot.veterancy = experience->level;
 			fired.SlotAt(chunks).push_back(shot);
 		}
 	}
@@ -136,10 +180,13 @@ struct WeaponSystem
 		const auto entities = chunk.Entities();
 		const std::uint64_t tick = context.Tick();
 		auto &out = fired.Slot(context);
+		auto &disarms = context.Write<Disarms>().Slot(context);
 		const auto disabledRows = chunk.Get<Disabled>();
 		const auto targetables = chunk.Get<Targetable>();
 		const auto bonusRows = chunk.Get<WeaponBonusConditions>();
 		auto trackers = chunk.Get<FiringTracker>();
+		const auto extents = chunk.Get<BodyExtent>();
+		const auto experiences = chunk.Get<Experience>();
 		const auto lookup = context.Lookup<Lookup>();
 		for (std::size_t row = 0; row < armaments.size(); ++row)
 		{
@@ -166,7 +213,22 @@ struct WeaponSystem
 			{
 				WeaponSlots &set = slotSets[row];
 				StoreSlot(set.slots[set.current], armament);
-				set.current = weapon_detail::ChooseSlot(set, weapons, *target, tick, mainTurret, altTurret, weapons.unresistable);
+				weapon_detail::SlotChoice choice{targets[row].source, bonusRows.empty() ? 0u : bonusRows[row].Effective()};
+				std::optional<VictimFitness> fitness;
+				std::optional<PitchBody> from, body;
+				if (targets[row].atPosition == 0)
+				{
+					fitness = FitnessOf(*target, lookup, true);
+					choice.victim = &*fitness;
+					if (lookup.IsAlive(target->entity) && AnyPitchLimited(weapons, armament, &set))
+					{
+						from = PitchBodyOf(transforms[row].position, extents.empty() ? nullptr : &extents[row]);
+						body = PitchBodyOf(target->position, lookup.Get<BodyExtent>(target->entity));
+						choice.from = &*from;
+						choice.body = &*body;
+					}
+				}
+				set.current = weapon_detail::ChooseSlot(set, weapons, context.Read<ArmorCatalog>(), *target, tick, mainTurret, altTurret, choice);
 				const WeaponSlot &chosen = set.slots[set.current];
 				slotIndex = set.current;
 				altAimed = chosen.aim == SlotAim::AltTurret && altTurret != nullptr;
@@ -183,8 +245,11 @@ struct WeaponSystem
 			const Engine::Math::FixedVector2 toTarget = target->position.XY() - transform.position.XY();
 			const Engine::Math::Fixed distance = Engine::Math::Length(toTarget);
 			const Engine::Math::Fixed radius = targetables.empty() ? Engine::Math::Fixed{} : targetables[row].radius;
-			if (!WithinAttackRange(BonusAttackRange(weapon.attackRange, bonus), transform.position.XY(), radius, *target) ||
-				TooCloseToAttack(weapon.minimumRange, transform.position.XY(), radius, *target))
+			// A leech range weapon that has fired or wound up in this attack reaches any distance (hasLeechRange).
+			const std::uint8_t slotBit = static_cast<std::uint8_t>(1u << slotIndex);
+			const bool leeching = (targets[row].leech & slotBit) != 0;
+			if (!leeching && (!WithinAttackRange(BonusAttackRange(weapon.attackRange, bonus), transform.position.XY(), radius, *target) ||
+				TooCloseToAttack(weapon.minimumRange, transform.position.XY(), radius, *target)))
 				continue;
 			if (!armament.turret)
 			{
@@ -217,6 +282,9 @@ struct WeaponSystem
 					(weapon.preAttackType == WeaponDefinition::PreAttack::PerAttack && armament.lastVictim == victim);
 				const auto windUp = skip ? 0 : static_cast<std::uint64_t>(
 					(Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(weapon.preAttackDelay)) * bonus.Get(WeaponBonusField::PreAttack)).Floor());
+				// Weapon::preFireWeapon: a wind-up at all sets a leech range weapon's unlimited reach.
+				if (windUp > 0 && weapon.leechRange)
+					targets[row].leech |= slotBit;
 				if (windUp > 1)
 				{
 					armament.preAttackUntil = tick - 1 + windUp;
@@ -231,58 +299,150 @@ struct WeaponSystem
 			armament.preAttackUntil = 0;
 			armament.lastVictim = victim;
 
-			// As Weapon::privateFireWeapon: wrap at the barrel count; this barrel fires.
-			const std::uint8_t barrel = armament.barrel >= armament.barrels ? std::uint8_t{0} : armament.barrel;
-			Engine::Math::FixedVector3 origin = transform.position;
-			if (weapon.projectile)
-			{
-				const bool turreted = armament.turret && aimer != nullptr;
-				origin = LaunchPosition(definitions.empty() ? nullptr : layouts.Of(definitions[row].index), barrel, turreted, turreted ? aimer->angle : Engine::Math::TurnAngle{},
-					turreted ? aimer->pitch : Engine::Math::TurnAngle{}, transform, slotIndex, altAimed);
-			}
-			// A lobbed shot's projectile carries it (it lands where that detonates); others land after their travel.
-			const std::uint64_t travel = weapon.speed > Engine::Math::Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
-			const bool turned = armament.turret && aimer != nullptr;
-			out.push_back({entities[row], targets[row].target, armament.weapon, owners[row].player, origin, target->position, tick,
-				weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel, transform.facing + (turned ? aimer->angle : Engine::Math::TurnAngle{}),
-				turned ? aimer->pitch : Engine::Math::TurnAngle{}, ecs::Entity{}, slotIndex, {}, shelter, 0, bonus.Get(WeaponBonusField::Damage),
-				bonus.Get(WeaponBonusField::Radius)});
-
 			auto random = Engine::Math::Stream(seed, {tick, entities[row].index, entities[row].generation});
-			const std::uint64_t spread = weapon.delayMax > weapon.delayMin ? weapon.delayMax - weapon.delayMin : 0;
-			const std::uint64_t delay = weapon.delayMin +
-				(spread == 0 ? 0 : static_cast<std::uint64_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(spread))));
-			// getDelayBetweenShots: divided by the rate-of-fire bonus.
-			armament.readyTick = tick + std::max<std::uint64_t>(BonusDelay(delay, bonus), 1);
-			armament.firedTick = tick;
-			// A limited attack counts the shot; its last ends it.
-			CountShot(targets[row]);
-			// Then move to the next.
-			armament.firedBarrel = barrel;
-			armament.barrel = static_cast<std::uint8_t>(barrel + 1);
-			armament.reloading = false;
-			if (weapon.clipSize > 0)
+			targets[row].fired = 1;
+			// Weapon::privateFireWeapon's DAMAGE_DISARM: nothing is fired; the victim is disarmed (the game carries it out),
+			// the shot counted and a round spent (an emptied clip reloading as it would), but no wait between shots is set.
+			if (weapon.damageType == weapons.disarm)
 			{
-				if (armament.clip == 0 || armament.clip > weapon.clipSize)
-					armament.clip = weapon.clipSize;
-				if (--armament.clip == 0)
+				if (targets[row].atPosition == 0)
+					disarms.push_back({entities[row], victim, armament.weapon, owners[row].player, target->position,
+						experiences.empty() ? std::uint8_t{0} : experiences[row].level});
+				CountShot(targets[row]);
+				if (weapon.clipSize > 0)
 				{
-					if (weapon.reloadsAtBase)
-					{
-						// Out of ammo until it reloads at base (its airfield refills it).
-						armament.readyTick = OutOfAmmo;
-						armament.reloading = true;
-					}
-					else
+					if (armament.clip == 0 || armament.clip > weapon.clipSize)
+						armament.clip = weapon.clipSize;
+					if (--armament.clip == 0)
 					{
 						armament.clip = weapon.clipSize;
 						armament.readyTick = tick + std::max<std::uint64_t>(BonusDelay(weapon.clipReload, bonus), 1);
 						armament.reloading = true;
+						if (!slotSets.empty())
+							ReleaseTemporaryLock(slotSets[row]);
 					}
-					// Object::fireCurrentWeapon: reloaded, it lets go of a temporary lock.
-					if (!slotSets.empty())
-						ReleaseTemporaryLock(slotSets[row]);
 				}
+			}
+			else
+			{
+				// As Weapon::privateFireWeapon: wrap at the barrel count; this barrel fires.
+				// (Wrapped round, the first barrel starts its ShotsPerBarrel afresh.)
+				if (armament.barrel >= armament.barrels)
+					armament.barrelShots = 0;
+				const std::uint8_t barrel = armament.barrel >= armament.barrels ? std::uint8_t{0} : armament.barrel;
+				Engine::Math::FixedVector3 origin = transform.position;
+				if (weapon.projectile)
+				{
+					const bool turreted = armament.turret && aimer != nullptr;
+					origin = LaunchPosition(definitions.empty() ? nullptr : layouts.Of(definitions[row].index), barrel, turreted, turreted ? aimer->angle : Engine::Math::TurnAngle{},
+						turreted ? aimer->pitch : Engine::Math::TurnAngle{}, transform, slotIndex, altAimed);
+				}
+				// WeaponTemplate::fireWeaponTemplate's scatter: ScatterRadius, plus ScatterRadiusVsInfantry at an infantry
+				// victim, randomised (a distance up to it, any way round); the aim moves that far, on to the ground there. A
+				// projectile with any scatter flies at that spot and not after its victim (so it can miss); a shot without a
+				// projectile still hits its victim (the damage goes to the victim's position).
+				Engine::Math::FixedVector3 aim = target->position;
+				ecs::Entity shotVictim = targets[row].target;
+				// Weapon::privateFireWeapon's ScatterTarget pattern: while this clip has entries it has not aimed at, it aims at
+				// a random one of them (scaled by ScatterTargetScalar) off the victim's position, on the ground there, and at no
+				// victim; that entry is used up until the clip reloads. The pattern used up, it fires as it would without one.
+				const std::uint32_t patternSize = std::min(weapon.scatterCount, ScatterTargetMax);
+				const std::uint64_t unused = patternSize == 0 ? 0 : ~armament.scatterUsed & (patternSize == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << patternSize) - 1);
+				if (unused != 0)
+				{
+					auto patternRandom = Engine::Math::Stream(seed ^ 0x5CA77A6Eu, {tick, entities[row].index, entities[row].generation});
+					auto pick = Engine::Math::UniformInt(patternRandom, 0, static_cast<std::int64_t>(std::popcount(unused)) - 1);
+					std::uint64_t left = unused;
+					for (; pick > 0; --pick)
+						left &= left - 1;
+					const auto entry = static_cast<std::uint32_t>(std::countr_zero(left));
+					armament.scatterUsed |= std::uint64_t{1} << entry;
+					const Engine::Math::FixedVector2 offset = weapons.scatterTargets[weapon.scatterFirst + entry];
+					aim.x += offset.x * weapon.scatterTargetScalar;
+					aim.y += offset.y * weapon.scatterTargetScalar;
+					aim.z = context.Read<GroundHeight>().At(aim.XY());
+					shotVictim = {};
+				}
+				const bool infantryVictim = shotVictim != ecs::Entity{} && (target->classes & target_class::Infantry) != 0;
+				if (weapon.scatterRadius > Engine::Math::Fixed{} || (weapon.infantryScatter > Engine::Math::Fixed{} && infantryVictim))
+				{
+					Engine::Math::Fixed scatter = weapon.scatterRadius;
+					if (weapon.infantryScatter > Engine::Math::Fixed{} && infantryVictim)
+						scatter += weapon.infantryScatter;
+					auto scatterRandom = Engine::Math::Stream(seed ^ 0x5CA77E4u, {tick, entities[row].index, entities[row].generation});
+					scatter = Engine::Math::UniformFixed(scatterRandom, Engine::Math::Fixed{}, scatter);
+					const Engine::Math::TurnAngle way{static_cast<std::uint32_t>(Engine::Math::UniformInt(scatterRandom, 0, 0xFFFFFFFFll))};
+					if (weapon.projectile && scatter > Engine::Math::Fixed{})
+					{
+						aim.x += scatter * Engine::Math::Cos(way);
+						aim.y += scatter * Engine::Math::Sin(way);
+						aim.z = context.Read<GroundHeight>().At(aim.XY());
+						shotVictim = {};
+					}
+				}
+				// A lobbed shot's projectile carries it (it lands where that detonates); others land after their travel.
+				const std::uint64_t travel = weapon.speed > Engine::Math::Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
+				const bool turned = armament.turret && aimer != nullptr;
+				out.push_back({entities[row], shotVictim, armament.weapon, owners[row].player, origin, aim, tick,
+					weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel, transform.facing + (turned ? aimer->angle : Engine::Math::TurnAngle{}),
+					turned ? aimer->pitch : Engine::Math::TurnAngle{}, ecs::Entity{}, slotIndex, {}, shelter, experiences.empty() ? std::uint8_t{0} : experiences[row].level, 0, {}, bonus.Get(WeaponBonusField::Damage),
+					bonus.Get(WeaponBonusField::Radius)});
+
+				const std::uint64_t spread = weapon.delayMax > weapon.delayMin ? weapon.delayMax - weapon.delayMin : 0;
+				const std::uint64_t delay = weapon.delayMin +
+					(spread == 0 ? 0 : static_cast<std::uint64_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(spread))));
+				// getDelayBetweenShots: divided by the rate-of-fire bonus.
+				armament.readyTick = tick + std::max<std::uint64_t>(BonusDelay(delay, bonus), 1);
+				armament.firedTick = tick;
+				// Weapon::privateFireWeapon: a leech range weapon, once fired, reaches any distance for the rest of the attack.
+				if (weapon.leechRange)
+					targets[row].leech |= slotBit;
+				// A limited attack counts the shot; its last ends it.
+				CountShot(targets[row]);
+				// Then move to the next.
+				armament.firedBarrel = barrel;
+				// Its ShotsPerBarrel fired, the next barrel's turn (m_numShotsForCurBarrel).
+				if (++armament.barrelShots >= weapon.shotsPerBarrel)
+				{
+					armament.barrel = static_cast<std::uint8_t>(barrel + 1);
+					armament.barrelShots = 0;
+				}
+				else
+					armament.barrel = barrel;
+				armament.reloading = false;
+				if (weapon.clipSize > 0)
+				{
+					if (armament.clip == 0 || armament.clip > weapon.clipSize)
+						armament.clip = weapon.clipSize;
+					if (--armament.clip == 0)
+					{
+						if (weapon.reloadsAtBase || weapon.noReload)
+						{
+							// Out of ammo (Weapon::privateFireWeapon: m_status OUT_OF_AMMO, never fireable again) until it
+							// reloads at base (its airfield refills it); a weapon that never reloads stays so.
+							armament.readyTick = OutOfAmmo;
+							armament.reloading = true;
+						}
+						else
+						{
+							armament.clip = weapon.clipSize;
+							armament.scatterUsed = 0;
+							armament.readyTick = tick + std::max<std::uint64_t>(BonusDelay(weapon.clipReload, bonus), 1);
+							armament.reloading = true;
+						}
+						// Object::fireCurrentWeapon: reloaded, it lets go of a temporary lock.
+						if (!slotSets.empty())
+							ReleaseTemporaryLock(slotSets[row]);
+					}
+				}
+			}
+			// Object::isReloadTimeShared: the set's other weapons wait as long (not a clip emptied for good).
+			if (!slotSets.empty() && armament.readyTick != OutOfAmmo)
+			{
+				WeaponSlots &set = slotSets[row];
+				ShareReloadTime(set, armament.readyTick, armament.reloading);
+				set.slots[set.current].readyTick = armament.readyTick;
+				set.slots[set.current].reloading = armament.reloading;
 			}
 			if (!trackers.empty())
 			{
@@ -294,8 +454,14 @@ struct WeaponSystem
 				ShotFired(tracker, weapon, armament.weapon, victim, armament.readyTick, tick);
 				// Weapon::onWeaponBonusChange: a changed rate of fire re-times the wait from now (a new pick between shots).
 				if (tracker.level != level || tracker.faerie != faerie)
+				{
+					const std::uint64_t before = armament.readyTick;
 					Retime(armament, weapon, weapons.Bonus(weapon, (bonusRows.empty() ? 0u : bonusRows[row].Effective()) |
 						ContinuousFireConditions(tracker, weapons)), tick, random);
+					// (Shared: every weapon waits as long, reloading.)
+					if (!slotSets.empty() && armament.readyTick != before)
+						ShareReloadTime(slotSets[row], armament.readyTick, true);
+				}
 			}
 		}
 	}
@@ -379,6 +545,8 @@ template<>
 struct SystemTraits<engine::gameplay::WeaponSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.weapons";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<>;
 	using After = SystemTypeList<engine::gameplay::MovementSystem, engine::gameplay::TargetingSystem>;

@@ -47,6 +47,20 @@ struct AbilityNotices
 	std::vector<PowerTrigger> powers;
 	std::vector<ecs::Entity> defected;
 	std::vector<ecs::Entity> hijacks; // hijackers that took a vehicle (the HijackDriver sound on them)
+	// Buildings sabotaged (CrateCollide::doSabotageFeedbackFX: its MiscAudio sound on it and a selection flash).
+	struct Sabotage
+	{
+		enum class Sound : std::uint8_t
+		{
+			None,       // a fake building: no more feedback
+			ResetTimer, // SabotageResetTimeBuilding
+			Withdraw,   // MoneyWithdrawSound
+			ShutDown,   // SabotageShutDownBuilding
+		};
+		ecs::Entity building;
+		Sound sound{Sound::None};
+	};
+	std::vector<Sabotage> sabotages;
 };
 }
 

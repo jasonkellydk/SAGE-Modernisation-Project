@@ -122,7 +122,15 @@ StepResult StepBody(PhysicsBody &body, Transform &transform, Attitude *attitude,
 	transform.facing = transform.facing + Engine::Math::TurnAngle{static_cast<std::uint32_t>(Scale(body.yawRate, body.rateFactor))};
 	if (attitude != nullptr)
 	{
-		attitude->pitch = attitude->pitch + Engine::Math::TurnAngle{static_cast<std::uint32_t>(Scale(body.pitchRate, body.rateFactor))};
+		// With a CenterOfMassOffset the pitch rate eases off as it comes to point straight down (a negative offset: up):
+		// scaled by sin of the angle left to go, cos(pitch) with its sign (PhysicsBehavior::update).
+		std::int32_t pitchStep = Scale(body.pitchRate, body.rateFactor);
+		if (body.centerOfMassOffset != Fixed{})
+		{
+			const Fixed lean = Engine::Math::Cos(attitude->pitch);
+			pitchStep = Scale(pitchStep, body.centerOfMassOffset > Fixed{} ? lean : Fixed{} - lean);
+		}
+		attitude->pitch = attitude->pitch + Engine::Math::TurnAngle{static_cast<std::uint32_t>(pitchStep)};
 		attitude->roll = attitude->roll + Engine::Math::TurnAngle{static_cast<std::uint32_t>(Scale(body.rollRate, body.rateFactor))};
 	}
 

@@ -13,59 +13,46 @@ using namespace generalszh::shell;
 
 namespace
 {
-// A replay's header as the original writes it (the layout of a shipped 1.04 replay).
+// A replay's header as the game writes it.
 std::vector<std::byte> Replay(std::uint16_t hour, std::uint16_t minute, const std::string &map, int localPlayer)
 {
-	std::vector<std::byte> bytes;
-	const auto u8 = [&](std::uint32_t value) { bytes.push_back(static_cast<std::byte>(value & 0xFF)); };
-	const auto u16 = [&](std::uint32_t value) { u8(value), u8(value >> 8); };
-	const auto u32 = [&](std::uint32_t value) { u16(value), u16(value >> 16); };
-	const auto wide = [&](const std::u16string &text) {
-		for (const char16_t c : text)
-			u16(c);
-		u16(0);
-	};
-	const auto narrow = [&](const std::string &text) {
-		for (const char c : text)
-			u8(static_cast<unsigned char>(c));
-		u8(0);
-	};
-	for (const char c : std::string("GENREP"))
-		u8(static_cast<unsigned char>(c));
-	u32(1745713883), u32(1745715733), u32(55427);
-	u8(0), u8(0);
-	for (int slot = 0; slot < 8; ++slot)
-		u8(0);
-	wide(u"Last Replay");
-	for (const std::uint16_t field : {std::uint16_t{2025}, std::uint16_t{4}, std::uint16_t{0}, std::uint16_t{27}, hour, minute, std::uint16_t{23},
-			 std::uint16_t{102}})
-		u16(field);
-	wide(u"Version 1.04");
-	wide(u"Oct 17 2005 17:31:25");
-	u32(65540), u32(0x12345678), u32(0x9ABCDEF0);
-	narrow("US=1;M=07maps/" + map + ";MC=4AF0F44A;SD=1;");
-	narrow(std::to_string(localPlayer));
-	return bytes;
+	ReplayHeader header;
+	header.startTime = 1745713883;
+	header.endTime = 1745715733;
+	header.frameCount = 55427;
+	header.name = u"Last Replay";
+	header.date = {2025, 4, 0, 27, hour, minute, 23, 102};
+	header.version = u"Version 1.04";
+	header.gameOptions = "US=1;M=07maps/" + map + ";MC=4AF0F44A;SD=1;";
+	header.localPlayer = localPlayer;
+	return WriteReplayHeader(header);
 }
 }
 
 BOOST_AUTO_TEST_SUITE(replay_menu_view_model)
 
-// Legacy parity (RecorderClass::readReplayHeader, GameState date and time buffers).
-BOOST_AUTO_TEST_CASE(legacy_parity_a_replay_header_reads_as_the_original_writes_it)
+// The port's own replay header (no compatibility with the original's GENREP files) reads back as written; anything else
+// (an original's GENREP replay, a damaged file) is no replay.
+BOOST_AUTO_TEST_CASE(a_replay_header_reads_back_as_written)
 {
 	const auto bytes = Replay(3, 31, "floodedplains", 0);
 	const auto header = ReadReplayHeader(bytes);
 	BOOST_TEST_REQUIRE(header.has_value());
 	BOOST_TEST(header->frameCount == 55427u);
 	BOOST_TEST((header->version == u"Version 1.04"));
+	BOOST_TEST((header->name == u"Last Replay"));
 	BOOST_TEST(header->date.year == 2025);
 	BOOST_TEST(header->date.minute == 31);
 	BOOST_TEST(header->localPlayer == 0);
 	BOOST_TEST(header->Map() == "floodedplains");
-	std::vector<std::byte> broken = bytes;
-	broken[0] = std::byte{'X'};
-	BOOST_TEST(!ReadReplayHeader(broken).has_value()); // not GENREP
+	BOOST_TEST(header->size == bytes.size());
+	BOOST_TEST((WriteReplayHeader(*header) == bytes));
+	std::vector<std::byte> genrep(bytes.size(), std::byte{0});
+	for (std::size_t index = 0; index < 6; ++index)
+		genrep[index] = static_cast<std::byte>("GENREP"[index]);
+	BOOST_TEST(!ReadReplayHeader(genrep).has_value());
+	const std::vector<std::byte> cut(bytes.begin(), bytes.end() - 3);
+	BOOST_TEST(!ReadReplayHeader(cut).has_value());
 }
 
 // Legacy parity (PopulateReplayFileListbox, createReplayName, deleteReplay / copyReplay).

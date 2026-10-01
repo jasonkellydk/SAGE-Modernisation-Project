@@ -9,12 +9,14 @@ import Graphics.Tests.Device;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(strip_seams_distance_fade_and_zero_alpha_anchors)
 {
-    std::array<TrackEdge,4> edges{};
+    std::array<std::array<float,3>,4> left{}, right{};
+    std::array<float,4> v{}, alpha{1,1,1,0};
     for (unsigned i=0;i<4;++i) {
-        edges[i].positions = {{{-1,float(i),0.5f},{1,float(i),0.5f}}};
-        edges[i].uv = {{{0,float(i)},{1,float(i)}}};
+        left[i] = {-1,float(i),0.5f};
+        right[i] = {1,float(i),0.5f};
+        v[i] = float(i);
     }
-    edges[3].alpha = 0;
+    const TrackEdges edges{left,right,v,alpha};
     TrackGeometry geometry;
     geometry.Build(edges,4,2,{1,1,1});
     BOOST_REQUIRE_EQUAL(geometry.vertices.size(),8);
@@ -25,7 +27,7 @@ BOOST_AUTO_TEST_CASE(strip_seams_distance_fade_and_zero_alpha_anchors)
     BOOST_CHECK_EQUAL(geometry.vertices[6].color[3],0);
     const std::array<std::uint32_t,12> expected{0,1,3,0,3,2,2,3,5,2,5,4};
     BOOST_CHECK_EQUAL_COLLECTIONS(geometry.indices.begin(),geometry.indices.begin()+12,expected.begin(),expected.end());
-    geometry.Build(std::span(edges).first(1),4,2,{1,1,1});
+    geometry.Build({std::span(left).first(1),std::span(right).first(1),std::span(v).first(1),std::span(alpha).first(1)},4,2,{1,1,1});
     BOOST_CHECK(geometry.vertices.empty() && geometry.indices.empty());
 }
 BOOST_AUTO_TEST_CASE(track_texture_and_vertex_fade_blend_without_writing_depth)
@@ -34,10 +36,9 @@ BOOST_AUTO_TEST_CASE(track_texture_and_vertex_fade_blend_without_writing_depth)
     BOOST_REQUIRE(device.Is_Valid());
     SurfaceRenderer renderer;
     BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
-    std::array<TrackEdge,2> edges{};
-    edges[0].positions = {{{-1,-1,0.5f},{1,-1,0.5f}}};
-    edges[1].positions = {{{-1,1,0.5f},{1,1,0.5f}}};
-    edges[0].alpha = edges[1].alpha = 0.5f;
+    std::array<std::array<float,3>,2> left{{{-1,-1,0.5f},{-1,1,0.5f}}}, right{{{1,-1,0.5f},{1,1,0.5f}}};
+    std::array<float,2> v{}, alpha{0.5f,0.5f};
+    const TrackEdges edges{left,right,v,alpha};
     TrackGeometry geometry;
     geometry.Build(edges,8,4,{1,1,1});
     const auto mesh = renderer.Create_Mesh(geometry.vertices,geometry.indices);
@@ -66,8 +67,8 @@ BOOST_AUTO_TEST_CASE(track_texture_and_vertex_fade_blend_without_writing_depth)
     BOOST_REQUIRE(renderer.Draw(commands,mesh,style,parameters,textures));
     BOOST_REQUIRE(device.Readback_Texture(target,pixels,16*4));
     for (int c=0;c<4;++c) BOOST_CHECK_SMALL(std::to_integer<int>(pixels[(8*16+8)*4+c])-191,2);
-    for (auto& edge : edges) for (auto& position : edge.positions) position[2] = 0.75f;
-    edges[0].alpha = edges[1].alpha = 1;
+    for (auto* side : {&left,&right}) for (auto& position : *side) position[2] = 0.75f;
+    alpha = {1,1};
     geometry.Build(edges,8,4,{1,0,0});
     BOOST_REQUIRE(renderer.Update_Mesh(mesh,geometry.vertices,geometry.indices));
     parameters.textured = 0;

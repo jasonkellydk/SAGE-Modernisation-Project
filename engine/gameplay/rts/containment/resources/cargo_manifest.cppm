@@ -50,8 +50,22 @@ struct DropExit
 	Engine::Math::FixedVector3 offset;
 	Engine::Math::FixedVector2 moveTo;
 	bool moves{false};
+	// InheritTransportVelocity: the rider is pushed by the carrier's velocity taken as a force (applyForce).
+	bool inherit{false};
+	Engine::Math::FixedVector3 velocity;
 };
 using DropExits = ecs::ChunkOutputs<DropExit>;
+
+// A rider taken out of its transport by name and put where it is told, facing as told, on physics (exitObjectViaDoor
+// then setWorldTransform: a rappeller at the end of its rope; the transport aloft, it may fall: setAllowToFall).
+struct PlacedExit
+{
+	ecs::Entity transport;
+	ecs::Entity rider;
+	Engine::Math::FixedVector3 at;
+	Engine::Math::TurnAngle facing;
+};
+using PlacedExits = ecs::ChunkOutputs<PlacedExit>;
 
 struct RiderExits : ecs::ChunkOutputs<RiderExit>
 {
@@ -143,6 +157,23 @@ public:
 		m_cargo.erase(found);
 		auto &home = m_cargo[Key(to)];
 		home.insert(home.end(), passengers.begin(), passengers.end());
+	}
+
+	// One passenger aboard `from` into `to`, after those already there, as MoveAll (no rider in or out: a network's
+	// transports share one list of riders). False: it was not aboard `from`.
+	bool Move(ecs::Entity from, ecs::Entity to, ecs::Entity passenger)
+	{
+		const auto found = m_cargo.find(Key(from));
+		if (from == to || found == m_cargo.end())
+			return false;
+		const auto at = std::find(found->second.begin(), found->second.end(), passenger);
+		if (at == found->second.end())
+			return false;
+		found->second.erase(at);
+		if (found->second.empty())
+			m_cargo.erase(found);
+		m_cargo[Key(to)].push_back(passenger);
+		return true;
 	}
 
 	void Link(ecs::Entity transport, std::uint32_t network)
@@ -301,6 +332,11 @@ template<>
 struct ResourceTraits<engine::gameplay::DropExits>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.drop_exits";
+};
+template<>
+struct ResourceTraits<engine::gameplay::PlacedExits>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.placed_exits";
 };
 
 template<>

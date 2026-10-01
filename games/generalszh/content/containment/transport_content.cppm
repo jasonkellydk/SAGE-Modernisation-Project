@@ -129,6 +129,18 @@ std::optional<engine::gameplay::TransportDefinition> ReadObjectTransport(const O
 	{
 		transport.deletesStuckRiders = yes("DestroyRidersWhoAreNotFreeToExit", false);
 		transport.goAggressiveOnExit = yes("GoAggressiveOnExit", false);
+		transport.armedRidersUpgrade = yes("ArmedRidersUpgradeMyWeaponSet", false);
+		transport.resetMoodOnExit = yes("ResetMoodCheckTimeOnExit", true);
+		if (type == "TransportContain")
+		{
+			transport.orientOnExit = yes("OrientLikeContainerOnExit", false);
+			transport.keepVelocityOnExit = yes("KeepContainerVelocityOnExit", false);
+			transport.delayExitInAir = yes("DelayExitInAir", false);
+			// INI::parseAngularVelocityReal: degrees a second, as radians a tick.
+			if (const auto *pitch = contain->block->Find("ExitPitchRate"))
+				transport.exitPitchRate = engine::config::values::ParseFixed(pitch->Value()).value_or(Engine::Math::Fixed{}) *
+					Engine::Math::Fixed::FromRaw(205887) / Engine::Math::Fixed::FromInt(180) / Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(step.TicksPerSecond()));
+		}
 		if (const auto *regen = contain->block->Find("HealthRegen%PerSec"))
 			transport.riderRegen = engine::config::values::ParseFixed(regen->Value()).value_or(Engine::Math::Fixed{}) /
 				Engine::Math::Fixed::FromInt(100 * static_cast<std::int64_t>(step.TicksPerSecond()));
@@ -249,6 +261,8 @@ struct RiderChangeRider
 	std::string condition;
 	std::string weaponFlag;
 	std::string status;
+	std::string commandSet;
+	std::string locomotorSet;
 };
 
 struct RiderChangeContent
@@ -267,7 +281,8 @@ inline std::optional<RiderChangeContent> ReadRiderChange(const ObjectDefinition 
 		RiderChangeContent content;
 		for (int index = 1; index <= 8; ++index)
 			if (const auto *rider = module.block->Find("Rider" + std::to_string(index)); rider != nullptr && rider->values.size() >= 4)
-				content.riders.push_back({std::string(rider->Value(0)), std::string(rider->Value(1)), std::string(rider->Value(2)), std::string(rider->Value(3))});
+				content.riders.push_back({std::string(rider->Value(0)), std::string(rider->Value(1)), std::string(rider->Value(2)), std::string(rider->Value(3)),
+					rider->values.size() >= 5 ? std::string(rider->Value(4)) : std::string{}, rider->values.size() >= 6 ? std::string(rider->Value(5)) : std::string{}});
 		if (const auto *delay = module.block->Find("ScuttleDelay"))
 		{
 			const auto ms = engine::config::values::ParseInt(delay->Value()).value_or(0);

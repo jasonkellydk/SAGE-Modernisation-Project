@@ -41,6 +41,7 @@ struct AudioCommand
 		UserSound3D,
 		UserSpeech,
 		Eva,            // EVA's line (`text`), heard without a position: its voice
+		FlatSoundsPaused, // SUSPEND_ / RESUME_BACKGROUND_SOUNDS: pauseAudio / resumeAudio(AudioAffect_Sound) (`flag`: paused)
 	};
 	Kind kind{Kind::MusicTrack};
 	std::string text;
@@ -58,6 +59,9 @@ struct AudioState
 	std::string musicName;
 	engine::audio::SoundHandle music{0};
 	std::uint32_t musicCompletions{0}; // how often the track has played through since it was set (hasMusicTrackCompleted)
+	// The progress last told the simulation (a single-player mission's scripts ask it through a MusicProgress command).
+	std::string reportedMusic;
+	std::uint32_t reportedCompletions{0};
 	std::vector<std::string> speech; // queued, in turn
 	engine::audio::SoundHandle speaking{0};
 	engine::audio::SoundHandle interfaceVoice{0}; // the last front-end voice (a challenge general's preview)

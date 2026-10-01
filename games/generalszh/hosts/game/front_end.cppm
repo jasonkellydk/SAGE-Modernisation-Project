@@ -10,6 +10,7 @@ import games.generalszh.content.loading.content_loader;
 export import games.generalszh.session.setup.game_setup;
 export import games.generalszh.shell.quit_menu.quit_menu_view_model;
 export import games.generalszh.shell.score.score_screen_view_model;
+export import games.generalszh.shell.game_setup.setup_catalog;
 
 // The front end over the shell map (the original's Shell with its screens):
 // the main menu, the options over it and the credits, each a WND layout
@@ -74,6 +75,8 @@ public:
 	std::optional<LanStart> TakeLanStart();
 	// A saved game the player chose to load (the load screen's Load): its file, once.
 	std::optional<std::filesystem::path> TakeLoadRequest();
+	// A replay chosen on the replay menu (its Load: RecorderClass::playbackFile), not yet taken by the host.
+	std::optional<std::filesystem::path> TakeReplayRequest();
 	// The folder saved games go in (GameState::getSaveDirectory).
 	std::filesystem::path SaveFolder() const;
 
@@ -104,6 +107,8 @@ public:
 	// The game is over (GameLogic::exitGame): the shell shows again, on the screen the game was started from.
 	void LeaveGame();
 	bool InGame() const noexcept;
+	// The MapCache and Multiplayer.ini's colours (a load screen's map preview and house colours).
+	const shell::SetupCatalog &SetupCatalog() const noexcept;
 
 private:
 	struct State;

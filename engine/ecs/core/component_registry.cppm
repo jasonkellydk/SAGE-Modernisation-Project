@@ -175,8 +175,32 @@ export namespace ecs
         std::unordered_map<std::type_index, ComponentInfo*> m_typeToInfo;
         std::unordered_map<ComponentKey, ComponentInfo*> m_keyToInfo;
         std::vector<ComponentInfo*> m_idToInfo;
+        // Once frozen: stable key -> dense id, open addressing (power-of-two size, linear probing). TryGet<T> of a
+        // component type with traits hashes nothing at run time: its key is a compile-time constant, and a stable
+        // name belongs to one registered type (duplicates are rejected), so the key alone identifies it.
+        struct KeySlot
+        {
+            ComponentKey key{};
+            ComponentId id{ InvalidComponentId };
+        };
+        std::vector<KeySlot> m_keySlots;
+        std::size_t m_keyMask{ 0 };
         bool m_frozen{ false };
         ComponentSchemaHash m_schemaHash{ UnfinalizedSchemaHash };
+
+    public:
+        // The dense id of a stable key (InvalidComponentId: none, or not frozen yet).
+        [[nodiscard]] ComponentId FindFrozenKey(const ComponentKey key) const noexcept
+        {
+            if (m_keySlots.empty())
+                return InvalidComponentId;
+            for (std::size_t slot = static_cast<std::size_t>(key ^ (key >> 29)) & m_keyMask;; slot = (slot + 1) & m_keyMask)
+            {
+                const KeySlot& entry = m_keySlots[slot];
+                if (entry.id == InvalidComponentId || entry.key == key)
+                    return entry.id;
+            }
+        }
     };
 
     namespace detail
@@ -325,6 +349,14 @@ export namespace ecs
     template<typename T>
     ComponentId ComponentRegistry::TryGet() const noexcept
     {
+        if constexpr (detail::HasComponentTraits<T>)
+        {
+            if (m_frozen)
+            {
+                constexpr ComponentKey key = HashComponentKey(ComponentTraits<T>::StableName);
+                return FindFrozenKey(key);
+            }
+        }
         return TryGet(typeid(T));
     }
 }
@@ -453,6 +485,19 @@ namespace ecs
         for (ComponentId id = 0; id < ordered.size(); ++id)
         {
             ordered[id]->id = id;
+        }
+
+        std::size_t capacity = 16;
+        while (capacity < ordered.size() * 2)
+            capacity *= 2;
+        m_keySlots.assign(capacity, KeySlot{});
+        m_keyMask = capacity - 1;
+        for (const ComponentInfo* info : ordered)
+        {
+            std::size_t slot = static_cast<std::size_t>(info->stableKey ^ (info->stableKey >> 29)) & m_keyMask;
+            while (m_keySlots[slot].id != InvalidComponentId)
+                slot = (slot + 1) & m_keyMask;
+            m_keySlots[slot] = KeySlot{ info->stableKey, info->id };
         }
 
         m_frozen = true;

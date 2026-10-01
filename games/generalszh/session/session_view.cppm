@@ -14,6 +14,7 @@ export import engine.gameplay.rts.topple.resources.topple_events;
 export import games.generalszh.scripting.camera_vocabulary;
 export import games.generalszh.scripting.presentation_vocabulary;
 export import games.generalszh.commands.game_commands;
+export import engine.net.lockstep.command_recording;
 
 // What the presentation sees of a running game, and how it runs one: a
 // narrow, read-mostly view (the tick's snapshot, events and the content
@@ -31,6 +32,22 @@ struct StartingPlayer
 	int playerTemplate{0};
 	int startPosition{0};
 };
+
+// GameLogic::startNewGame's scenery: shrubbery placed only with trees on (UseTrees), and clearing fluff made a client
+// prop (forceFluffToProp: below High detail, Custom never; a network game uses trees and forces fluff).
+struct ScenerySetup
+{
+	bool useTrees{true};
+	bool forceFluffToProp{false};
+};
+
+// The scenery for the detail level (StaticGameLODLevel: 0 Low .. 3 VeryHigh, 4 Custom) and the player's trees option.
+inline ScenerySetup ScenerySetupFor(std::int32_t detailLevel, bool useTrees, bool networkGame) noexcept
+{
+	if (networkGame)
+		return {true, true};
+	return {useTrees, detailLevel < 2};
+}
 
 struct SessionOptions
 {
@@ -76,6 +93,10 @@ struct SessionOptions
 	// NAMED_SELECTED: whether the local player has the entity selected (the presentation's selection; none: never, as in
 	// a multiplayer game).
 	std::function<bool(ecs::Entity)> selected;
+	// RecorderClass: the game's ticks are recorded from its start for a replay (skirmish and LAN games).
+	bool record{false};
+	// GameLogic::startNewGame's scenery (see ScenerySetup).
+	ScenerySetup scenery;
 };
 
 // A player's score keeping as the score screen shows it (the original's Player and its ScoreKeeper): its name and
@@ -190,6 +211,8 @@ public:
 	// Whether a player's order may fire `power` of `source` at `target` now (canDoSpecialPowerAtObject with its source's
 	// module fully ready).
 	virtual bool CanTargetWithPower(ecs::Entity source, std::string_view power, ecs::Entity target) = 0;
+	// ActionManager::canEnterObject(COMBATDROP_INTO) for a player's order: whether `transport` may combat drop into `target`.
+	virtual bool CanCombatDropInto(ecs::Entity transport, ecs::Entity target) = 0;
 	// A charging power button's inverse clock, per mille (1000: none).
 	virtual std::uint32_t CommandClock(ecs::Entity entity, const content::CommandButtonContent &button) = 0;
 	// The general's powers shortcut bar (Player::findMostReadyShortcutSpecialPowerOfType, hasAnyShortcutSpecialPower,
@@ -219,6 +242,17 @@ public:
 	virtual void Submit(const commands::GameCommand &command) = 0;
 	// The whole simulation state between ticks (a saved game's), for ResumeClientMatch.
 	virtual std::vector<std::byte> Checkpoint() const = 0;
+	// The ticks recorded so far (SessionOptions::record); none when not recording.
+	virtual const engine::net::CommandRecording *Recording() const noexcept { return nullptr; }
+	// A replay's playback: done once every recorded tick has run (RecorderClass::stopPlayback), and the first tick after
+	// which its state hash differed from the recording's (handleCRCMessage's mismatch). None: not a replay.
+	struct Playback
+	{
+		bool done{false};
+		std::optional<std::uint64_t> mismatch;
+		std::uint64_t endTick{0};
+	};
+	virtual std::optional<Playback> PlaybackState() const noexcept { return std::nullopt; }
 };
 
 std::unique_ptr<ClientMatch> MakeClientMatch(const engine::level::Level &level, const content::GameContent &content, SessionOptions options);
@@ -238,4 +272,9 @@ std::unique_ptr<ClientMatch> MakeNetworkMatch(const engine::level::Level &level,
 // A game resumed from a checkpoint (a saved game) on the same level, content and options; null when it does not fit.
 std::unique_ptr<ClientMatch> ResumeClientMatch(const engine::level::Level &level, const content::GameContent &content, SessionOptions options,
 	std::span<const std::byte> checkpoint);
+
+// A replay played back (RecorderClass::playbackFile / updatePlayback): the game started as it was, each recorded tick's
+// commands run on their tick (this machine's own orders are not: cullBadCommands), its state hashes checked.
+std::unique_ptr<ClientMatch> MakeReplayMatch(const engine::level::Level &level, const content::GameContent &content, SessionOptions options,
+	engine::net::CommandRecording recording);
 }

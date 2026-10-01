@@ -149,6 +149,7 @@ struct RecordingHost final : generalszh::scripting::UnitScriptHost
 	}
 	void TeamExitAll(const std::string &) override {}
 	void NamedUseCommandButtonAtWaypoint(const std::string &, const std::string &, const std::string &) override {}
+	void NamedUseCommandButtonUsingWaypointPath(const std::string &, const std::string &, const std::string &) override {}
 	void NamedFireSpecialPowerAtWaypoint(const std::string &, const std::string &, const std::string &) override {}
 	void NamedFireSpecialPowerAtNamed(const std::string &, const std::string &, const std::string &) override {}
 	void NamedHideSpecialPowerDisplay(const std::string &, bool) override {}
@@ -159,6 +160,8 @@ struct RecordingHost final : generalszh::scripting::UnitScriptHost
 	void TeamGuardSupplyCenter(const std::string &team, std::int64_t supplies) override { calls.push_back(team + " guards supplies " + std::to_string(supplies)); }
 	void NamedAttackNamed(const std::string &, const std::string &) override {}
 	void NamedSetHeld(const std::string &, bool) override {}
+	void NamedSetEvacDisposition(const std::string &, std::int64_t) override {}
+	void SetTrainHeld(const std::string &name, bool held) override { calls.push_back(name + (held ? " held" : " let go")); }
 	void NamedStop(const std::string &name) override { calls.push_back(name + " stops"); }
 	void TeamStop(const std::string &team, bool disband) override { calls.push_back(team + (disband ? " disbands" : " stops")); }
 	void TeamMoveTo(const std::string &team, const std::string &waypoint) override { calls.push_back(team + " to " + waypoint); }
@@ -216,6 +219,14 @@ struct RecordingHost final : generalszh::scripting::UnitScriptHost
 	void TeamUseCommandButtonOnNearest(const std::string &team, const std::string &button, int nearest, std::int64_t kind, const std::string &type) override
 	{
 		calls.push_back(team + " use " + button + " on nearest " + std::to_string(nearest) + " " + std::to_string(kind) + " " + type);
+	}
+	void TeamUseCommandButtonOnMostValuable(const std::string &team, const std::string &button, Engine::Math::Fixed range) override
+	{
+		calls.push_back(team + " use " + button + " on most valuable within " + std::to_string(range.Floor()));
+	}
+	void TeamAttackNearestGroupWithValue(const std::string &team, std::int32_t comparison, std::int64_t value) override
+	{
+		calls.push_back(team + " attack nearest group " + std::to_string(comparison) + " " + std::to_string(value));
 	}
 	bool allReady{false}, anyReady{false};
 	bool TeamCommandButtonReady(const std::string &team, const std::string &button, bool all) override
@@ -414,6 +425,30 @@ BOOST_AUTO_TEST_CASE(legacy_parity_object_status_conditions_ask_the_host)
 
 // ScriptConditions::evaluateNamedSelected asks the host; UNIT_DESTROY_ALL_CONTAINED, NAMED_SET_TOPPLE_DIRECTION and
 // PLAYER_TRANSFER_OWNERSHIP_PLAYER reach it with their parameters.
+// ScriptActions::executeAction SET_TRAIN_HELD (unit, held: doNamedSetTrainHeld) reaches the host.
+BOOST_AUTO_TEST_CASE(legacy_parity_set_train_held_reaches_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "hold";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	script.actions = {Call("SET_TRAIN_HELD", {"Train", ""}), Call("SET_TRAIN_HELD", {"Other", ""})};
+	script.actions[0].parameters[1].integer = 1;
+	script.actions[1].parameters[1].integer = 0;
+	participant.scripts.scripts.push_back(std::move(script));
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Train held", "Other let go"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
 BOOST_AUTO_TEST_CASE(legacy_parity_selection_condition_and_unit_actions_reach_the_host)
 {
 	level::Scenario scenario;
@@ -622,6 +657,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_area_orders_reach_the_host)
 	buildingClass.parameters[2].integer = 9;
 	script.actions.push_back(buildingClass);
 	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE", {"Squad", "Command_RangerCaptureBuilding", "TechOilDerrick"}));
+	level::ScriptCall valuable = Call("SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT", {"Squad", "Command_Snipe", "", ""});
+	valuable.parameters[2].number = Engine::Math::Fixed::FromInt(300);
+	valuable.parameters[3].integer = 1;
+	script.actions.push_back(valuable);
 	participant.scripts.scripts.push_back(script);
 	Vocabulary vocabulary;
 	generalszh::scripting::AddCoreVocabulary(vocabulary);
@@ -636,7 +675,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_area_orders_reach_the_host)
 		"Ranger uses Command_RangerCaptureBuilding on Depot", "Squad use Command_RangerCaptureBuilding on Depot", "Squad all use Command_RangerCaptureBuilding on Depot",
 		"Squad use Command_Snipe on nearest 0 -1 ", "Squad use Command_Clear on nearest 1 -1 ", "Squad use Command_Hack on nearest 2 7 ",
 		"Squad use Command_RangerCaptureBuilding on nearest 3 -1 ", "Squad use Command_RangerCaptureBuilding on nearest 4 9 ",
-		"Squad use Command_RangerCaptureBuilding on nearest 5 -1 TechOilDerrick"};
+		"Squad use Command_RangerCaptureBuilding on nearest 5 -1 TechOilDerrick", "Squad use Command_Snipe on most valuable within 300"};
 	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
 	BOOST_TEST(runtime.UnknownActions().empty());
 }

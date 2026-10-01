@@ -11,7 +11,8 @@ import engine.ecs.system.system;
 // (m_disabledUntilFrame), the tick its update next runs (its wake frame; never: ~0), whether it is on
 // (m_currentlyActive), whether its timers start again on its next update (m_resetTimersNextUpdate), whether its upgrade
 // has come (the upgrade mux), and a turn-on asked for (an upgrade or a SpyVisionSpecialPower, for `activateTicks`; 0:
-// for good) that its system carries out. Also the player it spies for, and whether it was disabled at the last look.
+// for good) that its system carries out. Also the player it spies for, whether it was disabled at the last look, and a
+// sabotage's setDisabledUntilFrame asked for (`disableUntil`; 0: none) that its system carries out.
 // SpyVisionEvents: the tick's spying turned on or off, by player, module and definition (applied after the step).
 // Simulation state: checkpointed.
 export namespace generalszh::gameplay
@@ -37,6 +38,7 @@ struct SpyVision
 	std::uint8_t count{0};
 	std::uint8_t wasDisabled{0};
 	std::uint8_t reserved[2]{};
+	std::uint64_t disableUntil{0};
 };
 
 struct SpyVisionEvent
@@ -60,7 +62,7 @@ template<>
 struct ComponentTraits<generalszh::gameplay::SpyVision>
 {
 	static constexpr std::string_view StableName = "generalszh.gameplay.spy_vision";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const generalszh::gameplay::SpyVision &value, StateHasher &hasher) noexcept
 	{
@@ -74,6 +76,7 @@ struct ComponentTraits<generalszh::gameplay::SpyVision>
 				(std::uint64_t{module.activateAsked} << 24));
 		}
 		hasher.AppendU64(value.player | (std::uint64_t{value.count} << 32) | (std::uint64_t{value.wasDisabled} << 40));
+		hasher.AppendU64(value.disableUntil);
 	}
 };
 

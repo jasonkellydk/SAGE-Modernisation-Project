@@ -1,6 +1,7 @@
 export module engine.gameplay.rts.containment.definitions.transport;
 import std;
 export import Engine.Core.Math.Fixed;
+export import Engine.Core.Math.FixedVector;
 
 // What a transport carries (bound from config by the game): slots, and how
 // fast passengers leave when it unloads. Airborne transports land to unload
@@ -49,9 +50,28 @@ struct TransportDefinition
 	bool goAggressiveOnExit{false};
 	// Its own weapon bonus conditions add to its riders' (OpenContain WeaponBonusPassedToPassengers).
 	bool bonusToPassengers{false};
-	std::uint8_t reserved4[6]{};
+	// TransportContain ArmedRidersUpgradeMyWeaponSet: while an infantry rider with a ranged damage weapon is aboard it
+	// takes its PLAYER_UPGRADE weapon set (letRidersUpgradeWeaponSet).
+	bool armedRidersUpgrade{false};
+	// TransportContain ResetMoodCheckTimeOnExit (default Yes): a rider getting out idle looks for a target at once
+	// (AIUpdateInterface::wakeUpAndAttemptToTarget).
+	bool resetMoodOnExit{false};
+	// TransportContain::onRemoving: OrientLikeContainerOnExit (a leaving rider takes its facing, upright);
+	// KeepContainerVelocityOnExit (it is pushed with its velocity times the rider's mass, applyMotiveForce, and pitches at
+	// its CenterOfMassOffset times `exitPitchRate`).
+	bool orientOnExit{false};
+	bool keepVelocityOnExit{false};
+	// DelayExitInAir (TransportContain::isExitBusy): no one gets out while it is above the ground.
+	bool delayExitInAir{false};
+	std::uint8_t reserved4[1]{};
 	// How long its door stands open after each one gets out (OpenContain DoorOpenTime, default a frame; 0: it leaves
 	// its doors alone).
 	std::uint64_t doorOpenTicks{1};
+	// ExitPitchRate (radians a tick) and ExitBone (TransportContain::onRemoving: a leaving rider is put where this bone
+	// of its default model is, turned with it; `hasExitBone` 0: no such bone, left where it is).
+	Engine::Math::Fixed exitPitchRate;
+	Engine::Math::FixedVector3 exitBone;
+	std::uint32_t hasExitBone{0};
+	std::uint32_t reserved5{0};
 };
 }

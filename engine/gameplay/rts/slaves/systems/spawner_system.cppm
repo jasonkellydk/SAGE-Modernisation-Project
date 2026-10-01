@@ -23,13 +23,14 @@ export import engine.gameplay.rts.construction.components.construction_progress;
 // computeAggregateStates) has their health over a whole set of them at their
 // average most, and goes once the last of them is lost (onSpawnDeath).
 export import engine.gameplay.rts.production.components.production_exit_gate;
+export import engine.gameplay.rts.slaves.components.spawn_points;
 export namespace engine::gameplay
 {
 inline constexpr std::uint64_t SpawnUpdateTicks = 15;
 
 struct SpawnerSystem
 {
-	using Query = ecs::Query<ecs::Write<Spawner>, ecs::OptionalWrite<ProductionExitGate>>;
+	using Query = ecs::Query<ecs::Write<Spawner>, ecs::OptionalWrite<ProductionExitGate>, ecs::OptionalWrite<SpawnPoints>>;
 	using Lookup = ecs::Lookup<ecs::Read<Dying>, ecs::Read<Health>, ecs::Read<Owner>, ecs::Read<Sale>, ecs::Read<ConstructionProgress>>;
 	using Resources = ecs::Resources<ecs::Write<SpawnRequests>, ecs::Write<KillRequests>, ecs::Read<TeamRoster>>;
 
@@ -46,6 +47,7 @@ struct SpawnerSystem
 		query.ForEachChunk([&](auto chunk) {
 			auto spawners = chunk.template Get<Spawner>();
 			auto gates = chunk.template Get<ProductionExitGate>();
+			auto points = chunk.template Get<SpawnPoints>();
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < spawners.size(); ++row)
 			{
@@ -115,6 +117,9 @@ struct SpawnerSystem
 				const TeamRoster &roster = context.Read<TeamRoster>();
 				if (owner != nullptr && owner->player < roster.PlayerCount() && roster.PlayerAt(owner->player).name.empty())
 					continue;
+				// SpawnPointProductionExitUpdate: the places free (revalidateOccupiers), each spawn made taking one.
+				std::uint32_t freePlaces = 0;
+				bool placesChecked = false;
 				for (std::size_t index = 0; index < spawner.dueCount;)
 				{
 					if (now <= spawner.due[index])
@@ -129,6 +134,22 @@ struct SpawnerSystem
 						if (!gates[row].Free(now))
 							break;
 						gates[row].Exited(now);
+					}
+					if (!points.empty())
+					{
+						if (!placesChecked)
+						{
+							placesChecked = true;
+							SpawnPoints &places = points[row];
+							for (std::uint32_t place = 0; place < places.count && place < SpawnPoints::Capacity; ++place)
+								if (places.occupier[place] != ecs::Entity{} && !lookup.IsAlive(places.occupier[place]))
+									places.occupier[place] = {};
+							for (std::uint32_t place = 0; place < places.count && place < SpawnPoints::Capacity; ++place)
+								freePlaces += places.occupier[place] == ecs::Entity{} ? 1u : 0u;
+						}
+						if (freePlaces == 0)
+							break;
+						--freePlaces;
 					}
 					requests.push_back({entities[row], spawner.templates[spawner.cursor]});
 					spawner.cursor = static_cast<std::uint8_t>((spawner.cursor + 1) % spawner.templateCount);

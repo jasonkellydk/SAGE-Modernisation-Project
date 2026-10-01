@@ -52,4 +52,32 @@ BOOST_AUTO_TEST_CASE(legacy_parity_radar_terrain_shades_tiles_and_water)
 	BOOST_TEST(cell[1] == 127); // kept on the radar
 }
 
+// legacy_parity: W3DRadar::refreshTerrain (REFRESH_RADAR: ScriptActions::doRadarRefresh) builds the terrain picture
+// again (buildTerrainTexture) from the ground and water as they are now: a cell that was dry land shows the darkened
+// radar water once the water over it has risen, and its land colour again once the water is gone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_refresh_draws_the_water_as_it_is_now)
+{
+	Heightfield field;
+	field.width = field.height = 13;
+	field.cellSize = Engine::Math::Fixed::FromInt(10);
+	field.heights.assign(13 * 13, Engine::Math::Fixed{});
+	field.playableExtents = {{12, 12}};
+	TerrainSurface surface;
+	surface.tiles.assign(13 * 13, 4);
+	const std::vector<std::array<std::uint8_t, 3>> colors{{0, 0, 0}, {200, 100, 50}};
+	std::optional<float> level;
+	RadarTerrainSource source;
+	source.terrain = &field;
+	source.surface = &surface;
+	source.tileColors = &colors;
+	source.ground = [](float, float) { return 0.0f; };
+	source.water = [&level](float x, float) { return x < 60.0f ? level : std::nullopt; };
+	const auto red = [](const RadarTerrain &radar) { return static_cast<int>(radar.pixels[(static_cast<std::size_t>(64) * RadarCells + 10) * 4]); };
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 200) <= 1);
+	level = 5.0f;
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 56) <= 1);
+	level.reset();
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 200) <= 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -164,15 +164,9 @@ struct GuardSystem
 			// getAdjustedVisionRangeForObject (owner type, mood; the inner or outer guard factor).
 			const bool human = player < roster.PlayerCount() && roster.PlayerAt(player).human;
 			const auto range = [&](bool innerRange) -> Fixed {
-				Fixed reach = aggression.vision * (innerRange ? (human ? moods.guardInnerHuman : moods.guardInnerAi) : (human ? moods.guardOuterHuman : moods.guardOuterAi));
 				if (inside)
 					return weapon.attackRange;
-				if (!human)
-					reach = aggression.attitude == gp::attitude::Sleep ? Fixed{}
-						: aggression.attitude == gp::attitude::Alert ? reach * moods.alert
-						: aggression.attitude == gp::attitude::Aggressive ? reach * moods.aggressive
-						: reach;
-				return reach;
+				return gp::GuardVision(moods, aggression.vision, human, innerRange, aggression.attitude);
 			};
 			const gp::Team *team = members[row].team < roster.TeamCount() ? &roster.TeamAt(members[row].team) : nullptr;
 			const auto teamVictim = [&]() -> ecs::Entity {
@@ -455,6 +449,8 @@ template<>
 struct SystemTraits<generalszh::gameplay::GuardSystem>
 {
 	static constexpr std::string_view StableName = "generalszh.gameplay.guards";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<engine::gameplay::TargetingSystem>;
 	using After = SystemTypeList<>;

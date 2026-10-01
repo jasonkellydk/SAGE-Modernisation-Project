@@ -9,6 +9,8 @@ export struct ScorchDescription final
     std::array<float, 2> center{};
     float radius = 1;
     unsigned atlas_index = 0;
+    // One texture laid over the whole square (a radius decal), not a cell of the 3x3 scorch atlas.
+    bool whole_texture = false;
 };
 
 export struct ScorchGrid final
@@ -63,8 +65,12 @@ public:
                 vertex.position = {x * grid.spacing, y * grid.spacing,
                     height(x + grid.border, y + grid.border) + grid.elevation};
                 vertex.color = color;
-                vertex.uv = {(float(type % 3) * 1.5f + 0.5f + (vertex.position[0] - mark.center[0]) / (2 * mark.radius)) / 4,
-                    (float(type / 3) * 1.5f + 0.5f + (vertex.position[1] - mark.center[1]) / (2 * mark.radius)) / 4};
+                if (mark.whole_texture)
+                    vertex.uv = {0.5f + (vertex.position[0] - mark.center[0]) / (2 * mark.radius),
+                        0.5f + (vertex.position[1] - mark.center[1]) / (2 * mark.radius)};
+                else
+                    vertex.uv = {(float(type % 3) * 1.5f + 0.5f + (vertex.position[0] - mark.center[0]) / (2 * mark.radius)) / 4,
+                        (float(type / 3) * 1.5f + 0.5f + (vertex.position[1] - mark.center[1]) / (2 * mark.radius)) / 4};
                 vertices.push_back(vertex);
             }
         }

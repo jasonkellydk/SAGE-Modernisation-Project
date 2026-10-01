@@ -10,6 +10,9 @@
 #include <string>
 #include <string_view>
 
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import engine.gameplay.rts.powers.components.special_power_timers;
 import engine.gameplay.rts.production.components.rally_point;
 import Engine.Core.Math.FixedPresentation;
 import engine.gameplay.rts.movement.components.move_path;
@@ -22,6 +25,7 @@ import engine.gameplay.rts.movement.components.wanderer;
 import engine.gameplay.common.spatial.resources.ground_height;
 import engine.gameplay.common.spatial.components.bounding_volume;
 import engine.gameplay.rts.death.components.crash;
+import engine.gameplay.rts.death.components.structure_topple;
 import engine.gameplay.rts.death.components.blast_wave;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.containment.algorithms.garrisons;
@@ -111,6 +115,9 @@ import engine.gameplay.rts.stealth.components.stealth;
 import engine.gameplay.rts.death.components.collapse;
 import engine.gameplay.common.appearance.components.draw_offset;
 import engine.gameplay.rts.death.resources.death_events;
+import games.generalszh.gameplay.effects.components.bone_fx;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import Engine.Core.Math.FixedAngle;
 import engine.gameplay.rts.lifecycle.resources.kill_requests;
 import engine.gameplay.rts.death.components.dying;
 import engine.gameplay.common.status.components.status_flags;
@@ -125,6 +132,9 @@ import engine.gameplay.rts.parachute.components.parachute;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.common.lifetime.components.lifetime;
 import engine.gameplay.rts.death.resources.hulk_lifetime;
+import engine.gameplay.rts.movement.components.move_goal;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.navigation.components.pathfind_goal;
 
 // Create modules on real data (VeterancyGainCreate, LockWeaponCreate), in a
 // skirmish: player0 America (a human), player1 the GLA (an AI).
@@ -177,7 +187,7 @@ struct Match
 	}
 };
 
-std::optional<Match> Prepare(Install &shell)
+std::optional<Match> Prepare(Install &shell, std::uint16_t superweaponRestriction = 0)
 {
 	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
 	if (!bytes)
@@ -194,6 +204,7 @@ std::optional<Match> Prepare(Install &shell)
 		return -1;
 	};
 	session::setup::GameSetup setup;
+	setup.superweaponRestriction = superweaponRestriction;
 	setup.seed = 7;
 	setup.startingCash = 10000;
 	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
@@ -939,6 +950,291 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_highrise_collapses_when_it_dies)
 	BOOST_TEST(world.IsAlive(highrise)); // the post-collapse ruin stays
 }
 
+// StructureToppleUpdate.cpp (beginStructureTopple, update, applyCrushingDamage, doDamageLine, doToppleDoneStuff) on
+// StanTallTower (MinToppleDelay 250 / MaxToppleDelay 500 ms: 8-15 frames; StructuralIntegrity 0.75, StructuralDecay 1.0;
+// GeometryHeight 80, radii 7; AngleFX 20 degrees; CrushingWeaponName ToppledStructureWeapon). Killed by a power plant's
+// damage from the west it plays FX_DefaultStructureToppleStart and waits; on its topple frame it starts to go over,
+// east give or take pi/8. The original's float loop (0.02 x sin(angle) x 0.25 a frame on an angle nudged to 0.001)
+// passes 20 degrees on its 93rd toppling frame (FX_StructureToppleAngle20), comes within pi/6 of the ground on its
+// 109th (the crushing shots and FX_DefaultStructureCrushing start) and lies flat on its 115th (ToppleDoneFX): the
+// same frames here, the lean in Q32 radians with the shared Q1.30 sine (no tolerance needed at frame granularity).
+// Flat, it stands again turned to its fall, POST_COLLAPSE, not RUBBLE; a Ranger under it is crushed. The same on 4
+// workers, and a checkpoint mid-fall carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tall_tower_topples_away_from_its_killer_and_crushes_what_it_lands_on)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity tower, plant, ranger;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.tower = made.game->Place("StanTallTower", match->At(300, 300), {}, 0);
+		made.plant = made.game->Place("AmericaPowerPlant", match->At(200, 300), {}, match->Team(*made.game, 0));
+		made.ranger = made.game->Place("AmericaInfantryRanger", match->At(330, 300), {}, match->Team(*made.game, 0));
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	BOOST_TEST_REQUIRE(world.IsAlive(one.tower));
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const auto names = [&] {
+		std::vector<std::string> list;
+		for (const gp::DeathEvent &event : game.DeathEvents())
+			if (event.entity == one.tower)
+				list.push_back(std::string(game.DeathEffectName(event.kind, event.id)));
+		return list;
+	};
+	const auto has = [](const std::vector<std::string> &list, std::string_view name) { return std::find(list.begin(), list.end(), name) != list.end(); };
+	const std::uint32_t explosion = *content::DamageTypeIndex("EXPLOSION");
+	const std::uint32_t normal = *content::DeathTypeIndex("NORMAL");
+	for (Game *g : {&one, &four})
+	{
+		auto &w = g->game->World();
+		w.Add<gp::PendingDamage>(g->tower);
+		*w.Get<gp::PendingDamage>(g->tower) = gp::PendingDamage{g->plant, Fixed::FromInt(5000), explosion, normal};
+	}
+	tick();
+	std::uint64_t died = game.CurrentTick();
+	if (world.Get<gp::StructureTopple>(one.tower) == nullptr)
+	{
+		tick(); // the damage lands, then it dies
+		died = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(world.Get<gp::StructureTopple>(one.tower) != nullptr);
+	BOOST_TEST(has(names(), "FX_DefaultStructureToppleStart"));
+	const gp::StructureTopple waiting = *world.Get<gp::StructureTopple>(one.tower);
+	BOOST_TEST_MESSAGE("died on " << died << ", topples on " << waiting.toppleTick);
+	BOOST_TEST(waiting.toppleTick >= died + 8);
+	BOOST_TEST(waiting.toppleTick <= died + 15);
+	// Away from the plant (east), give or take pi/8 (1/16 of a turn).
+	const std::int32_t off = static_cast<std::int32_t>(waiting.toppleAngle.units);
+	BOOST_TEST(std::abs(static_cast<std::int64_t>(off)) <= (std::int64_t{1} << 28));
+	const std::uint64_t start = waiting.toppleTick;
+	std::optional<std::uint64_t> angleFx, crushing, flat;
+	std::int64_t lean = 0;
+	bool restoredOnce = false;
+	for (int n = 0; n < 200 && !flat; ++n)
+	{
+		tick();
+		const auto list = names();
+		const gp::StructureTopple &now = *world.Get<gp::StructureTopple>(one.tower);
+		if (now.state == gp::StructureToppleState::Toppling)
+		{
+			BOOST_TEST(now.Lean() >= lean);
+			lean = now.Lean();
+		}
+		if (!angleFx && has(list, "FX_StructureToppleAngle20"))
+			angleFx = game.CurrentTick();
+		if (!crushing && has(list, "ToppledStructureWeapon"))
+		{
+			crushing = game.CurrentTick();
+			BOOST_TEST(has(list, "FX_DefaultStructureCrushing"));
+		}
+		if (now.state == gp::StructureToppleState::Done)
+		{
+			flat = game.CurrentTick();
+			BOOST_TEST(has(list, "FX_DefaultStructureToppleDone"));
+			BOOST_TEST(world.Get<gp::Transform>(one.tower)->facing.units == now.toppleAngle.units);
+		}
+		if (!restoredOnce && game.CurrentTick() == start + 60)
+		{
+			restoredOnce = true;
+			BOOST_TEST((game.StateHash() == four.game->StateHash()));
+			auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+			for (int more = 0; more < 5; ++more)
+			{
+				restored->Tick();
+				game.Tick();
+				four.game->Tick();
+			}
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+		}
+	}
+	BOOST_TEST_REQUIRE(angleFx.has_value());
+	BOOST_TEST_REQUIRE(crushing.has_value());
+	BOOST_TEST_REQUIRE(flat.has_value());
+	BOOST_TEST(*angleFx - start + 1 == 93u);
+	BOOST_TEST(*crushing - start + 1 == 109u);
+	BOOST_TEST(*flat - start + 1 == 115u);
+	tick();
+	tick();
+	BOOST_TEST(world.Get<gp::Appearance>(one.tower)->Test(content::ModelConditionBit("POST_COLLAPSE")));
+	BOOST_TEST(!world.Get<gp::Appearance>(one.tower)->Test(content::ModelConditionBit("RUBBLE")));
+	BOOST_TEST(world.IsAlive(one.tower)); // its ruin stays
+	BOOST_TEST((!world.IsAlive(one.ranger) || world.Get<gp::Dying>(one.ranger) != nullptr));
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// BoneFXUpdate.cpp (initTimes, update, doFXListAtBone, computeNextLogicFXTime, changeBodyDamageState, stopAllBoneFX) and
+// BoneFXDamage::onBodyDamageStateChange on MogadishuTower04 (RubbleFXList1 = bone:Smoke02 OnlyOnce:Yes 3000 3000
+// FXList:FX_DefaultStructureSecondary; RubbleParticleSystem1 = bone:Fire02 ... PSys:StructureToppleSmokeTrail;
+// DamageFXTypes and DamageParticleTypes ALL -WATER; no pristine slots): standing it plays nothing; the tick its health
+// reaches none it is rubble (ActiveBody::calcDamageState) and its rubble FX list is timed 90 ticks on (3000 ms at 30 a
+// second, no spread: parseDurationReal); on that tick FX_DefaultStructureSecondary plays once at its Smoke02 bone turned
+// and moved with it (transformBoneToWorld; its topple has not laid it flat yet), and never again (OnlyOnce); lying flat
+// stops its bone effects (doToppleDoneStuff: stopAllBoneFX). Its last damage WATER when the slot comes due, the FX list
+// is skipped and not tried again. The same on 1 and 4 workers, and a checkpoint on the way carries on exactly. The Dragon
+// Tank's flame projectile's content: its six pristine particle systems at bone NULL (not in its model: the origin), once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tower_plays_its_rubble_bone_fx_once_before_it_lies_flat)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	const auto &tower = shell.game.boneFx.at("MogadishuTower04");
+	const content::BoneFxEntry &rubbleFx = tower.fx[3][0];
+	BOOST_TEST(rubbleFx.name == "FX_DefaultStructureSecondary");
+	BOOST_TEST(rubbleFx.bone == "Smoke02");
+	BOOST_TEST(rubbleFx.onlyOnce);
+	BOOST_TEST((rubbleFx.minDelay == Fixed::FromInt(90) && rubbleFx.maxDelay == Fixed::FromInt(90)));
+	BOOST_TEST((rubbleFx.at.x != Fixed{} || rubbleFx.at.y != Fixed{} || rubbleFx.at.z != Fixed{})); // found in its model
+	BOOST_TEST(tower.particles[3][0].name == "StructureToppleSmokeTrail");
+	BOOST_TEST((tower.fxTypes & (std::uint64_t{1} << *content::DamageTypeIndex("WATER"))) == 0u);
+	for (std::size_t state = 0; state < 3; ++state)
+		for (const auto &slot : tower.fx[state])
+			BOOST_TEST(!slot.Used());
+	const auto &flame = shell.game.boneFx.at("DragonTankFlameProjectile");
+	for (std::size_t slot = 0; slot < 6; ++slot)
+	{
+		BOOST_TEST(flame.particles[0][slot].Used());
+		BOOST_TEST(flame.particles[0][slot].bone == "NULL");
+		BOOST_TEST((flame.particles[0][slot].at.x == Fixed{} && flame.particles[0][slot].at.y == Fixed{} && flame.particles[0][slot].at.z == Fixed{}));
+	}
+	BOOST_TEST(flame.particles[0][0].name == "FlameThrowerTrail01");
+
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity tower, plant;
+	};
+	const std::uint32_t explosion = *content::DamageTypeIndex("EXPLOSION");
+	const std::uint32_t normal = *content::DeathTypeIndex("NORMAL");
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.tower = made.game->Place("MogadishuTower04", match->At(300, 300), {}, 0);
+		made.plant = made.game->Place("AmericaPowerPlant", match->At(200, 300), {}, match->Team(*made.game, 0));
+		made.game->Tick();
+		return made;
+	};
+	const auto secondaries = [&](Game &g) {
+		std::vector<gameplay::EffectCue> found;
+		for (const gameplay::EffectCue &cue : g.game->World().Resource<gameplay::EffectCues>().list)
+			if (cue.effect == "FX_DefaultStructureSecondary")
+				found.push_back(cue);
+		return found;
+	};
+	const auto kill = [&](Game &g) {
+		auto &w = g.game->World();
+		w.Add<gp::PendingDamage>(g.tower);
+		*w.Get<gp::PendingDamage>(g.tower) = gp::PendingDamage{g.plant, Fixed::FromInt(5000), explosion, normal};
+	};
+	Game one = stage(1), four = stage(4), wet = stage(1);
+	auto &world = one.game->World();
+	BOOST_TEST_REQUIRE(world.Get<gameplay::BoneFx>(one.tower) != nullptr);
+	for (int n = 0; n < 30; ++n)
+	{
+		one.game->Tick();
+		four.game->Tick();
+		wet.game->Tick();
+		BOOST_TEST(secondaries(one).empty());
+	}
+	BOOST_TEST(world.Get<gameplay::BoneFx>(one.tower)->state == 0u);
+	BOOST_TEST(world.Get<gameplay::BoneFx>(one.tower)->active == 1u);
+	for (Game *g : {&one, &four, &wet})
+		kill(*g);
+	std::optional<std::uint64_t> died;
+	for (int n = 0; n < 5 && !died; ++n)
+	{
+		one.game->Tick();
+		four.game->Tick();
+		wet.game->Tick();
+		if (world.Get<gameplay::BoneFx>(one.tower)->state == 3u)
+			died = one.game->CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(died.has_value());
+	BOOST_TEST(wet.game->World().Get<gameplay::BoneFx>(wet.tower)->state == 3u);
+	const auto &timed = *world.Get<gameplay::BoneFx>(one.tower);
+	BOOST_TEST(timed.nextFx[0] == static_cast<std::int64_t>(*died + 90));
+	for (std::size_t slot = 1; slot < 8; ++slot)
+		BOOST_TEST(timed.nextFx[slot] == gameplay::BoneFx::Off);
+	// Its last damage WATER when the slot comes due.
+	wet.game->World().Get<gp::Health>(wet.tower)->lastDamageType = *content::DamageTypeIndex("WATER");
+	std::optional<std::uint64_t> played, flat;
+	std::optional<gameplay::EffectCue> cue;
+	std::unique_ptr<session::Session> restored;
+	for (int n = 0; n < 250 && !flat; ++n)
+	{
+		one.game->Tick();
+		four.game->Tick();
+		wet.game->Tick();
+		if (restored)
+			restored->Tick();
+		BOOST_TEST(secondaries(wet).empty());
+		const auto list = secondaries(one);
+		if (!list.empty())
+		{
+			BOOST_TEST(!played.has_value()); // once
+			played = one.game->CurrentTick();
+			cue = list.front();
+			// transformBoneToWorld: the bone at rest turned and moved with it.
+			const auto &frame = *world.Get<gp::Transform>(one.tower);
+			const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+			BOOST_TEST((cue->at.x == frame.position.x + rubbleFx.at.x * c - rubbleFx.at.y * s));
+			BOOST_TEST((cue->at.y == frame.position.y + rubbleFx.at.x * s + rubbleFx.at.y * c));
+			BOOST_TEST((cue->at.z == frame.position.z + rubbleFx.at.z));
+			BOOST_TEST(world.Get<gameplay::BoneFx>(one.tower)->nextFx[0] == gameplay::BoneFx::Off);
+			BOOST_TEST((world.Get<gp::StructureTopple>(one.tower)->state != gp::StructureToppleState::Done));
+		}
+		if (one.game->CurrentTick() == *died + 45)
+		{
+			BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+			restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+		}
+		if (const auto *topple = world.Get<gp::StructureTopple>(one.tower); topple != nullptr && topple->state == gp::StructureToppleState::Done)
+			flat = one.game->CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(played.has_value());
+	BOOST_TEST(*played == *died + 90);
+	BOOST_TEST_REQUIRE(flat.has_value());
+	BOOST_TEST(*flat > *played);
+	one.game->Tick();
+	four.game->Tick();
+	BOOST_TEST(world.Get<gameplay::BoneFx>(one.tower)->stops == 1u);
+	BOOST_TEST(world.Get<gameplay::BoneFx>(one.tower)->done == 1u);
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	restored->Tick();
+	BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+}
+
 // GarrisonContain::recalcApparentControllingPlayer / getApparentControllingPlayer: two Pathfinders
 // (KINDOF_STEALTH_GARRISON) inside an apartment make it America's, but to players America is not allied with (the GLA)
 // it still looks empty and the civilians'; not to America itself. A Ranger (not a stealthy garrisoner) joining them, or
@@ -1204,6 +1500,100 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_builds_a_power_plant)
 	BOOST_TEST(world.Resource<gp::PlayerEnergy>().Production(america) == powerBefore + plant.energyProduction);
 	BOOST_TEST(!world.Get<gp::Appearance>(built)->Test(content::ModelConditionBit("PARTIALLY_CONSTRUCTED")));
 	BOOST_TEST(!world.Has<gp::Builder>(dozer));
+}
+
+// GameLogic::onDozerCancelConstruct (MSG_DOZER_CANCEL_CONSTRUCT, ControlBar's Command_CancelConstruction): another
+// player's cancel does nothing; the owner's refunds the plant's cost to build at once and kills it (Object::kill: its
+// death modules run, it dies), and its dozer leaves off building it; a rebuild hole's reconstruction
+// (OBJECT_STATUS_RECONSTRUCTING) is not refunded; a standing building is not under construction and is left alone. The
+// match runs alike on 1 and 4 workers and restores from a checkpoint exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_cancelling_a_construction_refunds_it_and_destroys_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	const auto &plant = *shell.game.objects.Find("AmericaPowerPlant");
+	struct Run
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity dozer, built;
+		std::uint32_t america{0};
+	};
+	const auto start = [&](std::size_t workers) {
+		Run run;
+		run.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		auto &world = run.game->World();
+		run.dozer = run.game->Place("AmericaVehicleDozer", match->At(250, 250), {}, match->Team(*run.game, 0));
+		run.america = world.Get<gp::Owner>(run.dozer)->player;
+		world.Resource<gp::PlayerMoney>().Deposit(run.america, plant.buildCost);
+		auto envelope = commands::Encode(commands::BuildStructure{run.dozer, "AmericaPowerPlant", match->At(330, 250), 0});
+		envelope.player = 0;
+		run.game->Tick(std::span(&envelope, 1));
+		run.built = world.Get<gp::Builder>(run.dozer)->target;
+		for (int tick = 0; tick < 90; ++tick)
+			run.game->Tick();
+		return run;
+	};
+	Run one = start(1);
+	Run four = start(4);
+	auto &world = one.game->World();
+	auto &money = world.Resource<gp::PlayerMoney>();
+	BOOST_TEST_REQUIRE(world.Has<gp::UnderConstruction>(one.built));
+	BOOST_TEST(world.Get<gp::UnderConstruction>(one.built)->started != 0);
+	const std::int64_t before = money.Balance(one.america);
+	const auto send = [](Run &run, const commands::GameCommand &command, std::uint32_t seat) {
+		auto envelope = commands::Encode(command);
+		envelope.player = seat;
+		run.game->Tick(std::span(&envelope, 1));
+	};
+	send(one, commands::CancelConstruction{one.built}, 1); // the GLA's seat
+	BOOST_TEST(money.Balance(one.america) == before);
+	BOOST_TEST(world.IsAlive(one.built));
+	BOOST_TEST(!world.Has<gp::Dying>(one.built));
+	send(four, commands::CancelConstruction{four.built}, 1);
+	const std::uint64_t cancelTick = one.game->CurrentTick() + 1;
+	send(one, commands::CancelConstruction{one.built}, 0);
+	send(four, commands::CancelConstruction{four.built}, 0);
+	BOOST_TEST(money.Balance(one.america) == before + plant.buildCost);
+	BOOST_TEST((!world.IsAlive(one.built) || world.Has<gp::Dying>(one.built)));
+	std::optional<std::uint64_t> builderLeft, gone;
+	for (int tick = 0; tick < 300 && (!builderLeft || !gone); ++tick)
+	{
+		if (!builderLeft && !world.Has<gp::Builder>(one.dozer))
+			builderLeft = one.game->CurrentTick();
+		if (!gone && !world.IsAlive(one.built))
+			gone = one.game->CurrentTick();
+		one.game->Tick();
+		four.game->Tick();
+	}
+	BOOST_TEST_REQUIRE(builderLeft.has_value());
+	BOOST_TEST_REQUIRE(gone.has_value());
+	BOOST_TEST_MESSAGE("cancelled at " << cancelTick << ": builder left at " << *builderLeft << ", plant gone at " << *gone);
+	// DestroyDie's destroyObject at the end of the cancel's frame; the dozer's DozerActionDoActionState finds its goal
+	// object gone the frame after (STATE_FAILURE).
+	BOOST_TEST(*gone - cancelTick == 0u);
+	BOOST_TEST(*builderLeft - cancelTick == 1u);
+	BOOST_TEST(one.game->StateHash() == four.game->StateHash());
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == one.game->StateHash());
+
+	// A reconstruction costs nothing and gives nothing back; a building standing is not cancelled.
+	Run again = start(1);
+	auto &world2 = again.game->World();
+	world2.Get<gp::ConstructionProgress>(again.built)->rebuild = 1;
+	const std::int64_t held = world2.Resource<gp::PlayerMoney>().Balance(again.america);
+	send(again, commands::CancelConstruction{again.built}, 0);
+	BOOST_TEST(world2.Resource<gp::PlayerMoney>().Balance(again.america) == held);
+	BOOST_TEST((!world2.IsAlive(again.built) || world2.Has<gp::Dying>(again.built)));
+	const ecs::Entity standing = again.game->Place("AmericaPowerPlant", match->At(450, 250), {}, match->Team(*again.game, 0));
+	send(again, commands::CancelConstruction{standing}, 0);
+	BOOST_TEST(world2.IsAlive(standing));
+	BOOST_TEST(!world2.Has<gp::Dying>(standing));
+	BOOST_TEST(world2.Resource<gp::PlayerMoney>().Balance(again.america) == held);
 }
 
 // BuildAssistant::isLocationLegalToBuild for DozerAIUpdate::construct (TERRAIN_RESTRICTIONS | NO_OBJECT_OVERLAP): not on
@@ -1808,6 +2198,45 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_overlords_gattling_cannon_mounts_fights_an
 	BOOST_TEST((!world.IsAlive(cannon) || world.Get<gp::Dying>(cannon) != nullptr));
 }
 
+// Legacy parity (OverlordContain::onObjectCreated -> createPayload, PayloadTemplateName): an America Avenger
+// (OverlordContain PayloadTemplateName AmericaTankAvengerLaserTurret, ExperienceSinkForRider Yes) carries its laser
+// turret mounted from the start, on its own team, sharing its position; the turret's experience goes to the Avenger.
+// It shoots from on top: a Comanche in reach is hit by the turret.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_avenger_is_made_with_its_laser_turret)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity avenger = game.Place("AmericaTankAvenger", match->At(300, 300), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(avenger));
+	game.Tick();
+	const auto turrets = Named(game, "AmericaTankAvengerLaserTurret");
+	BOOST_TEST_REQUIRE(turrets.size() == 1u);
+	const ecs::Entity turret = turrets.front();
+	BOOST_TEST_REQUIRE(world.Get<gp::Mounted>(turret) != nullptr);
+	BOOST_TEST((world.Get<gp::Mounted>(turret)->carrier == avenger));
+	BOOST_TEST((world.Get<gp::Mount>(avenger)->rider == turret));
+	BOOST_TEST(world.Get<gp::TeamMember>(turret)->team == world.Get<gp::TeamMember>(avenger)->team);
+	BOOST_TEST((world.Get<gp::Transform>(turret)->position == world.Get<gp::Transform>(avenger)->position));
+	BOOST_TEST((world.Get<gp::Experience>(turret)->sink == avenger));
+	const ecs::Entity comanche = game.Place("AmericaVehicleComanche", match->At(300, 420), {}, match->Team(game, 1));
+	BOOST_TEST_REQUIRE(world.IsAlive(comanche));
+	const Fixed full = world.Get<gp::Health>(comanche)->current;
+	bool hurt = false;
+	for (int tick = 0; tick < 300 && !hurt; ++tick)
+	{
+		game.Tick();
+		const gp::Health *body = world.IsAlive(comanche) ? world.Get<gp::Health>(comanche) : nullptr;
+		hurt = body != nullptr && body->current < full && body->lastAttacker == turret;
+	}
+	BOOST_TEST(hurt);
+}
+
 // OverlordContain::getRedirectedContain with OCL_OverlordBattleBunker: carrying its ChinaTankOverlordBattleBunker, the
 // Overlord takes infantry in as the bunker does (its TransportContain: 5 slots, PassengersAllowedToFire): a Red Guard
 // ordered in rides armed; killed, the Overlord takes the bunker with it, whose riders take DamagePercentToUnits 50% of
@@ -2022,6 +2451,209 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_china_building_lays_its_minefield_on_the_up
 		game.Tick();
 	for (const ecs::Entity laid : emp)
 		BOOST_TEST(world.Get<gp::Minefield>(laid)->draining == 1u);
+}
+
+// Legacy parity (Object::updateUpgradeModules: nothing upgrades while OBJECT_STATUS_UNDER_CONSTRUCTION;
+// DozerAIUpdate's construction finishing clears it and calls updateUpgradeModules): with China already holding
+// Upgrade_ChinaMines, a Gattling Cannon a China dozer starts lays no mines while it is being built, and its minefield
+// goes down the tick it is finished.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_building_upgrades_only_once_it_is_built)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t team = match->Team(game, 1);
+	const ecs::Entity dozer = game.Place("ChinaVehicleDozer", match->At(250, 250), {}, team);
+	const std::uint32_t china = world.Get<gp::Owner>(dozer)->player;
+	world.Resource<gp::PlayerMoney>().Deposit(china, 100000);
+	world.Resource<gp::PlayerUpgrades>().Grant(china, *shell.game.upgrades.Find("Upgrade_ChinaMines"));
+	game.Tick();
+	const ecs::Entity cannon = generalszh::gameplay::BeginConstruction(game.Game(), dozer, "ChinaGattlingCannon", match->At(350, 250), {});
+	BOOST_TEST_REQUIRE(world.IsAlive(cannon));
+	std::uint64_t built = 0, mined = 0;
+	for (int tick = 0; tick < 3000 && mined == 0; ++tick)
+	{
+		game.Tick();
+		if (built == 0 && world.IsAlive(cannon) && world.Get<gp::UnderConstruction>(cannon) == nullptr)
+			built = game.CurrentTick();
+		if (!Named(game, "ChinaStandardMine").empty())
+			mined = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(built != 0u);
+	BOOST_TEST(mined == built);
+}
+
+// Legacy parity (AI::findClosestEnemy with PartitionFilterRejectBuildings, PartitionManager.cpp): an idle unit's mood
+// scan passes over enemy buildings, except a base defence (KINDOF_FS_BASE_DEFENSE) or a container able to attack; a
+// computer player's units take any enemy building (m_acquireEnemies). America's (human) idle Humvee ignores an empty
+// GLA barracks beside it but takes on a GLA Stinger Site; the GLA (Hard AI) player's idle Scorpion takes on an
+// American barracks.
+BOOST_AUTO_TEST_CASE(legacy_parity_idle_units_pass_over_buildings_unless_they_fight)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t usa = match->Team(game, 0), gla = match->Team(game, 1);
+	const auto targetOf = [&](ecs::Entity unit) {
+		const auto *attack = world.Get<gp::AttackTarget>(unit);
+		return attack != nullptr ? attack->target : ecs::Entity{};
+	};
+	const auto watch = [&](ecs::Entity unit, int ticks) {
+		ecs::Entity seen;
+		for (int tick = 0; tick < ticks && seen == ecs::Entity{}; ++tick)
+		{
+			game.Tick();
+			seen = targetOf(unit);
+		}
+		return seen;
+	};
+	const ecs::Entity barracks = game.Place("GLABarracks", match->At(300, 700), {}, gla);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(300, 600), {}, usa);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	BOOST_TEST((watch(humvee, 150) == ecs::Entity{}));
+	const ecs::Entity site = game.Place("GLAStingerSite", match->At(420, 600), {}, gla);
+	BOOST_TEST_REQUIRE(world.IsAlive(site));
+	BOOST_TEST((watch(humvee, 150) == site));
+	const ecs::Entity usaBarracks = game.Place("AmericaBarracks", match->At(-300, 700), {}, usa);
+	const ecs::Entity scorpion = game.Place("GLATankScorpion", match->At(-300, 580), {}, gla);
+	BOOST_TEST_REQUIRE(world.IsAlive(usaBarracks));
+	BOOST_TEST((watch(scorpion, 150) == usaBarracks));
+}
+
+// Legacy parity (ThingTemplate::getMaxSimultaneousOfType with MaxSimultaneousOfType DeterminedBySuperweaponRestriction:
+// GameLogic::getSuperweaponRestriction, the setup's "limit superweapons"): with the limit on (1) America may have one
+// Particle Cannon at a time, so with one standing it may build no other; with it off (0) there is no limit.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_superweapon_limit_holds_players_to_one_each)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto *uplink = shell.game.objects.Find("AmericaParticleCannonUplink");
+	BOOST_TEST_REQUIRE(uplink != nullptr);
+	BOOST_TEST(uplink->maxSimultaneousBySuperweaponRestriction);
+	for (const std::uint16_t limit : {std::uint16_t{1}, std::uint16_t{0}})
+	{
+		const auto match = Prepare(shell, limit);
+		BOOST_TEST_REQUIRE(match.has_value());
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		game.Tick();
+		game.Place("AmericaStrategyCenter", match->At(-300, 300), {}, match->Team(game, 0)); // its prerequisite
+		const ecs::Entity first = game.Place("AmericaParticleCannonUplink", match->At(300, 300), {}, match->Team(game, 0));
+		const std::uint32_t america = game.World().Get<engine::gameplay::Owner>(first)->player;
+		game.Tick();
+		BOOST_TEST(generalszh::gameplay::PlayerCanBuild(game.Game(), america, *uplink) == (limit == 0));
+	}
+}
+
+// Legacy parity (OCLSpecialPower::doSpecialPowerAtLocation with OCLAdjustPositionToPassable: findPositionAround,
+// FPF_CLEAR_CELLS_ONLY, maxRadius 500): a GLA command centre's rebel ambush (SUPERWEAPON_RebelAmbush1, CREATE_AT_LOCATION)
+// aimed at the middle of an American barracks lands its rebels on clear ground beside it, never inside the building.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_rebel_ambush_lands_on_clear_ground)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(300, 300), {}, match->Team(game, 0));
+	const ecs::Entity center = game.Place("GLACommandCenter", match->At(-400, -400), {}, match->Team(game, 1));
+	game.Tick();
+	const std::uint32_t power = *shell.game.powers.Template("SuperweaponRebelAmbush");
+	gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(center)->Find(power), game.CurrentTick());
+	world.Get<gp::SpecialPowerTimers>(center)->Find(power)->availableOn = game.CurrentTick();
+	const auto before = Named(game, "GLAInfantryRebel").size();
+	generalszh::gameplay::FireSpecialPower(game.Game(), center, "SuperweaponRebelAmbush", world.Get<gp::Transform>(barracks)->position.XY(), true);
+	game.Tick();
+	const auto rebels = Named(game, "GLAInfantryRebel");
+	BOOST_TEST_REQUIRE(rebels.size() == before + 4);
+	const auto &at = world.Get<gp::Transform>(barracks)->position;
+	const Fixed reach = world.Get<gp::Targetable>(barracks)->radius;
+	for (const ecs::Entity rebel : rebels)
+		BOOST_TEST((Engine::Math::Length((world.Get<gp::Transform>(rebel)->position - at).XY()) > reach));
+}
+
+// Legacy parity (Player::init / initFromDict, PlayerList::newGame): a skirmish player starts with its game's starting
+// cash (GameInfo: 10000 here; its template's StartMoney is 0) and no more; the neutral player (no name) with nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_players_start_with_the_games_cash)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+	const auto &roster = game.Game().roster;
+	bool sawNeutral = false;
+	for (std::uint32_t player = 0; player < roster.PlayerCount(); ++player)
+	{
+		const std::string &name = roster.PlayerAt(player).name;
+		if (name.empty())
+		{
+			sawNeutral = true;
+			BOOST_TEST(money.Balance(player) == 0);
+		}
+		else if (name == match->skirmish.players[0].name || name == match->skirmish.players[1].name)
+			BOOST_TEST(money.Balance(player) == 10000);
+	}
+	BOOST_TEST(sawNeutral);
+}
+
+// Legacy parity (GrantUpgradeCreate::onCreate / onBuildComplete with ExemptStatus UNDER_CONSTRUCTION; DozerAIUpdate
+// calling onBuildComplete as it finishes): a Command Center an American dozer starts gets its Upgrade_AmericaRadar (an
+// object upgrade) only on the tick it is finished, not as it is placed. One placed whole, as the map places it,
+// gives it at once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_command_center_grants_its_radar_once_built)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto radar = *shell.game.upgrades.Find("Upgrade_AmericaRadar");
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		auto &world = game.World();
+		namespace gp = engine::gameplay;
+		const ecs::Entity dozer = game.Place("AmericaVehicleDozer", match->At(250, 250), {}, match->Team(game, 0));
+		const std::uint32_t america = world.Get<gp::Owner>(dozer)->player;
+		world.Resource<gp::PlayerMoney>().Deposit(america, 100000);
+		game.Tick();
+		const ecs::Entity center = generalszh::gameplay::BeginConstruction(game.Game(), dozer, "AmericaCommandCenter", match->At(450, 250), {});
+		BOOST_TEST_REQUIRE(world.IsAlive(center));
+		BOOST_TEST(!world.Get<gp::Upgradable>(center)->completed.Has(radar));
+		std::uint64_t built = 0, granted = 0;
+		for (int tick = 0; tick < 3000 && granted == 0; ++tick)
+		{
+			game.Tick();
+			if (built == 0 && world.Get<gp::UnderConstruction>(center) == nullptr)
+				built = game.CurrentTick();
+			if (world.Get<gp::Upgradable>(center)->completed.Has(radar))
+				granted = game.CurrentTick();
+		}
+		BOOST_TEST_REQUIRE(built != 0u);
+		BOOST_TEST(granted == built);
+	}
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		auto &world = game.World();
+		namespace gp = engine::gameplay;
+		const ecs::Entity center = game.Place("AmericaCommandCenter", match->At(450, 250), {}, match->Team(game, 0));
+		BOOST_TEST(world.Get<gp::Upgradable>(center)->completed.Has(radar));
+	}
 }
 
 // DemoTrapUpdate on the shipped GLADemoTrap (DefaultProximityMode; PRIMARY detonates, SECONDARY proximity, TERTIARY
@@ -3939,7 +4571,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_player_queues_and_cancels_a_unit)
 // GameLogic::onSetRallyPoint / doSetRallyPoint and DefaultProductionExitUpdate::exitObjectViaDoor: a player's rally point
 // for its GLA command center (MSG_SET_RALLY_POINT) takes where a BasicHumanLocomotor could path (the setter told either
 // way), another player's order is ignored, and a worker it then makes walks out to its natural rally point and on to it
-// (aiFollowExitProductionPath). A point no path reaches (beyond the map) is refused and the old one kept.
+// (aiFollowExitProductionPath), the rally point adjusted for it first (Pathfinder::adjustDestination: nobody's claim
+// there; a worker, two cells across, goes about a cell corner: the cell of the point half a cell up and right, its low
+// corner plus 0.05 of a cell). A point no path reaches (beyond the map) is refused and the old one kept.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_factorys_rally_point_takes_its_units_on_there)
 {
 	Install &shell = Data();
@@ -3988,7 +4622,83 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_factorys_rally_point_takes_its_units_on_the
 	BOOST_TEST_REQUIRE(made.has_value());
 	const gp::MovePath &path = *world.Get<gp::MovePath>(*made);
 	BOOST_TEST(path.count == 2u);
-	BOOST_TEST((path.points[1] == spot));
+	const auto corner = [](Fixed value) { return Fixed::FromInt(((value + Fixed::FromInt(5)) / Fixed::FromInt(10)).Floor() * 10) + Fixed::FromRatio(1, 2); };
+	BOOST_TEST((path.points[1] == Engine::Math::FixedVector2{corner(spot.x), corner(spot.y)}));
+}
+
+// The user's "units spawn at the same place and intersect", against Pathfinder::adjustDestination / updateGoal /
+// getRadiusAndCenter (AIPathfind.cpp), DefaultProductionExitUpdate::exitObjectViaDoor and AIFollowPathState (AIStates.cpp):
+// workers made one after another at a GLA command center with a rally point on open ground each have the rally point
+// adjusted around the cells those before them claimed. A worker is two cells across (bounding radius 10), so it goes
+// about a cell corner: its cell C is the rally point's half a cell up and right, its footprint the 2 x 2 cells C - 1..C.
+// The first takes C. For the second, the spiral from C (right, up, two left, two down, three right, ...) meets the
+// first's cells until its ninth step, (C.x + 2, C.y - 1). For the third, both taken, the eleventh, (C.x + 2, C.y + 1).
+// Each stops on its cell's point (its low corner plus 0.05 of a cell) and keeps its claim there.
+BOOST_AUTO_TEST_CASE(legacy_parity_units_made_one_after_another_stop_on_their_own_cells)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity center = game.Place("GLACommandCenter", match->At(300, -300), {}, match->Team(game, 0));
+	const auto order = [&](commands::GameCommand command) {
+		std::vector<engine::net::CommandEnvelope> envelopes{std::visit([](const auto &c) { return commands::Encode(c); }, command)};
+		envelopes.front().player = 0;
+		game.Tick(std::span(envelopes));
+	};
+	world.Resource<gp::PlayerMoney>().Deposit(world.Get<gp::Owner>(center)->player, 10000);
+	const Engine::Math::FixedVector2 spot = match->At(180, -300);
+	order(commands::SetRallyPoint{center, spot});
+	BOOST_TEST_REQUIRE(world.Get<gp::RallyPoint>(center) != nullptr);
+	const std::int64_t cellX = ((spot.x + Fixed::FromInt(5)) / Fixed::FromInt(10)).Floor(), cellY = ((spot.y + Fixed::FromInt(5)) / Fixed::FromInt(10)).Floor();
+	// Open ground about it: nothing but the workers' claims moves them.
+	const auto &grid = world.Resource<gp::NavigationGrid>();
+	for (std::int64_t y = cellY - 3; y <= cellY + 3; ++y)
+		for (std::int64_t x = cellX - 3; x <= cellX + 4; ++x)
+			BOOST_TEST_REQUIRE((grid.Type(static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)) == gp::PathfindCellType::Clear));
+	for (int count = 0; count < 3; ++count)
+		order(commands::QueueUnit{center, "GLAInfantryWorker"});
+	const auto worker = game.DefinitionIndex("GLAInfantryWorker");
+	BOOST_TEST_REQUIRE(worker.has_value());
+	std::vector<ecs::Entity> made;
+	const auto settled = [&] {
+		return made.size() == 3u && std::all_of(made.begin(), made.end(), [&](ecs::Entity entity) {
+			return world.Get<gp::MovePath>(entity) == nullptr && world.Get<gp::MoveOrder>(entity)->mode == gp::MoveMode::Idle;
+		});
+	};
+	for (int tick = 0; tick < 30 * 120 && !settled(); ++tick)
+	{
+		game.Tick();
+		game.Visible().ForEach([&](const gp::VisibleObject &object) {
+			if (object.definition == *worker && world.Get<gp::MovePath>(object.entity) != nullptr && std::find(made.begin(), made.end(), object.entity) == made.end())
+				made.push_back(object.entity);
+		});
+	}
+	BOOST_TEST_REQUIRE(settled());
+	std::sort(made.begin(), made.end(), [](ecs::Entity a, ecs::Entity b) { return a.index < b.index; });
+	// getRadiusAndCenter: floor(20 / 10 + 0.3) = 2 cells across, even: reach 1, about a corner.
+	const auto *agent = world.Get<gp::NavigationAgent>(made[0]);
+	BOOST_TEST_REQUIRE(agent != nullptr);
+	BOOST_TEST_REQUIRE((agent->radius == 1 && agent->centered == 0));
+	const std::array<std::pair<std::int64_t, std::int64_t>, 3> cells{std::pair{cellX, cellY}, std::pair{cellX + 2, cellY - 1}, std::pair{cellX + 2, cellY + 1}};
+	for (std::size_t index = 0; index < made.size(); ++index)
+	{
+		const Engine::Math::FixedVector2 expected{Fixed::FromInt(cells[index].first * 10) + Fixed::FromRatio(1, 2),
+			Fixed::FromInt(cells[index].second * 10) + Fixed::FromRatio(1, 2)};
+		const auto *goal = world.Get<gp::MoveGoal>(made[index]);
+		const auto *claim = world.Get<gp::PathfindGoal>(made[index]);
+		BOOST_TEST_REQUIRE(goal != nullptr);
+		BOOST_TEST((goal->goal == expected), "worker " << index);
+		BOOST_TEST((claim->x == cells[index].first && claim->y == cells[index].second), "worker " << index);
+		BOOST_TEST((Engine::Math::Distance(game.TransformOf(made[index])->position.XY(), expected) < Fixed::One()), "worker " << index);
+	}
 }
 
 // The control bar over a real session (ControlBar::populateCommand, getCommandAvailability, populateBuildQueue): the
@@ -4182,6 +4892,43 @@ BOOST_AUTO_TEST_CASE(legacy_parity_scripts_switch_factories_and_stopping_distanc
 	BOOST_TEST(gameplay::SetStoppingDistance(game.Game(), tank, Engine::Math::Fixed::FromRatio(1, 4)));
 	BOOST_TEST((world.Get<gp::Locomotion>(tank)->locomotor.closeEnough == Engine::Math::Fixed::FromInt(25)));
 	BOOST_TEST(!gameplay::SetStoppingDistance(game.Game(), first, Engine::Math::Fixed::FromInt(25)));
+}
+
+// Legacy parity (ActionManager::canResumeConstructionOf, DozerAIUpdate::newTask, AIPlayer::processBaseBuilding): a dozer
+// ordered to build is the structure's builder at once (newTask: setBuilder), and a resume of that construction while it
+// has its build task on it does nothing: the computer player's every-pass aiResumeConstruction leaves its dozer's
+// picked spot and its way there alone (re-sent with a new spot each pass, a worker never got there and circled).
+BOOST_AUTO_TEST_CASE(legacy_parity_resuming_a_build_already_under_way_does_nothing)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", match->At(250, 250), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(dozer));
+	const std::uint32_t america = world.Get<gp::Owner>(dozer)->player;
+	world.Resource<gp::PlayerMoney>().Deposit(america, shell.game.objects.Find("AmericaPowerPlant")->buildCost);
+	auto envelope = commands::Encode(commands::BuildStructure{dozer, "AmericaPowerPlant", match->At(400, 250), 0});
+	envelope.player = 0;
+	game.Tick(std::span(&envelope, 1));
+	const gp::Builder *task = world.Get<gp::Builder>(dozer);
+	BOOST_TEST_REQUIRE(task != nullptr);
+	const ecs::Entity plant = task->target;
+	BOOST_TEST_REQUIRE(world.Has<gp::UnderConstruction>(plant));
+	BOOST_TEST((world.Get<gp::UnderConstruction>(plant)->builder == dozer));
+	const auto dock = task->dock;
+	const auto destination = world.Get<gp::MoveOrder>(dozer)->destination;
+	game.Tick();
+	BOOST_TEST(!gameplay::OrderWork(game.Game(), dozer, plant));
+	BOOST_TEST((world.Get<gp::Builder>(dozer)->dock == dock));
+	BOOST_TEST((world.Get<gp::MoveOrder>(dozer)->destination == destination));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

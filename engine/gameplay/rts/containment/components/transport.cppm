@@ -61,7 +61,8 @@ struct Boarding
 	// Only to touch it (a crate collide's approach, AIEnterState for a hijacker): its arrival is the game's to act on,
 	// never a boarding into cargo.
 	std::uint32_t touchOnly{0};
-	std::uint32_t reserved{0}; // no padding: checkpoints hold its bytes
+	// A script ordered it (its last command source CMD_FROM_SCRIPT: AIEnterState's re-checks skip the fog).
+	std::uint32_t fromScript{0};
 };
 
 // A rider that asked to get out of `transport` (AIExitState: aiExit): out when its exit is next free, the carrier
@@ -80,7 +81,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Transport>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.transport";
-	static constexpr std::uint32_t Version = 5;
+	static constexpr std::uint32_t Version = 6;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Transport &value, StateHasher &hasher) noexcept
 	{

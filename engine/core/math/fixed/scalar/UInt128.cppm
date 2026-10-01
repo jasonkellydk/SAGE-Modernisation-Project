@@ -15,6 +15,14 @@ struct UInt128
 
 	static constexpr UInt128 Multiply(std::uint64_t a, std::uint64_t b) noexcept
 	{
+#if defined(__SIZEOF_INT128__)
+		// The hardware's 64x64->128 multiply at run time (only __int128 division lacks a runtime): the same bits.
+		if !consteval
+		{
+			const unsigned __int128 product = static_cast<unsigned __int128>(a) * b;
+			return {static_cast<std::uint64_t>(product >> 64), static_cast<std::uint64_t>(product)};
+		}
+#endif
 		const std::uint64_t aLo = a & 0xFFFFFFFFu;
 		const std::uint64_t aHi = a >> 32;
 		const std::uint64_t bLo = b & 0xFFFFFFFFu;
@@ -58,10 +66,7 @@ struct UInt128
 
 	constexpr unsigned BitWidth() const noexcept
 	{
-		unsigned width = 0;
-		for (std::uint64_t word = hi ? hi : lo; word != 0; word >>= 1)
-			++width;
-		return hi ? width + 64 : width;
+		return hi ? static_cast<unsigned>(std::bit_width(hi)) + 64 : static_cast<unsigned>(std::bit_width(lo));
 	}
 
 	// Quotient and remainder by a non-zero 64-bit divisor (defined below).
@@ -70,6 +75,20 @@ struct UInt128
 	// floor(sqrt(value)); always fits in 64 bits.
 	constexpr std::uint64_t SquareRoot() const noexcept
 	{
+		if (hi == 0)
+		{
+			// Integer Newton from above (x0 >= sqrt): stops at floor(sqrt(lo)), the value the digit loop below gives.
+			if (lo < 2)
+				return lo;
+			std::uint64_t root = std::uint64_t{1} << ((std::bit_width(lo) + 1) / 2);
+			for (;;)
+			{
+				const std::uint64_t next = (root + lo / root) >> 1;
+				if (next >= root)
+					return root;
+				root = next;
+			}
+		}
 		UInt128 remainder = *this;
 		UInt128 root{};
 		unsigned width = BitWidth();

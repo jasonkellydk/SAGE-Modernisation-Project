@@ -4,6 +4,7 @@ import std;
 export import engine.config.binding.schema;
 export import Engine.Core.Math.FixedVector;
 export import Engine.Core.Math.FixedAngle;
+export import games.generalszh.content.global.radius_decal;
 
 // Object creation lists ("ObjectCreationList" blocks,
 // Data/INI/ObjectCreationList.ini) as data: what a list creates, where and
@@ -48,6 +49,9 @@ struct CreationNugget
 	std::string weapon; // FireWeapon
 	std::uint32_t weaponSlot{0};   // Attack: WeaponSlot (PRIMARY 0, SECONDARY 1, TERTIARY 2)
 	std::uint32_t shots{1};        // Attack: NumberOfShots
+	// Attack: DeliveryDecal and DeliveryDecalRadius, laid at the target by its source's RadiusDecalUpdate.
+	RadiusDecalLook deliveryDecal;
+	Engine::Math::Fixed deliveryDecalRadius;
 	std::uint32_t count{1};
 	Engine::Math::FixedVector3 offset;
 	std::uint32_t disposition{disposition::OnGroundAligned};
@@ -228,6 +232,10 @@ CreationLists BindCreationLists(const engine::config::Document &document, const 
 					attack.shots = static_cast<std::uint32_t>(std::max<std::int64_t>(0, engine::config::values::ParseInt(shots->Value()).value_or(1)));
 				if (const Node *slot = child.Find("WeaponSlot"); slot != nullptr && !slot->values.empty())
 					attack.weaponSlot = Same(slot->Value(), "SECONDARY") ? 1u : Same(slot->Value(), "TERTIARY") ? 2u : 0u;
+				if (const Node *decal = child.Find("DeliveryDecal"))
+					attack.deliveryDecal = ReadRadiusDecal(*decal, bind.step.TicksPerSecond());
+				if (const Node *radius = child.Find("DeliveryDecalRadius"); radius != nullptr && !radius->values.empty())
+					attack.deliveryDecalRadius = engine::config::values::ParseFixed(radius->Value()).value_or(Engine::Math::Fixed{});
 				list.nuggets.push_back(std::move(attack));
 			}
 		}

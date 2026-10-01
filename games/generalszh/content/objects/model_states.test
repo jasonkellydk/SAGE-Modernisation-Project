@@ -7,6 +7,7 @@
 #include <string>
 
 import games.generalszh.content.objects.model_states;
+import games.generalszh.content.objects.model_draw;
 import games.generalszh.content.objects.model_conditions;
 import games.generalszh.content.objects.object_catalog;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -78,6 +79,41 @@ BOOST_AUTO_TEST_CASE(states_copy_the_default_and_the_best_match_wins)
 	BOOST_TEST(SelectModelState(states, Bits({"MOVING", "REALLYDAMAGED"})) == 3u);
 	// Conditions no state mentions change nothing; ignored ones never count.
 	BOOST_TEST(SelectModelState(states, Bits({"MOVING", "ATTACKING", "PREORDER"})) == 1u);
+}
+
+// Legacy parity (W3DTankTruckDraw.cpp: its field table and doDrawModule): the shipped GLAVehicleQuadCannon's treads
+// scroll at TreadAnimationRate 2 while it drives at TreadDriveSpeedFraction 0.3 or more (its pivot scrolling commented
+// out: never), its two front tires (Tire01, Tire02) turn at 0.2 a unit and steer, and it throws RocketBuggyDust and
+// RocketBuggyDirtSpray.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_quad_cannon_rolls_its_treads_and_turns_its_tires)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ObjectDefinition *found = objects.Find("GLAVehicleQuadCannon");
+	BOOST_TEST_REQUIRE(found != nullptr);
+	const ObjectDefinition &quad = *found;
+	const auto treads = ReadTankTreads(quad);
+	BOOST_TEST_REQUIRE(treads.has_value());
+	BOOST_TEST(treads->rate.Raw() == Engine::Math::Fixed::FromInt(2).Raw());
+	BOOST_TEST(treads->pivotFraction.Raw() == 0);
+	BOOST_TEST(treads->driveFraction.Raw() == Engine::Math::Fixed::FromRatio(3, 10).Raw());
+	const auto tires = ReadTruckTires(quad);
+	BOOST_TEST_REQUIRE(tires.has_value());
+	BOOST_TEST((tires->bones == std::vector<std::string>{"Tire01", "Tire02"}));
+	BOOST_TEST((tires->steered == std::vector<std::string>{"Tire01", "Tire02"}));
+	BOOST_TEST(tires->rotationMultiplier.Raw() == Engine::Math::Fixed::FromRatio(2, 10).Raw());
+	const auto emitters = ReadMotionEmitters(quad);
+	BOOST_TEST_REQUIRE(emitters.size() == 2u);
+	BOOST_TEST(emitters[0].system == "RocketBuggyDust");
+	BOOST_TEST(emitters[1].system == "RocketBuggyDirtSpray");
 }
 
 BOOST_AUTO_TEST_CASE(shipped_infantry_run_and_shoot)

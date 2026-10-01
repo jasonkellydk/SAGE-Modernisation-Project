@@ -17,6 +17,8 @@ import Engine.Core.Math.FixedPresentation;
 //   money (a salvage crate's, a money crate's): MiscAudio's CrateMoney on the
 //   picker, and a salvage crate floats "+$amount" in the picker's colour 10
 //   above the crate (SalvageCrateCollide::doMoney; a money crate floats none);
+//   a heal crate: MiscAudio's CrateHeal where the picker is; a shroud crate:
+//   MiscAudio's CrateShroud on the picker;
 //   a level: the promotion's animation and sound (doLevelGain -> createVeterancyLevelFX);
 //   the crate's ExecuteAnimation where it was, for its time, rising and fading as it says;
 //   the crate's ExecuteFX on the picker (CrateCollide::onCollide doFXObj).
@@ -54,6 +56,10 @@ struct CratePresentationSystem
 				sounds.push_back({catalog.crateSalvageSound, picker});
 			else if (pickup.kind == Kind::Unit && !catalog.crateFreeUnitSound.empty())
 				sounds.push_back({catalog.crateFreeUnitSound, picker});
+			else if (pickup.kind == Kind::Heal && !catalog.crateHealSound.empty())
+				sounds.push_back({catalog.crateHealSound, picker});
+			else if (pickup.kind == Kind::Shroud && !catalog.crateShroudSound.empty())
+				sounds.push_back({catalog.crateShroudSound, picker});
 			else if (pickup.kind == Kind::Money)
 			{
 				if (!catalog.crateMoneySound.empty())

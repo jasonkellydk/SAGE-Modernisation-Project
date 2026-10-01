@@ -18,6 +18,9 @@ public:
 
 	std::uint32_t Add(ArmorDefinition armor)
 	{
+		for (std::uint32_t type = 0; type < MaxDamageTypes; ++type)
+			if ((armor.bypass >> type & 1u) == 0 && armor.coefficient[type] <= Engine::Math::Fixed{})
+				m_stopped |= std::uint64_t{1} << type;
 		m_armors.push_back(armor);
 		return static_cast<std::uint32_t>(m_armors.size() - 1);
 	}
@@ -32,12 +35,15 @@ public:
 	// The damage types a body's damage scalar leaves alone (UNRESISTABLE: "just like the armor code can't").
 	void SetUnscaled(std::uint64_t damageTypes) noexcept { m_unscaled = damageTypes; }
 	bool Unscaled(std::uint32_t damageType) const noexcept { return damageType < 64 && (m_unscaled >> damageType & 1u) != 0; }
+	// Whether some armor lets none of this damage type through (else any armor lets some through).
+	bool SomeStop(std::uint32_t damageType) const noexcept { return damageType >= 64 || (m_stopped >> damageType & 1u) != 0; }
 
 private:
 	std::vector<ArmorDefinition> m_armors;
 	std::uint64_t m_handled{0};
 	std::uint64_t m_subdual{0};
 	std::uint64_t m_unscaled{0};
+	std::uint64_t m_stopped{0};
 };
 }
 

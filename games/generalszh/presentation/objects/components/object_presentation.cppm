@@ -135,6 +135,21 @@ struct ShownLook
 	// What last stretched its animation (setAnimationLoopDuration), as bits: 1 a weapon winding up (PREATTACK), 2 being
 	// sold, 4 SOLD; each stretches it once as it comes on.
 	std::uint8_t stretched{0};
+	// The definition whose draw it is (a disguiser's changes with its disguise: changeVisualDisguise makes a new drawable,
+	// its model states starting over); unknown: 0xFFFFFFFF.
+	std::uint32_t definition{0xFFFFFFFFu};
+};
+
+// Its other draw modules' model states (a W3DModelDraw each: a structure's construction scaffold, a bike's rider), in
+// their order (DefinitionLooks::extraDraws), each as its own draw's ShownLook.
+struct ExtraShownLooks
+{
+	static constexpr std::size_t Capacity = 8; // the most a shipped object has (the strategy centre's and airfield's 8)
+	std::array<ShownLook, Capacity> draws{};
+	std::uint32_t definition{0xFFFFFFFFu}; // whose draws they are (a disguise starts them over)
+	// Which of them were made (a bit each): Drawable's constructor leaves out a draw module its MinLODRequired puts above
+	// the static detail level while draw module LOD is on, for good.
+	std::uint8_t made{0xFF};
 };
 }
 
@@ -332,6 +347,15 @@ template<>
 struct ComponentTraits<generalszh::presentation::ShownLook>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.shown_look";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+
+template<>
+struct ComponentTraits<generalszh::presentation::ExtraShownLooks>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.extra_shown_looks";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;

@@ -1,0 +1,139 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.resources.detail_settings;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_states;
+import games.generalszh.content.objects.model_conditions;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+struct Data
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Data()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Data &Install()
+{
+	static Data data;
+	return data;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(detail_settings)
+
+// Legacy parity (GameLOD.cpp GameLODManager::applyStaticLODLevel, init's Custom branch, Drawable's constructor): the Low
+// preset (GameLOD.ini) caps particles at 500 and turns off shadows, cloud and light maps, the soft water edge, tree sway
+// and build-up scaffolds (draw module LOD on: a scaffold module needing MEDIUM is not made), halving textures; High caps
+// at 3000 with everything on and every draw module made. Custom takes the player's options: no extra animations turns
+// draw module LOD on and tree sway off, yet every module is still made (Custom ranks above every level).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_detail_levels_apply_their_game_lod_presets)
+{
+	Data &data = Install();
+	if (!data.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const DetailSettings low = ApplyDetailLevel(data.game.staticLods, detail_level::Low, {});
+	BOOST_TEST(low.maxParticleCount == 500u);
+	BOOST_TEST(!low.useShadowVolumes);
+	BOOST_TEST(!low.useShadowDecals);
+	BOOST_TEST(!low.useCloudMap);
+	BOOST_TEST(!low.useLightMap);
+	BOOST_TEST(!low.showSoftWaterEdge);
+	BOOST_TEST(!low.useTreeSway);
+	BOOST_TEST(low.useDrawModuleLod);
+	BOOST_TEST(low.textureReduction == 1);
+	BOOST_TEST(low.useHeatEffects); // GameLOD.ini never sets it: StaticGameLODInfo's TRUE
+	BOOST_TEST(!low.DrawsModule(detail_level::Medium));
+	BOOST_TEST(low.DrawsModule(detail_level::Low));
+	const DetailSettings high = ApplyDetailLevel(data.game.staticLods, DetailLevelNamed("high"), {});
+	BOOST_TEST(high.level == detail_level::High);
+	BOOST_TEST(high.maxParticleCount == 3000u);
+	BOOST_TEST(high.useShadowVolumes);
+	BOOST_TEST(high.useCloudMap);
+	BOOST_TEST(!high.useDrawModuleLod);
+	BOOST_TEST(high.DrawsModule(detail_level::VeryHigh));
+	CustomDetail custom;
+	custom.extraAnimations = false;
+	custom.maxParticleCount = 1234;
+	custom.cloudShadows = false;
+	custom.heatEffects = false;
+	const DetailSettings own = ApplyDetailLevel(data.game.staticLods, detail_level::Custom, custom);
+	BOOST_TEST(own.maxParticleCount == 1234u);
+	BOOST_TEST(!own.useCloudMap);
+	BOOST_TEST(!own.useHeatEffects);
+	BOOST_TEST(own.useDrawModuleLod);
+	BOOST_TEST(!own.useTreeSway);
+	BOOST_TEST(own.DrawsModule(detail_level::VeryHigh));
+	// A shipped scaffold module needs MEDIUM (MinLODRequired).
+	bool found = false;
+	for (const auto &[name, object] : data.game.objects)
+		for (const content::ModelStates &extra : content::ReadExtraModelStates(object))
+			found = found || extra.minLodRequired == detail_level::Medium;
+	BOOST_TEST(found);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_CASE(probe_exploded_states)
+{
+	Data &data = Install();
+	if (!data.loaded)
+		return;
+	const auto *ranger = data.game.objects.Find("AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(ranger != nullptr);
+	const content::ModelStates states = content::ReadModelStates(*ranger);
+	namespace mc = content::model_condition;
+	const auto show = [&](const char *label, content::ConditionBits bits) {
+		const std::size_t index = content::SelectModelState(states, bits);
+		const auto &state = states.states[index];
+		std::string anims;
+		for (const auto &a : state.animations)
+			anims += a + " ";
+		BOOST_TEST_MESSAGE(label << " -> state " << index << " model '" << state.model << "' anims " << anims << " key '" << state.transitionKey << "'");
+	};
+	const auto set = [](content::ConditionBits &bits, std::uint32_t bit) { bits[bit / 64] |= std::uint64_t{1} << (bit % 64); };
+	content::ConditionBits dying{};
+	set(dying, mc::Dying);
+	content::ConditionBits flail = dying, bounce = dying;
+	set(flail, mc::ExplodedFlailing);
+	set(bounce, mc::ExplodedBouncing);
+	show("dying", dying);
+	show("flailing", flail);
+	show("bouncing", bounce);
+	content::ConditionBits moving = bounce;
+	set(moving, content::ModelConditionBit("MOVING"));
+	show("bouncing+moving", moving);
+	if (const auto t = content::FindTransition(states, content::SelectModelState(states, flail), content::SelectModelState(states, bounce)))
+		BOOST_TEST_MESSAGE("transition flail->bounce state " << *t << " anims " << states.states[*t].animations.size());
+	if (const auto t = content::FindTransition(states, content::SelectModelState(states, dying), content::SelectModelState(states, flail)))
+		BOOST_TEST_MESSAGE("transition dying->flail state " << *t);
+	if (const auto t = content::FindTransition(states, 0, content::SelectModelState(states, flail)))
+		BOOST_TEST_MESSAGE("transition default->flail state " << *t << " anims " << states.states[*t].animations.size());
+}

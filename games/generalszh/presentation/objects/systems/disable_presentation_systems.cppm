@@ -5,7 +5,6 @@ export import engine.ecs.system.system;
 export import engine.gameplay.common.status.components.disabled;
 export import engine.gameplay.common.health.components.subdual;
 export import engine.gameplay.common.weapons.components.temp_weapon_bonus;
-export import games.generalszh.gameplay.objects.resources.object_templates;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.rts.containment.components.mount;
@@ -138,7 +137,7 @@ struct TintStatusSystem
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Optional<engine::gameplay::Disabled>, ecs::Optional<engine::gameplay::Subdual>,
 		ecs::Optional<engine::gameplay::TempWeaponBonus>>;
 	using SideTables = ecs::SideTables<ecs::Write<TintEnvelope>, ecs::Write<SelectionFlash>>;
-	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<generalszh::gameplay::ObjectTemplates>>;
+	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<LookCatalog>>;
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -149,10 +148,10 @@ struct TintStatusSystem
 		const auto subduals = chunk.Get<engine::gameplay::Subdual>();
 		const auto frenzies = chunk.Get<engine::gameplay::TempWeaponBonus>();
 		const auto refs = chunk.Get<engine::gameplay::DefinitionRef>();
-		const auto &templates = context.Read<generalszh::gameplay::ObjectTemplates>();
-		static const std::size_t infantryBit = content::KindOfBit("INFANTRY");
+		const LookCatalog &catalog = context.Read<LookCatalog>();
 		const auto frenzyColor = [&](std::size_t row) {
-			return content::HasKindOf(templates.DefinitionAt(refs[row].index).kinds, infantryBit) ? FrenzyInfantryColor : FrenzyColor;
+			const DefinitionLooks *looks = catalog.Of(refs[row].index);
+			return looks != nullptr && looks->infantry ? FrenzyInfantryColor : FrenzyColor;
 		};
 		const auto entities = chunk.Entities();
 		for (std::size_t row = 0; row < entities.size(); ++row)

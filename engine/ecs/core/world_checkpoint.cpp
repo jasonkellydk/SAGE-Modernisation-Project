@@ -229,6 +229,7 @@ bool World::LoadCheckpoint(ByteReader &reader)
 	// Every live entity placed exactly once.
 	if (placed != alive || reader.Failed())
 		return fail();
+	m_archetypes.RebuildLayoutState();
 	return true;
 }
 
@@ -244,6 +245,7 @@ void World::ClearForFailedLoad() noexcept
 	m_records.clear();
 	m_freeIndices.clear();
 	m_entityCount = 0;
+	m_archetypes.RebuildLayoutState();
 }
 }
 }

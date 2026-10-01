@@ -2,6 +2,7 @@ export module games.generalszh.content.global.in_game_ui;
 import std;
 
 export import engine.config.binding.schema;
+export import games.generalszh.content.global.radius_decal;
 
 // InGameUI.ini's messages at the top of the screen (the original's InGameUI fields and their defaults): the colours
 // the lines alternate, where the first line is, its font (Language.ini's MessageFont overrides it), and how long a
@@ -30,6 +31,8 @@ struct InGameUiContent
 	int superweaponReadyPointSize{10};
 	bool superweaponReadyBold{false};
 	std::array<std::uint8_t, 4> militaryCaptionColor{200, 200, 30, 255};
+	// PopupMessageColor: the in-game popup message's text (InGameUI m_popupMessageColor, white by default).
+	std::array<std::uint8_t, 4> popupMessageColor{255, 255, 255, 255};
 	std::array<int, 2> militaryCaptionPosition{10, 380};
 	std::string militaryCaptionTitleFont{"Courier"};
 	int militaryCaptionTitlePointSize{12};
@@ -50,6 +53,8 @@ struct InGameUiContent
 	std::string militaryCaptionFont{"Courier"};
 	int militaryCaptionPointSize{12};
 	bool militaryCaptionBold{false};
+	// The radius cursors (the *RadiusCursor templates), by RadiusCursorType.
+	std::array<RadiusDecalLook, RadiusCursorNames.size()> radiusCursors{};
 };
 
 inline InGameUiContent BindInGameUi(const engine::config::Document &document)
@@ -75,10 +80,15 @@ inline InGameUiContent BindInGameUi(const engine::config::Document &document)
 		for (const engine::config::Node &field : root.children)
 		{
 			const std::string_view key = field.key;
+			for (const auto &[name, index] : RadiusCursorFields)
+				if (key == name)
+					ui.radiusCursors[index] = ReadRadiusDecal(field, 30);
 			if (key == "MessageColor1")
 				color(field, ui.messageColor1);
 			else if (key == "MessageColor2")
 				color(field, ui.messageColor2);
+			else if (key == "PopupMessageColor")
+				color(field, ui.popupMessageColor);
 			else if (key == "MessagePosition")
 			{
 				const auto read = channels(field, {ui.messagePosition[0], ui.messagePosition[1], 0, 0});

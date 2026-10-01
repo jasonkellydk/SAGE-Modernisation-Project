@@ -19,6 +19,8 @@ public:
 	// The player a script of `participant` names (see UnitScriptHost::PlayerNamed); none: no such player.
 	virtual std::optional<std::uint32_t> ResolvePlayer(std::size_t participant, const std::string &name) = 0;
 	virtual std::int64_t Money(std::uint32_t player) const = 0;
+	// AudioManager::hasMusicTrackCompleted: the track has played through at least `times` times (as last reported).
+	virtual bool MusicCompleted(const std::string &track, std::int64_t times) const = 0;
 	// Energy::getEnergyProduction / getEnergyConsumption.
 	virtual std::pair<std::int64_t, std::int64_t> Power(std::uint32_t player) const = 0;
 	virtual std::int64_t StartIndex(std::uint32_t player) const = 0; // 0-based (getMpStartIndex)
@@ -113,6 +115,10 @@ public:
 	virtual void EnableScoring(bool on) = 0;
 	// doMapSwitchBorder: TerrainLogic::setActiveBoundary.
 	virtual void SwitchBoundary(std::int64_t boundary) = 0;
+	// doWaterChangeHeightOverTime: TerrainLogic::changeWaterHeightOverTime of the named water area (none: nothing).
+	virtual void ChangeWaterHeight(const std::string &water, Engine::Math::Fixed height, Engine::Math::Fixed seconds, Engine::Math::Fixed damage) = 0;
+	// doWaterChangeHeight: TerrainLogic::setWaterHeight of the named water area at once.
+	virtual void SetWaterHeight(const std::string &water, Engine::Math::Fixed height) = 0;
 	// doOverrideHulkLifetime: hulks last (Int)(seconds * 30) ticks from now on (below zero: their own).
 	virtual void OverrideHulkLifetime(Engine::Math::Fixed seconds) = 0;
 	// doModifyBuildableStatus: GameLogic::setBuildableStatusOverride for the object type (none: nothing).
@@ -175,6 +181,8 @@ inline void AddPlayerVocabulary(engine::scripting::Vocabulary &vocabulary, Playe
 
 	// PLAYER_HAS_CREDITS(credits, comparison, player): evaluatePlayerHasCredits compares the credits to the money
 	// ("credits < money" for less than), the parameters' way round.
+	// MUSIC_TRACK_HAS_COMPLETED(track, times): evaluateMusicHasCompleted, in a single-player mission's own scripts.
+	vocabulary.AddCondition("MUSIC_TRACK_HAS_COMPLETED", [host](ScriptCallContext &c) { return host->MusicCompleted(Text(c, 0), Integer(c, 1)); });
 	vocabulary.AddCondition("PLAYER_HAS_CREDITS", [host, player](ScriptCallContext &c) {
 		const auto who = player(c, 2);
 		return who && detail::Compare(Integer(c, 0), Integer(c, 1), host->Money(*who));
@@ -434,6 +442,10 @@ inline void AddPlayerVocabulary(engine::scripting::Vocabulary &vocabulary, Playe
 	vocabulary.AddAction("ENABLE_SCORING", [host](ScriptCallContext &) { host->EnableScoring(true); });
 	// MAP_SWITCH_BORDER(boundary).
 	vocabulary.AddAction("MAP_SWITCH_BORDER", [host](ScriptCallContext &c) { host->SwitchBoundary(Integer(c, 0)); });
+	// WATER_CHANGE_HEIGHT_OVER_TIME(water area, height, seconds, damage).
+	// WATER_CHANGE_HEIGHT(water area, height).
+	vocabulary.AddAction("WATER_CHANGE_HEIGHT", [host](ScriptCallContext &c) { host->SetWaterHeight(Text(c, 0), parameters::Number(c, 1)); });
+	vocabulary.AddAction("WATER_CHANGE_HEIGHT_OVER_TIME", [host](ScriptCallContext &c) { host->ChangeWaterHeight(Text(c, 0), parameters::Number(c, 1), parameters::Number(c, 2), parameters::Number(c, 3)); });
 	// SCRIPTING_OVERRIDE_HULK_LIFETIME(seconds).
 	vocabulary.AddAction("SCRIPTING_OVERRIDE_HULK_LIFETIME", [host](ScriptCallContext &c) { host->OverrideHulkLifetime(parameters::Number(c, 0)); });
 	// TECHTREE_MODIFY_BUILDABILITY_OBJECT(object type, status: 0 yes, 1 ignore prerequisites, 2 no, 3 only by AI).
@@ -532,6 +544,12 @@ inline void AddPlayerVocabulary(engine::scripting::Vocabulary &vocabulary, Playe
 	// isVideoComplete: nothing ever tells the scripts a movie finished (InGameUI::stopMovie's notifyOfCompletedVideo is
 	// left out of the original as a sync error source), so this is never true.
 	vocabulary.AddCondition("HAS_FINISHED_VIDEO", [](ScriptCallContext &) { return false; });
+	// MULTIPLAYER_ALLIED_DEFEAT in a map's own scripts (a challenge's): evaluateMultiplayerAlliedDefeat ->
+	// VictoryConditions::isLocalAlliedDefeat, which needs a single alliance left (m_singleAllianceRemaining); outside a
+	// multiplayer game VictoryConditions::update never runs, so it is never true. (In a network match the original asked
+	// each machine's own local player; the lockstep simulation cannot, and the local player's scripts in the host answer
+	// it there.)
+	vocabulary.AddCondition("MULTIPLAYER_ALLIED_DEFEAT", [](ScriptCallContext &) { return false; });
 	vocabulary.AddCondition("HAS_FINISHED_AUDIO", [host](ScriptCallContext &c) { return host->SoundComplete(false, Text(c, 0)); });
 	// PLAYER_REPAIR_NAMED_STRUCTURE(player, structure): doPlayerRepairStructure (a computer player's repair list).
 	vocabulary.AddAction("FREEZE_TIME", [host](ScriptCallContext &) { host->FreezeTime(true); });

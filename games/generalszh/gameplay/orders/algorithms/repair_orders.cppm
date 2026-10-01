@@ -17,8 +17,15 @@ import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.docking.components.dock;
 import engine.gameplay.rts.docking.components.docking;
 import engine.gameplay.rts.docking.components.repair_dock;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.healing.components.healing;
+import engine.gameplay.common.spatial.components.off_map;
+import games.generalszh.gameplay.construction.algorithms.building;
 
-// Sending vehicles to be repaired (AIUpdateInterface::privateGetRepaired: canGetRepairedAt, then aiDock).
+// Sending vehicles to be repaired (AIUpdateInterface::privateGetRepaired: canGetRepairedAt, then aiDock), infantry to
+// be healed (privateGetHealed: canGetHealedAt, then aiEnter), and dozers to resume a structure's construction or repair
+// it (DozerAIUpdate / WorkerAIUpdate::privateResumeConstruction and privateRepair).
 export namespace generalszh::gameplay
 {
 // ActionManager::canGetRepairedAt: an ally's repair pad (an airborne aircraft: an ally's airfield) taking a damaged,
@@ -57,6 +64,92 @@ inline bool CanGetRepairedAt(const GameWorld &game, ecs::Entity unit, ecs::Entit
 		return false;
 	if (fromPlayer && ShroudedForAction(game, unit, depot))
 		return false;
+	return true;
+}
+
+// ActionManager::canGetHealedAt: an ally's HEAL_PAD, not dead, taking a hurt INFANTRY; neither being built, the pad not
+// being sold, and (a player's order) the pad not hidden from the player.
+inline bool CanGetHealedAt(const GameWorld &game, ecs::Entity unit, ecs::Entity pad, bool fromPlayer)
+{
+	namespace gp = engine::gameplay;
+	const auto &world = game.world;
+	if (!world.IsAlive(unit) || !world.IsAlive(pad))
+		return false;
+	if (RelationOf(game, unit, pad) != gp::Relationship::Allies)
+		return false;
+	if (ai_detail::EffectivelyDead(game, pad))
+		return false;
+	if (world.Has<gp::UnderConstruction>(unit) || world.Has<gp::UnderConstruction>(pad) || world.Has<gp::Sale>(pad))
+		return false;
+	const auto *self = world.Get<gp::DefinitionRef>(unit);
+	const auto *padRef = world.Get<gp::DefinitionRef>(pad);
+	if (self == nullptr || padRef == nullptr || !game.templates.DefinitionAt(self->index).Is("INFANTRY") ||
+		!game.templates.DefinitionAt(padRef->index).Is("HEAL_PAD"))
+		return false;
+	if (fromPlayer && ShroudedForAction(game, unit, pad))
+		return false;
+	const auto *health = world.Get<gp::Health>(unit);
+	return health == nullptr || health->current != health->maximum;
+}
+
+// ActionManager::canResumeConstructionOf: a DOZER of the structure's own player (the fork's fix), alive, the structure
+// still under construction, its builder (getBuilderID: the last one set to build it) not alive at work building it, and
+// (a player's order) the structure not hidden from the player.
+inline bool CanResumeConstruction(const GameWorld &game, ecs::Entity dozer, ecs::Entity structure, bool fromPlayer)
+{
+	namespace gp = engine::gameplay;
+	const auto &world = game.world;
+	if (!world.IsAlive(dozer) || !world.IsAlive(structure))
+		return false;
+	const auto *ref = world.Get<gp::DefinitionRef>(dozer);
+	const auto *mine = world.Get<gp::Owner>(dozer);
+	const auto *theirs = world.Get<gp::Owner>(structure);
+	if (ref == nullptr || mine == nullptr || theirs == nullptr || !game.templates.DefinitionAt(ref->index).Is("DOZER"))
+		return false;
+	if (mine->player != theirs->player)
+		return false;
+	const auto *building = world.Get<gp::UnderConstruction>(structure);
+	if (building == nullptr || ai_detail::EffectivelyDead(game, dozer))
+		return false;
+	if (const ecs::Entity builder = building->builder; world.IsAlive(builder) && !ai_detail::EffectivelyDead(game, builder))
+		if (const auto *task = world.Get<gp::Builder>(builder); task != nullptr && task->repair == 0 && task->target == structure)
+			return false;
+	return !(fromPlayer && ShroudedForAction(game, dozer, structure));
+}
+
+// DozerAIUpdate / WorkerAIUpdate::privateResumeConstruction: if it may, newTask(DOZER_TASK_BUILD): it becomes the
+// structure's builder (setBuilder) and goes to build it. Anything without a dozer's or worker's AI does nothing.
+inline bool OrderResumeConstruction(GameWorld &game, ecs::Entity dozer, ecs::Entity structure, bool fromPlayer)
+{
+	namespace gp = engine::gameplay;
+	auto &world = game.world;
+	const auto *ref = world.IsAlive(dozer) ? world.Get<gp::DefinitionRef>(dozer) : nullptr;
+	if (ref == nullptr || !building_detail::IsBuilder(game.templates.DefinitionAt(ref->index)) || world.Get<gp::Transform>(structure) == nullptr ||
+		!CanResumeConstruction(game, dozer, structure, fromPlayer))
+		return false;
+	world.Get<gp::UnderConstruction>(structure)->builder = dozer;
+	SendToWork(game, dozer, structure, false, {});
+	return true;
+}
+
+// DozerAIUpdate / WorkerAIUpdate::privateRepair: not the structure it is repairing already (canAcceptNewRepair); if
+// canRepairObject lets it (MayRepair, the builder not inside anything, and, a player's order, the structure not hidden
+// from the player) and nobody else is its sole healer now (getSoleHealingBenefactor: another's heal lock), newTask
+// (DOZER_TASK_REPAIR). Anything without a dozer's or worker's AI does nothing.
+inline bool OrderRepair(GameWorld &game, ecs::Entity dozer, ecs::Entity structure, bool fromPlayer)
+{
+	namespace gp = engine::gameplay;
+	auto &world = game.world;
+	const auto *ref = world.IsAlive(dozer) ? world.Get<gp::DefinitionRef>(dozer) : nullptr;
+	if (ref == nullptr || !building_detail::IsBuilder(game.templates.DefinitionAt(ref->index)))
+		return false;
+	if (const auto *task = world.Get<gp::Builder>(dozer); task != nullptr && task->repair != 0 && task->target == structure)
+		return false;
+	if (!MayRepair(game, dozer, structure) || (fromPlayer && ShroudedForAction(game, dozer, structure)))
+		return false;
+	if (const auto *lock = world.Get<gp::HealLock>(structure); lock != nullptr && game.tick <= lock->until && lock->healer != dozer)
+		return false;
+	SendToWork(game, dozer, structure, true, RepairShare(game, game.templates.DefinitionAt(ref->index)));
 	return true;
 }
 

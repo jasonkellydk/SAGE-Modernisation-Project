@@ -69,6 +69,7 @@ struct FrontEnd::State
 	std::optional<FrontEnd::LanStart> lanStart;         // a LAN game started, not yet taken by the host
 	std::optional<FrontEnd::CampaignStart> campaignStart; // a campaign chosen, not yet taken by the host
 	std::optional<std::filesystem::path> loadRequest;       // a saved game chosen, not yet taken by the host
+	std::optional<std::filesystem::path> replayRequest;     // a replay chosen, not yet taken by the host
 	std::filesystem::path saveFolder;
 	bool inGame{false};
 	const engine::localization::StringTable *strings{nullptr};
@@ -155,7 +156,21 @@ struct FrontEnd::State
 	void ApplyOptions()
 	{
 		game->SetUserVolumes(userOptions.musicVolume, userOptions.sound2DVolume, userOptions.sound3DVolume, userOptions.speechVolume);
-		game->SetDetailLevel(shell::StaticLodNames[std::clamp(userOptions.staticLod, 0, static_cast<int>(std::size(shell::StaticLodNames)) - 1)]);
+		// GameLODManager::init: the chosen level, or for Custom the player's own options (OptionPreferences).
+		presentation::CustomDetail custom;
+		custom.shadowVolumes = userOptions.shadowVolumes;
+		custom.shadowDecals = userOptions.shadowDecals;
+		custom.cloudShadows = userOptions.cloudShadows;
+		custom.lightMap = userOptions.groundLighting;
+		custom.softWaterEdge = userOptions.smoothWater;
+		custom.extraAnimations = userOptions.extraAnimations;
+		custom.dynamicLod = userOptions.dynamicLod;
+		custom.heatEffects = userOptions.heatEffects;
+		custom.trees = userOptions.trees;
+		custom.buildingOcclusion = userOptions.buildingOcclusion;
+		custom.maxParticleCount = userOptions.maxParticleCount;
+		custom.textureReduction = userOptions.textureReduction;
+		game->SetDetail(std::clamp(userOptions.staticLod, 0, presentation::detail_level::Custom), custom);
 		game->SetRetaliation(userOptions.retaliation);
 	}
 
@@ -212,7 +227,7 @@ struct FrontEnd::State
 			{"MainMenu.wnd:ButtonExit", "ShellMainMenuExit", nullptr}, {"MainMenu.wnd:ButtonChallenge", nullptr, "MainMenuFactionTraining"},
 			{"MainMenu.wnd:ButtonSkirmish", nullptr, "MainMenuFactionSkirmish"}, {"MainMenu.wnd:ButtonUSA", nullptr, "MainMenuFactionUS"},
 			{"MainMenu.wnd:ButtonGLA", nullptr, "MainMenuFactionGLA"}, {"MainMenu.wnd:ButtonChina", nullptr, "MainMenuFactionChina"}};
-		const bool still = mainMenuViewModel->panel.Get() == shell::MainMenuPanel::Difficulty || !transitions->IsFinished();
+		const bool still = !mainMenuViewModel->FactionHoverAllowed();
 		for (const Hover &hover : Hovers)
 		{
 			if (left == hover.window)
@@ -444,6 +459,8 @@ void FrontEnd::Load(const engine::filesystem::VirtualFileSystem &files, const en
 		std::error_code error;
 		return std::filesystem::copy_file(replays / name, std::filesystem::path(profile) / "Desktop" / name, std::filesystem::copy_options::overwrite_existing, error);
 	};
+	// ReplayMenu's Load: the host plays it back (RecorderClass::playbackFile).
+	replayFiles.play = [&state, replays](const std::string &name) { state.replayRequest = replays / name; };
 	shell::ReplayTexts replayTexts;
 	const auto text = [&strings](const char *label, std::u16string &out) {
 		if (const std::u16string found = Localized(strings, label); !found.empty() && found != std::u16string(label, label + std::char_traits<char>::length(label)))
@@ -896,7 +913,7 @@ void FrontEnd::Handle(const engine::platform::PlatformEvent &event)
 		bindings->Apply(*input);
 		return;
 	}
-	if (state.leaving || (state.shownScreen == shell::Screen::MainMenu && !state.transitions->IsFinished() && input->kind == WNDInputEvent::Kind::Clicked))
+	if (state.leaving)
 		return;
 	// The shell map's scripts hear some main menu buttons pressed (signalUIInteract ..._SELECTED).
 	if (state.shownScreen == shell::Screen::MainMenu && input->kind == WNDInputEvent::Kind::Clicked)
@@ -966,6 +983,9 @@ void FrontEnd::Step(float frameSeconds)
 			state.challengeViewModel->Update(state.transitions->IsFinished());
 	// The window transitions: the original's 30-a-second frames, on real time.
 	state.transitions->Update(static_cast<double>(frameSeconds) * 30.0);
+	// MainMenuUpdate: transitions finished, the menu's buttons may start new ones.
+	if (state.transitions->IsFinished())
+		state.mainMenuViewModel->TransitionsFinished();
 	state.mainMenuMotion->Step();
 	// Another screen asked for: the one showing plays its way out first, then the new one shows and plays in.
 	if (state.model.requestedScreen.Get() != state.shownScreen)
@@ -993,7 +1013,10 @@ void FrontEnd::Step(float frameSeconds)
 				state.game->SignalUiInteraction("ShellLANOpened");
 			state.leaving = false;
 			if (state.shownScreen == shell::Screen::MainMenu)
+			{
+				state.mainMenuViewModel->Entered();
 				state.mainMenuMotion->Enter(false);
+			}
 			else if (const std::string_view in = State::ScreenFade(state.shownScreen); !in.empty())
 			{
 				state.transitions->Remove("MainMenuDefaultMenuLogoFade");
@@ -1132,6 +1155,13 @@ std::optional<FrontEnd::CampaignStart> FrontEnd::TakeCampaignStart()
 	return start;
 }
 
+std::optional<std::filesystem::path> FrontEnd::TakeReplayRequest()
+{
+	auto request = std::move(m_state->replayRequest);
+	m_state->replayRequest.reset();
+	return request;
+}
+
 std::optional<std::filesystem::path> FrontEnd::TakeLoadRequest()
 {
 	auto request = std::move(m_state->loadRequest);
@@ -1238,4 +1268,5 @@ void FrontEnd::LeaveGame()
 }
 
 bool FrontEnd::InGame() const noexcept { return m_state->inGame; }
+const shell::SetupCatalog &FrontEnd::SetupCatalog() const noexcept { return m_state->setupCatalog; }
 }

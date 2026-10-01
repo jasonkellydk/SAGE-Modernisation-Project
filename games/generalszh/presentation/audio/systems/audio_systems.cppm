@@ -15,6 +15,7 @@ export import games.generalszh.presentation.objects.components.uplink_effects;
 export import engine.gameplay.rts.combat.components.firing_tracker;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.common.spatial.components.transform;
+export import games.generalszh.gameplay.railroad.components.railcar;
 import Engine.Core.Math.FixedPresentation;
 
 // What the player hears, as presentation systems each frame (one pass each:
@@ -26,6 +27,9 @@ import Engine.Core.Math.FixedPresentation;
 // - a Particle Cannon uplink's loops (ParticleUplinkCannonUpdate's addAudioEvent / removeAudioEvent as UplinkEffects
 //   follows them): each start plays its loop afresh (an earlier one of it stopped), each stop ends it; its powering
 //   up, unpack and firing loops on the uplink, its ground annihilation loop over the beam's spot;
+// - a locomotive's RunningSound: playing on it while it speeds up or runs (RailroadBehavior's update: added setting off
+//   and whenever it is not playing then; removed braking for a station, disembark or ping-pong point); stopped
+//   otherwise, and when it is gone;
 // - the mix: the scripts' commands (music, levels, speech, disabled sounds),
 //   one-shot world sounds where things happened, the microphone following
 //   the camera, speech in turn and the music repeating.
@@ -274,6 +278,13 @@ struct AudioMixSystem
 				break;
 			case AudioCommand::Kind::SoundStop: player.StopEvent(command.text); break;
 			case AudioCommand::Kind::SoundStopMuted: player.StopMuted(); break;
+			case AudioCommand::Kind::FlatSoundsPaused:
+				// MilesAudioManager::pauseAudio(AudioAffect_Sound): each playing 2D sound held where it is, and every play
+				// request not yet carried out dropped; resumeAudio lets them go on.
+				player.PauseFlat(command.flag);
+				if (command.flag)
+					sounds.pending.clear();
+				break;
 			case AudioCommand::Kind::SoundDisable:
 			case AudioCommand::Kind::SoundEnable:
 			case AudioCommand::Kind::VolumeOverride:
@@ -316,8 +327,14 @@ struct AudioMixSystem
 		const auto *relationships = &context.Read<engine::gameplay::Relationships>();
 		for (const SoundRequest &sound : sounds.pending)
 			if (const auto *event = AllowedSound(content, state, sound.sound); event != nullptr && Audible(*event, sound.owner, viewer, relationships))
-				PlaySound(player, state, *event,
-					sound.positioned ? std::optional(engine::audio::Vec3{sound.at[0], sound.at[1], sound.at[2]}) : std::nullopt);
+			{
+				const std::optional<engine::audio::Vec3> where =
+					sound.positioned ? std::optional(engine::audio::Vec3{sound.at[0], sound.at[1], sound.at[2]}) : std::nullopt;
+				if (sound.volume)
+					player.Play(*event, where, *sound.volume);
+				else
+					PlaySound(player, state, *event, where);
+			}
 		sounds.pending.clear();
 		if (const ListenerPose &pose = context.Read<ListenerPose>(); pose.placed)
 		{
@@ -415,6 +432,78 @@ struct FireLoopSystem
 	}
 };
 
+struct TrainSoundSystem
+{
+	using Query = ecs::Query<ecs::Read<generalszh::gameplay::Railcar>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>>;
+	using Lookup = ecs::Lookup<ecs::Read<generalszh::gameplay::Railcar>>;
+	using SideTables = ecs::SideTables<ecs::Write<TrainSoundLoop>>;
+	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Read<AudioState>, ecs::Write<AudioHandle>>;
+
+	void Execute(Query &query, ecs::SystemContext &context) const
+	{
+		AudioHandle &audio = context.Write<AudioHandle>();
+		auto &loops = context.Side<SideTables, TrainSoundLoop>();
+		if (audio.player == nullptr || audio.content == nullptr)
+			return;
+		engine::audio::SoundPlayer &player = *audio.player;
+		const AudioContent &content = *audio.content;
+		const AudioState &state = context.Read<AudioState>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		const auto lookup = context.Lookup<Lookup>();
+		// Gone trains fall silent.
+		for (std::size_t index = 0; index < loops.Size();)
+		{
+			const ecs::Entity entity = loops.Entities()[index];
+			if (!lookup.IsAlive(entity))
+			{
+				if (loops.Value(index).handle != 0)
+					player.Stop(loops.Value(index).handle);
+				loops.Erase(entity);
+				continue;
+			}
+			++index;
+		}
+		query.ForEachChunk([&](auto chunk) {
+			const auto cars = chunk.template Get<generalszh::gameplay::Railcar>();
+			const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < cars.size(); ++row)
+			{
+				const generalszh::gameplay::Railcar &car = cars[row];
+				if (car.locomotive == 0)
+					continue;
+				const DefinitionLooks *looks = catalog.Of(definitions[row].index);
+				const bool wanted = looks != nullptr && !looks->trainRunningSound.empty() && car.gone == 0 &&
+					car.state == generalszh::gameplay::ConductorState::Accelerate;
+				TrainSoundLoop *loop = loops.Get(entities[row]);
+				if (loop == nullptr)
+				{
+					if (!wanted)
+						continue;
+					loop = loops.Emplace(entities[row]);
+				}
+				const auto &at = transforms[row].position;
+				const engine::audio::Vec3 where{Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)};
+				const bool playing = loop->handle != 0 && player.Playing(loop->handle);
+				if (wanted && !playing)
+				{
+					loop->handle = 0;
+					if (const auto *sound = AllowedSound(content, state, looks->trainRunningSound))
+						loop->handle = PlaySound(player, state, *sound, where);
+				}
+				else if (!wanted && loop->handle != 0)
+				{
+					player.Stop(loop->handle);
+					loop->handle = 0;
+				}
+				else if (playing)
+					player.Move(loop->handle, where);
+			}
+		});
+	}
+};
+
 struct UplinkSoundSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
@@ -481,6 +570,15 @@ template<>
 struct SystemTraits<generalszh::presentation::FireLoopSystem>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.fire_loops";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<generalszh::presentation::TrainSoundSystem>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.train_sounds";
 	static constexpr bool Batch = true;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<>;

@@ -12,6 +12,7 @@ export namespace ecs
 // This cross-module friend has ordinary C++ ownership. Its definition remains
 // exported by core.world; a forward declaration must not attach it here.
 extern "C++" { class World; }
+class ArchetypeRegistry;
 
 class Archetype
 {
@@ -30,9 +31,19 @@ public:
 	const ChunkLayout &Layout() const noexcept { return m_layout; }
 	const std::vector<std::unique_ptr<Chunk>> &Chunks() const noexcept { return m_chunks; }
 
-	bool Has(ComponentId component) const noexcept;
-	std::size_t ColumnIndex(ComponentId component) const noexcept;
+	bool Has(ComponentId component) const noexcept
+	{
+		return component < m_columnOf.size() && m_columnOf[component] != NoColumn;
+	}
+	std::size_t ColumnIndex(ComponentId component) const noexcept
+	{
+		if (component >= m_columnOf.size() || m_columnOf[component] == NoColumn)
+			return std::numeric_limits<std::size_t>::max();
+		return m_columnOf[component];
+	}
 	std::size_t EntityCount() const noexcept { return m_entityCount; }
+	// Its place in creation order (dense, from 0).
+	std::uint32_t Index() const noexcept { return m_index; }
 
 	Slot AddEntity(Entity entity);
 	Entity RemoveEntity(Chunk *chunk, std::size_t row);
@@ -44,13 +55,23 @@ private:
 	void PrepareForRemoval(Chunk *chunk);
 
 	Signature m_signature;
+	// Component id -> column (NoColumn: absent), up to the highest id it has: Has / ColumnIndex in one load.
+	static constexpr std::uint16_t NoColumn = 0xFFFFu;
+	std::vector<std::uint16_t> m_columnOf;
 	std::vector<const ComponentInfo *> m_components;
 	ChunkLayout m_layout;
 	std::vector<std::unique_ptr<Chunk>> m_chunks;
 	std::vector<Chunk *> m_availableChunks;
 	std::size_t m_entityCount{0};
+	std::uint32_t m_index{0};
+	// Told whenever one of its chunks turns non-empty or empty, and when it goes into or out of use.
+	ArchetypeRegistry *m_registry{nullptr};
+	// The archetype graph's edges met so far (World::AddComponent / RemoveComponent): the archetype one component more
+	// or one less leads to, so a repeated move skips building and looking up the signature.
+	std::vector<std::pair<ComponentId, Archetype *>> m_addEdges, m_removeEdges;
 
 	friend class World;
+	friend class ArchetypeRegistry;
 };
 
 class ArchetypeRegistry
@@ -66,8 +87,31 @@ public:
 	std::size_t Count() const noexcept { return m_archetypes.size(); }
 	std::uint64_t Revision() const noexcept { return m_revision; }
 
+	// Archetypes in creation order (Archetype::Index).
+	Archetype *At(std::uint32_t index) const noexcept { return m_byIndex[index]; }
+	// The archetypes holding entities, in signature order (the order GetArchetypes walks): what queries walk, so the
+	// many empty archetypes a long game leaves behind cost them nothing.
+	const std::vector<Archetype *> &InUse() const noexcept { return m_inUse; }
+	// The chunk layout events: each an archetype whose set of non-empty chunks changed (a chunk's first entity in, its
+	// last out), numbered from 0; the last LayoutLogSize are kept. A query's prepared chunks stay exact while no
+	// event since names an archetype it matches.
+	static constexpr std::uint64_t LayoutLogSize = 4096;
+	std::uint64_t LayoutEvents() const noexcept { return m_layoutEvents; }
+	std::uint32_t LayoutEvent(std::uint64_t event) const noexcept { return m_layoutLog[event & (LayoutLogSize - 1)]; }
+	// After storage was rebuilt behind the archetypes' backs (checkpoint load): the in-use list from the entity
+	// counts, and every query's prepared chunks invalidated.
+	void RebuildLayoutState();
+
 private:
+	friend class Archetype;
+	void NoteLayout(const Archetype &archetype) noexcept { m_layoutLog[m_layoutEvents++ & (LayoutLogSize - 1)] = archetype.Index(); }
+	void NoteUse(Archetype &archetype, bool inUse) noexcept;
+
 	std::map<Signature, std::unique_ptr<Archetype>, SignatureLess> m_archetypes;
+	std::vector<Archetype *> m_byIndex;
+	std::vector<Archetype *> m_inUse;
+	std::array<std::uint32_t, LayoutLogSize> m_layoutLog{};
+	std::uint64_t m_layoutEvents{0};
 	std::uint64_t m_revision{0};
 };
 
@@ -83,19 +127,12 @@ Archetype::Archetype(Signature signature,
 	m_components(std::move(components)),
 	m_layout(ChunkLayout::Build(m_components, chunkCapacity))
 {
-}
-
-bool Archetype::Has(ComponentId component) const noexcept
-{
-	return std::binary_search(m_signature.begin(), m_signature.end(), component);
-}
-
-std::size_t Archetype::ColumnIndex(ComponentId component) const noexcept
-{
-	const auto found = std::lower_bound(m_signature.begin(), m_signature.end(), component);
-	if (found == m_signature.end() || *found != component)
-		return std::numeric_limits<std::size_t>::max();
-	return static_cast<std::size_t>(found - m_signature.begin());
+	if (m_signature.size() >= NoColumn)
+		throw std::length_error("ECS archetype has too many components");
+	if (!m_signature.empty())
+		m_columnOf.assign(static_cast<std::size_t>(*std::max_element(m_signature.begin(), m_signature.end())) + 1, NoColumn);
+	for (std::size_t column = 0; column < m_signature.size(); ++column)
+		m_columnOf[m_signature[column]] = static_cast<std::uint16_t>(column);
 }
 
 Archetype::Slot Archetype::ReserveEntity()
@@ -129,6 +166,13 @@ void Archetype::PublishEntity(const Slot slot, const Entity entity) noexcept
 	engine::core::Assert(slot.chunk != nullptr);
 	slot.chunk->PublishRow(entity, slot.row);
 	++m_entityCount;
+	if (m_registry != nullptr)
+	{
+		if (slot.chunk->Size() == 1)
+			m_registry->NoteLayout(*this);
+		if (m_entityCount == 1)
+			m_registry->NoteUse(*this, true);
+	}
 	if (slot.chunk->IsFull())
 	{
 		engine::core::Assert(!m_availableChunks.empty() && m_availableChunks.back() == slot.chunk);
@@ -202,6 +246,13 @@ Entity Archetype::RemoveEntity(Chunk *chunk, std::size_t row)
 	const Entity moved = chunk->RemoveSwap(row);
 	engine::core::Assert(m_entityCount > 0);
 	--m_entityCount;
+	if (m_registry != nullptr)
+	{
+		if (chunk->Size() == 0)
+			m_registry->NoteLayout(*this);
+		if (m_entityCount == 0)
+			m_registry->NoteUse(*this, false);
+	}
 	if (wasFull)
 		m_availableChunks.push_back(chunk);
 	return moved;
@@ -233,11 +284,40 @@ Archetype &ArchetypeRegistry::GetOrCreate(const Signature &signature,
 
 	auto archetype = std::make_unique<Archetype>(std::move(canonicalSignature), std::move(infos), chunkCapacity);
 	Archetype *result = archetype.get();
+	// Room first, so going into use never allocates (it happens in noexcept publishing).
+	m_byIndex.reserve(m_byIndex.size() + 1);
+	m_inUse.reserve(m_byIndex.size() + 1);
+	result->m_index = static_cast<std::uint32_t>(m_byIndex.size());
+	result->m_registry = this;
 	m_archetypes.emplace(result->GetSignature(), std::move(archetype));
+	m_byIndex.push_back(result);
 	++m_revision;
 	if (created != nullptr)
 		*created = true;
 	return *result;
+}
+
+void ArchetypeRegistry::NoteUse(Archetype &archetype, const bool inUse) noexcept
+{
+	const auto at = std::lower_bound(m_inUse.begin(), m_inUse.end(), &archetype, [](const Archetype *left, const Archetype *right) {
+		return SignatureLess{}(left->GetSignature(), right->GetSignature());
+	});
+	if (inUse)
+	{
+		if (at == m_inUse.end() || *at != &archetype)
+			m_inUse.insert(at, &archetype); // capacity reserved at creation: no allocation
+	}
+	else if (at != m_inUse.end() && *at == &archetype)
+		m_inUse.erase(at);
+}
+
+void ArchetypeRegistry::RebuildLayoutState()
+{
+	m_inUse.clear();
+	for (const auto &entry : m_archetypes)
+		if (entry.second->EntityCount() != 0)
+			m_inUse.push_back(entry.second.get());
+	m_layoutEvents += LayoutLogSize + 1;
 }
 
 std::vector<Archetype *> ArchetypeRegistry::GetArchetypes()

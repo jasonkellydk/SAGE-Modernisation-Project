@@ -1,0 +1,220 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.algorithms.scenery_setup;
+import games.generalszh.presentation.objects.algorithms.presentation_schedule;
+import games.generalszh.presentation.objects.systems.scenery_systems;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import Engine.Core.Math.FixedPresentation;
+import games.generalszh.presentation.models.scenery_clearing_system;
+import games.generalszh.gameplay.construction.algorithms.building;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/Twilight Flame/Twilight Flame.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	static const bool loaded = install.Load();
+	(void)loaded;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(scenery)
+
+// Legacy parity (GameLogic.cpp startNewGame / createOptimizedTree, W3DTreeDraw::addToTreeBuffer, W3DTreeBuffer.cpp
+// addTree, unitMoved, applyTopplingForce, drawTrees' topple update, removeTreesForConstruction; Twilight Flame's
+// GenericOptTree dogwoods: DoTopple, ToppleFX FX_ToppleTree, KillWhenFinishedToppling, SinkDistance 10, SinkTime 5000):
+// the map's 320 dogwoods are the client's, each where the map put it raised by the ground there, filed by place (they
+// topple). A Crusader (CrusherLevel 2) moving to a new spot within its radius plus 7 of one topples it away from itself
+// (FX_ToppleTree where it stands); it falls, comes to rest flat and sinks 10 over 150 frames, then is gone and no longer
+// drawn. A structure placed over another clears it (a cylinder of 14 about it against the footprint); one well clear
+// stays. Each standing tree is drawn.
+BOOST_AUTO_TEST_CASE(legacy_parity_map_trees_topple_sink_and_clear_for_construction)
+{
+	Install &shell = Data();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	int spots = 0;
+	for (const auto &marker : shell.map->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(shell.map->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	options.presentationComponents = [](ecs::World &world) { RegisterPresentationComponents(world); };
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+
+	auto &catalog = world.EmplaceResource<LookCatalog>();
+	KnowLooks(catalog, game);
+	auto &scenery = world.EmplaceResource<Scenery>();
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)low;
+	BuildScenery(scenery, skirmish.level.placements, game, catalog, world.Resource<gameplay::MapSceneryRules>(), game.Game().ground,
+		{Engine::Math::ToFloat(high.x), Engine::Math::ToFloat(high.y)});
+	BOOST_TEST_REQUIRE(scenery.Size() == 320u);
+	BOOST_TEST(scenery.cellItems.size() == 320u);
+	for (std::size_t item = 0; item < scenery.Size(); ++item)
+		BOOST_TEST(scenery.kind[item] == Scenery::Tree);
+	const std::array<float, 3> tree = scenery.at[0];
+	BOOST_TEST(tree[2] == Engine::Math::ToFloat(game.Game().ground.At(scenery.place[0])), boost::test_tools::tolerance(0.05f));
+
+	world.EmplaceResource<FxRequests>();
+	auto &frame = world.EmplaceResource<PresentationFrame>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<ObjectInstances>();
+	SceneryContactSystem contact;
+	SceneryBendSystem bend;
+	SceneryDrawSystem draw;
+	ecs::SystemRegistry ticks, frames;
+	ticks.Register(contact);
+	frames.Register(bend);
+	frames.Register(draw);
+	frames.OrderBefore<SceneryBendSystem, SceneryDrawSystem>();
+	ticks.Finalize(world.Components());
+	frames.Finalize(world.Components());
+	ecs::Scheduler tickScheduler(world, ticks, engine::jobs::JobSystemConfig{1});
+	ecs::Scheduler frameScheduler(world, frames, engine::jobs::JobSystemConfig{1});
+	tickScheduler.Finalize(engine::time::FixedStep{30});
+	frameScheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t step = 0;
+	const auto runTick = [&] { tickScheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}}); };
+	const auto runFrame = [&] { frameScheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}}); };
+
+	// A Crusader rolls up beside the first tree (10 east of it, from 30 east).
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", {scenery.place[0].x + Fixed::FromInt(10), scenery.place[0].y}, {}, team);
+	KnowLooks(catalog, game); // its definition made as it was placed
+	world.Side<TickPose>().Emplace(tank)->previous = {tree[0] + 30.0f, tree[1], tree[2]};
+	world.Side<TickPose>().Get(tank)->current = {tree[0] + 10.0f, tree[1], tree[2]};
+	runTick();
+	const TreeBend &bent = scenery.bends[0];
+	BOOST_TEST(bent.state == tree_bend_state::Falling);
+	BOOST_TEST(bent.direction[0] == -1.0f);
+	BOOST_TEST(bent.direction[1] == 0.0f);
+	const auto &fx = world.Resource<FxRequests>().pending;
+	BOOST_TEST_REQUIRE(fx.size() == 1u);
+	BOOST_TEST(fx[0].fx == "FX_ToppleTree");
+	// Down, sunk and gone.
+	frame.seconds = 1.0 / 30.0;
+	int frames_ = 0;
+	while (bent.state == tree_bend_state::Falling && frames_ < 300)
+	{
+		runFrame();
+		++frames_;
+	}
+	BOOST_TEST(bent.state == tree_bend_state::Down);
+	int sinking = 0;
+	while (bent.state == tree_bend_state::Down && sinking < 400)
+	{
+		runFrame();
+		++sinking;
+	}
+	BOOST_TEST(bent.state == tree_bend_state::Gone);
+	BOOST_TEST(sinking == 151);
+	BOOST_TEST(bent.sunk == 10.0f, boost::test_tools::tolerance(0.1f));
+	world.Resource<ObjectInstances>().Reset(2);
+	runFrame();
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn.size() == 319u);
+
+	// A power plant placed over the second tree clears it (and any other within 14 of its footprint); the rest stay.
+	world.EmplaceResource<ModelLibrary>();
+	world.EmplaceResource<ModelAssets>();
+	world.EmplaceResource<MotionLooks>();
+	SceneryClearingSystem clearing;
+	ecs::SystemRegistry clearings;
+	clearings.Register(clearing);
+	clearings.Finalize(world.Components());
+	ecs::Scheduler clearingScheduler(world, clearings, engine::jobs::JobSystemConfig{1});
+	clearingScheduler.Finalize(engine::time::FixedStep{30});
+	// (The computer player's dozer: it builds where it is told, "the ai will validate".)
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {scenery.place[1].x + Fixed::FromInt(60), scenery.place[1].y}, {},
+		*game.Teams().FindTeam(skirmish.players[1].team));
+	generalszh::gameplay::BeginConstruction(game.Game(), dozer, "AmericaPowerPlant", scenery.place[1], Engine::Math::TurnAngle{});
+	clearingScheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}});
+	BOOST_TEST(scenery.removed[1] == 1u);
+	BOOST_TEST(scenery.clearingsApplied == 1u);
+	const auto &geometry = shell.game.objects.Find("AmericaPowerPlant")->geometry;
+	const bool box = geometry.shape == content::GeometryShape::Box;
+	std::size_t expected = 0, removed = 0;
+	for (std::size_t item = 0; item < scenery.Size(); ++item)
+	{
+		const FixedVector2 off = scenery.place[item] - scenery.place[1];
+		// The plant's footprint (a box major along x by minor across, unturned; else a circle) against the tree's 14 circle.
+		if (box)
+		{
+			const Fixed dx = std::max(Engine::Math::Abs(off.x) - geometry.majorRadius, Fixed{});
+			const Fixed dy = std::max(Engine::Math::Abs(off.y) - geometry.minorRadius, Fixed{});
+			expected += dx * dx + dy * dy < Fixed::FromInt(14 * 14) ? 1u : 0u;
+		}
+		else
+			expected += off.x * off.x + off.y * off.y < (geometry.majorRadius + Fixed::FromInt(14)) * (geometry.majorRadius + Fixed::FromInt(14)) ? 1u : 0u;
+		removed += scenery.removed[item];
+	}
+	BOOST_TEST(removed == expected);
+	BOOST_TEST(removed < 10u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

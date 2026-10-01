@@ -34,6 +34,9 @@ struct Players final : generalszh::scripting::PlayerScriptHost
 		return std::nullopt;
 	}
 	std::int64_t Money(std::uint32_t) const override { return money; }
+	bool MusicCompleted(const std::string &track, std::int64_t times) const override { return track == musicTrack && musicPlays >= times; }
+	std::string musicTrack{"Game_GLA_01"};
+	std::int64_t musicPlays{1};
 	std::pair<std::int64_t, std::int64_t> Power(std::uint32_t) const override { return power; }
 	std::int64_t StartIndex(std::uint32_t) const override { return start; }
 	std::string Side(std::uint32_t player) const override { return player == 0 ? "GLA" : "America"; }
@@ -155,6 +158,10 @@ struct Players final : generalszh::scripting::PlayerScriptHost
 	}
 	std::vector<std::string> commandBar;
 	void SwitchBoundary(std::int64_t boundary) override { boundaries.push_back(boundary); }
+	void ChangeWaterHeight(const std::string &water, Engine::Math::Fixed, Engine::Math::Fixed, Engine::Math::Fixed) override { waterChanged.push_back(water); }
+	void SetWaterHeight(const std::string &water, Engine::Math::Fixed) override { waterSet.push_back(water); }
+	std::vector<std::string> waterChanged;
+	std::vector<std::string> waterSet;
 	std::vector<std::int64_t> boundaries;
 	void FreezeTime(bool frozen) override { ranks.push_back(frozen ? "frozen" : "thawed"); }
 	void SelectSkillset(std::uint32_t player, std::int64_t skillset) override { ranks.push_back(std::to_string(player) + " skillset " + std::to_string(skillset)); }
@@ -297,6 +304,25 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_video_is_never_reported_finished)
 {
 	Players players;
 	BOOST_TEST(!Holds(players, Call("HAS_FINISHED_VIDEO", {{"MD_USA01", 0}})));
+}
+
+// legacy_parity: ScriptConditions::evaluateMultiplayerAlliedDefeat -> VictoryConditions::isLocalAlliedDefeat outside a
+// multiplayer game (GC_ChemGeneral's and GC_ChinaBoss's scripts): VictoryConditions::update never runs there, no single
+// alliance is ever left, so it is never true.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_map_asking_for_an_allied_defeat_outside_a_network_game_is_told_no)
+{
+	Players players;
+	BOOST_TEST(!Holds(players, Call("MULTIPLAYER_ALLIED_DEFEAT", {})));
+}
+
+// legacy_parity: ScriptConditions::evaluateMusicHasCompleted -> AudioManager::hasMusicTrackCompleted(track, times): the
+// track playing has played through at least that many times (MD_GLA03's "GLA Post Track Silence" asks once).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_music_track_has_completed)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_01", 0}, {"", 1}})));
+	BOOST_TEST(!Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_01", 0}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_02", 0}, {"", 1}})));
 }
 
 // legacy_parity: hasSufficientPower (production at least consumption) and getEnergySupplyRatio against percent/100:

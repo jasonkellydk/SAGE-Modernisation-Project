@@ -40,6 +40,8 @@ enum class CrateKind : std::uint8_t
 	Unit,
 	CarBomb, // ConvertToCarBombCrateCollide: the terrorist is the crate, the vehicle it enters collects it
 	Hijack,  // ConvertToHijackedVehicleCrateCollide: the hijacker is the crate, the vehicle it touches collects it
+	Heal,    // HealCrateCollide: everything the collector's player has, healed completely
+	Shroud,  // ShroudCrateCollide: the whole map revealed to the collector's player
 };
 
 struct CrateCollideContent
@@ -163,19 +165,21 @@ inline CrateTemplates BindCrateTemplates(const engine::config::Document &documen
 	return templates;
 }
 
-inline std::optional<CrateCollideContent> ReadCrateCollide(const ObjectDefinition &object)
+// A CrateCollide module's fields (CrateCollideModuleData and its kind's own).
+inline CrateCollideContent ReadCrateCollideBlock(std::string_view type, const engine::config::Node &block)
 {
 	using namespace crate_detail;
-	for (const ModuleEntry &module : object.modules)
 	{
-		if (module.block == nullptr || !std::string_view(module.type).ends_with("CrateCollide"))
-			continue;
-		const engine::config::Node &block = *module.block;
+		const struct
+		{
+			std::string_view type;
+		} module{type};
 		CrateCollideContent crate;
 		crate.kind = module.type == "SalvageCrateCollide" ? CrateKind::Salvage : module.type == "MoneyCrateCollide" ? CrateKind::Money
 			: module.type == "VeterancyCrateCollide" ? CrateKind::Veterancy : module.type == "UnitCrateCollide" ? CrateKind::Unit
 			: module.type == "ConvertToCarBombCrateCollide" ? CrateKind::CarBomb
-			: module.type == "ConvertToHijackedVehicleCrateCollide" ? CrateKind::Hijack : CrateKind::Other;
+			: module.type == "ConvertToHijackedVehicleCrateCollide" ? CrateKind::Hijack : module.type == "HealCrateCollide" ? CrateKind::Heal
+			: module.type == "ShroudCrateCollide" ? CrateKind::Shroud : CrateKind::Other;
 		crate.required = Kinds(block.Find("RequiredKindOf"));
 		crate.forbidden = Kinds(block.Find("ForbiddenKindOf"));
 		const auto flag = [&](std::string_view key) {
@@ -237,6 +241,69 @@ inline std::optional<CrateCollideContent> ReadCrateCollide(const ObjectDefinitio
 		}
 		return crate;
 	}
+}
+
+inline std::optional<CrateCollideContent> ReadCrateCollide(const ObjectDefinition &object)
+{
+	for (const ModuleEntry &module : object.modules)
+		if (module.block != nullptr && std::string_view(module.type).ends_with("CrateCollide"))
+			return ReadCrateCollideBlock(module.type, *module.block);
 	return std::nullopt;
+}
+
+// The Saboteur's Sabotage*CrateCollide modules, each on the building kinds it takes: the kind of sabotage, its
+// CrateCollide fields, StealCashAmount (supply center and drop zone) and SabotageDuration / SabotagePowerDuration
+// (parseDurationUnsignedInt: milliseconds to frames, rounded up).
+enum class SabotageKind : std::uint8_t
+{
+	PowerPlant,
+	SupplyDropzone,
+	Superweapon,
+	CommandCenter,
+	SupplyCenter,
+	MilitaryFactory,
+	FakeBuilding,
+	InternetCenter,
+};
+
+struct SabotageCollideContent
+{
+	SabotageKind kind{SabotageKind::PowerPlant};
+	CrateCollideContent crate;
+	std::int64_t stealCash{0};
+	std::uint64_t durationTicks{0};
+};
+
+inline std::vector<SabotageCollideContent> ReadSabotageCollides(const ObjectDefinition &object)
+{
+	constexpr std::array<std::pair<std::string_view, SabotageKind>, 8> kinds{{{"SabotagePowerPlantCrateCollide", SabotageKind::PowerPlant},
+		{"SabotageSupplyDropzoneCrateCollide", SabotageKind::SupplyDropzone}, {"SabotageSuperweaponCrateCollide", SabotageKind::Superweapon},
+		{"SabotageCommandCenterCrateCollide", SabotageKind::CommandCenter}, {"SabotageSupplyCenterCrateCollide", SabotageKind::SupplyCenter},
+		{"SabotageMilitaryFactoryCrateCollide", SabotageKind::MilitaryFactory}, {"SabotageFakeBuildingCrateCollide", SabotageKind::FakeBuilding},
+		{"SabotageInternetCenterCrateCollide", SabotageKind::InternetCenter}}};
+	std::vector<SabotageCollideContent> collides;
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr)
+			continue;
+		for (const auto &[type, kind] : kinds)
+		{
+			if (module.type != type)
+				continue;
+			SabotageCollideContent sabotage;
+			sabotage.kind = kind;
+			sabotage.crate = ReadCrateCollideBlock(module.type, *module.block);
+			if (const auto *node = module.block->Find("StealCashAmount"))
+				sabotage.stealCash = std::max<std::int64_t>(0, engine::config::values::ParseInt(node->Value()).value_or(0));
+			for (const std::string_view key : {std::string_view{"SabotageDuration"}, std::string_view{"SabotagePowerDuration"}})
+				if (const auto *node = module.block->Find(key))
+				{
+					const auto ms = engine::config::values::ParseFixed(node->Value()).value_or(Engine::Math::Fixed{});
+					sabotage.durationTicks = static_cast<std::uint64_t>(std::max<std::int64_t>(0, (ms * Engine::Math::Fixed::FromInt(30) / Engine::Math::Fixed::FromInt(1000)).Ceil()));
+				}
+			collides.push_back(std::move(sabotage));
+		}
+	}
+	return collides;
 }
 }

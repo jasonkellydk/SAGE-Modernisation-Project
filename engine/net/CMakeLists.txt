@@ -9,6 +9,7 @@ engine_add_module_library(engine_net
 		transport/reliable_udp.cppm
 		lockstep/protocol.cppm
 		lockstep/command_log.cppm
+		lockstep/command_recording.cppm
 		lockstep/hash_vote.cppm
 		lockstep/input_delay.cppm
 		lockstep/lockstep_server.cppm

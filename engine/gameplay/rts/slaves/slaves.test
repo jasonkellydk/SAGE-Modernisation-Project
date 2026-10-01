@@ -1,6 +1,7 @@
 #define BOOST_TEST_MODULE EngineGameplaySlaves
 #include <boost/test/included/unit_test.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -34,6 +35,7 @@ namespace
 struct Hive
 {
 	ecs::World world{ecs::WorldConfig{4}};
+	engine::level::Heightfield terrain;
 	ecs::Entity master;
 	ecs::Entity drone;
 	std::uint64_t tick{0};
@@ -41,6 +43,12 @@ struct Hive
 	Hive(SlavedDefinition definition)
 	{
 		world.EmplaceResource<RandomSeed>(RandomSeed{5});
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed::FromInt(10));
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<HealPulses>();
+		world.EmplaceResource<SlaveOrders>();
 		world.RegisterComponent<Transform>();
 		world.RegisterComponent<Health>();
 		world.RegisterComponent<AttackTarget>();
@@ -50,6 +58,8 @@ struct Hive
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<PhysicsBody>();
 		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<SurfaceLayer>();
 		world.FinalizeComponents();
 		master = Unit(100, 100);
 		world.Add<Health>(master);
@@ -192,6 +202,206 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_drone_near_the_victim_grants_its_master_dro
 	BOOST_TEST(conditions().changedTick == 22u);
 	hive.Run(7);
 	BOOST_TEST(conditions().changedTick == 22u); // clear to clear: no change
+}
+
+// SlavedUpdate::update / doRepairLogic / setRepairState / moveToNewRepairSpot / endRepair with the battle drone's
+// numbers (RepairRange 8, RepairMin/MaxAltitude 18/24, RepairRatePerSecond 5, RepairWhenBelowHealth% 60, ready 9-23
+// frames, weld 8-15 frames): a master at 41% (100 of 240) comes first. The drone within 12 of it (bounding circles)
+// unpacks on its first look (15 frames, UNPACKING), and from then looks every frame: ready for a random 9-23 frames,
+// extending 5 (FIRING_B), welding a random 8-15 frames (its sparks, and from that frame on it heals its master
+// 5/30 a frame while within 12), retracting 5 (FIRING_C) as it zips to a new spot 8 from its master in a whole-radian
+// direction on its panic locomotor, ultra-accurate at a precise height 18-24 over the ground there, then ready again.
+// Pulled more than 12 away it stops healing and heads back over its master, at a precise height once within twice
+// the master's bounding sphere. Its master back to full, it guards: its guard point more than 15 away and idle, the
+// repair ends (PACKING, its normal locomotor, its wait a look again) as it heads there. 5/30 a frame is 10923 raw in
+// fixed point (rounded; the original's float 0.16666667: within 2^-16 a frame).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_battle_drone_repairs_its_master_on_the_original_frames)
+{
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(35);
+	definition.guardWanderRange = Fixed::FromInt(35);
+	definition.repairRange = Fixed::FromInt(8);
+	definition.repairMinAltitude = Fixed::FromInt(18);
+	definition.repairMaxAltitude = Fixed::FromInt(24);
+	definition.repairPerTick = Fixed::FromInt(5) / Fixed::FromInt(30);
+	definition.repairBelowPercent = 60;
+	definition.minReadyTicks = 9;
+	definition.maxReadyTicks = 23;
+	definition.minWeldTicks = 8;
+	definition.maxWeldTicks = 15;
+	Hive hive(definition);
+	*hive.world.Get<Health>(hive.master) = {Fixed::FromInt(100), Fixed::FromInt(240)};
+	hive.world.Add<BodyExtent>(hive.master);
+	hive.world.Get<BodyExtent>(hive.master)->sphereRadius = Fixed::FromInt(10);
+	hive.world.Add<Locomotion>(hive.drone);
+	Slaved &slave = *hive.world.Get<Slaved>(hive.drone);
+	slave.radius = Fixed::FromInt(5);
+	slave.masterRadius = Fixed::FromInt(10);
+	std::vector<SlaveLocomotorOrder> asked;
+	std::vector<RepairWeld> welds;
+	// One tick, then the game's part: the drone's locomotor orders (a set change starts a fresh locomotor).
+	const auto step = [&] {
+		hive.Run(1);
+		auto &orders = hive.world.Resource<SlaveOrders>();
+		for (const SlaveLocomotorOrder &order : orders.locomotors)
+		{
+			Locomotion &motion = *hive.world.Get<Locomotion>(hive.drone);
+			if (order.set != SlaveLocomotorSet::Keep)
+			{
+				motion = Locomotion{};
+				motion.set = order.set == SlaveLocomotorSet::Panic ? 2 : 0;
+			}
+			motion.preciseZ = order.preciseZ;
+			motion.preciseHeight = order.preciseHeight;
+			if (order.ultraAccurate != SlaveLocomotorOrder::Keep)
+				motion.ultraAccurate = order.ultraAccurate;
+			asked.push_back(order);
+		}
+		orders.locomotors.clear();
+		welds.insert(welds.end(), orders.welds.begin(), orders.welds.end());
+		// Its heals this tick (SlaveRepairSystem passes them on): its master, 5/30.
+		return orders.heals.size() == 1u && orders.heals.front().target == hive.master && orders.heals.front().amount.Raw() == 10923;
+	};
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::Packing)); // onObjectCreated: packed
+	BOOST_TEST(!step());
+	BOOST_TEST((slave.repairState == SlaveRepairState::Unpacking));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::Unpacking));
+	BOOST_TEST(slave.waitTicks == 15u);
+	for (int frame = 0; frame < 14; ++frame)
+		step();
+	BOOST_TEST((slave.repairState == SlaveRepairState::Unpacking));
+	step(); // tick 16
+	BOOST_TEST((slave.repairState == SlaveRepairState::Ready));
+	const std::uint32_t ready = slave.waitTicks;
+	BOOST_TEST((ready >= 9u && ready <= 23u));
+	for (std::uint32_t frame = 1; frame < ready; ++frame)
+		step();
+	BOOST_TEST((slave.repairState == SlaveRepairState::Ready));
+	BOOST_TEST(!step()); // tick 16 + ready
+	BOOST_TEST((slave.repairState == SlaveRepairState::Extending));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::FiringB));
+	BOOST_TEST(slave.waitTicks == 5u);
+	for (int frame = 0; frame < 4; ++frame)
+		BOOST_TEST(!step());
+	BOOST_TEST(welds.empty());
+	BOOST_TEST(step()); // tick 21 + ready: welding, and healing from this frame
+	BOOST_TEST((slave.repairState == SlaveRepairState::Welding));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::FiringB));
+	const std::uint32_t weld = slave.waitTicks;
+	BOOST_TEST((weld >= 8u && weld <= 15u));
+	BOOST_TEST_REQUIRE(welds.size() == 1u);
+	BOOST_TEST(welds.front().lifetime == weld * 30u);
+	for (std::uint32_t frame = 1; frame < weld; ++frame)
+		BOOST_TEST(step());
+	BOOST_TEST(asked.empty());
+	BOOST_TEST(step()); // retracting, still healing
+	BOOST_TEST((slave.repairState == SlaveRepairState::Retracting));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::FiringC));
+	BOOST_TEST(slave.waitTicks == 5u);
+	BOOST_TEST_REQUIRE(asked.size() == 1u);
+	BOOST_TEST((asked.front().set == SlaveLocomotorSet::Panic));
+	BOOST_TEST(asked.front().ultraAccurate == 1u);
+	BOOST_TEST(asked.front().preciseZ == 1u);
+	BOOST_TEST((asked.front().preciseHeight >= Fixed::FromInt(28) && asked.front().preciseHeight <= Fixed::FromInt(34))); // ground 10 + 18..24
+	BOOST_TEST(Near(Engine::Math::Length(hive.Goal() - FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}), 8.0));
+	BOOST_TEST(hive.world.Get<Locomotion>(hive.drone)->set == 2u);
+	for (int frame = 0; frame < 4; ++frame)
+		BOOST_TEST(step());
+	BOOST_TEST(step()); // ready again (not unpacking), healing on while close
+	BOOST_TEST((slave.repairState == SlaveRepairState::Ready));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::FiringC));
+	// Pulled away (60 from its master, 45 between the circles): it stops healing and heads back over its master at a
+	// random altitude, not yet at a precise height (twice the master's bounding sphere is 20).
+	hive.world.Get<Transform>(hive.drone)->position.x = Fixed::FromInt(160);
+	BOOST_TEST(!step());
+	BOOST_TEST(slave.repairing == 0u);
+	BOOST_TEST_REQUIRE(asked.size() == 2u);
+	BOOST_TEST((asked.back().set == SlaveLocomotorSet::Keep));
+	BOOST_TEST(asked.back().preciseZ == 0u);
+	BOOST_TEST(asked.back().ultraAccurate == SlaveLocomotorOrder::Keep);
+	BOOST_TEST((asked.back().preciseHeight >= Fixed::FromInt(18) && asked.back().preciseHeight <= Fixed::FromInt(24))); // over the master (z 0)
+	BOOST_TEST((hive.Goal() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
+	// Within twice its sphere (19 between the circles): a precise height.
+	hive.world.Get<Transform>(hive.drone)->position.x = Fixed::FromInt(134);
+	BOOST_TEST(!step());
+	BOOST_TEST(asked.back().preciseZ == 1u);
+	// Its master whole again: guarding, idle and far from its guard point, the repair ends.
+	hive.world.Get<Health>(hive.master)->current = Fixed::FromInt(240);
+	*hive.world.Get<MoveOrder>(hive.drone) = {};
+	step();
+	BOOST_TEST((slave.repairState == SlaveRepairState::None));
+	BOOST_TEST((slave.repairLook == SlaveRepairLook::Packing));
+	BOOST_TEST(slave.waitTicks == SlavedUpdateTicks);
+	BOOST_TEST((asked.back().set == SlaveLocomotorSet::Normal));
+	BOOST_TEST(asked.back().ultraAccurate == 0u);
+	BOOST_TEST(asked.back().preciseZ == 0u);
+	BOOST_TEST(hive.world.Get<Locomotion>(hive.drone)->set == 0u);
+}
+
+// doAttackLogic / doScoutLogic / doGuardLogic: AttackWanderRange and ScoutWanderRange move the goal that far off in a
+// random direction (GameLogicRandomValue(0, 2*PI): a whole number of radians, 0 to 6), kept as its offset; with a
+// GuardWanderRange the guard point gets a new offset GuardMaxRange long (not the wander range) on top of the old one.
+BOOST_AUTO_TEST_CASE(legacy_parity_drones_wander_by_their_wander_ranges)
+{
+	const auto wholeRadians = [](FixedVector2 offset, double length) {
+		for (int radians = 0; radians <= 6; ++radians)
+			if (std::abs(static_cast<double>(offset.x.Raw()) / 65536.0 - length * std::cos(radians)) < 0.05 &&
+				std::abs(static_cast<double>(offset.y.Raw()) / 65536.0 - length * std::sin(radians)) < 0.05)
+				return true;
+		return false;
+	};
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(35);
+	definition.guardWanderRange = Fixed::FromInt(35);
+	definition.attackRange = Fixed::FromInt(75);
+	definition.attackWanderRange = Fixed::FromInt(10);
+	definition.scoutRange = Fixed::FromInt(75);
+	definition.scoutWanderRange = Fixed::FromInt(20);
+	Hive hive(definition);
+	const Slaved &slave = *hive.world.Get<Slaved>(hive.drone);
+	BOOST_TEST(wholeRadians(slave.guardOffset, 35.0)); // startSlavedEffects
+	const ecs::Entity victim = hive.Unit(150, 100);
+	*hive.world.Get<AttackTarget>(hive.master) = {victim, true};
+	hive.Run(1);
+	BOOST_TEST(wholeRadians(slave.guardOffset, 10.0));
+	BOOST_TEST((hive.Goal() == FixedVector2{Fixed::FromInt(150), Fixed::FromInt(100)} + slave.guardOffset));
+	*hive.world.Get<AttackTarget>(hive.master) = {};
+	*hive.world.Get<MoveOrder>(hive.master) = MoveToPoint({Fixed::FromInt(100), Fixed::FromInt(140)});
+	hive.Run(7);
+	BOOST_TEST(wholeRadians(slave.guardOffset, 20.0));
+	BOOST_TEST((hive.Goal() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(140)} + slave.guardOffset));
+	// The master still: idle and more than 15 from its guard point, a new offset of GuardMaxRange on top of the old one.
+	*hive.world.Get<MoveOrder>(hive.master) = {};
+	*hive.world.Get<MoveOrder>(hive.drone) = {};
+	const FixedVector2 old = slave.guardOffset;
+	hive.Run(7);
+	BOOST_TEST(wholeRadians(slave.guardOffset, 35.0));
+	BOOST_TEST((hive.Goal() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)} + old + slave.guardOffset));
+}
+
+// StayOnSameLayerAsMaster: each look puts the slave on its master's layer (setLayer(master->getLayer())); without it,
+// its own layer stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drone_keeps_to_its_masters_layer)
+{
+	SlavedDefinition definition;
+	definition.guardMaxRange = Fixed::FromInt(30);
+	definition.stayOnMasterLayer = 1;
+	Hive hive(definition);
+	hive.world.Add<SurfaceLayer>(hive.master);
+	hive.world.Get<SurfaceLayer>(hive.master)->layer = 2;
+	hive.Run(1);
+	BOOST_TEST_REQUIRE(hive.world.Has<SurfaceLayer>(hive.drone));
+	BOOST_TEST(hive.world.Get<SurfaceLayer>(hive.drone)->layer == 2u);
+	hive.world.Remove<SurfaceLayer>(hive.master);
+	hive.Run(6);
+	BOOST_TEST(hive.world.Has<SurfaceLayer>(hive.drone)); // it looks again only on the 8th tick
+	hive.Run(1);
+	BOOST_TEST(!hive.world.Has<SurfaceLayer>(hive.drone));
+	hive.world.Get<Slaved>(hive.drone)->definition.stayOnMasterLayer = 0;
+	hive.world.Add<SurfaceLayer>(hive.master);
+	hive.world.Get<SurfaceLayer>(hive.master)->layer = 3;
+	hive.Run(7);
+	BOOST_TEST(!hive.world.Has<SurfaceLayer>(hive.drone));
 }
 
 // SpawnBehavior::update / onSpawnDeath / onDie, tick by tick (SPAWN_UPDATE_RATE 15; slot n due after frame n; SpawnReplaceDelay

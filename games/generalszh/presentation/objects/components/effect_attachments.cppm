@@ -14,6 +14,7 @@ struct AttachedSystem
 	std::uint64_t id{0};           // in the particle world
 	std::array<float, 3> local{};  // in the object's frame (unscaled)
 	float yaw{0.0f};
+	std::int32_t bone{-1};         // its ParticleSysBone (index in its state's list) when it sits at a bone
 };
 
 // A missile's exhaust (MissileAIUpdate: lit at ignition, tossed when its fuel runs out or it is done),
@@ -22,6 +23,8 @@ struct ExhaustState
 {
 	std::uint32_t weapon{0};
 	std::uint32_t lit{0};
+	std::uint8_t veterancy{0}; // its launcher's (the exhaust for that level: VeterancyProjectileExhaust)
+	std::uint8_t reserved[7]{};
 };
 
 // The exhaust trailing it in the particle world (0: none yet).
@@ -53,6 +56,27 @@ struct CrashTrailEmission
 {
 	std::vector<AttachedSystem> systems;
 	std::uint32_t started{0};
+	std::uint32_t seenFrame{0};
+};
+
+// A firestorm's particle systems (FirestormDynamicGeometryInfoUpdate: started where it stands, ParticleOffsetZ over the
+// ground, as its effects fire; each frame their emission radius is its radius).
+struct FirestormEmission
+{
+	std::vector<std::uint64_t> systems;
+};
+
+// Its BoneFXUpdate's particle systems (BoneFXUpdate::doParticleSystemAtBone: started at their bones, riding on it) and
+// their timers, on the tick the simulation keeps and the presentation's random stream (GameClientRandomVariable): for
+// each slot of its damage state the tick it starts its system next (Off: not at all); the simulation's timings and stops
+// last followed.
+struct BoneFxEmission
+{
+	static constexpr std::int64_t Off = -1;
+	std::vector<AttachedSystem> systems;
+	std::array<std::int64_t, 8> next{Off, Off, Off, Off, Off, Off, Off, Off};
+	std::uint32_t timings{0};
+	std::uint32_t stops{0};
 	std::uint32_t seenFrame{0};
 };
 
@@ -100,9 +124,25 @@ struct ComponentTraits<generalszh::presentation::DamageEmission>
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
 };
 template<>
+struct ComponentTraits<generalszh::presentation::BoneFxEmission>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.bone_fx_emission";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
 struct ComponentTraits<generalszh::presentation::FxEmission>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.fx_emission";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::FirestormEmission>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.firestorm_emission";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;

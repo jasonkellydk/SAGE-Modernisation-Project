@@ -66,6 +66,8 @@ struct AiData
 	Engine::Math::Fixed guardChaseUnitsMs;
 	// GuardEnemyReturnScanRate (ms; TAiData's default a second): how often a guard on its way back looks for enemies.
 	Engine::Math::Fixed guardEnemyReturnScanRateMs{Engine::Math::Fixed::FromInt(1000)};
+	// ForceIdleMSEC (ms; TAiData's default a single frame): how long a unit that went idle waits before its first look.
+	std::optional<Engine::Math::Fixed> forceIdleMs;
 	bool rotateSkirmishBases{false};
 	// EnableRepulsors (KINDOF_CAN_BE_REPULSED run from enemies and repulsors), RepulsedDistance (how much further than
 	// their vision they run).
@@ -169,6 +171,12 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 				fixed(field, data.guardInnerModifierAi);
 			else if (key == "GuardInnerModifierHuman")
 				fixed(field, data.guardInnerModifierHuman);
+			else if (key == "ForceIdleMSEC")
+			{
+				Engine::Math::Fixed ms;
+				fixed(field, ms);
+				data.forceIdleMs = ms;
+			}
 			else if (key == "GuardEnemyScanRate")
 				fixed(field, data.guardEnemyScanRateMs);
 			else if (key == "GuardChaseUnitsDuration")

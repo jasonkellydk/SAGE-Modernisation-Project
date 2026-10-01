@@ -71,6 +71,30 @@ struct SpyVisionSystem
 					}
 				spy.player = owners[row].player;
 			}
+			// setDisabledUntilFrame asked for (a sabotaged Internet Center: disableInternetCenterSpyVision): a later tick
+			// turns it off until then, its timers starting again when it wakes.
+			if (spy.disableUntil != 0)
+			{
+				const std::uint64_t until = spy.disableUntil;
+				spy.disableUntil = 0;
+				for (std::uint8_t module = 0; module < spy.count; ++module)
+				{
+					SpyVisionState &state = spy.modules[module];
+					if (until > now)
+					{
+						if (state.active != 0)
+							work(module, spy.player, false);
+						state.disabledUntil = until;
+						state.wakeTick = until;
+					}
+					else
+					{
+						state.disabledUntil = now;
+						state.wakeTick = now;
+					}
+					state.resetTimers = 1;
+				}
+			}
 			// onDisabledEdge -> setDisabledUntilFrame.
 			const bool isDisabled = !disabled.empty() && disabled[row].mask != 0;
 			if (isDisabled != (spy.wasDisabled != 0))

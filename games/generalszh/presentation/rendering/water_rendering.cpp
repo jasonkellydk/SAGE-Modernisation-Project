@@ -280,7 +280,7 @@ bool WaterRendering::Load(Graphics::Device &device, const engine::filesystem::Vi
 }
 
 void WaterRendering::Draw(Graphics::Device &device, Graphics::CommandList &commands, const std::array<float, 16> &view,
-	const std::array<float, 16> &projection, const std::array<float, 3> &eye, float timeSeconds)
+	const std::array<float, 16> &projection, const std::array<float, 3> &eye, float timeSeconds, const ShroudBinding *shroud, bool softEdge)
 {
 	State &state = *m_state;
 	if (state.meshes.empty() || state.device != &device)
@@ -307,8 +307,12 @@ void WaterRendering::Draw(Graphics::Device &device, Graphics::CommandList &comma
 	parameters.camera_position = {eye[0], eye[1], eye[2], 1.0f};
 	parameters.displacement_domain = state.domain;
 	parameters.tint = state.tint;
-	parameters.effects = {0.0f, 0.0f, 0.0f, 0.0f}; // no mirror, shroud, refraction or underwater
-	parameters.surface_options = {0.0f, state.transparentDepth, state.minOpacity, depth.Is_Valid() ? 1.0f : 0.0f};
+	// No mirror, refraction or underwater; the viewer's shroud over it as over the terrain (W3DWater's shroud stage).
+	const bool shrouded = shroud != nullptr && shroud->Active();
+	parameters.effects = {0.0f, shrouded ? 1.0f : 0.0f, 0.0f, 0.0f};
+	if (shrouded)
+		parameters.shroud_projection = shroud->projection;
+	parameters.surface_options = {0.0f, state.transparentDepth, state.minOpacity, depth.Is_Valid() && softEdge && state.transparentDepth != 0.0f ? 1.0f : 0.0f};
 	// The sky stands in for the reflected environment; the original blends a
 	// cloud layer rather than an HDR sky, so it is kept dim (EnvironmentScale).
 	parameters.sun_color = {state.sunColor[0] * EnvironmentScale, state.sunColor[1] * EnvironmentScale, state.sunColor[2] * EnvironmentScale, 1.0f};
@@ -321,6 +325,8 @@ void WaterRendering::Draw(Graphics::Device &device, Graphics::CommandList &comma
 	textures[2] = state.rippleNormals;
 	textures[6] = state.skyTexture;
 	textures[8] = depth;
+	if (shrouded)
+		textures[7] = shroud->texture;
 
 	Graphics::WaterStyle style;
 	style.pass = Graphics::WaterPass::Ocean;

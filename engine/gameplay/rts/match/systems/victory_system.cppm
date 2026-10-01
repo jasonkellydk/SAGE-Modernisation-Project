@@ -34,7 +34,7 @@ export namespace engine::gameplay
 {
 struct VictorySystem
 {
-	using Query = ecs::Query<ecs::Read<Owner>>;
+	using Query = ecs::Query<ecs::Read<Owner>, ecs::Optional<VictoryRole>, ecs::Optional<Dying>, ecs::Optional<InactiveBody>, ecs::Optional<UnderConstruction>>;
 	using Lookup = ecs::Lookup<ecs::Read<VictoryRole>, ecs::Read<Dying>, ecs::Read<InactiveBody>, ecs::Read<Transport>, ecs::Read<TeamMember>, ecs::Read<UnderConstruction>>;
 	using Resources = ecs::Resources<ecs::Write<MatchOutcome>, ecs::Write<Evacuations>, ecs::Write<KillRequests>, ecs::Read<Deaths>, ecs::Read<Expirations>,
 		ecs::Read<Relationships>, ecs::Read<TeamRoster>, ecs::Write<ShroudMap>>;
@@ -60,32 +60,41 @@ struct VictorySystem
 				std::binary_search(dead.begin(), dead.end(), entity, [](ecs::Entity a, ecs::Entity b) { return a.index < b.index || (a.index == b.index && a.generation < b.generation); });
 		};
 
-		struct Owned
-		{
-			ecs::Entity entity;
-			std::uint32_t player;
+		// Who still stands: a pass over the chunks, whose component sets answer most of it (a chunk with no victory
+		// role holds nothing that counts; the dying and the inactive are whole chunks). Order does not matter here.
+		std::vector<std::uint8_t> standing;
+		const auto stand = [&](std::uint32_t player) {
+			if (player >= standing.size())
+				standing.resize(static_cast<std::size_t>(player) + 1, 0);
+			standing[player] = 1;
 		};
-		std::vector<Owned> owned;
+		const auto deadThisTick = [&](ecs::Entity entity) {
+			return std::binary_search(dead.begin(), dead.end(), entity, [](ecs::Entity a, ecs::Entity b) { return a.index < b.index || (a.index == b.index && a.generation < b.generation); });
+		};
 		query.ForEachChunk([&](auto chunk) {
+			const auto roles = chunk.template Get<VictoryRole>();
+			if (roles.empty())
+				return;
 			const auto owners = chunk.template Get<Owner>();
 			const auto entities = chunk.Entities();
-			for (std::size_t row = 0; row < owners.size(); ++row)
-				owned.push_back({entities[row], owners[row].player});
+			const bool dying = !chunk.template Get<Dying>().empty();
+			const bool inactive = !chunk.template Get<InactiveBody>().empty();
+			const bool underConstruction = !chunk.template Get<UnderConstruction>().empty();
+			for (std::size_t row = 0; row < roles.size(); ++row)
+			{
+				const VictoryRole &role = roles[row];
+				if (!role.Has(victory_role::CountsForVictory) && !role.Has(victory_role::LeavesCountedHole))
+					continue;
+				const bool isDead = dying || inactive || deadThisTick(entities[row]);
+				if (role.Has(victory_role::CountsForVictory) && !isDead)
+					stand(owners[row].player);
+				// Dying this tick, finished: what it leaves stands at the tick's end.
+				else if (role.Has(victory_role::LeavesCountedHole) && !dying && isDead && !underConstruction)
+					stand(owners[row].player);
+			}
 		});
-		std::sort(owned.begin(), owned.end(), [](const Owned &a, const Owned &b) { return a.entity.index < b.entity.index; });
 
-		std::vector<std::uint32_t> standing;
-		for (const Owned &each : owned)
-		{
-			const VictoryRole *role = lookup.Get<VictoryRole>(each.entity);
-			if (role != nullptr && role->Has(victory_role::CountsForVictory) && !effectivelyDead(each.entity))
-				standing.push_back(each.player);
-			// Dying this tick, finished: what it leaves stands at the tick's end.
-			else if (role != nullptr && role->Has(victory_role::LeavesCountedHole) && lookup.Get<Dying>(each.entity) == nullptr &&
-				effectivelyDead(each.entity) && lookup.Get<UnderConstruction>(each.entity) == nullptr)
-				standing.push_back(each.player);
-		}
-		const auto beaten = [&](std::uint32_t player) { return std::find(standing.begin(), standing.end(), player) == standing.end(); };
+		const auto beaten = [&](std::uint32_t player) { return player >= standing.size() || standing[player] == 0; };
 		const Relationships &relationships = context.Read<Relationships>();
 		const auto allies = [&](std::uint32_t a, std::uint32_t b) { return a != b && relationships.Allies(a, b) && relationships.Allies(b, a); };
 
@@ -116,6 +125,27 @@ struct VictorySystem
 			}
 		}
 
+		// Everything owned, by entity index: only walked when someone falls.
+		struct Owned
+		{
+			ecs::Entity entity;
+			std::uint32_t player;
+		};
+		std::vector<Owned> owned;
+		bool ownedGathered = false;
+		const auto gatherOwned = [&] {
+			if (ownedGathered)
+				return;
+			ownedGathered = true;
+			query.ForEachChunk([&](auto chunk) {
+				const auto owners = chunk.template Get<Owner>();
+				const auto entities = chunk.Entities();
+				for (std::size_t row = 0; row < owners.size(); ++row)
+					owned.push_back({entities[row], owners[row].player});
+			});
+			std::sort(owned.begin(), owned.end(), [](const Owned &a, const Owned &b) { return a.entity.index < b.entity.index; });
+		};
+
 		const TeamRoster &roster = context.Read<TeamRoster>();
 		const std::optional<std::uint32_t> neutral = roster.FindTeam("team");
 		auto &commands = context.Commands();
@@ -124,6 +154,7 @@ struct VictorySystem
 			if (player.defeated || !beaten(player.player))
 				continue;
 			player.defeated = true;
+			gatherOwned();
 			if (context.Tick() > 1)
 			{
 				context.Write<ShroudMap>().RevealAllPermanently(player.player);

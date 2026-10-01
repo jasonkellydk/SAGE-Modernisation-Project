@@ -36,6 +36,20 @@ inline constexpr std::array<engine::config::EnumName<HeightBehavior>, 8> HeightB
 	{"RELATIVE_TO_HIGHEST_LAYER", HeightBehavior::RelativeToHighestLayer},
 }};
 
+// The locomotor sets a unit moves on, in the port's numbering (0 its normal one; the names as TheLocomotorSetNames;
+// SET_NORMAL_UPGRADED is the normal set of a unit with its locomotor upgrade).
+inline constexpr std::array<std::string_view, 7> LocomotorSetNames{"SET_NORMAL", "SET_WANDER", "SET_PANIC", "SET_SLUGGISH", "SET_TAXIING", "SET_SUPERSONIC",
+	"SET_FREEFALL"};
+
+// A set's number by its name; none: not one of them.
+inline std::optional<std::uint8_t> LocomotorSetIndex(std::string_view name) noexcept
+{
+	for (std::size_t index = 0; index < LocomotorSetNames.size(); ++index)
+		if (LocomotorSetNames[index] == name)
+			return static_cast<std::uint8_t>(index);
+	return std::nullopt;
+}
+
 engine::config::Schema<LocomotorDefinition> LocomotorSchema()
 {
 	using D = LocomotorDefinition;

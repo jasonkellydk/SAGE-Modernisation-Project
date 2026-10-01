@@ -115,6 +115,9 @@ struct ModelStates
 	// AnimationsRequirePower: an underpowered object's animations pause (the original's default: yes).
 	bool animationsRequirePower{true};
 	bool receivesDynamicLights{true}; // ReceivesDynamicLights
+	// MinLODRequired: the lowest static detail level (0 Low .. 4 Custom) the draw module is made at while draw module
+	// LOD is on (W3DModelDrawModuleData m_minLODRequired: Low by default).
+	std::int32_t minLodRequired{0};
 	// OkToChangeModelColor: its model takes a new indicator colour later (a capture, a script's colour); without, it keeps
 	// the one it was made with (W3DModelDraw::replaceIndicatorColor).
 	bool okToChangeColor{false};
@@ -319,6 +322,17 @@ ModelStates ReadDrawStates(const ModuleEntry &module)
 				result.ignored = ReadConditions(child);
 			else if (child.key == "OkToChangeModelColor")
 				result.okToChangeColor = engine::config::values::ParseBool(child.Value()).value_or(false);
+			else if (child.key == "MinLODRequired" && !child.values.empty())
+			{
+				// INI::parseStaticGameLODLevel: one of StaticGameLODNames, case blind.
+				constexpr std::array<std::string_view, 5> levels{"LOW", "MEDIUM", "HIGH", "VERYHIGH", "CUSTOM"};
+				std::string upper(child.Value());
+				for (char &c : upper)
+					c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+				for (std::size_t level = 0; level < levels.size(); ++level)
+					if (upper == levels[level])
+						result.minLodRequired = static_cast<std::int32_t>(level);
+			}
 			else if (child.key == "AnimationsRequirePower")
 				result.animationsRequirePower = engine::config::values::ParseBool(child.Value()).value_or(true);
 			else if (child.key == "ProjectileBoneFeedbackEnabledSlots")

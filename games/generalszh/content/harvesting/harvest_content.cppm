@@ -33,8 +33,10 @@ struct DockLayout
 	bool warehouse{false};
 	bool center{false};
 	bool repair{false};                // RepairDockUpdate
+	bool railed{false};                // RailedTransportDockUpdate: a ferry's (its points move with it)
 	Engine::Math::Fixed fullHealTicks; // RepairDockUpdate TimeForFullHeal (parseDurationReal: frames, not rounded)
 	engine::gameplay::ResourceStore store;
+	std::uint32_t grantStealthTicks{0}; // SupplyCenterDockUpdate GrantTemporaryStealth (parseDurationUnsignedInt)
 };
 
 inline const ModuleEntry *FindBehavior(const ObjectDefinition &object, std::span<const std::string_view> types)
@@ -83,7 +85,7 @@ inline std::string_view SupplyBoostUpgrade(const ObjectDefinition &object)
 
 std::optional<DockLayout> ReadDockLayout(const ObjectDefinition &object, ModelRigs &rigs)
 {
-	static constexpr std::string_view Types[] = {"SupplyWarehouseDockUpdate", "SupplyCenterDockUpdate", "RepairDockUpdate"};
+	static constexpr std::string_view Types[] = {"SupplyWarehouseDockUpdate", "SupplyCenterDockUpdate", "RepairDockUpdate", "RailedTransportDockUpdate"};
 	const ModuleEntry *module = FindBehavior(object, Types);
 	if (module == nullptr)
 		return std::nullopt;
@@ -93,7 +95,11 @@ std::optional<DockLayout> ReadDockLayout(const ObjectDefinition &object, ModelRi
 	DockLayout layout;
 	layout.warehouse = module->type == "SupplyWarehouseDockUpdate";
 	layout.repair = module->type == "RepairDockUpdate";
-	layout.center = !layout.warehouse && !layout.repair;
+	layout.railed = module->type == "RailedTransportDockUpdate";
+	layout.center = !layout.warehouse && !layout.repair && !layout.railed;
+	if (layout.center)
+		if (const auto *node = block.Find("GrantTemporaryStealth"))
+			layout.grantStealthTicks = static_cast<std::uint32_t>(engine::config::ReadDurationTicks(*node, bind).value_or(0));
 	if (layout.repair)
 	{
 		// m_framesForFullHeal: 1 frame by default (no divide by zero).

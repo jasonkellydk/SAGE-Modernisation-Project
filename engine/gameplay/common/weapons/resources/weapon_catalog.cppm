@@ -19,6 +19,17 @@ public:
 	std::uint32_t normalDeath{0};
 	// DAMAGE_KILL_GARRISONED (kills those inside a garrison instead of hurting it); set by the game.
 	std::uint32_t killGarrisoned{None};
+	// The damage types and death estimateWeaponDamage treats apart (SNIPER, SURRENDER, DISARM, DEPLOY, HACK, KILL_PILOT;
+	// DEATH_BURNED); set by the game, None: the game has none.
+	std::uint32_t sniper{None};
+	std::uint32_t surrender{None};
+	std::uint32_t disarm{None};
+	std::uint32_t deploy{None};
+	std::uint32_t hack{None};
+	std::uint32_t killPilot{None};
+	std::uint32_t burnedDeath{None};
+	// DEATH_DETONATED (a missile that calls its die modules on going off); set by the game.
+	std::uint32_t detonatedDeath{0};
 	// The weapon bonus conditions of continuous fire (CONTINUOUS_FIRE_MEAN, CONTINUOUS_FIRE_FAST); set by the game.
 	std::uint32_t continuousFireMean{0};
 	std::uint32_t continuousFireFast{0};
@@ -30,6 +41,8 @@ public:
 	// The global weapon bonus table (GameData's WeaponBonus lines) and the weapons' own tables.
 	WeaponBonusSet globalBonus;
 	std::vector<WeaponBonusSet> extraBonuses;
+	// The weapons' ScatterTarget patterns, one after another (WeaponDefinition::scatterFirst/scatterCount), unscaled.
+	std::vector<Engine::Math::FixedVector2> scatterTargets;
 
 	// Weapon::computeBonus: the global table's and then the weapon's own rows for these conditions.
 	WeaponBonus Bonus(const WeaponDefinition &weapon, std::uint32_t conditions) const noexcept

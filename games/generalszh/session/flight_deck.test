@@ -1,0 +1,345 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <cmath>
+#include <optional>
+#include <array>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.rts.production.components.production_queue;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.gameplay.common.spatial.algorithms.geometry_collision;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// FlightDeckBehavior (FlightDeckBehavior.cpp) on the shipped Alpine Assault.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// Two human seats with nobody at them on Alpine Assault.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 2);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+}
+
+BOOST_AUTO_TEST_SUITE(flight_deck)
+
+// Legacy parity (FlightDeckBehavior.cpp: buildInfo, update, aiDoCommand, propagateOrderToSpecificPlane,
+// exitObjectViaDoor; the shipped AmericaAircraftCarrier: 2 runways x 10 spaces, LaunchRampDelay 667 ms = 21 frames,
+// LowerRampDelay 600 ms = 18, CatapultFireDelay 750 ms = 23, LaunchWaveDelay 3000 ms = 90, ParkingCleanupPeriod 533 ms =
+// 16, HumanFollowPeriod 333 ms = 10, LandingDeckHeightOffset 45, HealAmountPerSecond 20; its PSAirCarrier bones): a
+// carrier placed makes its 20 Raptors on its first update, space k on runway k mod 2 (row k / 2: RunwayStart1,
+// RunwayStart2, Runway1Prep1, ...), parked at their bones on its deck (45 over the terrain). Told to attack (a script's
+// order: the carrier itself takes no aim) on tick U its ramps go up (DOOR_2 / DOOR_3 opening) and 21 frames on the
+// two front jets get the order (and set off the tick after: here a jet's cycle answers its orders on its next tick), the steam at U + 44, the ramps down at U + 39 (closing); the next wave no
+// sooner than U + 111. Once a front jet is off the deck, the next cleanup pass moves the jet behind it up into its space
+// (one per runway a pass). A parked jet hurt heals 4 hit points each 6 frames. A 4-worker run hashes the same, and a
+// checkpoint plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_carrier_makes_and_launches_its_jets)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	std::unique_ptr<session::Session> restored;
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-500), Fixed::FromInt(-300)};
+	ecs::Entity carrier, target;
+	for (session::Session *session : {&game, &four})
+	{
+		const ecs::Entity made = session->Place("AmericaAircraftCarrier", site, {}, america);
+		const ecs::Entity aim = session->Place("ChinaPowerPlant", site + Engine::Math::FixedVector2{Fixed::FromInt(900), Fixed{}}, {}, china);
+		if (session == &game)
+			carrier = made, target = aim;
+	}
+	BOOST_TEST_REQUIRE(world.IsAlive(carrier));
+	const auto step = [&](std::vector<engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		four.Tick(orders);
+		if (restored)
+			restored->Tick(orders);
+	};
+	const auto deckJets = [&] {
+		std::vector<std::pair<std::uint32_t, ecs::Entity>> out;
+		ecs::Query<ecs::Read<gp::Jet>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto jets = chunk.template Get<gp::Jet>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < jets.size(); ++row)
+				if (jets[row].airfield == carrier)
+					out.push_back({jets[row].space, entities[row]});
+		});
+		std::ranges::sort(out, {}, [](const auto &entry) { return entry.first; });
+		return out;
+	};
+	step();
+	const auto &field = *world.Get<gp::Airfield>(carrier);
+	BOOST_TEST_REQUIRE(field.spaceCount == 20u);
+	BOOST_TEST(field.runwayCount == 2u);
+	BOOST_TEST((field.deckHeight == Fixed::FromInt(45)));
+	for (std::uint32_t space = 0; space < 20; ++space)
+		BOOST_TEST(field.spaces[space].runway == space % 2);
+	auto jets = deckJets();
+	BOOST_TEST_REQUIRE(jets.size() == 20u);
+	for (std::uint32_t space = 0; space < 20; ++space)
+	{
+		BOOST_TEST(jets[space].first == space);
+		const auto &at = world.Get<gp::Transform>(jets[space].second)->position;
+		BOOST_TEST((at.XY() == field.spaces[space].prep.XY()));
+		BOOST_TEST((world.Get<gp::Jet>(jets[space].second)->state == gp::JetState::Parked));
+	}
+	step();
+	for (const auto &[space, jet] : jets)
+	{
+		const auto &at = world.Get<gp::Transform>(jet)->position;
+		BOOST_TEST((at.z == game.Game().ground.At(at.XY()) + Fixed::FromInt(45)), "space " << space);
+	}
+	// A parked jet hurt heals.
+	const ecs::Entity hurt = jets[5].second;
+	const auto healthNow = [&] { return world.Get<gp::Health>(hurt)->current; };
+	for (session::Session *session : {&game, &four})
+		for (const auto &[space, jet] : jets)
+			if (space == 5)
+				session->World().Get<gp::Health>(jet)->current = session->World().Get<gp::Health>(jet)->maximum - Fixed::FromInt(20);
+	std::vector<std::uint64_t> healedAt;
+	Fixed last = healthNow();
+	for (int tick = 0; tick < 40; ++tick)
+	{
+		step();
+		if (healthNow() != last)
+		{
+			BOOST_TEST((healthNow() - last == Fixed::FromInt(4)));
+			healedAt.push_back(game.CurrentTick());
+			last = healthNow();
+		}
+	}
+	BOOST_TEST_REQUIRE(healedAt.size() == 5u);
+	for (std::size_t index = 1; index < healedAt.size(); ++index)
+		BOOST_TEST(healedAt[index] - healedAt[index - 1] == 6u);
+
+	// Told to attack.
+	restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	for (session::Session *session : {&game, &four, restored.get()})
+		gameplay::OrderAttack(session->Game(), carrier, target, 0, gp::CommandSource::Script);
+	BOOST_TEST(!world.Get<gp::AttackTarget>(carrier)->target.IsValid());
+	step();
+	const std::uint64_t ordered = game.CurrentTick();
+	const std::uint32_t door2Opening = content::model_condition::DoorOpening(1), door2Closing = content::model_condition::DoorClosing(1);
+	const std::uint32_t door3Opening = content::model_condition::DoorOpening(2);
+	BOOST_TEST(world.Get<gp::Appearance>(carrier)->Test(door2Opening));
+	BOOST_TEST(world.Get<gp::Appearance>(carrier)->Test(door3Opening));
+	std::uint64_t launched = 0, told = 0, closing = 0, steam = 0, movedUp = 0;
+	for (int tick = 0; tick < 300 && movedUp == 0; ++tick)
+	{
+		step();
+		const std::uint64_t now = game.CurrentTick();
+		const auto *front = world.Get<gp::Jet>(jets[0].second);
+		if (launched == 0 && front->state != gp::JetState::Parked)
+			launched = now;
+		if (told == 0 && world.Get<gp::AttackTarget>(jets[0].second)->target == target)
+			told = now;
+		if (closing == 0 && world.Get<gp::Appearance>(carrier)->Test(door2Closing))
+			closing = now;
+		for (const auto &cue : world.Resource<gameplay::EffectCues>().list)
+			if (steam == 0 && cue.effect == "AircraftCarrierCatapultSteamParent")
+				steam = now;
+		if (movedUp == 0 && world.Get<gp::Jet>(jets[2].second)->space == 0u)
+			movedUp = now;
+	}
+	BOOST_TEST(told == ordered + 21);
+	// Its cycle takes it off the deck the next tick (the original's order switches its state at once: one tick sooner).
+	BOOST_TEST(launched == ordered + 22);
+	BOOST_TEST((world.Get<gp::AttackTarget>(jets[0].second)->target == target));
+	BOOST_TEST(closing == ordered + 39);
+	BOOST_TEST(steam == ordered + 44);
+	BOOST_TEST_REQUIRE(movedUp != 0u);
+	BOOST_TEST(world.Get<gp::Jet>(jets[0].second)->space == 2u);
+	step();
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (FlightDeckBehavior.cpp: update's replacement production, exitObjectViaDoor; ProductionUpdate: the
+// Raptor's BuildTime 4 s = 120 frames, the carrier's DoorOpeningTime 3000 ms = 90 frames): a carrier's jet lost, the
+// carrier's next update with that space empty and nothing in production queues a replacement (free), and the next may
+// not be queued sooner than 210 frames on; made, it comes out of the hangar (Hanger1, facing it) into the first empty
+// space and taxies out by its runway's creation points (TAXI_FROM_HANGAR) to its space.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_carrier_replaces_a_lost_jet)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-500), Fixed::FromInt(-300)};
+	const ecs::Entity carrier = game.Place("AmericaAircraftCarrier", site, {}, america);
+	game.Tick();
+	game.Tick();
+	std::vector<ecs::Entity> original;
+	ecs::Entity lost;
+	{
+		ecs::Query<ecs::Read<gp::Jet>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto rows = chunk.template Get<gp::Jet>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < rows.size(); ++row)
+				if (rows[row].airfield == carrier)
+				{
+					original.push_back(entities[row]);
+					if (rows[row].space == 7)
+						lost = entities[row];
+				}
+		});
+	}
+	BOOST_TEST_REQUIRE(original.size() == 20u);
+	gameplay::KillNow(game.Game(), lost);
+	std::uint64_t queued = 0, made = 0;
+	ecs::Entity replacement;
+	std::uint32_t space = 0;
+	for (int tick = 0; tick < 900 && made == 0; ++tick)
+	{
+		game.Tick();
+		const auto *queue = world.Get<gp::ProductionQueue>(carrier);
+		if (queued == 0 && queue != nullptr && queue->count > 0)
+			queued = game.CurrentTick();
+		ecs::Query<ecs::Read<gp::Jet>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto rows = chunk.template Get<gp::Jet>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < rows.size(); ++row)
+				if (rows[row].airfield == carrier && std::ranges::find(original, entities[row]) == original.end())
+				{
+					made = game.CurrentTick();
+					replacement = entities[row];
+					space = rows[row].space;
+				}
+		});
+	}
+	BOOST_TEST_REQUIRE(queued != 0u);
+	BOOST_TEST_REQUIRE(made != 0u);
+	BOOST_TEST_MESSAGE("queued " << queued << " made " << made);
+	const auto &field = *world.Get<gp::Airfield>(carrier);
+	const gp::Jet &jet = *world.Get<gp::Jet>(replacement);
+	BOOST_TEST((jet.state == gp::JetState::TaxiToParking));
+	BOOST_TEST(jet.route == 1u);
+	const auto &runway = field.runways[field.spaces[space].runway];
+	BOOST_TEST_REQUIRE(runway.creationCount >= 2u);
+	BOOST_TEST((jet.goal == runway.creation[1].XY()));
+	BOOST_TEST((world.Get<gp::Transform>(replacement)->position.XY() == field.spaces[space].hangar.XY()));
+	// It goes on to its space.
+	for (int tick = 0; tick < 900 && world.Get<gp::Jet>(replacement)->state == gp::JetState::TaxiToParking; ++tick)
+		game.Tick();
+	const std::uint32_t settled = world.Get<gp::Jet>(replacement)->space;
+	BOOST_TEST((Engine::Math::DistanceSquared(world.Get<gp::Transform>(replacement)->position.XY(), field.spaces[settled].prep.XY()) < Fixed::FromInt(100)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

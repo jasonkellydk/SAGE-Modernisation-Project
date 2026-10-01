@@ -6,8 +6,11 @@ export import Engine.Core.Math.Fixed;
 import engine.ecs.core.component_registry;
 
 // How entities heal (the original's AutoHealBehavior), as data:
-// - SelfHealing: `amount` every `delay` ticks while hurt; after being hit it
-//   waits `startDelay` ticks before healing again.
+// - SelfHealing: up to four programs (an object may have several self-heal
+//   modules: its AutoHealBehavior(s), the veterancy AutoHeal every object
+//   inherits, and a structure's BaseRegenerateUpdate), each `amount` every
+//   `delay` ticks while hurt; after being hit it waits `startDelay` ticks
+//   before healing again.
 // - AreaHealing: up to four programs, each every `delay` ticks giving
 //   `amount` to each hurt ally in `radius` (or every one of its player's,
 //   when WholePlayer) whose target classes match `classes` and not
@@ -16,7 +19,8 @@ import engine.ecs.core.component_registry;
 //   original's sole benefactor: heals from several healers do not stack).
 export namespace engine::gameplay
 {
-struct SelfHealing
+// One self heal an entity gives (one module).
+struct SelfHealProgram
 {
 	Engine::Math::Fixed amount;
 	std::uint64_t delay{1};
@@ -24,11 +28,38 @@ struct SelfHealing
 	std::uint64_t nextTick{0};
 	// The disabled types it still heals under (its update module's getDisabledTypesToProcess); 0: held only.
 	std::uint32_t runsWhileDisabled{0};
-	// Waits while its structure is not standing whole (BaseRegenerateUpdate::update: under construction or being sold);
-	// `waiting` is set while that is so.
+	// Waits while its structure is not standing whole (BaseRegenerateUpdate::update: under construction or being sold).
 	std::uint8_t onlyWhenStanding{0};
-	std::uint8_t waiting{0};
+	// An upgrade-triggered module not yet upgraded (AutoHealBehavior's UpgradeMux: GLA Junk Repair, the inherited
+	// veterancy heal): it does nothing.
+	std::uint8_t dormant{0};
 	std::uint8_t padding[2]{};
+};
+
+struct SelfHealing
+{
+	static constexpr std::uint32_t MaxPrograms = 4;
+	// AutoHealBehavior self heals in module order, then BaseRegenerateUpdate's.
+	std::array<SelfHealProgram, MaxPrograms> programs{};
+	std::uint32_t count{0};
+	// Set while its structure is not standing whole: programs that only run while standing wait.
+	std::uint8_t waiting{0};
+	std::uint8_t padding[3]{};
+
+	bool Add(const SelfHealProgram &program) noexcept
+	{
+		if (count >= MaxPrograms)
+			return false;
+		programs[count++] = program;
+		return true;
+	}
+	bool WaitsWhileNotStanding() const noexcept
+	{
+		for (std::uint32_t index = 0; index < count; ++index)
+			if (programs[index].onlyWhenStanding != 0)
+				return true;
+		return false;
+	}
 };
 
 namespace area_healing
@@ -37,6 +68,7 @@ inline constexpr std::uint32_t SkipSelf = 1u << 0;
 inline constexpr std::uint32_t SingleBurst = 1u << 1;
 inline constexpr std::uint32_t WholePlayer = 1u << 2;
 inline constexpr std::uint32_t Spent = 1u << 3; // a single burst that went off
+inline constexpr std::uint32_t Dormant = 1u << 4; // upgrade-triggered, not yet upgraded: it does nothing
 }
 
 // One area heal an entity gives (the original allows several modules).
@@ -81,7 +113,7 @@ template<>
 struct ComponentTraits<engine::gameplay::SelfHealing>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.self_healing";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 3;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 template<>

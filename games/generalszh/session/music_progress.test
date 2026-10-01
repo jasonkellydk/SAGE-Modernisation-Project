@@ -1,0 +1,100 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.world.resources.music_progress;
+import engine.level.adapters.generals_map.map_reader;
+
+// A single-player mission's MUSIC_TRACK_HAS_COMPLETED (ScriptConditions::evaluateMusicHasCompleted ->
+// AudioManager::hasMusicTrackCompleted) on the shipped MD_GLA03, whose music scripts ask it.
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(music_progress)
+
+// Legacy parity (hasMusicTrackCompleted: the track set has played through that many times): the audio runs on real
+// time, so the presentation reports its progress as a recorded command (MusicProgress) applied on the tick the relay
+// gives it; from then the simulation's answer is that track and count. One and four workers agree; a checkpoint keeps
+// it.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_music_progress_reaches_the_mission_scripts)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_GLA03/MD_GLA03.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	const auto options = [&](std::size_t workers) {
+		session::SessionOptions made{7, workers, {}, seats};
+		made.singlePlayer = true;
+		return made;
+	};
+	session::Session game(read->level, shell.game, options(1));
+	session::Session four(read->level, shell.game, options(4));
+	game.Tick();
+	four.Tick();
+	const auto &music = game.World().Resource<gameplay::MusicProgress>();
+	BOOST_TEST(!music.Completed("Game_GLA_01", 1));
+	const std::vector<engine::net::CommandEnvelope> report{commands::Encode(commands::MusicProgress{"Game_GLA_01", 1})};
+	game.Tick(report);
+	four.Tick(report);
+	BOOST_TEST(music.track == "Game_GLA_01");
+	BOOST_TEST(music.Completed("Game_GLA_01", 1));
+	BOOST_TEST(!music.Completed("Game_GLA_01", 2));
+	BOOST_TEST(!music.Completed("Game_GLA_02", 1));
+	auto restored = session::Session::Restore(read->level, shell.game, options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Resource<gameplay::MusicProgress>().Completed("Game_GLA_01", 1));
+	game.Tick();
+	four.Tick();
+	restored->Tick();
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

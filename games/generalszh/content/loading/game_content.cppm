@@ -1,6 +1,8 @@
 export module games.generalszh.content.loading.game_content;
+export import games.generalszh.content.effects.bone_fx_content;
 export import games.generalszh.content.sciences.science_content;
 export import games.generalszh.content.ai.ai_data;
+export import games.generalszh.content.global.multiplayer_settings;
 import std;
 export import games.generalszh.content.terrain.bridge_content;
 import engine.gameplay.common.spatial.components.targetable;
@@ -16,6 +18,7 @@ export import games.generalszh.content.crates.crate_content;
 export import games.generalszh.content.images.animation_2d;
 export import games.generalszh.content.containment.garrison_points;
 export import games.generalszh.content.containment.parachute_content;
+import games.generalszh.content.containment.transport_content;
 export import games.generalszh.content.powers.special_powers;
 export import games.generalszh.content.creation.creation_lists;
 export import games.generalszh.content.production.production_content;
@@ -25,7 +28,7 @@ export import games.generalszh.content.global.game_data;
 export import games.generalszh.content.global.player_templates;
 export import games.generalszh.content.objects.model_states;
 export import games.generalszh.content.upgrades.upgrade_content;
-import games.generalszh.content.models.model_rigs;
+export import games.generalszh.content.models.model_rigs;
 import games.generalszh.content.objects.model_conditions;
 export import engine.gameplay.rts.combat.resources.launch_layouts;
 export import engine.gameplay.common.weapons.definitions.weapon;
@@ -112,6 +115,19 @@ inline std::optional<engine::gameplay::MissileFlightDefinition> ReadMissileFligh
 	flight.useWeaponSpeed = yes("UseWeaponSpeed", false);
 	flight.detonateOnNoFuel = yes("DetonateOnNoFuel", false);
 	flight.killSelfTicks = ticks("KillSelfDelay", 3);
+	flight.detonateCallsKill = yes("DetonateCallsKill", false);
+	if (const Node *node = ai->block->Find("GarrisonHitKillCount"))
+		flight.garrisonHitKill = static_cast<std::uint8_t>(std::clamp<std::int64_t>(engine::config::values::ParseInt(node->Value()).value_or(0), 0, 255));
+	const auto kinds = [&](std::string_view key) {
+		namespace tc = engine::gameplay::target_class;
+		std::uint32_t mask = 0;
+		if (const Node *node = ai->block->Find(key))
+			for (const std::string_view kind : node->values)
+				mask |= kind == "INFANTRY" ? tc::Infantry : kind == "VEHICLE" ? tc::Vehicle : kind == "STRUCTURE" ? tc::Structure : kind == "AIRCRAFT" ? tc::Aircraft : 0u;
+		return mask;
+	};
+	flight.garrisonHitRequired = kinds("GarrisonHitKillRequiredKindOf");
+	flight.garrisonHitForbidden = kinds("GarrisonHitKillForbiddenKindOf");
 	flight.jamScatter = fixed("DistanceScatterWhenJammed", Engine::Math::Fixed::FromInt(75));
 	if (const engine::gameplay::LocomotorDefinition *locomotor = ObjectLocomotor(object, locomotors))
 	{
@@ -157,8 +173,10 @@ inline std::optional<engine::gameplay::ProjectileArc> ReadProjectileArc(const Ob
 	arc.firstIndent = fixed("FirstPercentIndent");
 	arc.secondIndent = fixed("SecondPercentIndent");
 	arc.followPerTick = step.PerTick(fixed("FlightPathAdjustDistPerSecond"));
+	// OrientToFlightPath: TRUE unless the module says otherwise (DumbProjectileBehaviorModuleData's default).
+	arc.orientToPath = true;
 	if (const engine::config::Node *node = dumb->block->Find("OrientToFlightPath"))
-		arc.orientToPath = engine::config::values::ParseBool(node->Value()).value_or(false);
+		arc.orientToPath = engine::config::values::ParseBool(node->Value()).value_or(true);
 	if (const engine::config::Node *node = dumb->block->Find("TumbleRandomly"); node != nullptr && engine::config::values::ParseBool(node->Value()).value_or(false))
 	{
 		arc.tumble = true;
@@ -175,6 +193,8 @@ inline std::optional<engine::gameplay::ProjectileArc> ReadProjectileArc(const Ob
 				mask |= kind == "INFANTRY" ? tc::Infantry : kind == "VEHICLE" ? tc::Vehicle : kind == "STRUCTURE" ? tc::Structure : kind == "AIRCRAFT" ? tc::Aircraft : 0u;
 		return mask;
 	};
+	if (const engine::config::Node *node = dumb->block->Find("DetonateCallsKill"))
+		arc.callsKill = engine::config::values::ParseBool(node->Value()).value_or(false) ? 1u : 0u;
 	arc.garrisonHitRequired = classes("GarrisonHitKillRequiredKindOf");
 	arc.garrisonHitForbidden = classes("GarrisonHitKillForbiddenKindOf");
 	// MaxLifespan (parseDurationUnsignedInt: milliseconds, up to whole frames); DEFAULT_MAX_LIFESPAN 10 s.
@@ -206,16 +226,39 @@ struct GameContent
 	std::map<std::string, DockLayout, std::less<>> docks;
 	std::map<std::string, GarrisonPointSets, std::less<>> garrisonPoints; // FIREPOINT bones by damage state, by object
 	std::map<std::string, TransportFirePointSet, std::less<>> transportFirePoints; // a transport's FIREPOINT bones, by object
+	// TransportContain ExitBone (onRemoving: getPristineBonePositions(name, 0): that bone exactly, in its default model), by object.
+	std::map<std::string, RestBone, std::less<>> transportExitBones;
+	// SpawnPointProductionExitUpdate: its SpawnPointBoneName bones (getPristineBoneTransforms from 1: <name>01, 02, ... while
+	// there, at most MAX_SPAWN_POINTS 10), by object; none found: it never has a place free.
+	std::map<std::string, std::vector<RestBone>, std::less<>> spawnPoints;
+	// BoneFXUpdate: its FX lists, creation lists and particle systems by damage state, at their bones in its default
+	// model, by object.
+	std::map<std::string, BoneFxContent, std::less<>> boneFx;
 	// computeTrackSpacing: the width of the tracks an object that leaves them makes (its TREADFX01 to TREADFX02 bones
 	// plus a track's width of 4; without them 1.4 cells), by object.
 	std::map<std::string, Engine::Math::Fixed, std::less<>> trackWidths;
-	// GameLOD.ini's StaticGameLOD presets (Low, Medium, High ...): how long and how lasting track marks are.
+	// GameLOD.ini's StaticGameLOD presets (Low, Medium, High, VeryHigh): StaticGameLODInfo's fields, its defaults where
+	// a preset leaves one out (StaticGameLODInfo::StaticGameLODInfo).
 	struct GameLod
 	{
 		std::string name;
+		std::uint32_t maxParticleCount{2500};
+		bool useShadowVolumes{true};
+		bool useShadowDecals{true};
+		bool useCloudMap{true};       // cloud shadows over the terrain
+		bool useLightMap{true};       // the noise pattern over the terrain
+		bool showSoftWaterEdge{true}; // the water's feathered edge
 		std::uint32_t maxTankTrackEdges{100};
 		std::uint32_t maxTankTrackOpaqueEdges{25};
 		std::uint32_t maxTankTrackFadeDelay{300000}; // milliseconds
+		bool useBuildupScaffolds{true}; // draw modules below the level skipped when off (m_useDrawModuleLOD)
+		bool useTreeSway{true};
+		bool useEmissiveNightMaterials{true};
+		bool useHeatEffects{true};
+		std::int32_t textureReduction{0};
+		bool useFpsLimit{true};
+		bool enableDynamicLod{true};
+		bool useTrees{true};
 	};
 	std::vector<GameLod> staticLods;
 	// Armed objects' PRIMARY barrel counts (from their default model's bones), by object.
@@ -224,6 +267,15 @@ struct GameContent
 	std::map<std::string, engine::gameplay::LaunchLayout, std::less<>> launchLayouts;
 	// HelicopterSlowDeathBehavior BladeBoneName: where on its model (its first state, at rest) its blades come off.
 	std::map<std::string, Engine::Math::FixedVector3, std::less<>> bladeBones;
+	// ChinookAIUpdate's combat drop ropes (ChinookCombatDropState::onEnter: getPristineBonePositions("RopeStart", 1, ...) and
+	// getPristineBoneTransforms("RopeEnd", 1, ...): RopeStart01, 02 ... and RopeEnd01, 02 ... to the first gap, at most
+	// 32, on its first state's model at rest), by object.
+	struct RopeBones
+	{
+		std::vector<Engine::Math::FixedVector3> starts;
+		std::vector<RestBone> ends;
+	};
+	std::map<std::string, RopeBones, std::less<>> ropeBones;
 	// HelicopterSlowDeathBehavior: the helicopter's NORMAL locomotor (as a hover locomotor), which flies its death spiral.
 	std::map<std::string, engine::gameplay::HoverLocomotor, std::less<>> helicopterLocomotors;
 	// Parachutes (ParachuteContain with their locomotors and model bones), by object.
@@ -239,6 +291,7 @@ struct GameContent
 	AiData aiData;     // AIData.ini: the computer players' settings, side information and skirmish base plans
 	FactionColors factionColors; // PlayerTemplate.ini's preferred colours
 	PlayerTemplates playerTemplates; // PlayerTemplate.ini in store order (ChallengeMode.ini's locks)
+	MultiplayerSettings multiplayer; // Multiplayer.ini
 	UpgradeCatalog upgrades;     // Upgrade.ini, by bit
 	std::vector<std::string> sciences; // Science.ini's sciences, in order (their bits)
 	std::vector<ScienceInfo> scienceInfo; // Science.ini, by bit
@@ -271,6 +324,9 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	engine::config::BindContext playerTemplateContext{loader.DiagnosticsFor(playerTemplateSet), step};
 	content.factionColors = BindFactionColors(playerTemplateSet, playerTemplateContext);
 	content.playerTemplates = BindPlayerTemplates(playerTemplateSet, &loader.Load({"Data/INI/ChallengeMode"}), playerTemplateContext);
+	const engine::config::Document &multiplayerSet = loader.Load({"Data/INI/Default/Multiplayer", "Data/INI/Multiplayer"});
+	engine::config::BindContext multiplayerContext{loader.DiagnosticsFor(multiplayerSet), step};
+	content.multiplayer = BindMultiplayerSettings(multiplayerSet, multiplayerContext);
 	const engine::config::Document &objectSet = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
 	const engine::config::Document &crateSet = loader.Load({"Data/INI/Default/Crate", "Data/INI/Crate"});
 	engine::config::BindContext objectContext{loader.DiagnosticsFor(objectSet), step};
@@ -287,6 +343,8 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	for (const auto &[name, object] : content.objects)
 		if (auto layout = ReadParkingLayout(object, rigs))
 			content.parking.emplace(name, std::move(*layout));
+		else if (auto deck = ReadFlightDeckLayout(object, rigs))
+			content.parking.emplace(name, std::move(*deck));
 	for (const auto &[name, object] : content.objects)
 		if (auto layout = ReadDockLayout(object, rigs))
 			content.docks.emplace(name, std::move(*layout));
@@ -296,6 +354,36 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	for (const auto &[name, object] : content.objects)
 		if (auto points = ReadTransportFirePoints(object, rigs))
 			content.transportFirePoints.emplace(name, std::move(*points));
+	for (const auto &[name, object] : content.objects)
+		if (const ModuleEntry *contain = TransportModule(object); contain != nullptr && contain->type == "TransportContain")
+			if (const auto *node = contain->block->Find("ExitBone"); node != nullptr && !node->Value().empty())
+				if (const std::string model = DefaultModel(object).model; !model.empty())
+					if (const auto bone = rigs.Bone(model, std::string(node->Value())))
+						content.transportExitBones.emplace(name, *bone);
+	for (const auto &[name, object] : content.objects)
+		for (const ModuleEntry &module : object.modules)
+		{
+			if (module.block == nullptr || module.type != "SpawnPointProductionExitUpdate")
+				continue;
+			std::vector<RestBone> bones;
+			const auto *node = module.block->Find("SpawnPointBoneName");
+			const std::string model = DefaultModel(object).model;
+			if (node != nullptr && !model.empty())
+				for (int index = 1; index <= 10; ++index)
+				{
+					char suffix[4];
+					std::snprintf(suffix, sizeof(suffix), "%02d", index);
+					const auto bone = rigs.Bone(model, std::string(node->Value()) + suffix);
+					if (!bone)
+						break;
+					bones.push_back(*bone);
+				}
+			content.spawnPoints.emplace(name, std::move(bones));
+			break;
+		}
+	for (const auto &[name, object] : content.objects)
+		if (auto boneFx = ReadBoneFx(object, rigs, step.TicksPerSecond()))
+			content.boneFx.emplace(name, std::move(*boneFx));
 	for (const auto &[name, object] : content.objects)
 	{
 		const ModelStates states = ReadModelStates(object);
@@ -316,12 +404,35 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 			for (const engine::config::Node &field : root.children)
 			{
 				const auto number = [&] { return static_cast<std::uint32_t>(std::max<std::int64_t>(engine::config::values::ParseInt(field.Value()).value_or(0), 0)); };
-				if (field.key == "MaxTankTrackEdges")
+				const auto flag = [&](bool &target) { target = engine::config::values::ParseBool(field.Value()).value_or(target); };
+				if (field.key == "MaxParticleCount")
+					lod.maxParticleCount = number();
+				else if (field.key == "UseShadowVolumes")
+					flag(lod.useShadowVolumes);
+				else if (field.key == "UseShadowDecals")
+					flag(lod.useShadowDecals);
+				else if (field.key == "UseCloudMap")
+					flag(lod.useCloudMap);
+				else if (field.key == "UseLightMap")
+					flag(lod.useLightMap);
+				else if (field.key == "ShowSoftWaterEdge")
+					flag(lod.showSoftWaterEdge);
+				else if (field.key == "MaxTankTrackEdges")
 					lod.maxTankTrackEdges = number();
 				else if (field.key == "MaxTankTrackOpaqueEdges")
 					lod.maxTankTrackOpaqueEdges = number();
 				else if (field.key == "MaxTankTrackFadeDelay")
 					lod.maxTankTrackFadeDelay = number();
+				else if (field.key == "UseBuildupScaffolds")
+					flag(lod.useBuildupScaffolds);
+				else if (field.key == "UseTreeSway")
+					flag(lod.useTreeSway);
+				else if (field.key == "UseEmissiveNightMaterials")
+					flag(lod.useEmissiveNightMaterials);
+				else if (field.key == "UseHeatEffects")
+					flag(lod.useHeatEffects);
+				else if (field.key == "TextureReductionFactor")
+					lod.textureReduction = static_cast<std::int32_t>(engine::config::values::ParseInt(field.Value()).value_or(0));
 			}
 			content.staticLods.push_back(std::move(lod));
 		}
@@ -350,6 +461,34 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 					if (const auto found = rigs.Bone(states.states.front().model, std::string(bone->Value())))
 						content.bladeBones.emplace(name, found->position);
 				}
+	for (const auto &[name, object] : content.objects)
+		for (const ModuleEntry &module : object.modules)
+			if (module.block != nullptr && module.type == "ChinookAIUpdate")
+			{
+				const ModelStates states = ReadModelStates(object);
+				if (states.Empty() || states.states.front().model.empty())
+					continue;
+				const std::string &model = states.states.front().model;
+				GameContent::RopeBones ropes;
+				char bone[16];
+				for (int index = 1; index <= 32; ++index)
+				{
+					std::snprintf(bone, sizeof bone, "RopeStart%02d", index);
+					const auto found = rigs.Bone(model, bone);
+					if (!found)
+						break;
+					ropes.starts.push_back(found->position);
+				}
+				for (int index = 1; index <= 32; ++index)
+				{
+					std::snprintf(bone, sizeof bone, "RopeEnd%02d", index);
+					const auto found = rigs.Bone(model, bone);
+					if (!found)
+						break;
+					ropes.ends.push_back(*found);
+				}
+				content.ropeBones.emplace(name, std::move(ropes));
+			}
 	for (const auto &[name, object] : content.objects)
 		if (auto arc = ReadProjectileArc(object, step))
 			content.projectileArcs.emplace(name, *arc);
@@ -466,6 +605,26 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	const engine::config::Document &creationLists = loader.Load({"Data/INI/ObjectCreationList"});
 	const engine::config::Document &commandButtons = loader.Load({"Data/INI/CommandButton"});
 	content.powers = BindSpecialPowers(commandButtons, creationLists, step);
+	// The runs' visible payload bones on their transports' models at rest (Drawable::getPristineBonePositions: NAME01,
+	// NAME02, ...; one missing: the carrier's own position).
+	for (VisibleRun &run : content.powers.visibleRuns)
+	{
+		const ObjectDefinition *transport = content.objects.Find(run.transport);
+		const std::string model = transport != nullptr ? DefaultModel(*transport).model : std::string{};
+		for (std::int32_t index = 1; index <= run.count; ++index)
+		{
+			std::optional<Engine::Math::FixedVector3> at;
+			if (!model.empty() && !run.dropBone.empty())
+			{
+				std::string name = run.dropBone;
+				name.push_back(static_cast<char>('0' + index / 10 % 10));
+				name.push_back(static_cast<char>('0' + index % 10));
+				if (const auto bone = rigs.Bone(model, name))
+					at = bone->position;
+			}
+			run.bones.push_back(at);
+		}
+	}
 	content.powers.templates = BindSpecialPowerTemplates(loader.Load({"Data/INI/Default/SpecialPower", "Data/INI/SpecialPower"}), step);
 	content.buildLists = BindBuildLists(loader.Load({"Data/INI/CommandSet"}), commandButtons);
 	content.researchLists = BindResearchLists(loader.Load({"Data/INI/CommandSet"}), commandButtons);

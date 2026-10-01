@@ -96,6 +96,209 @@ BOOST_AUTO_TEST_CASE(the_bar_shows_the_selection_and_orders_what_is_clicked)
 	BOOST_TEST(!bar.shown.Get());
 	BOOST_TEST(!bar.commandShown[0].Get());
 	BOOST_TEST(!bar.queueShown.Get());
+	// Legacy parity (ControlBar::setPortraitByObject): no portrait object, the portrait window (WinUnitSelected) is
+	// hidden (the right HUD shows its own image), not an empty portrait frame; a portrait object shows it, its
+	// SelectPortrait with its rank over it and the upgrade cameos it names, enabled once had (which object is the
+	// portrait one: ReadPortrait, control_bar_portrait.test).
+	bar.ApplyPortrait(PortraitState{});
+	BOOST_TEST(!bar.portraitShown.Get());
+	PortraitState portrait;
+	portrait.shown = true;
+	portrait.image = "SAComCenter_L";
+	portrait.overlay = "SSChevron2L";
+	portrait.upgrades[1] = {true, "SAUpgradeDrone", false};
+	portrait.upgrades[2] = {true, "SAUpgradeTOW", true};
+	bar.ApplyPortrait(portrait);
+	BOOST_TEST(bar.portraitShown.Get());
+	BOOST_TEST(bar.portraitImage.Get() == "SAComCenter_L");
+	BOOST_TEST(bar.portraitOverlay.Get() == "SSChevron2L");
+	BOOST_TEST(!bar.upgradeShown[0].Get());
+	BOOST_TEST(bar.upgradeShown[1].Get());
+	BOOST_TEST(!bar.upgradeEnabled[1].Get());
+	BOOST_TEST(bar.upgradeImage[2].Get() == "SAUpgradeTOW");
+	BOOST_TEST(bar.upgradeEnabled[2].Get());
+	bar.ApplyPortrait(PortraitState{});
+	BOOST_TEST(!bar.portraitShown.Get());
+	BOOST_TEST(!bar.upgradeShown[1].Get());
+	BOOST_TEST(bar.portraitImage.Get().empty());
+}
+
+// ControlBar::populateUnderConstruction / updateConstructionTextDisplay and populateOCLTimer / updateOCLTimerTextDisplay
+// (OCLUpdate::getCountdownPercent): a structure under construction shows Cancel (Command_CancelConstruction's art) and
+// "Building: %.0f%%" (12.5% prints 12, a tie to even; 37.6% 38), no commands; the cancel orders
+// MSG_DOZER_CANCEL_CONSTRUCT. The Supply Drop Zone's OCLUpdate shows Sell, "Time Until Next Drop: m:ss" (padding under
+// ten seconds) and its bar at 100 * (1 - remaining / length) truncated; Sell sells it; a tech building's rally point
+// waits for its spot; a tech building without one has no button.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_construction_and_drop_timer_panels)
+{
+	std::vector<commands::GameCommand> sent;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	bar.SetLabels([](std::string_view label) -> std::u16string {
+		if (label == "CONTROLBAR:UnderConstructionDesc")
+			return u"Building: %.0f%%";
+		if (label == "CONTROLBAR:OCLTimerDesc")
+			return u"Time Until Next Drop: %d:%d";
+		if (label == "CONTROLBAR:OCLTimerDescWithPadding")
+			return u"Time Until Next Drop: %d:0%d";
+		return {};
+	});
+	content::CommandButtonContent cancel = Button(content::ButtonCommand::Other, "", "SACancelConstruction");
+	cancel.commandName = "DOZER_CONSTRUCT_CANCEL";
+	content::CommandButtonContent sell = Button(content::ButtonCommand::Sell, "", "SSSell");
+	content::CommandButtonContent rally = Button(content::ButtonCommand::Other, "", "SSRallyPoint");
+	rally.commandName = "SET_RALLY_POINT";
+	rally.name = "Command_SetRallyPoint";
+	ecs::Entity building;
+	building.index = 9;
+	building.generation = 1;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = building;
+	state.context = ControlBarContext::UnderConstruction;
+	state.contextButton = &cancel;
+	state.constructionPercent = 819200; // 12.5
+	bar.Apply(state);
+	BOOST_TEST(bar.underConstructionShown.Get());
+	BOOST_TEST(!bar.oclTimerShown.Get());
+	BOOST_TEST(!bar.commandsShown.Get());
+	BOOST_TEST((bar.constructionText.Get() == u"Building: 12%"));
+	BOOST_TEST(bar.cancelConstructionImage.Get() == "SACancelConstruction");
+	state.constructionPercent = 2464153; // 37.6
+	bar.Apply(state);
+	BOOST_TEST((bar.constructionText.Get() == u"Building: 38%"));
+	bar.cancelConstructionClicked.Execute();
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST((std::get<commands::CancelConstruction>(sent[0]).building == building));
+
+	state.context = ControlBarContext::OclTimer;
+	state.contextButton = &sell;
+	state.oclTotal = 3600; // 120 s
+	state.oclRemaining = 2709; // 90.3 s: 1:30
+	bar.Apply(state);
+	BOOST_TEST(!bar.underConstructionShown.Get());
+	BOOST_TEST(bar.oclTimerShown.Get());
+	BOOST_TEST((bar.oclTimerText.Get() == u"Time Until Next Drop: 1:30"));
+	BOOST_TEST(bar.oclTimerProgress.Get() == 24); // 1 - 2709 / 3600 = 0.2475
+	BOOST_TEST(bar.oclButtonShown.Get());
+	BOOST_TEST(bar.oclButtonImage.Get() == "SSSell");
+	state.oclRemaining = 1890; // 63 s: 1:03
+	bar.Apply(state);
+	BOOST_TEST((bar.oclTimerText.Get() == u"Time Until Next Drop: 1:03"));
+	BOOST_TEST(bar.oclTimerProgress.Get() == 47);
+	state.oclRemaining = 1080; // 1 - 0.3f, times 100 in floats: 70
+	bar.Apply(state);
+	BOOST_TEST(bar.oclTimerProgress.Get() == 70);
+	bar.oclButtonClicked.Execute();
+	BOOST_TEST_REQUIRE(sent.size() == 2u);
+	BOOST_TEST((std::get<commands::Sell>(sent[1]).building == building));
+	state.contextButton = &rally;
+	bar.Apply(state);
+	bar.oclButtonClicked.Execute();
+	BOOST_TEST(sent.size() == 2u);
+	BOOST_TEST(bar.targeting.Get() == "Command_SetRallyPoint");
+	state.contextButton = nullptr;
+	bar.Apply(state);
+	BOOST_TEST(!bar.oclButtonShown.Get());
+}
+
+// legacy_parity: ControlBar::update lights a command window a script made flash (CAMEO_FLASH: WIN_STATUS_FLASHING) only
+// while it shows a button; ControlBar::processCommandUI tells a pressed button to stop flashing (setFlashCount(0)),
+// here through the pressed callback with the window and the button's name.
+BOOST_AUTO_TEST_CASE(legacy_parity_flashing_command_buttons_show_and_stop_when_pressed)
+{
+	std::vector<commands::GameCommand> sent;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	std::vector<std::pair<std::size_t, std::string>> pressed;
+	bar.SetPressed([&](std::size_t slot, std::string_view name) { pressed.emplace_back(slot, std::string(name)); });
+	auto worker = Button(content::ButtonCommand::UnitBuild, "GLAInfantryWorker", "SUWorker");
+	worker.name = "Command_ConstructGLAWorker";
+	ecs::Entity factory;
+	factory.index = 4;
+	factory.generation = 1;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = factory;
+	state.slots[2] = {&worker, gameplay::ButtonState::Available, "SUWorker"};
+	state.slots[2].flashing = true;
+	state.slots[5].flashing = true; // no button there: nothing to light
+	bar.Apply(state);
+	BOOST_TEST(bar.commandFlashing[2].Get());
+	BOOST_TEST(!bar.commandFlashing[5].Get());
+	bar.commandClicked[2].Execute();
+	BOOST_TEST_REQUIRE(pressed.size() == 1u);
+	BOOST_TEST(pressed[0].first == 2u);
+	BOOST_TEST(pressed[0].second == "Command_ConstructGLAWorker");
+	BOOST_TEST(sent.size() == 1u);
+}
+
+// legacy_parity: ControlBar::doTransportInventoryUI / populateInvDataCallback (ControlBarCommand.cpp) and
+// processCommandUI's GUI_COMMAND_EXIT_CONTAINER (ControlBarCommandProcessing.cpp): a rider's button shows the rider's art
+// with its rank chevron over it (GadgetButtonDrawOverlayImage) and, clicked, sends MSG_EXIT for exactly that rider of the
+// selected container; an empty slot has no m_containData entry, so even enabled it sends nothing; a slot past the room
+// hides. populateStructureInventory: the structure inventory's buttons dim while disabled (WIN_STATUS_ALWAYS_COLOR), and
+// its Evacuate sends MSG_EVACUATE.
+BOOST_AUTO_TEST_CASE(legacy_parity_inventory_buttons_show_riders_and_let_one_out)
+{
+	std::vector<commands::GameCommand> sent;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	content::CommandButtonContent exit;
+	exit.name = "Command_TransportExit";
+	exit.command = content::ButtonCommand::Other;
+	exit.commandName = "EXIT_CONTAINER";
+	exit.buttonImage = "SSEvacButton";
+	ecs::Entity humvee;
+	humvee.index = 9;
+	humvee.generation = 1;
+	ecs::Entity ranger;
+	ranger.index = 21;
+	ranger.generation = 2;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = humvee;
+	state.slots[3] = {&exit, gameplay::ButtonState::Available, "SARanger"};
+	state.slots[3].rider = ranger;
+	state.slots[3].overlay = "SSChevron2L";
+	state.slots[4] = {&exit, gameplay::ButtonState::Available, "SSEvacButton"};
+	state.slots[5] = {&exit, gameplay::ButtonState::Hidden, "SSEvacButton"};
+	state.slots[5].overlay = "SSChevron1L"; // hidden: nothing of it shows
+	bar.Apply(state);
+	BOOST_TEST(bar.commandShown[3].Get());
+	BOOST_TEST(bar.commandEnabled[3].Get());
+	BOOST_TEST(bar.commandImage[3].Get() == "SARanger");
+	BOOST_TEST(bar.commandOverlay[3].Get() == "SSChevron2L");
+	BOOST_TEST(!bar.commandAlwaysColor[3].Get());
+	BOOST_TEST(bar.commandShown[4].Get());
+	BOOST_TEST(bar.commandImage[4].Get() == "SSEvacButton");
+	BOOST_TEST(bar.commandOverlay[4].Get().empty());
+	BOOST_TEST(!bar.commandShown[5].Get());
+	BOOST_TEST(bar.commandOverlay[5].Get().empty());
+	BOOST_TEST(bar.commandClicked[4].Execute()); // an empty slot: pressed, nothing sent
+	BOOST_TEST(sent.empty());
+	BOOST_TEST(bar.commandClicked[3].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(std::holds_alternative<commands::Exit>(sent[0]));
+	BOOST_TEST((std::get<commands::Exit>(sent[0]).rider == ranger));
+	BOOST_TEST((std::get<commands::Exit>(sent[0]).container == humvee));
+
+	// The structure inventory: an empty slot disabled and dimmed, Evacuate sends MSG_EVACUATE for the building.
+	content::CommandButtonContent evacuate;
+	evacuate.name = "Command_Evacuate";
+	evacuate.command = content::ButtonCommand::Other;
+	evacuate.commandName = "EVACUATE";
+	ControlBarState building;
+	building.hasPlayer = true;
+	building.selected = humvee;
+	building.slots[0] = {&exit, gameplay::ButtonState::Restricted, "SSEvacButton"};
+	building.slots[0].alwaysColor = true;
+	building.slots[11] = {&evacuate, gameplay::ButtonState::Available, "SSEvacuate"};
+	bar.Apply(building);
+	BOOST_TEST(bar.commandShown[0].Get());
+	BOOST_TEST(!bar.commandEnabled[0].Get());
+	BOOST_TEST(bar.commandAlwaysColor[0].Get());
+	BOOST_TEST(!bar.commandClicked[0].Execute());
+	BOOST_TEST(bar.commandClicked[11].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 2u);
+	BOOST_TEST((std::get<commands::Evacuate>(sent[1]).units == std::vector<ecs::Entity>{humvee}));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

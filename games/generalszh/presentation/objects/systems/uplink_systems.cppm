@@ -13,6 +13,7 @@ export import games.generalszh.presentation.objects.resources.presentation_resou
 export import games.generalszh.presentation.objects.resources.look_catalog;
 export import games.generalszh.presentation.objects.resources.object_frame;
 export import games.generalszh.presentation.objects.algorithms.laser_beams;
+export import games.generalszh.presentation.objects.algorithms.draw_bones;
 import Engine.Core.Math.FixedPresentation;
 
 // The Particle Cannon uplink's client effects (ParticleUplinkCannonUpdate):
@@ -197,7 +198,7 @@ struct UplinkEffectSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using Lookup = ecs::Lookup<ecs::Read<gameplay::ParticleCannon>, ecs::Read<engine::gameplay::DefinitionRef>>;
-	using SideTables = ecs::SideTables<ecs::Write<UplinkEffects>>;
+	using SideTables = ecs::SideTables<ecs::Write<UplinkEffects>, ecs::Read<ExtraShownLooks>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<LookCatalog>, ecs::Read<BonePoses>,
 		ecs::Read<TerrainHeightHandle>, ecs::Write<LaserFrame>, ecs::Write<ParticleWorldHandle>>;
 
@@ -257,7 +258,8 @@ struct UplinkEffectSystem
 			else if (fx.builtSerial != fx.clientSerial && object != nullptr && object->look < catalog.lookModels.size())
 			{
 				removeAll(fx);
-				if (Build(fx, look, wanted, *object, catalog.lookModels[object->look], poses, create))
+				const DrawBoneSearch bones{poses, catalog, *looks, *object, context.SideRead<SideTables, ExtraShownLooks>().Get(entity), frame.clock};
+				if (Build(fx, look, wanted, *object, bones, create))
 				{
 					fx.builtSerial = fx.clientSerial;
 					fx.built = 1;
@@ -319,8 +321,9 @@ private:
 	// Makes the effects for the client status (false while the model it needs is still loading: none made).
 	template<typename Create>
 	static bool Build(UplinkEffects &fx, const content::UplinkLook &look, const uplink_detail::ClientLook &wanted, const PresentedObject &object,
-		std::string_view model, const BonePoses &poses, const Create &create)
+		const DrawBoneSearch &bones, const Create &create)
 	{
+		const BonePoses &poses = bones.poses;
 		const float c = std::cos(object.facing), s = std::sin(object.facing);
 		const auto world = [&](const std::array<float, 3> &local) {
 			const float x = local[0] * object.scale, y = local[1] * object.scale, z = local[2] * object.scale;
@@ -336,7 +339,8 @@ private:
 			bool found = true;
 			for (std::uint32_t node = 0; node < look.outerBones && found; ++node)
 			{
-				const BoneLookup bone = poses.pose(model, std::format("{}{:02}", look.outerBone, node + 1));
+				// getMultiLogicalBonePosition: the pristine bones of any of its draw modules.
+				const BoneLookup bone = FindDrawBone(bones, std::format("{}{:02}", look.outerBone, node + 1), false);
 				if (!bone.ready)
 					return false;
 				found = bone.found;
@@ -357,8 +361,9 @@ private:
 				return false;
 			if (!look.connectorBone.empty())
 			{
-				const BoneLookup connector = poses.pose(model, look.connectorBone);
-				const BoneLookup fire = poses.pose(model, look.fireBone);
+				// getCurrentClientBoneTransforms: as drawn now in any of its draw modules (the raised dish's FXConnector, FXMain).
+				const BoneLookup connector = FindDrawBone(bones, look.connectorBone, true);
+				const BoneLookup fire = FindDrawBone(bones, look.fireBone, true);
 				if (!connector.ready || !fire.ready)
 					return false;
 				if (connector.found)

@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.drop_homing;
 import engine.gameplay.rts.topple.systems.topple_system;
 import engine.core.serialization.byte_stream;
 import engine.ecs.core.world;
@@ -57,9 +58,13 @@ struct Grove
 		target.RegisterComponent<Locomotion>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
 		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<DropHoming>();
 		target.RegisterComponent<OffMap>();
 		target.RegisterComponent<Dying>();
+		target.RegisterComponent<BoundingVolume>();
 		target.FinalizeComponents();
 	}
 

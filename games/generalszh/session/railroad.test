@@ -1,0 +1,721 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <cmath>
+#include <optional>
+#include <array>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import games.generalszh.gameplay.railroad.components.railcar;
+import games.generalszh.gameplay.railroad.resources.rail_network;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.gameplay.common.spatial.algorithms.geometry_collision;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// RailroadBehavior (RailroadGuideAIUpdate.cpp) on the shipped Alpine Assault, whose train runs its tracks.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// Two human seats with nobody at them on Alpine Assault.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 2);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+std::vector<ecs::Entity> Railcars(session::Session &game)
+{
+	std::vector<ecs::Entity> out;
+	ecs::Query<ecs::Read<gameplay::Railcar>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			out.push_back(entity);
+	});
+	return out;
+}
+
+std::string NameOf(session::Session &game, ecs::Entity entity)
+{
+	return game.Game().templates.DefinitionAt(game.World().Get<gp::DefinitionRef>(entity)->index).name;
+}
+
+// The train behind a locomotive, in order.
+std::vector<ecs::Entity> Chain(session::Session &game, ecs::Entity locomotive)
+{
+	std::vector<ecs::Entity> out;
+	for (ecs::Entity at = game.World().Get<gameplay::Railcar>(locomotive)->trailer; at != ecs::Entity{} && game.World().IsAlive(at) && out.size() < 64;
+		 at = game.World().Get<gameplay::Railcar>(at)->trailer)
+		out.push_back(at);
+	return out;
+}
+
+Fixed Radius(session::Session &game, ecs::Entity entity)
+{
+	return game.Game().templates.RailroadOf(game.World().Get<gp::DefinitionRef>(entity)->index)->radius;
+}
+
+// Where `distance` along a track is (FindPosByPathDistance within a segment).
+Engine::Math::FixedVector3 AlongTrack(const gameplay::RailTracks &tracks, const gameplay::RailTrack &track, Fixed distance)
+{
+	while (distance > track.length)
+		distance -= track.length;
+	for (std::uint32_t k = 0; k + 1 < track.count; ++k)
+	{
+		const std::uint32_t point = track.first + k;
+		if (tracks.along[point] < distance && tracks.along[point + 1] > distance)
+			return tracks.positions[point] + Engine::Math::Normalize(tracks.positions[point + 1] - tracks.positions[point]) * (distance - tracks.along[point]);
+	}
+	return tracks.positions[track.first];
+}
+
+gp::CollisionBody BodyOf(session::Session &game, ecs::Entity entity)
+{
+	const auto &kind = game.Game().templates.DefinitionAt(game.World().Get<gp::DefinitionRef>(entity)->index);
+	const auto &at = *game.World().Get<gp::Transform>(entity);
+	const gp::BodyShape shape = kind.geometry.shape == content::GeometryShape::Box ? gp::BodyShape::Box
+		: kind.geometry.shape == content::GeometryShape::Cylinder                  ? gp::BodyShape::Cylinder
+																					: gp::BodyShape::Sphere;
+	return {at.position, at.facing, shape, kind.geometry.majorRadius, kind.geometry.minorRadius, kind.geometry.height};
+}
+
+// The level with a line of waypoints added from `from` along +x at the given distances (the named one's name ending in
+// `kind`: a Station, a Disembark ...), and
+// the id of its first.
+std::uint32_t AddLine(engine::level::Level &level, Engine::Math::FixedVector2 from, std::span<const int> along, std::size_t station,
+	std::string_view kind = "Station")
+{
+	std::uint32_t id = 1;
+	for (const auto &marker : level.markers)
+		id = std::max(id, marker.id + 1);
+	const std::uint32_t first = id;
+	for (std::size_t index = 0; index < along.size(); ++index)
+	{
+		engine::level::Marker marker;
+		marker.id = first + static_cast<std::uint32_t>(index);
+		marker.name = index == station ? "TestRail" + std::string(kind) : "TestRail" + std::to_string(index);
+		marker.position = {from.x + Fixed::FromInt(along[index]), from.y, Fixed{}};
+		if (index + 1 < along.size())
+			marker.links.push_back(marker.id + 1);
+		level.markers.push_back(marker);
+		if (index + 1 < along.size())
+			level.markerLinks.push_back({marker.id, marker.id + 1});
+	}
+	return first;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(railroad)
+
+// Legacy parity (RailroadGuideAIUpdate.cpp: loadTrackData, createCarriages / hitchNewCarriagebyTemplate, update,
+// getPulled, updatePositionTrackDistance, FindPosByPathDistance) on Alpine Assault's TrainEngineAlpine (SpeedMax 5,
+// Acceleration 1.03, radius 40): its first update lays its track from the waypoint nearest it (a loop of 212 points)
+// and makes its twelve cars from its CarriageTemplateNames in order (TrainCoal x4, TrainCarFlat, TrainCoal,
+// TrainCarFlat, TrainTank x4, TrainCabUngarrisonable), each hitched behind the one before; its speed a frame is
+// (s + 0.02) x 1.03 each update, 0.0206 on the first (within Q16 steps), capped at 5 on the 72nd update (as the
+// original's floats). Every update each car's rear is twice its radius behind the rear of what pulls it (the locomotive's
+// twice its own behind its front), its centre its radius ahead of its rear point; in a tunnel its height holds, and more
+// than 3 below the ground it shows OVER_WATER. The same on 4 workers and after a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_alpine_train_makes_its_cars_and_runs_its_loop)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	ecs::Entity locomotive;
+	for (const ecs::Entity car : Railcars(game))
+		if (world.Get<gameplay::Railcar>(car)->locomotive != 0)
+			locomotive = car;
+	BOOST_TEST_REQUIRE((locomotive != ecs::Entity{}));
+	BOOST_TEST(NameOf(game, locomotive) == "TrainEngineAlpine");
+	const auto rail = [&](ecs::Entity car) -> const gameplay::Railcar & { return *world.Get<gameplay::Railcar>(car); };
+	int updates = rail(locomotive).trackLoaded != 0 ? 1 : 0; // the session's first snapshot runs its systems once
+	game.Tick();
+	four.Tick();
+	++updates;
+	const std::vector<ecs::Entity> chain = Chain(game, locomotive);
+	const std::vector<std::string> expected{"TrainCoal", "TrainCoal", "TrainCoal", "TrainCoal", "TrainCarFlat", "TrainCoal", "TrainCarFlat",
+		"TrainTank", "TrainTank", "TrainTank", "TrainTank", "TrainCabUngarrisonable"};
+	BOOST_TEST_REQUIRE(chain.size() == expected.size());
+	for (std::size_t index = 0; index < chain.size(); ++index)
+	{
+		BOOST_TEST(NameOf(game, chain[index]) == expected[index]);
+		BOOST_TEST(world.Get<gameplay::Railcar>(chain[index])->hitched == 1);
+	}
+	const gameplay::RailTrack *track = world.Resource<gameplay::RailTracks>().Of(rail(locomotive).anchor);
+	BOOST_TEST_REQUIRE(track != nullptr);
+	BOOST_TEST(track->looping);
+	BOOST_TEST(track->count == 212u);
+	// The speed as the original's floats have it so far (0.0206 on the first update), within a Q16 step an update.
+	float ideal = 0.0f;
+	for (int update = 0; update < updates; ++update)
+		ideal = (ideal + 0.02f) * 1.03f;
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(rail(locomotive).conductor.speed) - ideal) < static_cast<float>(updates) / 16384);
+	int capped = rail(locomotive).conductor.speed == Fixed::FromInt(5) ? updates : 0;
+	std::unique_ptr<session::Session> restored;
+	std::map<std::uint64_t, Fixed> heights; // a car's height as it went into a tunnel
+	bool tunnelled = false;
+	for (int tick = 0; tick < 600; ++tick)
+	{
+		const Fixed was = rail(locomotive).conductor.speed;
+		game.Tick();
+		four.Tick();
+		if (restored)
+			restored->Tick();
+		++updates;
+		const gameplay::Railcar &loco = rail(locomotive);
+		if (capped == 0 && loco.conductor.speed == Fixed::FromInt(5))
+			capped = updates;
+		if (capped == 0)
+		{
+			const Fixed next = (was + Fixed::FromRatio(1, 50)) * Fixed::FromRatio(103, 100);
+			BOOST_TEST((loco.conductor.speed == next), "update " << updates);
+		}
+		BOOST_TEST((loco.pull.distance == loco.conductor.distance - Fixed::FromInt(80)));
+		ecs::Entity puller = locomotive;
+		for (const ecs::Entity car : chain)
+		{
+			const gameplay::Railcar &own = rail(car);
+			const Fixed radius = Radius(game, car);
+			BOOST_TEST((own.pull.distance == rail(puller).pull.distance - radius * Fixed::FromInt(2)));
+			const auto &at = world.Get<gp::Transform>(car)->position;
+			BOOST_TEST(std::abs(Engine::Math::ToFloat(Engine::Math::Distance(at.XY(), own.pull.hitch.XY()) - radius)) < 0.02f);
+			const std::uint64_t key = (std::uint64_t{car.index} << 32) | car.generation;
+			if (own.tunnel != 0)
+			{
+				tunnelled = true;
+				if (const auto held = heights.find(key); held != heights.end())
+					BOOST_TEST((at.z == held->second), "tick " << tick);
+				heights[key] = at.z;
+			}
+			else
+				heights.erase(key);
+			const bool under = at.z < game.Game().ground.At(at.XY()) - Fixed::FromInt(3);
+			BOOST_TEST(world.Get<gp::Appearance>(car)->Test(content::model_condition::OverWater) == under);
+			puller = car;
+		}
+		if (tick == 200)
+			restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	}
+	BOOST_TEST(capped == 72);
+	BOOST_TEST(tunnelled);
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (RailroadGuideAIUpdate.cpp: update's conductor, FindPosByPathDistance's station, getPulled's end of
+// the line) with the shipped TrainEngine (SpeedMax 5, Acceleration 1.03, Braking 0.97, WaitAtStationTime 10000 = 300
+// frames; TrainCar03 x2, TrainCoal, TrainCab) on a line of waypoints that does not loop, its third waypoint a Station:
+//   before its start (its rear, twice its radius behind its front, short of the first waypoint) it is hidden (in the
+//     wings); so are its cars;
+//   its rear coming into the station's segment (a new handle), it brakes from the next update, by 0.97 a frame from 5:
+//     stopped (under 0.1: 0) on the 129th braking update, waiting 300 frames; a script's hold keeps it there past them,
+//     and let go it sets off on its next update at 0.05; stopped, the whole train is a wall on the pathfinding grid
+//     (makeAWallOutOfThisTrain), no longer once it sets off;
+//   its front past the line's end it is hidden for good (the end of the line); each car whose rear is past it and that
+//   has nothing behind it takes itself away (destroyObject): the last car first, then one a frame to the front, the
+//   locomotive last.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_train_stops_at_a_station_and_runs_off_the_end_of_its_line)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	engine::level::Level level = match->skirmish.level;
+	const Engine::Math::FixedVector2 from = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-700), Fixed::FromInt(-300)};
+	const std::array<int, 5> along{0, 300, 600, 900, 1400};
+	const std::uint32_t first = AddLine(level, from, along, 2);
+	session::Session game(level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto team = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const ecs::Entity locomotive = game.Place("TrainEngine", from, {}, team);
+	const auto rail = [&](ecs::Entity car) -> const gameplay::Railcar & { return *world.Get<gameplay::Railcar>(car); };
+	game.Tick();
+	BOOST_TEST_REQUIRE(rail(locomotive).anchor == first);
+	const std::vector<ecs::Entity> cars = Chain(game, locomotive);
+	BOOST_TEST_REQUIRE(cars.size() == 4u);
+	const gameplay::RailTrack &track = *world.Resource<gameplay::RailTracks>().Of(first);
+	BOOST_TEST(!track.looping);
+	const Fixed station = world.Resource<gameplay::RailTracks>().along[track.first + 2];
+	std::vector<ecs::Entity> train{locomotive};
+	train.insert(train.end(), cars.begin(), cars.end());
+	for (const ecs::Entity car : train)
+		BOOST_TEST(rail(car).hidden == 1);
+	// On to the station.
+	int update = 0, entered = -1, braking = 0, stopped = -1;
+	Fixed speed;
+	for (; update < 600 && stopped < 0; ++update)
+	{
+		const gameplay::Railcar before = rail(locomotive);
+		game.Tick();
+		const gameplay::Railcar &loco = rail(locomotive);
+		BOOST_TEST((loco.hidden != 0) == (loco.pull.distance < Fixed{}), "update " << update);
+		if (entered < 0 && loco.pull.distance > station)
+		{
+			entered = update;
+			speed = loco.conductor.speed;
+			BOOST_TEST((loco.state == gameplay::ConductorState::ApplyBrakes));
+			BOOST_TEST((before.state == gameplay::ConductorState::Accelerate));
+		}
+		else if (entered >= 0)
+		{
+			++braking;
+			if (loco.state == gameplay::ConductorState::WaitAtStation)
+			{
+				stopped = update;
+				BOOST_TEST((loco.conductor.speed == Fixed{}));
+				BOOST_TEST(loco.waitTimer == 300);
+			}
+			else
+			{
+				speed = speed * Fixed::FromRatio(97, 100);
+				BOOST_TEST((loco.conductor.speed == speed));
+			}
+		}
+	}
+	BOOST_TEST_REQUIRE(entered >= 0);
+	BOOST_TEST((speed == Fixed::FromInt(5) || braking > 0));
+	BOOST_TEST(braking == 129);
+	// makeAWallOutOfThisTrain(TRUE): stopped, the whole train is a wall on the pathfinding grid.
+	for (const ecs::Entity car : train)
+		BOOST_TEST(world.Has<gp::NavigationObstacle>(car));
+	// The wait, held past it by a script.
+	world.Get<gameplay::Railcar>(locomotive)->held = 1;
+	const auto cues = [&](gameplay::RailroadCue::Kind kind, ecs::Entity car) {
+		int count = 0;
+		for (const auto &cue : world.Resource<gameplay::RailroadCues>().list)
+			count += cue.kind == kind && cue.car == car ? 1 : 0;
+		return count;
+	};
+	for (int wait = 1; wait <= 350; ++wait)
+	{
+		game.Tick();
+		BOOST_TEST((rail(locomotive).state == gameplay::ConductorState::WaitAtStation));
+		BOOST_TEST(rail(locomotive).waitTimer == 300 - wait);
+		// Its whistle a quarter of the wait before it is over (the timer at 75), once: held past it, never again.
+		BOOST_TEST(cues(gameplay::RailroadCue::Kind::Whistle, locomotive) == (wait == 225 ? 1 : 0), "wait " << wait);
+	}
+	world.Get<gameplay::Railcar>(locomotive)->held = 0;
+	game.Tick();
+	BOOST_TEST((rail(locomotive).state == gameplay::ConductorState::Accelerate));
+	BOOST_TEST((rail(locomotive).conductor.speed == Fixed::FromRatio(1, 20)));
+	// makeAWallOutOfThisTrain(FALSE) as it sets off.
+	for (const ecs::Entity car : train)
+		BOOST_TEST(!world.Has<gp::NavigationObstacle>(car));
+	// Its clickety-clack: the locomotive's as its rear comes into each new stretch; a car's every frame (it never notes
+	// the stretch it is in), at its speed / 10.
+	{
+		const std::uint32_t handle = rail(locomotive).handle;
+		int lastHandleChange = 0, clacks = 0;
+		for (int tick = 0; tick < 150 && world.IsAlive(cars.front()); ++tick)
+		{
+			const std::uint32_t before = rail(locomotive).handle;
+			game.Tick();
+			const bool edge = rail(locomotive).handle != before;
+			BOOST_TEST(cues(gameplay::RailroadCue::Kind::ClicketyClack, locomotive) == (edge ? 1 : 0), "tick " << tick);
+			clacks += edge ? 1 : 0;
+			lastHandleChange = edge ? tick : lastHandleChange;
+			if (rail(cars.front()).wings == 0 && rail(cars.front()).endOfLine == 0 && rail(cars.front()).tunnel == 0)
+			{
+				BOOST_TEST(cues(gameplay::RailroadCue::Kind::ClicketyClack, cars.front()) == 1, "tick " << tick);
+				for (const auto &cue : world.Resource<gameplay::RailroadCues>().list)
+					if (cue.car == cars.front())
+						BOOST_TEST((cue.volume == rail(cars.front()).conductor.speed / Fixed::FromInt(10)));
+			}
+		}
+		(void)handle;
+		(void)lastHandleChange;
+		BOOST_TEST(clacks >= 1);
+	}
+	// Off the end of the line.
+	int ended = -1;
+	std::vector<int> gone(train.size(), -1);
+	Fixed lastRear;
+	for (int tick = 0; tick < 1200 && gone.front() < 0; ++tick)
+	{
+		game.Tick();
+		const gameplay::Railcar &loco = rail(locomotive);
+		if (ended < 0 && loco.endOfLine != 0)
+		{
+			ended = tick;
+			BOOST_TEST((loco.conductor.distance >= track.length));
+			BOOST_TEST(loco.hidden == 1);
+		}
+		// destroyObject: gone with the tick it takes itself away.
+		for (std::size_t index = 0; index < train.size(); ++index)
+			if (gone[index] < 0 && (!world.IsAlive(train[index]) || rail(train[index]).gone != 0))
+				gone[index] = tick;
+		if (gone.back() < 0 && world.IsAlive(train.back()))
+			lastRear = rail(train.back()).pull.distance;
+	}
+	BOOST_TEST_REQUIRE(ended >= 0);
+	BOOST_TEST_REQUIRE(gone.back() >= 0);
+	// The tick before it went its rear was short of the end, by no more than that frame's run of 5.
+	BOOST_TEST((lastRear < track.length));
+	BOOST_TEST((lastRear + Fixed::FromInt(5) >= track.length));
+	for (std::size_t index = 0; index + 1 < train.size(); ++index)
+		BOOST_TEST(gone[index] == gone[index + 1] + 1, "car " << index);
+}
+
+// Legacy parity (RailroadGuideAIUpdate.cpp: update's FRAMES_UNPULLED_LONG_ENOUGH_TO_UNHITCH and COAST, getPulled):
+// Alpine Assault's train at full speed losing its sixth car: the car in front lets go of it and runs on; the seventh,
+// no longer pulled, counts its updates and on the third leads from where its last pull left it (its conductor: the
+// sixth's rear, wrapped into the loop's length), coasting, 5 x 0.995 a frame (Friction), pulling the cars behind it twice
+// their radius behind.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_car_left_behind_leads_what_is_behind_it_and_coasts)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto rail = [&](ecs::Entity car) -> const gameplay::Railcar & { return *world.Get<gameplay::Railcar>(car); };
+	ecs::Entity locomotive;
+	for (const ecs::Entity car : Railcars(game))
+		if (rail(car).locomotive != 0)
+			locomotive = car;
+	for (int tick = 0; tick < 120; ++tick)
+		game.Tick();
+	std::vector<ecs::Entity> chain = Chain(game, locomotive);
+	BOOST_TEST_REQUIRE(chain.size() == 12u);
+	BOOST_TEST_REQUIRE((rail(locomotive).conductor.speed == Fixed::FromInt(5)));
+	const ecs::Entity lost = chain[5], left = chain[6];
+	world.Destroy(lost);
+	Fixed speed = rail(left).conductor.speed;
+	Fixed along = rail(left).conductor.distance;
+	BOOST_TEST((speed == Fixed::FromInt(5)));
+	for (int update = 1; update <= 6; ++update)
+	{
+		game.Tick();
+		BOOST_TEST((rail(chain[4]).trailer == ecs::Entity{}));
+		const gameplay::Railcar &car = rail(left);
+		if (update < 3)
+		{
+			BOOST_TEST(car.lead == 0);
+			BOOST_TEST(car.unpulled == update + 1);
+			BOOST_TEST((car.conductor.distance == along));
+		}
+		else
+		{
+			BOOST_TEST(car.lead == 1);
+			speed = speed * Fixed::FromRatio(995, 1000);
+			along += speed;
+			// Leading on a loop, its point wraps into the track's length.
+			const Fixed length = world.Resource<gameplay::RailTracks>().Of(car.anchor)->length;
+			while (along > length)
+				along -= length;
+			while (along < Fixed{})
+				along += length;
+			BOOST_TEST((car.conductor.speed == speed), "update " << update);
+			BOOST_TEST((car.conductor.distance == along), "update " << update);
+			BOOST_TEST((car.pull.distance == along - Radius(game, left) * Fixed::FromInt(2)));
+			BOOST_TEST((rail(chain[7]).pull.distance == car.pull.distance - Radius(game, chain[7]) * Fixed::FromInt(2)));
+		}
+	}
+	BOOST_TEST((rail(locomotive).conductor.speed == Fixed::FromInt(5)));
+}
+
+
+// Legacy parity (RailroadGuideAIUpdate.cpp, RailroadBehavior::onCollide; PartitionContactList::processContactList):
+// Alpine Assault's train at full speed (5, KillSpeedMin 1) meets what is put on its track ahead: a China Battlemaster, a
+// Red Guard and an American power plant (FS_POWER). Each dies the tick the locomotive's box first touches it (its
+// maximum health, unresistable), not before; the tank (not infantry) is shoved out by a quarter of their overlap; both
+// it and the soldier are lifted to 2 above the ground, the tank pushed, falling and bouncing; the power plant is simply
+// killed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_train_at_speed_kills_what_it_hits)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	ecs::Entity locomotive;
+	for (const ecs::Entity car : Railcars(game))
+		if (world.Get<gameplay::Railcar>(car)->locomotive != 0)
+			locomotive = car;
+	for (int tick = 0; tick < 120; ++tick)
+		game.Tick();
+	const auto &rail = *world.Get<gameplay::Railcar>(locomotive);
+	BOOST_TEST_REQUIRE((rail.conductor.speed == Fixed::FromInt(5)));
+	const auto &tracks = world.Resource<gameplay::RailTracks>();
+	const gameplay::RailTrack &track = *tracks.Of(rail.anchor);
+	const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+	const std::array<std::pair<const char *, int>, 3> ahead{{{"ChinaTankBattleMaster", 120}, {"ChinaInfantryRedguard", 260}, {"AmericaPowerPlant", 420}}};
+	std::vector<ecs::Entity> victims;
+	for (const auto &[name, distance] : ahead)
+	{
+		const auto at = AlongTrack(tracks, track, world.Get<gameplay::Railcar>(locomotive)->conductor.distance + Fixed::FromInt(distance));
+		victims.push_back(game.Place(name, at.XY(), {}, china));
+		BOOST_TEST_REQUIRE(world.IsAlive(victims.back()));
+	}
+	std::vector<int> hit(victims.size(), -1);
+	const std::uint32_t chinaPlayer = game.Teams().TeamAt(china).owner;
+	int impacts = 0, firstWhistle = -1;
+	for (int tick = 0; tick < 200; ++tick)
+	{
+		for (const auto &cue : world.Resource<gameplay::RailroadCues>().list)
+		{
+			if (cue.kind == gameplay::RailroadCue::Kind::Impact)
+			{
+				++impacts;
+				BOOST_TEST(cue.sound == "BuildingFallingMetal");
+				BOOST_TEST(cue.player == chinaPlayer);
+				BOOST_TEST((cue.volume == Fixed::One()));
+			}
+			if (cue.kind == gameplay::RailroadCue::Kind::Whistle)
+			{
+				if (firstWhistle < 0)
+					firstWhistle = tick - 1; // the cues seen now are the last tick's
+				BOOST_TEST(cue.sound == "TrainWhistle");
+				BOOST_TEST((cue.car == locomotive));
+			}
+		}
+		std::vector<gp::CollisionBody> before(victims.size());
+		for (std::size_t index = 0; index < victims.size(); ++index)
+			if (hit[index] < 0 && world.IsAlive(victims[index]))
+				before[index] = BodyOf(game, victims[index]);
+		game.Tick();
+		for (std::size_t index = 0; index < victims.size(); ++index)
+		{
+			if (hit[index] >= 0)
+				continue;
+			// Killed (a structure can be gone with the tick it dies in).
+			const bool dead = !world.IsAlive(victims[index]) || gp::IsDead(*world.Get<gp::Health>(victims[index]));
+			// The locomotive's box as it stood when the contacts were made (after its move this tick), the victim's before
+			// the push.
+			const bool touches = gp::WouldCollide(BodyOf(game, locomotive), before[index]);
+			if (dead)
+			{
+				hit[index] = tick;
+				BOOST_TEST(touches, ahead[index].first);
+				if (!world.IsAlive(victims[index]))
+					continue;
+				const auto &now = world.Get<gp::Transform>(victims[index])->position;
+				if (index < 2)
+					BOOST_TEST((now.z >= game.Game().ground.At(now.XY()) + Fixed::FromInt(2)), ahead[index].first);
+				// The tank takes the push (a dying soldier sinks, held: its body no longer moved by forces).
+				if (index == 0)
+				{
+					const auto *body = world.Get<gp::PhysicsBody>(victims[index]);
+					BOOST_TEST_REQUIRE(body != nullptr);
+					BOOST_TEST(body->Has(gp::physics_flag::AllowToFall));
+					BOOST_TEST(body->Has(gp::physics_flag::AllowBouncing));
+				}
+				if (index == 1)
+					BOOST_TEST((now.XY() == before[index].position.XY())); // infantry is not shoved
+				if (index == 0)
+					BOOST_TEST((now.XY() != before[index].position.XY()));
+			}
+			else
+				BOOST_TEST(!touches, ahead[index].first << " at tick " << tick);
+		}
+	}
+	for (std::size_t index = 0; index < victims.size(); ++index)
+		BOOST_TEST(hit[index] >= 0, ahead[index].first);
+	// playImpactSound: only the power plant (no PhysicsBehavior: BigMetalBounceSound); a unit's is its silent bounce sound.
+	BOOST_TEST(impacts == 1);
+	// Its whistle (TrainWhistle; a car has none) the tick it first hits a unit (asked for at every such touch after, the
+	// sound's Limit of 1 keeping it to one at a time).
+	BOOST_TEST(firstWhistle == hit[0]);
+	BOOST_TEST(hit[0] < hit[1]);
+	BOOST_TEST(hit[1] < hit[2]);
+}
+
+// Legacy parity (RailroadGuideAIUpdate.cpp: FindPosByPathDistance's Disembark point (flagged on the point after the
+// waypoint so named), update's APPLY_BRAKES stop, disembark(): orderAllPassengersToExit down the chain) with the shipped
+// TrainEngineVerySlow (SpeedMax 0.25, GarrisonContain 5): five Red Guards aboard, it stops after its rear comes into
+// the segment past the Disembark waypoint's next, and unloads them all while it waits; waiting, a soldier moving within
+// it that is boarding it is let through (onCollide's getEnterTarget) without its whistle, another sets the whistle off.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_train_lets_its_passengers_out_where_it_stops_to_unload)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	engine::level::Level level = match->skirmish.level;
+	const Engine::Math::FixedVector2 from = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-700), Fixed::FromInt(-300)};
+	const std::array<int, 5> along{0, 100, 200, 300, 1000};
+	const std::uint32_t first = AddLine(level, from, along, 1, "Disembark");
+	session::Session game(level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto team = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const ecs::Entity locomotive = game.Place("TrainEngineVerySlow", from, {}, team);
+	std::vector<ecs::Entity> riders;
+	for (int index = 0; index < 5; ++index)
+	{
+		riders.push_back(game.Place("ChinaInfantryRedguard", from, {}, team));
+		gameplay::PutInside(game.Game(), locomotive, riders.back());
+	}
+	const auto aboard = [&] {
+		int count = 0;
+		for (const ecs::Entity rider : riders)
+			if (const auto *passenger = world.Get<gp::Passenger>(rider); passenger != nullptr && passenger->transport == locomotive)
+				++count;
+		return count;
+	};
+	BOOST_TEST_REQUIRE(aboard() == 5);
+	const auto rail = [&](ecs::Entity car) -> const gameplay::Railcar & { return *world.Get<gameplay::Railcar>(car); };
+	game.Tick();
+	BOOST_TEST_REQUIRE(rail(locomotive).anchor == first);
+	const Fixed segment = world.Resource<gameplay::RailTracks>().along[world.Resource<gameplay::RailTracks>().Of(first)->first + 2];
+	bool entered = false, stopped = false;
+	for (int tick = 0; tick < 3000 && !stopped; ++tick)
+	{
+		game.Tick();
+		const gameplay::Railcar &loco = rail(locomotive);
+		if (!entered && loco.pull.distance > segment)
+		{
+			entered = true;
+			BOOST_TEST((loco.state == gameplay::ConductorState::ApplyBrakes));
+			BOOST_TEST(loco.disembark == 1);
+		}
+		if (loco.state == gameplay::ConductorState::WaitAtStation)
+			stopped = true;
+		BOOST_TEST(aboard() == 5);
+	}
+	BOOST_TEST_REQUIRE(stopped);
+	BOOST_TEST(rail(locomotive).disembark == 0);
+	for (int tick = 0; tick < 290 && aboard() > 0; ++tick)
+		game.Tick();
+	BOOST_TEST(aboard() == 0);
+	BOOST_TEST((rail(locomotive).state == gameplay::ConductorState::WaitAtStation));
+	// Waiting (slower than its RunningGarrisonSpeedMax 2), what walks into it to board it is let through without its
+	// whistle; what walks through it sets it off.
+	const auto whistles = [&] {
+		int count = 0;
+		for (const auto &cue : world.Resource<gameplay::RailroadCues>().list)
+			count += cue.kind == gameplay::RailroadCue::Kind::Whistle && cue.car == locomotive ? 1 : 0;
+		return count;
+	};
+	world.Get<gameplay::Railcar>(locomotive)->held = 1;
+	// The others out walk off first.
+	for (int tick = 0; tick < 200; ++tick)
+		game.Tick();
+	BOOST_TEST(whistles() == 0);
+	// A soldier moving within its box (onCollide from the contact of something that moved): one whose AI means to get
+	// in (its enter target, Boarding, as AIEnterState keeps it) is let through without the whistle; the other sets it
+	// off. (Stopped, the train is a wall its path goes round: this is a soldier already there.)
+	for (const ecs::Entity rider : riders)
+		if (world.Get<gp::Passenger>(rider) == nullptr)
+			gameplay::PutInside(game.Game(), locomotive, rider);
+	BOOST_TEST_REQUIRE(aboard() == 5);
+	const Engine::Math::FixedVector3 at = world.Get<gp::Transform>(locomotive)->position;
+	const auto touchedWhileMoving = [&](bool boarding) {
+		const ecs::Entity soldier = game.Place("ChinaInfantryRedguard", at.XY(), {}, team);
+		if (boarding)
+		{
+			world.Add<gp::Boarding>(soldier);
+			world.Get<gp::Boarding>(soldier)->transport = locomotive;
+		}
+		world.Get<gp::PhysicsBody>(soldier)->velocity = {Fixed::One(), Fixed{}, Fixed{}};
+		game.Tick();
+		const int heard = whistles();
+		world.Destroy(soldier);
+		return heard;
+	};
+	BOOST_TEST(touchedWhileMoving(true) == 0);
+	BOOST_TEST(touchedWhileMoving(false) == 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

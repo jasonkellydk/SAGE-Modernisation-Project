@@ -30,6 +30,7 @@ engine_add_module_library(engine_gameplay_identity
 		common/identity/resources/object_ids.cppm
 		common/identity/resources/name_registry.cppm
 		common/identity/resources/relationships.cppm
+		common/identity/resources/template_equivalence.cppm
 	DEPENDS engine_ecs)
 
 # common/appearance: condition bits the presentation draws by.
@@ -56,6 +57,8 @@ engine_add_module_library(engine_gameplay_spatial
 		common/spatial/components/off_map.cppm
 		common/spatial/components/carried.cppm
 		common/spatial/components/bounding_volume.cppm
+		common/spatial/components/dynamic_geometry.cppm
+		common/spatial/systems/dynamic_geometry_system.cppm
 		common/spatial/components/object_shroud.cppm
 		common/spatial/resources/ground_height.cppm
 		common/spatial/resources/deck_surfaces.cppm
@@ -123,13 +126,36 @@ engine_add_module_library(engine_gameplay_navigation
 		rts/navigation/algorithms/grid_classification.cppm
 		rts/navigation/algorithms/clearance.cppm
 		rts/navigation/algorithms/decks.cppm
+		rts/navigation/resources/unit_cells.cppm
+		rts/navigation/algorithms/unit_movement.cppm
 		rts/navigation/algorithms/route_search.cppm
 		rts/navigation/components/navigation.cppm
 		rts/navigation/components/ignored_obstacle.cppm
+		rts/navigation/components/pathfind_goal.cppm
+		rts/navigation/resources/goal_cells.cppm
+		rts/navigation/algorithms/goal_claims.cppm
+		rts/navigation/algorithms/move_away_search.cppm
 		rts/navigation/systems/obstacle_system.cppm
-	DEPENDS engine_ecs engine_core_math_fixed engine_gameplay_spatial
-	TESTS rts/navigation/navigation.test
+	DEPENDS engine_ecs engine_core_math_fixed engine_gameplay_spatial engine_gameplay_identity
+	TESTS rts/navigation/navigation.test rts/navigation/goal_claims.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+# rts/collision (components): how a body crushes and is crushed (pure data the pathfinder weighs too).
+engine_add_module_library(engine_gameplay_collision_components
+	MODULES
+		rts/collision/components/collider.cppm
+		rts/collision/components/squishable.cppm
+	DEPENDS engine_ecs engine_core_math_fixed)
+
+# rts/blocking (state): what a ground unit's AI keeps about the units in its way, and the rules it weighs them by.
+engine_add_module_library(engine_gameplay_blocking_state
+	MODULES
+		rts/blocking/components/blocking_unit.cppm
+		rts/blocking/components/blocked_state.cppm
+		rts/blocking/components/block_contact.cppm
+		rts/blocking/algorithms/blocking_rules.cppm
+		rts/blocking/algorithms/locomotor_blocking.cppm
+	DEPENDS engine_ecs engine_core_math_fixed)
 
 # rts/movement: locomotors, move orders, steering and the movement system.
 engine_add_module_library(engine_gameplay_movement
@@ -138,7 +164,9 @@ engine_add_module_library(engine_gameplay_movement
 		rts/movement/components/locomotion.cppm
 		rts/movement/components/move_order.cppm
 		rts/movement/components/path_completed.cppm
+		rts/movement/components/move_ended.cppm
 		rts/movement/components/descent.cppm
+		rts/movement/components/floor_lift.cppm
 		rts/movement/algorithms/steering.cppm
 		rts/movement/algorithms/formation_layout.cppm
 		rts/movement/systems/movement_system.cppm
@@ -152,9 +180,12 @@ engine_add_module_library(engine_gameplay_movement
 		rts/movement/systems/face_target_system.cppm
 		rts/movement/systems/wander_system.cppm
 		rts/movement/components/move_path.cppm
+		rts/movement/components/move_goal.cppm
+		rts/movement/components/move_away.cppm
 		rts/movement/systems/move_path_system.cppm
 		rts/movement/algorithms/hover_motion.cppm
 	DEPENDS engine_gameplay_spatial engine_gameplay_navigation engine_gameplay_random engine_gameplay_status engine_gameplay_physics engine_gameplay_health
+		engine_gameplay_blocking_state engine_gameplay_identity engine_gameplay_collision_components
 	TESTS rts/movement/movement.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -254,10 +285,13 @@ engine_add_module_library(engine_gameplay_combat
 		rts/combat/algorithms/deploy_states.cppm
 		rts/combat/systems/turret_system.cppm
 		rts/combat/resources/shots.cppm
+		rts/combat/resources/historic_damage.cppm
 		rts/combat/resources/garrison_kills.cppm
 		rts/combat/resources/launch_layouts.cppm
 		rts/combat/algorithms/projectile_arc.cppm
 		rts/combat/algorithms/attack_goal.cppm
+		rts/combat/algorithms/target_pitch.cppm
+		rts/combat/algorithms/weapon_fitness.cppm
 		rts/combat/algorithms/countermeasure_decoys.cppm
 		rts/combat/components/countermeasures.cppm
 		rts/combat/systems/countermeasures_system.cppm
@@ -268,6 +302,7 @@ engine_add_module_library(engine_gameplay_combat
 		rts/combat/systems/attack_move_system.cppm
 		rts/combat/components/firing_tracker.cppm
 		rts/combat/systems/weapon_system.cppm
+		rts/combat/algorithms/spot_fire.cppm
 		rts/combat/systems/firing_tracker_system.cppm
 		rts/combat/components/assisted_targeting.cppm
 		rts/combat/resources/assists.cppm
@@ -287,7 +322,7 @@ engine_add_module_library(engine_gameplay_combat
 		rts/combat/systems/projectile_launch_system.cppm
 		rts/combat/components/point_defense.cppm
 		rts/combat/systems/point_defense_system.cppm
-	DEPENDS engine_gameplay_weapons engine_gameplay_health engine_gameplay_movement engine_gameplay_identity engine_gameplay_physics engine_gameplay_status engine_gameplay_construction engine_gameplay_teams engine_gameplay_areas
+	DEPENDS engine_gameplay_weapons engine_gameplay_health engine_gameplay_movement engine_gameplay_identity engine_gameplay_physics engine_gameplay_status engine_gameplay_construction engine_gameplay_teams engine_gameplay_areas engine_gameplay_veterancy engine_gameplay_lifetime
 	TESTS rts/combat/combat.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -296,6 +331,8 @@ engine_add_module_library(engine_gameplay_containment
 	MODULES
 		rts/containment/definitions/transport.cppm
 		rts/containment/components/transport.cppm
+		rts/containment/components/drop_homing.cppm
+		rts/containment/systems/drop_homing_system.cppm
 		rts/containment/components/cargo_size.cppm
 		rts/containment/components/garrison.cppm
 		rts/containment/components/garrison_points.cppm
@@ -309,6 +346,7 @@ engine_add_module_library(engine_gameplay_containment
 		rts/containment/systems/unloading_system.cppm
 		rts/containment/systems/cargo_transfer_system.cppm
 		rts/containment/systems/garrison_clear_system.cppm
+		rts/containment/systems/container_classes_system.cppm
 		rts/containment/systems/garrison_kill_damage_system.cppm
 		rts/containment/systems/passed_bonus_system.cppm
 		rts/containment/systems/passenger_ride_system.cppm
@@ -323,7 +361,7 @@ engine_add_module_library(engine_gameplay_delivery
 	MODULES
 		rts/delivery/components/delivery.cppm
 		rts/delivery/systems/delivery_system.cppm
-	DEPENDS engine_gameplay_containment
+	DEPENDS engine_gameplay_containment engine_gameplay_combat
 	TESTS rts/delivery/delivery.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -342,10 +380,8 @@ engine_add_module_library(engine_gameplay_lifecycle
 # rts/collision: where the bodies are, and who runs into whom.
 engine_add_module_library(engine_gameplay_collision
 	MODULES
-		rts/collision/components/collider.cppm
 		rts/collision/resources/contacts.cppm
 		rts/collision/systems/collision_systems.cppm
-		rts/collision/components/squishable.cppm
 		rts/collision/resources/crush_damage.cppm
 		rts/collision/systems/crush_system.cppm
 		rts/collision/components/collide_weapon.cppm
@@ -354,8 +390,20 @@ engine_add_module_library(engine_gameplay_collision
 		rts/collision/resources/collision_settings.cppm
 		rts/collision/systems/body_collision_system.cppm
 	DEPENDS engine_gameplay_spatial engine_gameplay_movement engine_gameplay_health engine_gameplay_identity engine_gameplay_fire engine_gameplay_combat
-		engine_gameplay_weapons engine_gameplay_physics engine_gameplay_lifetime
+		engine_gameplay_weapons engine_gameplay_physics engine_gameplay_lifetime engine_gameplay_collision_components
 	TESTS rts/collision/collision.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+# rts/blocking: ground units held up by the units in their way, and planning their routes again when stuck.
+engine_add_module_library(engine_gameplay_blocking
+	MODULES
+		rts/blocking/systems/unit_blocking_system.cppm
+		rts/blocking/systems/blocked_repath_system.cppm
+		rts/blocking/systems/unit_cell_system.cppm
+		rts/blocking/resources/move_away_requests.cppm
+	DEPENDS engine_gameplay_blocking_state engine_gameplay_collision engine_gameplay_movement engine_gameplay_navigation engine_gameplay_identity
+		engine_gameplay_status engine_gameplay_health engine_gameplay_spatial engine_gameplay_death engine_gameplay_weapons
+	TESTS rts/blocking/blocking.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
 # rts/topple: things that fall over when run into.
@@ -404,12 +452,14 @@ engine_add_module_library(engine_gameplay_slaves
 		rts/slaves/algorithms/enslave.cppm
 		rts/slaves/systems/slaved_system.cppm
 		rts/slaves/components/spawner.cppm
+		rts/slaves/components/spawn_points.cppm
 		rts/slaves/resources/spawn_requests.cppm
+		rts/slaves/resources/slave_orders.cppm
 		rts/slaves/systems/spawner_system.cppm
 		rts/slaves/systems/disable_follow_system.cppm
 		rts/slaves/components/hive_body.cppm
 		rts/slaves/systems/hive_damage_system.cppm
-	DEPENDS engine_gameplay_movement engine_gameplay_health engine_gameplay_weapons engine_gameplay_lifecycle engine_gameplay_random engine_gameplay_status engine_gameplay_death engine_gameplay_construction engine_gameplay_identity engine_gameplay_containment engine_gameplay_production
+	DEPENDS engine_gameplay_movement engine_gameplay_health engine_gameplay_healing engine_gameplay_spatial engine_gameplay_weapons engine_gameplay_lifecycle engine_gameplay_random engine_gameplay_status engine_gameplay_death engine_gameplay_construction engine_gameplay_identity engine_gameplay_containment engine_gameplay_production
 	TESTS rts/slaves/slaves.test rts/slaves/disable_follow.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -434,7 +484,7 @@ engine_add_module_library(engine_gameplay_upgrades
 		rts/upgrades/resources/object_upgrade_grants.cppm
 		rts/upgrades/components/upgradable.cppm
 		rts/upgrades/systems/upgrade_system.cppm
-	DEPENDS engine_ecs engine_gameplay_identity
+	DEPENDS engine_ecs engine_gameplay_identity engine_gameplay_construction
 	TESTS rts/upgrades/upgrades.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -472,7 +522,7 @@ engine_add_module_library(engine_gameplay_production
 		rts/production/components/production_exit_gate.cppm
 		rts/production/components/rally_point.cppm
 		rts/production/systems/production_system.cppm
-	DEPENDS engine_ecs engine_gameplay_economy
+	DEPENDS engine_ecs engine_gameplay_economy engine_gameplay_status
 	TESTS rts/production/production.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -547,12 +597,13 @@ engine_add_module_library(engine_gameplay_docking
 	MODULES
 		rts/docking/components/dock.cppm
 		rts/docking/components/docking.cppm
+		rts/docking/components/dock_look.cppm
 		rts/docking/algorithms/dock_points.cppm
 		rts/docking/systems/dock_system.cppm
 		rts/docking/components/repair_dock.cppm
 		rts/docking/resources/dock_repairs.cppm
 		rts/docking/systems/repair_dock_system.cppm
-	DEPENDS engine_gameplay_movement engine_gameplay_navigation engine_gameplay_spatial engine_gameplay_random engine_gameplay_health
+	DEPENDS engine_gameplay_movement engine_gameplay_navigation engine_gameplay_spatial engine_gameplay_random engine_gameplay_health engine_gameplay_containment
 	TESTS rts/docking/docking.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -576,12 +627,13 @@ engine_add_module_library(engine_gameplay_stealth
 		rts/stealth/components/stealth_detector.cppm
 		rts/stealth/components/grant_stealth.cppm
 		rts/stealth/components/undetected_defector.cppm
+		rts/stealth/components/stealth_rider.cppm
 		rts/stealth/resources/detections.cppm
 		rts/stealth/systems/stealth_system.cppm
 		rts/stealth/systems/stealth_detector_system.cppm
 		rts/stealth/systems/defector_system.cppm
 	DEPENDS engine_gameplay_spatial engine_gameplay_health engine_gameplay_weapons engine_gameplay_movement engine_gameplay_lifetime engine_gameplay_status engine_gameplay_containment
-	TEST_DEPENDS engine_gameplay_combat
+		engine_gameplay_combat engine_gameplay_teams engine_gameplay_identity
 	TESTS rts/stealth/stealth.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
@@ -641,10 +693,13 @@ engine_add_module_library(engine_gameplay_death
 		rts/death/components/dying.cppm
 		rts/death/components/crash.cppm
 		rts/death/components/collapse.cppm
+		rts/death/components/structure_topple.cppm
 		rts/death/resources/death_events.cppm
 		rts/death/algorithms/death_choice.cppm
+		rts/death/algorithms/structure_topple.cppm
 		rts/death/systems/death_system.cppm
 		rts/death/systems/slow_death_system.cppm
+		rts/death/systems/structure_topple_system.cppm
 		rts/death/systems/crash_collision_system.cppm
 		rts/death/components/height_die.cppm
 		rts/death/components/death_credit.cppm
@@ -667,6 +722,9 @@ engine_add_module_library(engine_gameplay_vision
 		rts/vision/components/partition_footprint.cppm
 		rts/vision/algorithms/footprint_cells.cppm
 		rts/vision/systems/object_shroud_system.cppm
+		rts/vision/definitions/dynamic_clearing.cppm
+		rts/vision/components/dynamic_clearing.cppm
+		rts/vision/systems/dynamic_clearing_system.cppm
 	DEPENDS engine_ecs engine_gameplay_identity engine_gameplay_spatial engine_gameplay_construction engine_gameplay_containment engine_gameplay_stealth
 		engine_gameplay_death
 	TESTS rts/vision/vision.test

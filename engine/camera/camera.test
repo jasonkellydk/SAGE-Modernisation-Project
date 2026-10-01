@@ -426,3 +426,18 @@ BOOST_AUTO_TEST_CASE(scripted_motion_is_deterministic)
 		BOOST_TEST(a[i].farClip == b[i].farClip);
 	}
 }
+
+// legacy_parity: View::setTimeMultiplier (SET_VISUAL_SPEED_MULTIPLIER) and W3DDisplay::draw / FramePacer::
+// isActualFramesPerSecondLimitEnabled: a multiplier above 1 runs that many logic frames to each drawn one (4: four
+// times the game's pace); 1, 0 or less leaves it as it is. The camera keeps the multiplier its scripts set.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_time_multiplier_fast_forwards_the_logic)
+{
+	RtsCamera camera(CameraSettings{}, [](float, float) { return 0.0f; });
+	BOOST_TEST(camera.TimeMultiplier() == 1);
+	camera.SetTimeMultiplier(4);
+	BOOST_TEST(camera.TimeMultiplier() == 4);
+	BOOST_TEST(FastForwardFactor(camera.TimeMultiplier()) == 4);
+	BOOST_TEST(FastForwardFactor(1) == 1);
+	BOOST_TEST(FastForwardFactor(0) == 1);
+	BOOST_TEST(FastForwardFactor(-3) == 1);
+}

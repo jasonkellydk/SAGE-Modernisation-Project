@@ -69,12 +69,19 @@ inline const engine::level::Properties &InfoOf(const GameWorld &game, std::uint3
 
 inline std::vector<UnitsInfo> UnitsOf(const engine::level::Properties &info)
 {
+	// The slots' keys, spelled once (no strings built per look).
+	static constexpr std::array<std::string_view, 7> Types{"teamUnitType1", "teamUnitType2", "teamUnitType3", "teamUnitType4", "teamUnitType5",
+		"teamUnitType6", "teamUnitType7"};
+	static constexpr std::array<std::string_view, 7> Mins{"teamUnitMinCount1", "teamUnitMinCount2", "teamUnitMinCount3", "teamUnitMinCount4",
+		"teamUnitMinCount5", "teamUnitMinCount6", "teamUnitMinCount7"};
+	static constexpr std::array<std::string_view, 7> Maxes{"teamUnitMaxCount1", "teamUnitMaxCount2", "teamUnitMaxCount3", "teamUnitMaxCount4",
+		"teamUnitMaxCount5", "teamUnitMaxCount6", "teamUnitMaxCount7"};
 	std::vector<UnitsInfo> out;
-	for (int slot = 1; slot <= 7; ++slot)
+	for (std::size_t slot = 0; slot < 7; ++slot)
 	{
-		const auto type = info.Get<std::string>("teamUnitType" + std::to_string(slot));
-		const auto min = info.Get<std::int64_t>("teamUnitMinCount" + std::to_string(slot)).value_or(0);
-		const auto max = info.Get<std::int64_t>("teamUnitMaxCount" + std::to_string(slot)).value_or(0);
+		const auto type = info.Get<std::string>(Types[slot]);
+		const auto min = info.Get<std::int64_t>(Mins[slot]).value_or(0);
+		const auto max = info.Get<std::int64_t>(Maxes[slot]).value_or(0);
 		if (max > 0 && type)
 			out.push_back({*type, static_cast<std::int32_t>(min), static_cast<std::int32_t>(max)});
 	}
@@ -305,9 +312,16 @@ inline ecs::Entity TryToRecruit(GameWorld &game, AiPlayers &ais, std::uint32_t t
 	const std::uint32_t player = game.roster.TeamAt(team).owner;
 	const auto defaultTeam = game.roster.DefaultTeam(player);
 	const std::int32_t priority = PriorityOf(game, ais, team);
+	// Only objects of the type (or a variation) can be picked: they alone are sorted newest first (the others were
+	// passed over first thing, so the order among these is unchanged).
+	const auto ofType = [&](ecs::Entity object) {
+		const content::ObjectDefinition *kind = KindOf(game, object);
+		return kind != nullptr &&
+			(kind->name == type.name || std::find(type.buildVariations.begin(), type.buildVariations.end(), kind->name) != type.buildVariations.end());
+	};
 	std::vector<std::pair<std::uint32_t, ecs::Entity>> objects;
 	ai_detail::ForPlayerObjects(game, player, [&](ecs::Entity entity) {
-		if (const auto *id = game.world.Get<gp::ObjectId>(entity))
+		if (const auto *id = game.world.Get<gp::ObjectId>(entity); id != nullptr && ofType(entity))
 			objects.emplace_back(id->value, entity);
 	});
 	std::sort(objects.begin(), objects.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
@@ -315,11 +329,6 @@ inline ecs::Entity TryToRecruit(GameWorld &game, AiPlayers &ais, std::uint32_t t
 	ecs::Entity recruit;
 	for (const auto &[id, object] : objects)
 	{
-		const content::ObjectDefinition *kind = KindOf(game, object);
-		if (kind == nullptr)
-			continue;
-		if (kind->name != type.name && std::find(type.buildVariations.begin(), type.buildVariations.end(), kind->name) == type.buildVariations.end())
-			continue;
 		const auto *owner = game.world.Get<gp::Owner>(object);
 		const auto *member = game.world.Get<gp::TeamMember>(object);
 		if (owner == nullptr || member == nullptr || owner->player != player)

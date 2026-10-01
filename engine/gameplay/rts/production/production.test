@@ -30,6 +30,7 @@ struct Plant
 		world.RegisterComponent<Health>();
 		world.RegisterComponent<EnergySource>();
 		world.RegisterComponent<ProductionDoors>();
+		world.RegisterComponent<Disabled>();
 		world.FinalizeComponents();
 		world.EmplaceResource<ProductionDone>();
 		world.EmplaceResource<PlayerEnergy>();
@@ -105,6 +106,38 @@ BOOST_AUTO_TEST_CASE(a_factory_builds_its_queue_in_order_each_for_its_build_time
 	BOOST_TEST(done[1].first == 330u); // the next starts when the first is done
 	BOOST_TEST(done[1].second.quantity == 2u);
 	BOOST_TEST(plant.world.Get<ProductionQueue>(airfield)->count == 0u);
+}
+
+// GameLogic's disabled gate on ProductionUpdate (getDisabledTypesToProcess: DisabledTypesToProcess, default
+// DISABLED_HELD): a factory disabled otherwise (EMPed) builds nothing while it lasts; its 30-tick unit is done 20 ticks
+// late for 20 ticks disabled. A China nuclear silo's (DISABLED_HELD DISABLED_UNDERPOWERED) keeps building underpowered.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_disabled_factory_builds_nothing_unless_it_processes_that_disable)
+{
+	Plant plant(2);
+	const ecs::Entity factory = plant.Factory();
+	BOOST_TEST(plant.world.Get<ProductionQueue>(factory)->Push({7, 3, 1, 0, {}, 30}));
+	plant.world.Add<Disabled>(factory);
+	plant.world.Get<Disabled>(factory)->mask = disabled_type::Emp;
+	std::uint64_t done = 0;
+	for (int step = 0; step < 100 && done == 0; ++step)
+	{
+		if (plant.tick == 20)
+			plant.world.Get<Disabled>(factory)->mask = 0;
+		if (!plant.Step().empty())
+			done = plant.tick;
+	}
+	BOOST_TEST(done == 50u);
+	const ecs::Entity silo = plant.Factory();
+	plant.world.Get<ProductionQueue>(silo)->runsWhileDisabled = disabled_type::Held | disabled_type::Underpowered;
+	BOOST_TEST(plant.world.Get<ProductionQueue>(silo)->Push({8, 3, 1, 0, {}, 30}));
+	plant.world.Add<Disabled>(silo);
+	plant.world.Get<Disabled>(silo)->mask = disabled_type::Underpowered;
+	const std::uint64_t start = plant.tick;
+	std::uint64_t built = 0;
+	for (int step = 0; step < 100 && built == 0; ++step)
+		if (!plant.Step().empty())
+			built = plant.tick;
+	BOOST_TEST(built == start + 30);
 }
 
 BOOST_AUTO_TEST_CASE(a_queue_holds_as_many_as_it_may)

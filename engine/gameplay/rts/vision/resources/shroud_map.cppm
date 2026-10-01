@@ -77,6 +77,7 @@ public:
 		m_unlookPersist = unlookPersist;
 		using Engine::Math::Fixed;
 		m_cellSize = cellSize < Fixed::One() ? Fixed::One() : cellSize;
+		DeriveCellDivision();
 		width = std::max(width, Fixed::One());
 		height = std::max(height, Fixed::One());
 		m_cellsX = static_cast<std::int32_t>((width / m_cellSize).Ceil());
@@ -84,6 +85,7 @@ public:
 		m_players = players;
 		m_current.assign(static_cast<std::size_t>(m_cellsX) * m_cellsY * players, 1);
 		m_active.assign(m_current.size(), 0);
+		RebuildMasks();
 		m_pending.clear();
 		m_lookers.clear();
 		m_free.clear();
@@ -158,9 +160,17 @@ public:
 	Engine::Math::Fixed CellSize() const noexcept { return m_cellSize; }
 
 	// worldToCell / worldToCellDist.
-	std::array<std::int32_t, 2> CellOf(Engine::Math::Fixed x, Engine::Math::Fixed y) const noexcept
+	std::array<std::int32_t, 2> CellOf(Engine::Math::Fixed x, Engine::Math::Fixed y) const noexcept { return {CellIndexOf(x), CellIndexOf(y)}; }
+	// One coordinate's cell: (x / cellSize).Floor(). For x of raw r >= 0 with the cell size's raw d, that quotient is
+	// floor(floor((r * 2^16 + floor(d / 2)) / d) / 2^16) = floor((r + floor(d / 2) / 2^16) / d) (the remainder of the
+	// half below 2^16 never carries past a multiple of d * 2^16), taken by one multiply with ceil(2^64 / d) (exact for
+	// 32-bit operands: Lemire, Kaser and Kurz, "Faster remainder by direct computation", 2019). Anything else divides.
+	std::int32_t CellIndexOf(Engine::Math::Fixed x) const noexcept
 	{
-		return {static_cast<std::int32_t>((x / m_cellSize).Floor()), static_cast<std::int32_t>((y / m_cellSize).Floor())};
+		const std::int64_t raw = x.Raw();
+		if (raw >= 0 && raw < m_cellFastLimit)
+			return static_cast<std::int32_t>(Engine::Math::UInt128::Multiply(static_cast<std::uint64_t>(raw) + m_cellHalfWhole, m_cellReciprocal).hi);
+		return static_cast<std::int32_t>((x / m_cellSize).Floor());
 	}
 	std::int32_t CellsFor(Engine::Math::Fixed range) const noexcept { return std::max<std::int32_t>(static_cast<std::int32_t>((range / m_cellSize).Ceil()), 1); }
 
@@ -170,6 +180,17 @@ public:
 			return CellShroud::Shrouded;
 		const std::int16_t level = m_current[Index(player, x, y)];
 		return level == 1 ? CellShroud::Shrouded : level == 0 ? CellShroud::Fogged : CellShroud::Clear;
+	}
+	// A cell's players (bit per player, the first 64) that see it clear, and that see it fogged: Status for every
+	// player at once (a player in neither sees it shrouded; a cell off the map: nobody sees it). Derived from the
+	// levels, kept in step with every change.
+	std::uint64_t ClearMask(std::int32_t x, std::int32_t y) const noexcept
+	{
+		return x < 0 || y < 0 || x >= m_cellsX || y >= m_cellsY ? 0 : m_clearBits[static_cast<std::size_t>(y) * m_cellsX + static_cast<std::size_t>(x)];
+	}
+	std::uint64_t FogMask(std::int32_t x, std::int32_t y) const noexcept
+	{
+		return x < 0 || y < 0 || x >= m_cellsX || y >= m_cellsY ? 0 : m_fogBits[static_cast<std::size_t>(y) * m_cellsX + static_cast<std::size_t>(x)];
 	}
 	CellShroud StatusAt(std::uint32_t player, Engine::Math::Fixed x, Engine::Math::Fixed y) const noexcept
 	{
@@ -214,6 +235,7 @@ public:
 		m_cellsY = static_cast<std::int32_t>((height / m_cellSize).Ceil());
 		m_current.assign(static_cast<std::size_t>(m_cellsX) * m_cellsY * m_players, 1);
 		m_active.assign(m_current.size(), 0);
+		RebuildMasks();
 		const auto restore = [&](bool toFog) {
 			for (std::uint32_t player = 0; player < m_players; ++player)
 				for (std::int32_t y = 0; y < oldY; ++y)
@@ -424,11 +446,13 @@ public:
 		}
 		m_unlookPersist = *persist;
 		m_cellSize = Engine::Math::Fixed::FromRaw(*size);
+		DeriveCellDivision();
 		m_cellsX = static_cast<std::int32_t>(*cellsX);
 		m_cellsY = static_cast<std::int32_t>(*cellsY);
 		m_players = *players;
 		m_current = std::move(current);
 		m_active = std::move(active);
+		RebuildMasks();
 		m_pending = std::move(pending);
 		m_lookers = std::move(lookers);
 		m_free = std::move(free);
@@ -463,6 +487,7 @@ private:
 	{
 		std::int16_t &level = m_current[Index(player, x, y)];
 		level = std::min<std::int16_t>(static_cast<std::int16_t>(level - 1), -1);
+		RefreshMask(player, x, y, level);
 	}
 	// removeLooker: the last looker leaves the cell fogged, or shrouded under active shroud.
 	void RemoveLooker(std::uint32_t player, std::int32_t x, std::int32_t y)
@@ -472,24 +497,62 @@ private:
 			level = std::min<std::int16_t>(m_active[Index(player, x, y)], 1);
 		else
 			++level;
+		RefreshMask(player, x, y, level);
 	}
 	// addShrouder / removeShrouder.
 	void AddShrouder(std::uint32_t player, std::int32_t x, std::int32_t y)
 	{
 		++m_active[Index(player, x, y)];
 		if (m_current[Index(player, x, y)] == 0)
+		{
 			m_current[Index(player, x, y)] = 1;
+			RefreshMask(player, x, y, 1);
+		}
+	}
+
+	// The cell masks (ClearMask / FogMask) for one player's new level at a cell, and all of them from the levels.
+	void RefreshMask(std::uint32_t player, std::int32_t x, std::int32_t y, std::int16_t level) noexcept
+	{
+		if (player >= 64)
+			return;
+		const std::size_t cell = static_cast<std::size_t>(y) * m_cellsX + static_cast<std::size_t>(x);
+		const std::uint64_t bit = std::uint64_t{1} << player;
+		m_clearBits[cell] = (m_clearBits[cell] & ~bit) | (level != 0 && level != 1 ? bit : 0); // as Status: neither shrouded (1) nor fogged (0)
+		m_fogBits[cell] = (m_fogBits[cell] & ~bit) | (level == 0 ? bit : 0);
+	}
+	void RebuildMasks()
+	{
+		const std::size_t cells = static_cast<std::size_t>(m_cellsX) * static_cast<std::size_t>(m_cellsY);
+		m_clearBits.assign(cells, 0);
+		m_fogBits.assign(cells, 0);
+		for (std::uint32_t player = 0; player < m_players && player < 64; ++player)
+			for (std::int32_t y = 0; y < m_cellsY; ++y)
+				for (std::int32_t x = 0; x < m_cellsX; ++x)
+					RefreshMask(player, x, y, m_current[Index(player, x, y)]);
 	}
 	void RemoveShrouder(std::uint32_t player, std::int32_t x, std::int32_t y) { --m_active[Index(player, x, y)]; }
 
 	// DiscreteCircle(cx, cy, radius).drawCircle: its scanlines (the top half, mirrored about the centre row).
+	struct DiscLine
+	{
+		std::int32_t xStart, xEnd, y;
+	};
 	void Disc(std::int32_t cx, std::int32_t cy, std::int32_t radius, std::uint64_t mask, Op op)
 	{
-		struct Line
+		switch (op)
 		{
-			std::int32_t xStart, xEnd, y;
-		};
-		std::vector<Line> edges;
+		case Op::AddLooker: DiscOf<Op::AddLooker>(cx, cy, radius, mask); break;
+		case Op::RemoveLooker: DiscOf<Op::RemoveLooker>(cx, cy, radius, mask); break;
+		case Op::AddShrouder: DiscOf<Op::AddShrouder>(cx, cy, radius, mask); break;
+		case Op::RemoveShrouder: DiscOf<Op::RemoveShrouder>(cx, cy, radius, mask); break;
+		}
+	}
+	// The operation chosen once per disc (not per cell); the scanlines in reused buffers.
+	template<Op op>
+	void DiscOf(std::int32_t cx, std::int32_t cy, std::int32_t radius, std::uint64_t mask)
+	{
+		std::vector<DiscLine> &edges = m_discEdges;
+		edges.clear();
 		std::int32_t x = 0, y = radius, d = (1 - radius) << 1;
 		while (y >= 0)
 		{
@@ -506,7 +569,8 @@ private:
 			}
 		}
 		// removeDuplicates: of lines on the same row, the last.
-		std::vector<Line> lines;
+		std::vector<DiscLine> &lines = m_discLines;
+		lines.clear();
 		for (std::size_t index = 0; index < edges.size(); ++index)
 			if (index + 1 == edges.size() || edges[index].y != edges[index + 1].y)
 				lines.push_back(edges[index]);
@@ -517,16 +581,49 @@ private:
 			const auto scan = [&](std::int32_t x1, std::int32_t x2, std::int32_t row) {
 				if (row < 0 || row >= m_cellsY || x1 >= m_cellsX || x2 < 0)
 					return;
-				for (std::int32_t column = std::max(x1, 0); column <= std::min(x2, m_cellsX - 1); ++column)
-					switch (op)
+				// One run of cells in a row: the levels, shrouders and masks walked by pointer (AddLooker, RemoveLooker,
+				// AddShrouder, RemoveShrouder cell by cell, as below).
+				const std::int32_t first = std::max(x1, 0);
+				const std::int32_t last = std::min(x2, m_cellsX - 1);
+				const std::size_t count = static_cast<std::size_t>(last - first + 1);
+				const std::size_t at = Index(static_cast<std::uint32_t>(player), first, row);
+				const std::size_t cellAt = static_cast<std::size_t>(row) * static_cast<std::size_t>(m_cellsX) + static_cast<std::size_t>(first);
+				std::int16_t *const levels = m_current.data() + at;
+				std::int16_t *const shrouders = m_active.data() + at;
+				std::uint64_t *const clearBits = m_clearBits.data() + cellAt;
+				std::uint64_t *const fogBits = m_fogBits.data() + cellAt;
+				const bool masked = player < 64;
+				const std::uint64_t bit = masked ? std::uint64_t{1} << player : 0;
+				for (std::size_t cell = 0; cell < count; ++cell)
+				{
+					std::int16_t &level = levels[cell];
+					if constexpr (op == Op::AddLooker)
 					{
-					case Op::AddLooker: AddLooker(static_cast<std::uint32_t>(player), column, row); break;
-					case Op::RemoveLooker: RemoveLooker(static_cast<std::uint32_t>(player), column, row); break;
-					case Op::AddShrouder: AddShrouder(static_cast<std::uint32_t>(player), column, row); break;
-					case Op::RemoveShrouder: RemoveShrouder(static_cast<std::uint32_t>(player), column, row); break;
+						level = std::min<std::int16_t>(static_cast<std::int16_t>(level - 1), -1);
+						clearBits[cell] |= bit; // below 0: clear
+						fogBits[cell] &= ~bit;
 					}
+					else if constexpr (op == Op::RemoveLooker)
+					{
+						level = level == -1 ? std::min<std::int16_t>(shrouders[cell], 1) : static_cast<std::int16_t>(level + 1);
+						clearBits[cell] = (clearBits[cell] & ~bit) | (level != 0 && level != 1 ? bit : 0);
+						fogBits[cell] = (fogBits[cell] & ~bit) | (level == 0 ? bit : 0);
+					}
+					else if constexpr (op == Op::AddShrouder)
+					{
+						++shrouders[cell];
+						if (level == 0)
+						{
+							level = 1;
+							clearBits[cell] &= ~bit;
+							fogBits[cell] &= ~bit;
+						}
+					}
+					else
+						--shrouders[cell];
+				}
 			};
-			for (const Line &line : lines)
+			for (const DiscLine &line : lines)
 			{
 				scan(line.xStart, line.xEnd, line.y);
 				if (line.y != cy)
@@ -535,12 +632,32 @@ private:
 		}
 	}
 
+	// CellIndexOf's division by the cell size (derived from it, never saved): ceil(2^64 / d), the whole part of half a
+	// cell (floor(d / 2) / 2^16), and the raw coordinates below which the multiply is exact (sum and d under 2^32).
+	void DeriveCellDivision() noexcept
+	{
+		const auto d = static_cast<std::uint64_t>(m_cellSize.Raw());
+		m_cellHalfWhole = (d / 2u) >> Engine::Math::Fixed::FractionBits;
+		const bool fits = d >= 2u && d < (std::uint64_t{1} << 32);
+		m_cellReciprocal = fits ? ~std::uint64_t{0} / d + 1u : 0u;
+		m_cellFastLimit = fits ? static_cast<std::int64_t>((std::uint64_t{1} << 32) - m_cellHalfWhole) : 0;
+	}
+
 	Engine::Math::Fixed m_cellSize{Engine::Math::Fixed::FromInt(40)};
+	std::uint64_t m_cellReciprocal{~std::uint64_t{0} / (std::uint64_t{40} << 16) + 1u};
+	std::uint64_t m_cellHalfWhole{((std::uint64_t{40} << 16) / 2u) >> 16};
+	std::int64_t m_cellFastLimit{static_cast<std::int64_t>((std::uint64_t{1} << 32) - (((std::uint64_t{40} << 16) / 2u) >> 16))};
 	std::int32_t m_cellsX{0}, m_cellsY{0};
 	std::uint32_t m_players{0};
 	std::uint64_t m_unlookPersist{150};
 	std::vector<std::int16_t> m_current; // per player, per cell
 	std::vector<std::int16_t> m_active;
+	// Derived (never saved): per cell, the players seeing it clear and fogged.
+	std::vector<std::uint64_t> m_clearBits;
+	std::vector<std::uint64_t> m_fogBits;
+	// Disc's scanline buffers (working space only).
+	std::vector<DiscLine> m_discEdges;
+	std::vector<DiscLine> m_discLines;
 	std::deque<PendingUnlook> m_pending;
 	std::vector<Looker> m_lookers;
 	std::vector<std::uint32_t> m_free;

@@ -3,6 +3,7 @@ import std;
 
 export import games.generalszh.session.session;
 export import engine.net.lockstep.lockstep_peer;
+export import engine.net.lockstep.command_recording;
 
 // A Zero Hour session as the lockstep peer's simulation: bundles run as
 // ticks, and a checkpoint from the relay replaces the session with one
@@ -24,7 +25,19 @@ public:
 	}
 	bool Valid() const noexcept { return m_session != nullptr; }
 
-	void Step(std::span<const engine::net::CommandEnvelope> commands) override { m_session->Tick(commands); }
+	void Step(std::span<const engine::net::CommandEnvelope> commands) override
+	{
+		const std::uint64_t tick = m_session->CurrentTick();
+		m_session->Tick(commands);
+		if (m_recording)
+		{
+			engine::net::RecordTick(*m_recording, tick, commands);
+			engine::net::RecordHash(*m_recording, tick, m_session->StateHash());
+		}
+	}
+	// From now on every tick stepped is recorded (a replay's; RecorderClass::startRecording at the game's start).
+	void Record() { m_recording.emplace(); }
+	const engine::net::CommandRecording *Recording() const noexcept { return m_recording ? &*m_recording : nullptr; }
 	std::uint64_t CurrentTick() const override { return m_session->CurrentTick(); }
 	std::uint64_t StateHash() const override { return m_session->StateHash(); }
 	std::vector<std::byte> SaveCheckpoint() const override { return m_session->Checkpoint(); }
@@ -49,5 +62,6 @@ private:
 	SessionOptions m_options;
 	std::unique_ptr<Session> m_session;
 	std::uint64_t m_generation{0};
+	std::optional<engine::net::CommandRecording> m_recording;
 };
 }

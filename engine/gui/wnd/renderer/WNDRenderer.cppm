@@ -150,7 +150,9 @@ export enum class WindowFlag : std::uint32_t
 	// (then dimmed) or NOT_READY (then as it is), hover and press shown by overlays.
 	UseOverlayStates = 1u << 10,
 	AlwaysColor = 1u << 11,
-	NotReady = 1u << 12
+	NotReady = 1u << 12,
+	// A command button flashing (WIN_STATUS_FLASHING: a script's CAMEO_FLASH): the pushed overlay (Cameo_push) over its art.
+	Flashing = 1u << 13
 };
 
 export constexpr std::uint32_t operator|(WindowFlag left, WindowFlag right) noexcept

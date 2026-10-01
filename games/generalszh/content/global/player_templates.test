@@ -120,6 +120,36 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_challenge_generals)
 	BOOST_TEST(!generals[11].startsEnabled);
 }
 
+// PlayerTemplate.cpp's parse table: DisplayName, Features and LoadScreenMusic as MultiPlayerLoadScreen::init reads them
+// (getDisplayName, getGeneralFeatures, getLoadScreenMusic) for the shipped USA faction and the Air Force General.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_factions_load_screen_fields)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &set = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	BindContext context{loader.DiagnosticsFor(set), engine::time::FixedStep{30}};
+	const PlayerTemplates templates = BindPlayerTemplates(set, nullptr, context);
+	const PlayerTemplateInfo *usa = nullptr;
+	const PlayerTemplateInfo *airForce = nullptr;
+	for (const PlayerTemplateInfo &info : templates.templates)
+	{
+		usa = info.name == "FactionAmerica" ? &info : usa;
+		airForce = info.name == "FactionAmericaAirForceGeneral" ? &info : airForce;
+	}
+	BOOST_TEST_REQUIRE(usa != nullptr);
+	BOOST_TEST_REQUIRE(airForce != nullptr);
+	BOOST_TEST(usa->displayName == "INI:FactionAmerica");
+	BOOST_TEST(usa->features == "GUI:BioFeatures_USA");
+	BOOST_TEST(usa->loadScreenMusic == "Load_USA");
+	BOOST_TEST(!airForce->features.empty());
+	BOOST_TEST(airForce->loadScreenMusic == "Load_USA");
+}
+
 // VideoPlayer::init (Video.ini) and Movie_File_Name / Open_Movie_File: each movie by its internal name; the USA
 // campaign's first mission's intro movie names a Video block whose file (with ".bik") is in the English Movies folder
 // of the install; a name no block has is looked for as it is.

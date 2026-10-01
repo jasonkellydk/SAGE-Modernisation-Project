@@ -7,6 +7,7 @@ import games.generalszh.presentation.objects.systems.object_icon_systems;
 import games.generalszh.content.combat.weapon_bonus_content;
 import games.generalszh.content.combat.loadout_content;
 import engine.ecs.core.world;
+import engine.gameplay.common.weapons.components.weapon_slots;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
 import engine.time.simulation_time;
@@ -56,6 +57,27 @@ BOOST_AUTO_TEST_CASE(legacy_parity_icons_sit_where_draw_icon_ui_puts_them)
 	BOOST_TEST(zoomed.hiX == 416);
 	BOOST_TEST(EnthusiasticScale(true, false) == 1.0f);
 	BOOST_TEST(EnthusiasticScale(false, false) == 0.5f);
+}
+
+// Drawable::drawAmmo and Weapon::getRemainingAmmo, worked by hand: with the shipped AmmoPipScreenOffset y 0 and a
+// bounding sphere of 20, pips of a 6x4 image for a health region starting at x 373 sit at 373, 380, 387 ... (1 apart),
+// their tops 1 under the projected top at y 250; an offset of -1 moves them up by the radius. A clip of 4 with 3 left
+// shows 3 full; reloading (or out of ammo for good) none; a clip not yet counted full.
+BOOST_AUTO_TEST_CASE(legacy_parity_ammo_pips_sit_under_the_health_bar_and_count_the_clip)
+{
+	const IconRegion region = HealthRegion(400, 300, 60.0f, 1.0f);
+	const IconRect first = PlaceAmmoPip(region, 250, 0.0f, 20.0f, 6, 4, 0);
+	BOOST_TEST(first.x == 373);
+	BOOST_TEST(first.y == 251);
+	BOOST_TEST(first.width == 6);
+	BOOST_TEST(first.height == 4);
+	BOOST_TEST(PlaceAmmoPip(region, 250, 0.0f, 20.0f, 6, 4, 2).x == 387);
+	BOOST_TEST(PlaceAmmoPip(region, 250, -1.0f, 20.0f, 6, 4, 0).y == 231);
+	BOOST_TEST(gp::RemainingAmmo(4, 3, 10, false, 20) == 3u);
+	BOOST_TEST(gp::RemainingAmmo(4, 4, 30, true, 20) == 0u);
+	BOOST_TEST(gp::RemainingAmmo(4, 4, 30, true, 30) == 4u);
+	BOOST_TEST(gp::RemainingAmmo(4, 0, 0, false, 20) == 4u);
+	BOOST_TEST(gp::RemainingAmmo(4, 2, gp::OutOfAmmo, true, 20) == 0u);
 }
 
 // Drawable::drawDisabled / drawEnthusiastic / drawBombed deciding each frame: an EMP'd tank's disabled icon is made on

@@ -11,6 +11,10 @@
 #include <utility>
 #include <vector>
 
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.rts.slaves.components.slaved;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.common.weapons.components.weapon_slots;
 import games.generalszh.session.session;
 import Engine.Core.Math.FixedPresentation;
 import engine.gameplay.rts.navigation.components.navigation;
@@ -56,6 +60,30 @@ import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.rts.death.components.dying;
 import games.generalszh.gameplay.hacking.algorithms.hack_orders;
 import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.gameplay.creation.components.ocl_timer;
+import engine.gameplay.rts.vision.components.vision;
+import engine.gameplay.rts.vision.components.dynamic_clearing;
+import engine.gameplay.rts.slaves.components.spawn_points;
+import engine.gameplay.rts.slaves.components.spawner;
+import games.generalszh.gameplay.containment.components.assault_transport;
+import games.generalszh.gameplay.combat.algorithms.bunker_busters;
+import games.generalszh.gameplay.combat.components.enemy_near;
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.status.components.disabled_until;
+import engine.gameplay.common.spatial.components.dynamic_geometry;
+import games.generalszh.gameplay.combat.components.firestorm;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.combat.resources.shots;
+import engine.gameplay.rts.combat.resources.historic_damage;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+import engine.gameplay.common.health.components.pending_damage;
+import games.generalszh.gameplay.crates.algorithms.sabotage;
+import engine.gameplay.rts.economy.resources.player_energy;
+import engine.gameplay.rts.economy.components.energy_source;
+import engine.gameplay.common.status.components.disabled;
+import games.generalszh.gameplay.powers.algorithms.special_power_state;
+import games.generalszh.gameplay.powers.components.spy_vision;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.common.weapons.components.armament;
@@ -67,7 +95,6 @@ import games.generalszh.content.combat.weapon_bonus_content;
 import engine.gameplay.common.health.components.damage_scalar;
 import engine.gameplay.common.health.components.pending_damage;
 import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
-import engine.gameplay.common.status.components.disabled_until;
 import engine.gameplay.rts.combat.components.turret;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.rts.vision.components.vision;
@@ -81,6 +108,9 @@ import games.generalszh.gameplay.containment.algorithms.garrisons;
 import engine.gameplay.common.health.components.second_life;
 import engine.gameplay.rts.loadout.components.loadout;
 import games.generalszh.content.combat.loadout_content;
+import games.generalszh.gameplay.construction.components.builder_boredom;
+import engine.gameplay.rts.mines.components.minefield;
+import engine.gameplay.rts.stealth.components.stealth;
 
 // SpecialAbilityUpdate / SpecialAbility on a shipped skirmish map: the infantry capture of a building.
 using namespace generalszh;
@@ -399,6 +429,312 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_ranger_captures_a_building)
 	BOOST_TEST(restored->StateHash() == game.StateHash());
 }
 
+// Legacy parity (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_BLACKLOTUS_STEAL_CASH_HACK): a Black Lotus of
+// China's (SpecialAbilityBlackLotusStealCashHack: StartAbilityRange 150, UnpackTime 6730 = 202 ticks, PreparationTime
+// 6000 = 180, EffectValue 1000) fired by a script at an American supply center takes, as its preparation ends (the
+// trigger: unpacked + 202 + 180), 1000 of America's money for China (addMoneyEarned). America's EVA says its cash was
+// stolen. A second steal with 400 left takes the 400. One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_black_lotus_steals_cash)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const ecs::Entity supply = game.Place("AmericaSupplyCenter", match->At(300, -350), {}, match->Team(game, 0));
+		const ecs::Entity lotus = game.Place("ChinaInfantryBlackLotus", match->At(150, -350), {}, match->Team(game, 1));
+		const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityBlackLotusStealCashHack");
+		gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(lotus)->Find(power), game.CurrentTick());
+		auto &money = world.Resource<gp::PlayerMoney>();
+		const std::uint32_t america = world.Get<gp::Owner>(supply)->player, china = world.Get<gp::Owner>(lotus)->player;
+		money.Withdraw(america, money.Balance(america));
+		money.Deposit(america, 1400);
+		const std::int64_t chinaBefore = money.Balance(china);
+		generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), lotus, "SpecialAbilityBlackLotusStealCashHack", supply, true);
+		std::uint64_t unpacked = 0, stolen = 0;
+		for (int tick = 0; tick < 1200 && stolen == 0; ++tick)
+		{
+			game.Tick();
+			if (unpacked == 0 && Shows(game, lotus, "UNPACKING"))
+				unpacked = game.CurrentTick();
+			if (money.Balance(america) != 1400)
+				stolen = game.CurrentTick();
+		}
+		BOOST_TEST_REQUIRE(stolen != 0u);
+		BOOST_TEST(stolen == unpacked + 202 + 180);
+		BOOST_TEST(money.Balance(america) == 400);
+		BOOST_TEST(money.Balance(china) == chinaBefore + 1000);
+		const auto &eva = world.Resource<generalszh::gameplay::EvaNotices>().list;
+		BOOST_TEST(std::any_of(eva.begin(), eva.end(), [&](const auto &notice) { return notice.cue == generalszh::gameplay::EvaCue::CashStolen && notice.player == america; }));
+		// Again once recharged: only what is left.
+		for (int tick = 0; tick < 3000 && money.Balance(america) == 400; ++tick)
+		{
+			const auto &slots = world.Get<generalszh::gameplay::SpecialAbilities>(lotus)->slots;
+			const auto steal = std::find_if(slots.begin(), slots.end(), [&](const generalszh::gameplay::AbilitySlot &slot) { return slot.power == power; });
+			if (!steal->Has(generalszh::gameplay::ability_flag::Active) &&
+				gp::IsReady(*world.Get<gp::SpecialPowerTimers>(lotus)->Find(power),
+					gp::PowerClock{world.Resource<gp::SpecialPowerRules>(), world.Resource<gp::SharedPowerTimers>(), china, game.CurrentTick()}))
+				generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), lotus, "SpecialAbilityBlackLotusStealCashHack", supply, true);
+			game.Tick();
+		}
+		BOOST_TEST(money.Balance(america) == 0);
+		BOOST_TEST(money.Balance(china) == chinaBefore + 1400);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_HACKER_DISABLE_BUILDING; its persistent preparation,
+// continuePreparation / PersistentPrepTime): a China Hacker (SpecialAbilityHackerDisableBuilding: PersistentPrepTime 333
+// = 10 ticks, EffectDuration 2000 = 60) fired by a script at an American barracks disables it DISABLED_HACKED
+// (setDisabledUntil: now + 60) on each trigger, and triggers again every 10 ticks while it keeps at it, so the hack never
+// lapses. One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hacker_disables_a_building)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(300, -350), {}, match->Team(game, 0));
+		const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(150, -350), {}, match->Team(game, 1));
+		const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityHackerDisableBuilding");
+		gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(hacker)->Find(power), game.CurrentTick());
+		generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), hacker, "SpecialAbilityHackerDisableBuilding", barracks, true);
+		const auto hackedUntil = [&] {
+			const auto *until = world.Get<gp::DisabledUntil>(barracks);
+			return until != nullptr ? until->until[1] : 0u; // DISABLED_HACKED's bit index
+		};
+		std::vector<std::uint64_t> triggers;
+		std::uint64_t last = 0;
+		for (int tick = 0; tick < 1500 && triggers.size() < 5; ++tick)
+		{
+			game.Tick();
+			if (hackedUntil() != last)
+			{
+				last = hackedUntil();
+				// Triggered the tick before: its disable request is carried out as the next tick's disables are.
+				triggers.push_back(game.CurrentTick() - 1);
+				BOOST_TEST(last == triggers.back() + 60);
+				BOOST_TEST(((world.Get<gp::Disabled>(barracks)->mask & gp::disabled_type::Hacked) != 0));
+			}
+		}
+		BOOST_TEST_REQUIRE(triggers.size() == 5u);
+		for (std::size_t index = 1; index < triggers.size(); ++index)
+			BOOST_TEST(triggers[index] == triggers[index - 1] + 10);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES): a Missile
+// Defender fired by a script at a GLA tank locks its SECONDARY weapon (LOCKED_TEMPORARILY) as its ability triggers and
+// its AI attacks the tank (aiAttackObject, CMD_FROM_AI).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_defender_laser_guides_its_missiles)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity defender = game.Place("AmericaInfantryMissileDefender", match->At(150, -350), {}, match->Team(game, 0));
+	const ecs::Entity tank = game.Place("ChinaTankBattleMaster", match->At(300, -350), {}, match->Team(game, 1));
+	const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityMissileDefenderLaserGuidedMissiles");
+	gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(defender)->Find(power), game.CurrentTick());
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), defender, "SpecialAbilityMissileDefenderLaserGuidedMissiles", tank, true);
+	bool locked = false;
+	for (int tick = 0; tick < 600 && !locked; ++tick)
+	{
+		game.Tick();
+		const auto &slots = *world.Get<gp::WeaponSlots>(defender);
+		locked = slots.locked == 1 && slots.temporary == 1;
+	}
+	BOOST_TEST_REQUIRE(locked);
+	BOOST_TEST(world.Get<gp::WeaponSlots>(defender)->current == 1u);
+	BOOST_TEST((world.Get<gp::AttackTarget>(defender)->target == tank));
+}
+
+// Legacy parity (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_HELIX_NAPALM_BOMB -> createSpecialObject): a Helix
+// whose napalm bomb is unpaused, fired by a script at a spot, makes its NapalmBomb where it is as the ability triggers,
+// facing its way, on its team, pitching at its CenterOfMassOffset (0.13 radians a frame) with no airborne friction.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_helix_drops_its_napalm_bomb)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity helix = game.Place("ChinaVehicleHelix", match->At(150, -350), {}, match->Team(game, 1));
+	const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityHelixNapalmBomb");
+	gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(helix)->Find(power), game.CurrentTick());
+	game.Tick();
+	generalszh::gameplay::FireSpecialPower(game.Game(), helix, "SpecialAbilityHelixNapalmBomb", match->At(200, -350), true);
+	const auto bombs = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::DefinitionRef>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto refs = chunk.template Get<gp::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < refs.size(); ++row)
+				if (game.DefinitionName(refs[row].index) == "NapalmBomb")
+					found.push_back(entities[row]);
+		});
+		return found;
+	};
+	std::vector<ecs::Entity> made;
+	for (int tick = 0; tick < 600 && made.empty(); ++tick)
+	{
+		game.Tick();
+		made = bombs();
+	}
+	BOOST_TEST_REQUIRE(made.size() == 1u);
+	const auto *body = world.Get<gp::PhysicsBody>(made[0]);
+	BOOST_TEST_REQUIRE(body != nullptr);
+	BOOST_TEST(!body->Has(gp::physics_flag::AirborneFriction));
+	BOOST_TEST(world.Get<gp::TeamMember>(made[0])->team == world.Get<gp::TeamMember>(helix)->team);
+}
+
+// Legacy parity (StealthUpdate::allowedToStealth, STEALTH_NOT_WHILE_FIRING_PRIMARY: only a PRIMARY shot last frame or
+// this one, Weapon::getLastShotFrame, and only while OBJECT_STATUS_IS_FIRING_WEAPON): Colonel Burton (StealthForbidden-
+// Conditions FIRING_PRIMARY, InnateStealth, SECONDARY ColonelBurtonKnifeWeapon) stays stealthed while he knifes a Red
+// Guard. His PRIMARY sniper rifle shot on frame N reveals him on N + 1: AIAttackFireWeaponState::onExit clears
+// IS_FIRING_WEAPON on the shot frame (the rifle is no contact weapon, so the aim state does not re-enter at once), and
+// its onEnter sets it again on N + 1, when his StealthUpdate sees the shot of the frame before (AIStates.cpp).
+BOOST_AUTO_TEST_CASE(legacy_parity_burton_stays_hidden_with_his_knife)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity burton = game.Place("AmericaInfantryColonelBurton", match->At(150, -350), {}, match->Team(game, 0));
+	for (int tick = 0; tick < 90; ++tick)
+		game.Tick();
+	const auto hidden = [&] { return world.Get<gp::Stealth>(burton)->Has(gp::stealth_flag::Stealthed); };
+	BOOST_TEST_REQUIRE(hidden());
+	const ecs::Entity guard = game.Place("ChinaInfantryRedguard", match->At(158, -350), {}, match->Team(game, 1));
+	{
+		auto &slots = *world.Get<gp::WeaponSlots>(burton);
+		gp::LockSlot(slots, *world.Get<gp::Armament>(burton), 1);
+	}
+	generalszh::gameplay::OrderAttack(game.Game(), burton, guard);
+	int knifed = 0;
+	for (int tick = 0; tick < 300 && world.IsAlive(guard) && world.Get<gp::Health>(guard)->current > Fixed{}; ++tick)
+	{
+		game.Tick();
+		if (world.Get<gp::Armament>(burton)->firedTick == game.CurrentTick())
+			++knifed;
+		BOOST_TEST(hidden());
+	}
+	BOOST_TEST(knifed > 0);
+	const ecs::Entity second = game.Place("ChinaInfantryRedguard", match->At(300, -350), {}, match->Team(game, 1));
+	{
+		auto &slots = *world.Get<gp::WeaponSlots>(burton);
+		gp::LockSlot(slots, *world.Get<gp::Armament>(burton), 0);
+	}
+	generalszh::gameplay::OrderAttack(game.Game(), burton, second);
+	std::uint64_t shot = 0, revealed = 0;
+	for (int tick = 0; tick < 300 && revealed == 0; ++tick)
+	{
+		game.Tick();
+		if (shot == 0 && world.Get<gp::Armament>(burton)->firedTick != 0 && world.Get<gp::WeaponSlots>(burton)->current == 0 &&
+			world.Get<gp::Armament>(burton)->firedTick == game.CurrentTick())
+			shot = game.CurrentTick();
+		if (!hidden())
+			revealed = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(shot != 0u);
+	BOOST_TEST(revealed == shot + 1);
+}
+
+// Legacy parity (SpecialAbilityUpdate::handlePackingProcessing and triggerAbilityEffect with LoseStealthOnTrigger,
+// PreTriggerUnstealthTime; StealthUpdate::markAsDetected): Colonel Burton, stealthed, planting a timed charge on a China
+// barracks (SpecialAbilityColonelBurtonTimedCharges: UnpackTime 5500 = 165 ticks, PreTriggerUnstealthTime 5000 = 150)
+// stays hidden through the first 15 ticks of his unpacking. From the 16th (the first frame fewer than 150 remain) he is
+// marked detected every frame, for his StealthDelay (60) from then. He is detected again as the charge goes on.
+BOOST_AUTO_TEST_CASE(legacy_parity_burton_is_revealed_as_he_plants_a_charge)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity burton = game.Place("AmericaInfantryColonelBurton", match->At(150, -350), {}, match->Team(game, 0));
+	const ecs::Entity barracks = game.Place("ChinaBarracks", match->At(200, -350), {}, match->Team(game, 1));
+	for (int tick = 0; tick < 90; ++tick)
+		game.Tick();
+	const auto &stealth = *world.Get<gp::Stealth>(burton);
+	BOOST_TEST_REQUIRE(stealth.Has(gp::stealth_flag::Stealthed));
+	const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityColonelBurtonTimedCharges");
+	gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(burton)->Find(power), game.CurrentTick());
+	generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), burton, "SpecialAbilityColonelBurtonTimedCharges", barracks, true);
+	std::uint64_t unpacking = 0, detected = 0;
+	for (int tick = 0; tick < 900 && detected == 0; ++tick)
+	{
+		game.Tick();
+		if (unpacking == 0 && Shows(game, burton, "UNPACKING"))
+			unpacking = game.CurrentTick();
+		if (world.Get<gp::Stealth>(burton)->detectedUntil > game.CurrentTick())
+			detected = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(unpacking != 0u);
+	BOOST_TEST(detected == unpacking + 16);
+	BOOST_TEST(world.Get<gp::Stealth>(burton)->detectedUntil == detected + 60);
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Stealth>(burton)->detectedUntil == detected + 61);
+}
+
+// Legacy parity (CommandButtonHuntUpdate::huntWeapon): Jarmen Kell hunting with his vehicle snipe button
+// (Command_GLAInfantryJarmenKellSnipeVehicleAttack: FIRE_WEAPON, SECONDARY), set by doTeamHuntWithCommandButton, hunts
+// (aiHunt while idle). Every update it locks his SECONDARY weapon for the attack (setWeaponLock LOCKED_TEMPORARILY).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_weapon_hunt_locks_its_buttons_weapon)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 1);
+	const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", match->At(0, -350), {}, team);
+	game.Tick();
+	BOOST_TEST(world.Get<gp::WeaponSlots>(jarmen)->locked == gp::WeaponSlots::Unlocked);
+	generalszh::gameplay::TeamHuntWithCommandButton(game.Game(), "#" + std::to_string(team), "Command_GLAInfantryJarmenKellSnipeVehicleAttack");
+	BOOST_TEST_REQUIRE(world.Get<generalszh::gameplay::CommandButtonHunt>(jarmen) != nullptr);
+	game.Tick();
+	const auto &slots = *world.Get<gp::WeaponSlots>(jarmen);
+	BOOST_TEST(slots.locked == 1u);
+	BOOST_TEST(slots.temporary == 1u);
+	BOOST_TEST(slots.current == 1u);
+	BOOST_TEST((world.Get<gp::Aggression>(jarmen)->stance == gp::Stance::Hunt));
+}
+
 // SpecialAbilityUpdate::update: an order from outside its AI (here a player's move) ends the capture at the Ranger's next
 // update (getLastCommandSource() != CMD_FROM_AI: onExit): its flag comes down, it is no longer using the ability, and
 // the barracks stays China's.
@@ -561,6 +897,90 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_team_captures_the_nearest_tech_building)
 		BOOST_TEST(Slot(game, ranger).Has(generalszh::gameplay::ability_flag::Active));
 		BOOST_TEST((Slot(game, ranger).target == nearer));
 	}
+}
+
+// ScriptActions::doSkirmishCommandButtonOnMostValuable (SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT,
+// Command_AmericaRangerCaptureBuilding, range 400): of the GLA's buildings within 400 of the team's centre
+// (FROM_CENTER_2D) that its first Ranger may capture, the one that costs the most to build (ITER_SORTED_EXPENSIVE_TO_CHEAP):
+// the Supply Stash over the cheaper Barracks, not the dearer Arms Dealer 700 away; every Ranger starts capturing it. With
+// the power still paused nothing is valid and nobody moves. The same on 1 and 4 workers, and a checkpoint plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_uses_its_button_on_the_most_valuable_enemy_in_range)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto cost = [&](std::string_view name) { return shell.game.objects.Find(name)->buildCost; };
+	BOOST_TEST_REQUIRE(cost("GLASupplyStash") > cost("GLABarracks"));
+	BOOST_TEST_REQUIRE(cost("GLAArmsDealer") > cost("GLASupplyStash"));
+	struct Built
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity stash, barracks, dealer, first, second;
+	};
+	const auto build = [&](std::size_t workers) {
+		Built made{std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers))};
+		session::Session &game = *made.game;
+		game.Tick();
+		made.barracks = game.Place("GLABarracks", match->At(-150, -350), {}, match->Team(game, 1));
+		made.stash = game.Place("GLASupplyStash", match->At(250, -350), {}, match->Team(game, 1));
+		made.dealer = game.Place("GLAArmsDealer", match->At(700, -350), {}, match->Team(game, 1));
+		made.first = game.Place("AmericaInfantryRanger", match->At(0, -350), {}, match->Team(game, 0));
+		made.second = game.Place("AmericaInfantryRanger", match->At(20, -350), {}, match->Team(game, 0));
+		return made;
+	};
+	Built one = build(1), four = build(4);
+	auto &world = one.game->World();
+	for (const ecs::Entity placed : {one.stash, one.barracks, one.dealer, one.first, one.second})
+		BOOST_TEST_REQUIRE(world.IsAlive(placed));
+	const auto use = [&](Built &made) {
+		generalszh::gameplay::TeamUseCommandButtonOnMostValuable(made.game->Game(), "#" + std::to_string(match->Team(*made.game, 0)),
+			"Command_AmericaRangerCaptureBuilding", Fixed::FromInt(400));
+	};
+	use(one);
+	BOOST_TEST(!Slot(*one.game, one.first).Has(generalszh::gameplay::ability_flag::Active));
+	BOOST_TEST(!Slot(*one.game, one.second).Has(generalszh::gameplay::ability_flag::Active));
+	const auto power = *shell.game.powers.Template("SpecialAbilityRangerCaptureBuilding");
+	const auto ready = [&](Built &made) {
+		auto &w = made.game->World();
+		const std::uint32_t america = w.Get<gp::Owner>(made.first)->player;
+		for (const ecs::Entity ranger : {made.first, made.second})
+		{
+			auto &timer = *w.Get<gp::SpecialPowerTimers>(ranger)->Find(power);
+			gp::ResumeCountdown(timer, made.game->CurrentTick());
+			gp::SetReadyFrame(timer, made.game->CurrentTick(),
+				{w.Resource<gp::SpecialPowerRules>(), w.Resource<gp::SharedPowerTimers>(), america, made.game->CurrentTick()});
+		}
+	};
+	ready(one);
+	ready(four);
+	use(one);
+	use(four);
+	for (const ecs::Entity ranger : {one.first, one.second})
+	{
+		BOOST_TEST(Slot(*one.game, ranger).Has(generalszh::gameplay::ability_flag::Active));
+		BOOST_TEST((Slot(*one.game, ranger).target == one.stash));
+	}
+	for (int tick = 0; tick < 30; ++tick)
+	{
+		one.game->Tick();
+		four.game->Tick();
+	}
+	BOOST_TEST(one.game->StateHash() == four.game->StateHash());
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		one.game->Tick();
+		four.game->Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(one.game->StateHash() == four.game->StateHash());
+	BOOST_TEST(restored->StateHash() == one.game->StateHash());
 }
 
 // DefaultProductionExitUpdate::exitObjectViaDoor / aiFollowExitProductionPath: a Ranger trained at a barracks appears
@@ -965,6 +1385,55 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_booby_trap_goes_off_at_an_enemy_or_as_its_v
 	BOOST_TEST(!Dead(game, second));
 	game.Tick();
 	BOOST_TEST((!world.IsAlive(second) || Dead(game, second)));
+}
+
+// Legacy parity (ActiveBody::onSubdualChange: orderAllPassengersToIdle as it is subdued, and on an
+// FS_INTERNET_CENTER no longer subdued orderAllPassengersToHackInternet, CMD_FROM_AI, Patch 1.01): a China Internet
+// Center holding a hacker who is hacking. Subdued (subdual damage at its 2500 health), the hacker stops; once it
+// recovers (SubdualDamageHealRate 500 ms, 100 a time) he starts hacking again (unpacking first) with no order from his
+// player.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_internet_centers_hackers_resume_once_it_recovers)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity center = game.Place("ChinaInternetCenter", match->At(150, 150), {}, match->Team(game, 1));
+	const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(150, 150), {}, match->Team(game, 1));
+	ga::PutInside(game.Game(), center, hacker);
+	ga::HackInternet(game.Game(), hacker, true);
+	for (int tick = 0; tick < 400 && world.Get<ga::InternetHack>(hacker)->stage != ga::HackStage::Hacking; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE((world.Get<ga::InternetHack>(hacker)->stage == ga::HackStage::Hacking));
+	BOOST_TEST_REQUIRE(world.Get<gp::Subdual>(center) != nullptr);
+	{
+		// As a subdual hit on the coming tick does (attemptDamage: damage, the helper woken).
+		auto &body = *world.Get<gp::Subdual>(center);
+		body.damage = world.Get<gp::Health>(center)->maximum;
+		body.touchTick = body.hitTick = game.CurrentTick() + 1;
+		body.awake = 1;
+		body.countdown = body.healTicks;
+	}
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Subdual>(center)->subdued == 1u);
+	BOOST_TEST((world.Get<ga::InternetHack>(hacker)->stage != ga::HackStage::Hacking));
+	std::uint64_t free = 0, resumed = 0;
+	for (int tick = 0; tick < 300 && resumed == 0; ++tick)
+	{
+		game.Tick();
+		if (free == 0 && world.Get<gp::Subdual>(center)->subdued == 0)
+			free = game.CurrentTick();
+		const auto stage = world.Get<ga::InternetHack>(hacker)->stage;
+		if (free != 0 && (stage == ga::HackStage::Unpacking || stage == ga::HackStage::Hacking))
+			resumed = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(free != 0u);
+	BOOST_TEST(resumed == free); // ordered as it recovers (onSubdualChange): unpacking at once
 }
 
 // HackInternetAIUpdate.cpp (HackInternetStateMachine: UnpackingState, HackInternetState, PackingState; aiDoCommand's
@@ -1646,6 +2115,1287 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_frenzy_pulse_gives_nearby_allies_a_weapon_b
 	}
 	BOOST_TEST(held == 600);
 	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// OCLUpdate.cpp (update, shouldCreate, setNextCreationFrame) on AmericaSupplyDropZone (OCL_AmericaSupplyDropZoneCrateDrop,
+// Min/MaxDelay 120000 ms: 3600 frames, CreateAtEdge) and TechReinforcementPad (FactionTriggered, FactionOCL by side):
+// the first update only starts the timer; 3600 frames later an AmericaJetCargoPlane comes in from the nearest map edge
+// for the zone's player (its default team) and the timer restarts; its 6 SupplyDropZoneCrates (MoneyCrateCollide
+// MoneyProvided 250, BuildingPickup) land on the zone and pay 1500. A pad of America's sends its America list's
+// plane the same frame; a neutral pad (no playable owner) never starts. The same on 4 workers, and a checkpoint
+// mid-timer carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_drop_zone_calls_a_cargo_plane_every_two_minutes)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity zone, pad, neutralPad;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t team = match->Team(*made.game, 0);
+		made.zone = made.game->Place("AmericaSupplyDropZone", match->At(0, -350), {}, team);
+		made.pad = made.game->Place("TechReinforcementPad", match->At(250, -350), {}, team);
+		made.neutralPad = made.game->Place("TechReinforcementPad", match->At(500, -350), {}, 0);
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	BOOST_TEST_REQUIRE(world.IsAlive(one.zone));
+	BOOST_TEST_REQUIRE(world.Get<ga::OclTimer>(one.zone) != nullptr);
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const std::uint32_t america = world.Get<gp::Owner>(one.zone)->player;
+	tick();
+	const ga::OclTimer started = *world.Get<ga::OclTimer>(one.zone);
+	BOOST_TEST(started.nextTick - started.startedTick == 3600u);
+	BOOST_TEST(world.Get<ga::OclTimer>(one.pad)->nextTick == started.nextTick);
+	BOOST_TEST(world.Get<ga::OclTimer>(one.neutralPad)->neutral == 1u);
+	const std::uint64_t due = started.nextTick;
+	auto &money = world.Resource<gp::PlayerMoney>();
+	const std::uint32_t before = money.Balance(america);
+	std::optional<std::uint64_t> came;
+	std::size_t planes = 0;
+	while (!came && game.CurrentTick() < due + 10)
+	{
+		if (game.CurrentTick() == due - 1000)
+		{
+			BOOST_TEST((game.StateHash() == four.game->StateHash()));
+			auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+			BOOST_TEST(restored->World().Get<ga::OclTimer>(one.zone)->nextTick == due);
+		}
+		tick();
+		planes = ObjectsOf(game, "AmericaJetCargoPlane").size();
+		if (planes > 0)
+			came = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(came.has_value());
+	BOOST_TEST_MESSAGE("timer started " << started.startedTick << ", due " << due << ", planes on " << *came);
+	BOOST_TEST(*came == due);
+	BOOST_TEST(planes == 2u); // the zone's and the pad's
+	for (const ecs::Entity plane : ObjectsOf(game, "AmericaJetCargoPlane"))
+		BOOST_TEST(world.Get<gp::Owner>(plane)->player == america);
+	BOOST_TEST(world.Get<ga::OclTimer>(one.zone)->nextTick == due + 3600);
+	BOOST_TEST(world.Get<ga::OclTimer>(one.neutralPad)->nextTick == 0u);
+	// The crates come down on the zone and pay out.
+	for (int n = 0; n < 1800 && money.Balance(america) < before + 1500; ++n)
+		tick();
+	BOOST_TEST(money.Balance(america) == before + 1500);
+	BOOST_TEST(!ObjectsOf(game, "AmericaTankCrusader").empty()); // the pad's reinforcement
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// The Saboteur (GLAInfantrySaboteur) and its Sabotage*CrateCollide modules (SabotagePowerPlantCrateCollide.cpp,
+// SabotageSupplyCenterCrateCollide.cpp, SabotageMilitaryFactoryCrateCollide.cpp, SabotageCommandCenterCrateCollide.cpp:
+// executeCrateBehavior; CrateCollide::onCollide; Energy.cpp getProduction / hasSufficientPower and Player::update's
+// sabotage expiry; Object::checkDisabledStatus). China's saboteurs, sent in on America's buildings, each vanish on the
+// frame they touch theirs (S):
+// - the power plant: America's power reads as none (SabotagePowerDuration 30000 ms: until S + 900); its Particle Cannon uplink
+//   is DISABLED_UNDERPOWERED from the next frame through S + 900 and back on S + 901, once the sabotage has lapsed;
+// - the supply center: StealCashAmount 1000 of America's 5000 is China's;
+// - the war factory: DISABLED_HACKED (SabotageDuration 30000 ms) until S + 900;
+// - the command center: every special power on it recharging again from S (a full reload).
+// The same on 4 workers, and a checkpoint mid-sabotage carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_saboteurs_shut_down_power_factories_timers_and_steal_cash)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity plant, patriot, supply, factory, command;
+		std::array<ecs::Entity, 4> saboteurs{};
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t usa = match->Team(*made.game, 0), china = match->Team(*made.game, 1);
+		made.plant = made.game->Place("AmericaPowerPlant", match->At(0, -400), {}, usa);
+		made.game->Place("AmericaPowerPlant", match->At(-450, -100), {}, usa); // enough power once the sabotage lapses
+		made.game->Place("AmericaPowerPlant", match->At(-300, -100), {}, usa);
+		made.patriot = made.game->Place("AmericaParticleCannonUplink", match->At(-200, -380), {}, usa);
+		made.supply = made.game->Place("AmericaSupplyCenter", match->At(200, -400), {}, usa);
+		made.factory = made.game->Place("AmericaWarFactory", match->At(450, -400), {}, usa);
+		made.command = made.game->Place("AmericaCommandCenter", match->At(-450, -250), {}, usa);
+		const std::array<ecs::Entity, 4> targets{made.plant, made.supply, made.factory, made.command};
+		for (std::size_t index = 0; index < targets.size(); ++index)
+			made.saboteurs[index] = made.game->Place("GLAInfantrySaboteur", made.game->World().Get<gp::Transform>(targets[index])->position.XY() +
+				Engine::Math::FixedVector2{Fixed{}, Fixed::FromInt(index == 3 ? 160 : 120)}, {}, china);
+		made.game->Tick();
+		auto &money = made.game->World().Resource<gp::PlayerMoney>();
+		const std::uint32_t america = made.game->World().Get<gp::Owner>(made.plant)->player;
+		money.Withdraw(america, money.Balance(america));
+		money.Deposit(america, 5000);
+		for (std::size_t index = 0; index < targets.size(); ++index)
+			BOOST_TEST(ga::OrderSabotage(made.game->Game(), made.saboteurs[index], targets[index], true, true)); // as a script orders it (no fog check)
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const std::uint32_t america = world.Get<gp::Owner>(one.plant)->player;
+	const std::uint32_t china = world.Get<gp::Owner>(one.saboteurs[0])->player;
+	auto &money = world.Resource<gp::PlayerMoney>();
+	const std::int64_t chinaBefore = money.Balance(china);
+	std::array<std::optional<std::uint64_t>, 4> sabotaged{};
+	for (int n = 0; n < 900 && std::ranges::any_of(sabotaged, [](const auto &at) { return !at; }); ++n)
+	{
+		tick();
+		for (std::size_t index = 0; index < 4; ++index)
+			if (!sabotaged[index] && !world.IsAlive(one.saboteurs[index]))
+				sabotaged[index] = game.CurrentTick();
+	}
+	for (std::size_t index = 0; index < 4; ++index)
+		BOOST_TEST_REQUIRE(sabotaged[index].has_value());
+	BOOST_TEST_MESSAGE("sabotaged on " << *sabotaged[0] << ", " << *sabotaged[1] << ", " << *sabotaged[2] << ", " << *sabotaged[3]);
+	const auto &energy = world.Resource<gp::PlayerEnergy>();
+	BOOST_TEST(energy.SabotagedUntil(america) == *sabotaged[0] + 900);
+	BOOST_TEST(money.Balance(america) == 4000);
+	BOOST_TEST(money.Balance(china) == chinaBefore + 1000);
+	const ga::OclTimer *none = world.Get<ga::OclTimer>(one.command);
+	BOOST_TEST(none == nullptr);
+	if (const auto *timers = world.Get<gp::SpecialPowerTimers>(one.command))
+	{
+		const gp::PowerClock clock = ga::ClockFor(game.Game(), america);
+		for (std::uint32_t index = 0; index < timers->count; ++index)
+			if (const gp::SpecialPowerRule *rule = clock.rules.Of(timers->timers[index].power); rule != nullptr && !rule->sharedSynced)
+				BOOST_TEST(timers->timers[index].availableOn == *sabotaged[3] + rule->reloadTicks);
+	}
+	const auto underpowered = [&] {
+		const auto *off = world.Get<gp::Disabled>(one.patriot);
+		return off != nullptr && (off->mask & gp::disabled_type::Underpowered) != 0;
+	};
+	const auto hacked = [&] {
+		const auto *off = world.Get<gp::Disabled>(one.factory);
+		return off != nullptr && (off->mask & gp::disabled_type::Hacked) != 0;
+	};
+	std::optional<std::uint64_t> powerBack, factoryBack;
+	bool checked = false;
+	while (game.CurrentTick() < *sabotaged[0] + 910 || game.CurrentTick() < *sabotaged[2] + 910)
+	{
+		tick();
+		const std::uint64_t now = game.CurrentTick();
+		if (now == *sabotaged[0] + 1)
+			BOOST_TEST(underpowered());
+		if (!powerBack && now > *sabotaged[0] && !underpowered())
+			powerBack = now;
+		if (now == *sabotaged[2] + 1)
+			BOOST_TEST(hacked());
+		if (!factoryBack && now > *sabotaged[2] && !hacked())
+			factoryBack = now;
+		if (!checked && now == *sabotaged[0] + 400)
+		{
+			checked = true;
+			BOOST_TEST((game.StateHash() == four.game->StateHash()));
+			auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+			BOOST_TEST(restored->World().Resource<gp::PlayerEnergy>().SabotagedUntil(america) == *sabotaged[0] + 900);
+		}
+	}
+	BOOST_TEST_REQUIRE(powerBack.has_value());
+	BOOST_TEST_REQUIRE(factoryBack.has_value());
+	BOOST_TEST(*powerBack == *sabotaged[0] + 901);
+	BOOST_TEST(*factoryBack == *sabotaged[2] + 900);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// SabotageFakeBuilding.cpp and SabotageInternetCenterCrateCollide.cpp (executeCrateBehavior): a fake GLA command center
+// of America's, touched by China's saboteur, dies (its maximum health, UNRESISTABLE, DETONATED); China's Internet
+// Center, touched by America's, is DISABLED_HACKED with the hacker inside for SabotageDuration 15000 ms (450 frames),
+// its spy vision off until then.
+BOOST_AUTO_TEST_CASE(legacy_parity_saboteurs_blow_fakes_and_hack_internet_centers)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t usa = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity fake = game.Place("FakeGLACommandCenter", match->At(0, -400), {}, usa);
+	const ecs::Entity center = game.Place("ChinaInternetCenter", match->At(400, -400), {}, china);
+	const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(500, -250), {}, china);
+	BOOST_TEST_REQUIRE(world.IsAlive(fake));
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	game.Tick();
+	ga::PutInside(game.Game(), center, hacker);
+	const ecs::Entity bomber = game.Place("GLAInfantrySaboteur", match->At(0, -280), {}, china);
+	const ecs::Entity spy = game.Place("GLAInfantrySaboteur", match->At(400, -280), {}, usa);
+	game.Tick();
+	BOOST_TEST(ga::OrderSabotage(game.Game(), bomber, fake, true, true)); // as a script orders it
+	BOOST_TEST(ga::OrderSabotage(game.Game(), spy, center, true, true));
+	std::optional<std::uint64_t> fakeHit, centerHit;
+	std::optional<std::uint64_t> fakeDead;
+	for (int n = 0; n < 900 && (!fakeHit || !centerHit); ++n)
+	{
+		game.Tick();
+		if (!fakeHit && !world.IsAlive(bomber))
+			fakeHit = game.CurrentTick();
+		if (!fakeDead && (!world.IsAlive(fake) || world.Get<gp::Dying>(fake) != nullptr))
+			fakeDead = game.CurrentTick();
+		if (!centerHit && !world.IsAlive(spy))
+			centerHit = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(fakeHit.has_value());
+	BOOST_TEST_REQUIRE(centerHit.has_value());
+	const auto hackedOf = [&](ecs::Entity entity) {
+		const auto *off = world.Get<gp::Disabled>(entity);
+		return off != nullptr && (off->mask & gp::disabled_type::Hacked) != 0;
+	};
+	std::optional<std::uint64_t> centerBack;
+	while (game.CurrentTick() < *centerHit + 460)
+	{
+		game.Tick();
+		const std::uint64_t now = game.CurrentTick();
+		if (!fakeDead && (!world.IsAlive(fake) || world.Get<gp::Dying>(fake) != nullptr))
+			fakeDead = now;
+		if (now == *centerHit + 1)
+		{
+			BOOST_TEST(hackedOf(center));
+			BOOST_TEST(hackedOf(hacker));
+			for (std::uint8_t module = 0; module < world.Get<ga::SpyVision>(center)->count; ++module)
+			{
+				BOOST_TEST(world.Get<ga::SpyVision>(center)->modules[module].active == 0u);
+				BOOST_TEST(world.Get<ga::SpyVision>(center)->modules[module].disabledUntil != 0u);
+			}
+		}
+		if (!centerBack && now > *centerHit && !hackedOf(center))
+			centerBack = now;
+	}
+	BOOST_TEST_REQUIRE(fakeDead.has_value());
+	BOOST_TEST(*fakeDead == *fakeHit + 1); // its damage lands with the next frame's
+	BOOST_TEST_REQUIRE(centerBack.has_value());
+	BOOST_TEST(*centerBack == *centerHit + 450);
+	BOOST_TEST(!hackedOf(hacker));
+}
+
+// CommandButtonHuntUpdate.cpp (huntEnter, scanClosestTarget: SABOTAGE_BUILDING, canSabotageBuilding): a Saboteur of
+// China's hunting with Command_SabotageBuilding, idle, scans for enemies near to far; an America ambulance nearer is
+// passed over (no module of its would take it), America's power plant is set out for at the first scan (CMD_FROM_AI)
+// and sabotaged on touching it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hunting_saboteur_goes_for_the_nearest_building_it_can_sabotage)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t usa = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity plant = game.Place("AmericaPowerPlant", match->At(0, -420), {}, usa);
+	const ecs::Entity ambulance = game.Place("AmericaVehicleMedic", match->At(0, -360), {}, usa);
+	const ecs::Entity saboteur = game.Place("GLAInfantrySaboteur", match->At(0, -300), {}, china); // America's own base further off
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.IsAlive(ambulance));
+	BOOST_TEST(!ga::CanSabotageBuilding(game.Game(), saboteur, ambulance, false));
+	BOOST_TEST_REQUIRE(ga::CanSabotageBuilding(game.Game(), saboteur, plant, false));
+	ga::StartCommandButtonHunt(game.Game(), saboteur, "Command_SabotageBuilding");
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Boarding>(saboteur) != nullptr);
+	BOOST_TEST((world.Get<gp::Boarding>(saboteur)->transport == plant));
+	const std::uint32_t america = world.Get<gp::Owner>(plant)->player;
+	for (int n = 0; n < 600 && world.IsAlive(saboteur); ++n)
+		game.Tick();
+	BOOST_TEST_REQUIRE(!world.IsAlive(saboteur));
+	BOOST_TEST(world.Resource<gp::PlayerEnergy>().SabotagedUntil(america) == game.CurrentTick() + 900);
+}
+
+// DynamicShroudClearingRangeUpdate.cpp (constructor, update) on the shipped RadarVanPing (a range of 150; ShrinkDelay
+// 7500 ms: 225 frames; ShrinkTime 2500 ms: 75; ChangeInterval 50 ms: 2) and SpySatellitePing (GrowTime 1000 ms: 30;
+// GrowInterval 10 ms: 1; ChangeInterval 80 ms: 3). Made on frame P, the ping first updates on P + 1: holding, it sets
+// its full 150 then and every third frame on; shrinking from P + 226 by 2 a frame, the range set reads 148 there, 6 less
+// every third frame, 4 at P + 298. The satellite's grows from nothing by a thirtieth of its range a frame, set every
+// other frame (1/30 of it on P + 1, 3/30 on P + 3), within a Q16 rounding a step (one unit per step taken). The same on
+// 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_radar_scan_ping_holds_its_vision_then_shrinks_it_away)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	const std::uint32_t usa = match->Team(game, 0);
+	const ecs::Entity ping = game.Place("RadarVanPing", match->At(0, -300), {}, usa);
+	const ecs::Entity satellite = game.Place("SpySatellitePing", match->At(300, -300), {}, usa);
+	four.Place("RadarVanPing", match->At(0, -300), {}, usa);
+	four.Place("SpySatellitePing", match->At(300, -300), {}, usa);
+	BOOST_TEST_REQUIRE(world.Get<gp::DynamicClearing>(ping) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::DynamicClearing>(satellite) != nullptr);
+	const std::uint64_t made = game.CurrentTick();
+	const Fixed native = world.Get<gp::DynamicClearing>(satellite)->native;
+	BOOST_TEST((world.Get<gp::DynamicClearing>(ping)->native == Fixed::FromInt(150)));
+	for (std::uint64_t u = 1; u <= 299; ++u)
+	{
+		game.Tick();
+		four.Tick();
+		BOOST_TEST_REQUIRE(game.CurrentTick() == made + u);
+		if (!world.IsAlive(ping))
+			break;
+		const Fixed range = world.Get<gp::Vision>(ping)->clearingRange;
+		// The last set: the latest update 1 + 3k at or before u.
+		const std::uint64_t set = u - (u - 1) % 3;
+		const Fixed expected = set < 226 ? Fixed::FromInt(150) : Fixed::FromInt(150 - 2 * static_cast<std::int64_t>(set - 225));
+		BOOST_TEST((range == expected), "update " << u << ": " << Engine::Math::ToFloat(range) << " != " << Engine::Math::ToFloat(expected));
+		if (u == 1 || u == 3)
+		{
+			const Fixed grown = world.Get<gp::Vision>(satellite)->clearingRange;
+			const Fixed ideal = native * Fixed::FromInt(static_cast<std::int64_t>(u)) / Fixed::FromInt(30);
+			BOOST_TEST(std::abs(grown.Raw() - ideal.Raw()) <= static_cast<std::int64_t>(u), "satellite at " << u << ": " << Engine::Math::ToFloat(grown));
+		}
+		if (u == 2)
+			BOOST_TEST((world.Get<gp::Vision>(satellite)->clearingRange == native / Fixed::FromInt(30)));
+	}
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+}
+
+// DynamicShroudClearingRangeUpdate.cpp (update's createGridDecals, animateGridDecals, killGridDecals) on the shipped
+// SpySatellitePing (ShrinkDelay 10000 ms: 300 frames, ShrinkTime 5000: 150, GrowDelay 0, GrowTime 1000: 30): its grid
+// is made on its first update (P + 1) and animated while it grows, before each growth step: on update u its ring is
+// (u - 1) thirtieths of its range plus 2 (u - 1) (m_totalFrames 450 less the frames left), its opacity 1 - range / full
+// range; update 31 finds it holding and the grid goes for good. The same on 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_spy_satellite_scan_shows_its_grid_while_it_grows)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	const std::uint32_t usa = match->Team(game, 0);
+	const ecs::Entity satellite = game.Place("SpySatellitePing", match->At(300, -300), {}, usa);
+	four.Place("SpySatellitePing", match->At(300, -300), {}, usa);
+	const gp::DynamicClearing *clearing = world.Get<gp::DynamicClearing>(satellite);
+	BOOST_TEST_REQUIRE(clearing != nullptr);
+	BOOST_TEST(clearing->grid == 0);
+	const Fixed native = clearing->native;
+	Fixed range;
+	for (std::int64_t u = 1; u <= 31; ++u)
+	{
+		game.Tick();
+		four.Tick();
+		if (u <= 30)
+		{
+			BOOST_TEST(clearing->grid == 1, "update " << u);
+			BOOST_TEST((clearing->gridRadius == range + Fixed::FromInt(2 * (u - 1))), "update " << u << ": " << Engine::Math::ToFloat(clearing->gridRadius));
+			BOOST_TEST((clearing->gridOpacity == Fixed::One() - range / native), "update " << u);
+			range += native / Fixed::FromInt(30);
+		}
+		else
+			BOOST_TEST(clearing->grid == 2);
+	}
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+}
+
+// SpawnPointProductionExitUpdate.cpp (initializeBonePositions, reserveDoorForExit, exitObjectViaDoor,
+// revalidateOccupiers) on GLAStingerSite (SpawnPointBoneName SpawnPoint; SpawnBehavior SpawnNumber 3,
+// GLAInfantryStingerSoldier): each soldier is made on the first free SpawnPointNN bone in the site's frame, facing the
+// bone's way, DISABLED_HELD there for good, and enslaved to the site (SpawnBehavior::createSpawn -> onEnslave); with
+// every place taken no more are made. One killed, its place frees
+// once it is gone and its replacement (SpawnReplaceDelay 30000 ms later) stands on that same place.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stinger_site_puts_its_soldiers_on_its_spawn_points)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	const std::uint32_t china = match->Team(game, 1);
+	const ecs::Entity site = game.Place("GLAStingerSite", match->At(0, -300), {}, china);
+	four.Place("GLAStingerSite", match->At(0, -300), {}, china);
+	BOOST_TEST_REQUIRE(world.Get<gp::SpawnPoints>(site) != nullptr);
+	const auto *bones = game.Game().templates.SpawnPointsOf(world.Get<gp::DefinitionRef>(site)->index);
+	BOOST_TEST_REQUIRE(bones != nullptr);
+	BOOST_TEST_MESSAGE("spawn points: " << bones->size());
+	BOOST_TEST_REQUIRE(bones->size() >= 3u);
+	BOOST_TEST(world.Get<gp::SpawnPoints>(site)->count == bones->size());
+	const auto spawned = [&] { return world.Get<gp::Spawner>(site)->spawnedCount; };
+	std::array<std::uint32_t, 3> madeFacing{};
+	for (int n = 0; n < 300 && spawned() < 3; ++n)
+	{
+		const std::uint32_t before = spawned();
+		game.Tick();
+		four.Tick();
+		for (std::uint32_t index = before; index < spawned() && index < 3; ++index)
+			madeFacing[index] = world.Get<gp::Transform>(world.Get<gp::Spawner>(site)->spawned[index])->facing.units;
+	}
+	BOOST_TEST_REQUIRE(spawned() == 3u);
+	const gp::Transform frame = *world.Get<gp::Transform>(site);
+	const auto &places = *world.Get<gp::SpawnPoints>(site);
+	for (std::uint32_t place = 0; place < 3; ++place)
+	{
+		const ecs::Entity soldier = places.occupier[place];
+		BOOST_TEST_REQUIRE(world.IsAlive(soldier));
+		BOOST_TEST((world.Get<gp::Spawner>(site)->spawned[place] == soldier));
+		const Engine::Math::FixedVector3 &bone = (*bones)[place].position;
+		const Fixed c = Engine::Math::Cos(frame.facing), sn = Engine::Math::Sin(frame.facing);
+		const Engine::Math::FixedVector2 expected{frame.position.x + bone.x * c - bone.y * sn, frame.position.y + bone.x * sn + bone.y * c};
+		const auto at = world.Get<gp::Transform>(soldier)->position.XY();
+		BOOST_TEST((at == expected), "place " << place << " at " << Engine::Math::ToFloat(at.x) << "," << Engine::Math::ToFloat(at.y));
+		BOOST_TEST(madeFacing[place] == (frame.facing + (*bones)[place].facing).units); // as made (it may turn after)
+		BOOST_TEST((world.Get<gp::Disabled>(soldier)->mask & gp::disabled_type::Held) != 0u);
+		// SpawnBehavior::createSpawn -> SlavedUpdate::onEnslave: the site is its master.
+		BOOST_TEST_REQUIRE(world.Get<gp::Slaved>(soldier) != nullptr);
+		BOOST_TEST((world.Get<gp::Slaved>(soldier)->master == site));
+		BOOST_TEST(world.Get<gp::Slaved>(soldier)->enslaved == 1u);
+	}
+	for (std::uint32_t place = 3; place < places.count; ++place)
+		BOOST_TEST((places.occupier[place] == ecs::Entity{}));
+	// One killed: its replacement stands on its place.
+	const ecs::Entity lost = places.occupier[1];
+	world.Resource<gp::KillRequests>().entities.push_back(lost);
+	four.World().Resource<gp::KillRequests>().entities.push_back(four.World().Get<gp::SpawnPoints>(site)->occupier[1]); // the same ids on 4 workers
+	std::optional<std::uint64_t> replaced;
+	for (int n = 0; n < 1200 && !replaced; ++n)
+	{
+		game.Tick();
+		four.Tick();
+		const ecs::Entity now = world.Get<gp::SpawnPoints>(site)->occupier[1];
+		if (now != ecs::Entity{} && now != lost && world.IsAlive(now))
+			replaced = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(replaced.has_value());
+	const ecs::Entity fresh = world.Get<gp::SpawnPoints>(site)->occupier[1];
+	{
+		const Engine::Math::FixedVector3 &bone = (*bones)[1].position;
+		const Fixed c = Engine::Math::Cos(frame.facing), sn = Engine::Math::Sin(frame.facing);
+		const Engine::Math::FixedVector2 expected{frame.position.x + bone.x * c - bone.y * sn, frame.position.y + bone.x * sn + bone.y * c};
+		BOOST_TEST((world.Get<gp::Transform>(fresh)->position.XY() == expected));
+	}
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// AssaultTransportAIUpdate.cpp (aiDoCommand, update, beginAssault via Weapon::fireWeaponTemplate's DAMAGE_DEPLOY,
+// retrieveMembers) on ChinaVehicleTroopCrawler (8 ChinaInfantryRedguard aboard; TroopCrawlerAssault: DEPLOY, range
+// 175): its riders join as members on its first update (not new). Ordered to attack an America power plant 150 away, it
+// fires its DEPLOY weapon at it (tick D): the plant is the designated enemy, and on its next update (D + 1) every
+// healthy member inside is told to get out; once out and standing, each goes for the plant (its own AI's order). A
+// player's stop calls them all back in and starts it over. The same on 4 workers, and a checkpoint carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_troop_crawler_deploys_its_riders_at_its_target_and_calls_them_back)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity crawler, plant;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.plant = made.game->Place("AmericaPowerPlant", match->At(0, -420), {}, match->Team(*made.game, 0));
+		made.crawler = made.game->Place("ChinaVehicleTroopCrawler", match->At(0, -270), {}, match->Team(*made.game, 1));
+		made.game->Tick();
+		made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &game = *one.game;
+	auto &world = game.World();
+	const auto tick = [&] {
+		game.Tick();
+		four.game->Tick();
+	};
+	const ga::AssaultTransport *assault = world.Get<ga::AssaultTransport>(one.crawler);
+	BOOST_TEST_REQUIRE(assault != nullptr);
+	BOOST_TEST_REQUIRE(assault->count == 8u);
+	for (std::uint32_t index = 0; index < 8; ++index)
+		BOOST_TEST(assault->newMember[index] == 0u);
+	BOOST_TEST((assault->healAtLifeRatio == Fixed::FromRatio(1, 2)));
+	for (Game *g : {&one, &four})
+		ga::OrderAttack(g->game->Game(), g->crawler, g->plant);
+	BOOST_TEST(world.Get<ga::AssaultTransport>(one.crawler)->isAttackObject == 1u);
+	std::optional<std::uint64_t> designated;
+	for (int n = 0; n < 300 && !designated; ++n)
+	{
+		tick();
+		if (world.Get<ga::AssaultTransport>(one.crawler)->designatedTarget == one.plant)
+			designated = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(designated.has_value());
+	const auto members = [&] {
+		const auto &a = *world.Get<ga::AssaultTransport>(one.crawler);
+		return std::vector<ecs::Entity>(a.members.begin(), a.members.begin() + a.count);
+	};
+	for (const ecs::Entity member : members())
+		BOOST_TEST(world.Get<gp::ExitIntent>(member) == nullptr);
+	tick();
+	std::size_t leaving = 0;
+	for (const ecs::Entity member : members())
+		leaving += world.Get<gp::ExitIntent>(member) != nullptr || world.Get<gp::Passenger>(member) == nullptr ? 1u : 0u;
+	BOOST_TEST_MESSAGE("designated on " << *designated << "; leaving on the next tick: " << leaving);
+	BOOST_TEST(leaving == 8u);
+	// Out and standing, each goes for the plant.
+	bool allAfter = false;
+	for (int n = 0; n < 600 && !allAfter; ++n)
+	{
+		tick();
+		allAfter = true;
+		for (const ecs::Entity member : members())
+		{
+			const auto *attack = world.Get<gp::AttackTarget>(member);
+			allAfter = allAfter && world.Get<gp::Passenger>(member) == nullptr && attack != nullptr && attack->target == one.plant;
+		}
+	}
+	BOOST_TEST(allAfter);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+	// A player's stop: every member outside boards again; it starts over.
+	const std::vector<ecs::Entity> outside = members();
+	for (Game *g : {&one, &four})
+		ga::OrderStop(g->game->Game(), g->crawler, true);
+	for (const ecs::Entity member : outside)
+		BOOST_TEST((world.Get<gp::Boarding>(member) != nullptr && world.Get<gp::Boarding>(member)->transport == one.crawler));
+	BOOST_TEST(world.Get<ga::AssaultTransport>(one.crawler)->count == 0u);
+	BOOST_TEST((world.Get<ga::AssaultTransport>(one.crawler)->designatedTarget == ecs::Entity{}));
+	for (int n = 0; n < 600 && world.Resource<gp::CargoManifest>().Count(one.crawler) < 8u; ++n)
+		tick();
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Count(one.crawler) == 8u);
+	BOOST_TEST((game.StateHash() == four.game->StateHash()));
+}
+
+// NeutonBlastBehavior.cpp (onDie, neutronBlastToObject) on the shipped NeutronBlastObject (BlastRadius 20, AffectAirborne
+// No, AffectAllies No), China's, killed on frame K with, within 20 of it: an America Ranger (killed), an America Humvee
+// with a Ranger aboard (the rider killed, the Humvee unmanned, idle and the neutral player's), a civilian car (a CARBOMB
+// weapon set: unmanned, it blows) and China's own Red Guard (an ally: spared). They die with the next frame's dead.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_neutron_blast_kills_crews_and_leaves_their_vehicles)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	std::array<ecs::Entity, 6> made{};
+	for (session::Session *g : {&game, &four})
+	{
+		const std::uint32_t usa = match->Team(*g, 0), china = match->Team(*g, 1);
+		made[1] = g->Place("AmericaInfantryRanger", match->At(8, -300), {}, usa);
+		made[2] = g->Place("AmericaVehicleHumvee", match->At(-10, -300), {}, usa);
+		made[3] = g->Place("AmericaInfantryRanger", match->At(-10, -330), {}, usa);
+		made[4] = g->Place("CarCamaro", match->At(0, -312), {}, 0);
+		made[5] = g->Place("ChinaInfantryRedguard", match->At(0, -290), {}, china);
+		g->Tick();
+		ga::PutInside(g->Game(), made[2], made[3]);
+		g->Tick();
+		// On the ground (under its HeightDieUpdate's TargetHeight 100) it dies on its first update: its blast.
+		made[0] = g->Place("NeutronBlastObject", match->At(0, -300), {}, china);
+	}
+	const auto [blaster, ranger, humvee, rider, car, redguard] = made;
+	for (const ecs::Entity entity : made)
+		BOOST_TEST_REQUIRE(world.IsAlive(entity));
+	BOOST_TEST_REQUIRE(world.Resource<gp::CargoManifest>().Count(humvee) == 1u);
+	const std::uint32_t neutralTeam = *game.Teams().FindTeam("team");
+	std::optional<std::uint64_t> killed;
+	for (int n = 0; n < 60 && !killed; ++n)
+	{
+		game.Tick();
+		four.Tick();
+		if (!world.IsAlive(blaster) || world.Get<gp::Dying>(blaster) != nullptr)
+			killed = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(killed.has_value());
+	BOOST_TEST_MESSAGE("blast on " << *killed);
+	BOOST_TEST((world.IsAlive(ranger) && world.Get<gp::Dying>(ranger) == nullptr)); // not yet: with the next frame's dead
+	game.Tick();
+	four.Tick();
+	const auto dead = [&](ecs::Entity entity) { return !world.IsAlive(entity) || world.Get<gp::Dying>(entity) != nullptr; };
+	BOOST_TEST(dead(ranger));
+	BOOST_TEST(dead(rider));
+	BOOST_TEST(dead(car));
+	BOOST_TEST(!dead(redguard));
+	BOOST_TEST_REQUIRE(!dead(humvee));
+	BOOST_TEST((world.Get<gp::Disabled>(humvee)->mask & gp::disabled_type::Unmanned) != 0u);
+	BOOST_TEST(world.Get<gp::TeamMember>(humvee)->team == neutralTeam);
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+}
+
+// BunkerBusterBehavior.cpp (onDie, bustTheBunker) on StealthJetMissile (UpgradeRequired Upgrade_AmericaBunkerBusters,
+// DetonationFX FX_BunkerBusterExplosion, ShockwaveWeaponTemplate BunkerBusterShockwaveWeaponSmall,
+// OccupantDamageWeaponTemplate BunkerBusterAntiTunnelGarrisonWeaponWithABigName): a StealthJetMissileWeapon missile going
+// off at a building China's Red Guards garrison busts nothing before America has the upgrade (only the shockwave and FX
+// of the missile itself are not the bunker buster's: nothing); with it, every one of them is out at once, each to take
+// 100 of the occupant weapon's damage, the FX plays on the building and its shockwave goes off there.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bunker_buster_throws_the_garrison_out_and_hurts_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t usa = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity building = game.Place("AsianApartment01", match->At(0, -300), {}, 0);
+	std::vector<ecs::Entity> guards;
+	for (int index = 0; index < 3; ++index)
+		guards.push_back(game.Place("ChinaInfantryRedguard", match->At(-30 + 30 * index, -220), {}, china));
+	game.Tick();
+	for (const ecs::Entity guard : guards)
+		ga::PutInside(game.Game(), building, guard);
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Resource<gp::CargoManifest>().Count(building) == 3u);
+	const ecs::Entity raptor = game.Place("AmericaJetStealthFighter", match->At(0, -500), {}, usa);
+	const std::uint32_t america = world.Get<gp::Owner>(raptor)->player;
+	const std::uint32_t weapon = game.Game().templates.Weapon("StealthJetMissileWeapon");
+	BOOST_TEST_REQUIRE(weapon != gp::WeaponCatalog::None);
+	const auto detonate = [&] {
+		gp::MissileDetonations detonations;
+		detonations.Reset(1);
+		gp::Shot shot;
+		shot.source = raptor;
+		shot.target = building;
+		shot.weapon = weapon;
+		shot.sourcePlayer = america;
+		shot.aim = world.Get<gp::Transform>(building)->position;
+		detonations.SlotAt(0).push_back(shot);
+		world.Resource<ga::EffectCues>().list.clear();
+		ga::ApplyBunkerBusters(game.Game(), detonations);
+	};
+	detonate();
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Count(building) == 3u);
+	BOOST_TEST(world.Resource<ga::EffectCues>().list.empty());
+	const auto upgrade = game.Game().templates.Content().upgrades.Find("Upgrade_AmericaBunkerBusters");
+	BOOST_TEST_REQUIRE(upgrade.has_value());
+	world.Resource<gp::PlayerUpgrades>().Grant(america, *upgrade);
+	detonate();
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Count(building) == 0u);
+	const std::uint32_t occupantWeapon = game.Game().templates.Weapon("BunkerBusterAntiTunnelGarrisonWeaponWithABigName");
+	for (const ecs::Entity guard : guards)
+	{
+		BOOST_TEST(world.Get<gp::Passenger>(guard) == nullptr);
+		const auto *hurt = world.Get<gp::PendingDamage>(guard);
+		BOOST_TEST_REQUIRE(hurt != nullptr);
+		BOOST_TEST((hurt->amount == Fixed::FromInt(100)));
+		BOOST_TEST(hurt->damageType == world.Resource<gp::WeaponCatalog>().At(occupantWeapon).damageType);
+	}
+	BOOST_TEST_REQUIRE(world.Resource<ga::EffectCues>().list.size() == 1u);
+	BOOST_TEST(world.Resource<ga::EffectCues>().list[0].effect == "FX_BunkerBusterExplosion");
+	BOOST_TEST((world.Resource<ga::EffectCues>().list[0].on == building));
+	BOOST_TEST(!world.Resource<gp::TemporaryWeaponFires>().Empty());
+}
+
+// EnemyNearUpdate.cpp (constructor, checkForEnemies, update) on GLABurningBarrier (VisionRange 50; ScanDelayTime 1 s:
+// 30 frames): made on frame P with a random first delay d (0 to 30), it first looks on P + d + 1 and every 31 frames after.
+// An America Ranger 30 away (an enemy it sees) shows it ENEMYNEAR from that first look; killed, the barrier drops it at the
+// next look. The same on 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_burning_barrier_flares_while_an_enemy_is_near)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	ecs::Entity barrier, ranger;
+	for (session::Session *g : {&game, &four})
+	{
+		ranger = g->Place("AmericaInfantryRanger", match->At(30, -300), {}, match->Team(*g, 0));
+		barrier = g->Place("GLABurningBarrier", match->At(0, -300), {}, match->Team(*g, 1));
+	}
+	BOOST_TEST_REQUIRE(world.Get<ga::EnemyNear>(barrier) != nullptr);
+	const std::uint64_t made = game.CurrentTick();
+	const std::uint32_t first = world.Get<ga::EnemyNear>(barrier)->scanDelay;
+	BOOST_TEST(first <= 30u);
+	const auto shows = [&] { return Shows(game, barrier, "ENEMYNEAR"); };
+	std::optional<std::uint64_t> flared;
+	for (int n = 0; n < 40 && !flared; ++n)
+	{
+		game.Tick();
+		four.Tick();
+		if (world.Get<ga::EnemyNear>(barrier)->near != 0)
+			flared = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(flared.has_value());
+	BOOST_TEST_MESSAGE("made " << made << ", first delay " << first << ", flared on " << *flared);
+	BOOST_TEST(*flared == made + first + 1);
+	game.Tick();
+	four.Tick();
+	BOOST_TEST(shows());
+	for (session::Session *g : {&game, &four})
+		g->World().Resource<gp::KillRequests>().entities.push_back(ranger);
+	std::optional<std::uint64_t> calmed;
+	for (int n = 0; n < 40 && !calmed; ++n)
+	{
+		game.Tick();
+		four.Tick();
+		if (world.Get<ga::EnemyNear>(barrier)->near == 0)
+			calmed = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(calmed.has_value());
+	BOOST_TEST(*calmed == *flared + 31);
+	game.Tick();
+	BOOST_TEST(!shows());
+	four.Tick();
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+}
+
+// SmartBombTargetHomingUpdate.cpp (SetTargetPosition, update) on the shipped MOAB (CourseCorrectionScalar 0.99): told its
+// spot as its carrier drops it, each frame while it is significantly above the ground it is put 0.99 of the way from the
+// spot to where it is, x and y (x = spot x 0.01 + x 0.99), its fall its own. Exact to the fixed point of that product.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_moab_steers_on_to_its_spot_as_it_falls)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity bomb = game.Place("MOAB", match->At(0, -300), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.Get<gp::DropHoming>(bomb) != nullptr);
+	BOOST_TEST((world.Get<gp::DropHoming>(bomb)->keep == Fixed::FromRatio(99, 100)));
+	auto &at = world.Get<gp::Transform>(bomb)->position;
+	at.z = at.z + Fixed::FromInt(400);
+	const Engine::Math::FixedVector2 spot = match->At(200, -300);
+	auto &homing = *world.Get<gp::DropHoming>(bomb);
+	homing.target = spot;
+	homing.received = 1;
+	for (int frame = 0; frame < 5; ++frame)
+	{
+		const auto before = world.Get<gp::Transform>(bomb)->position;
+		game.Tick();
+		const auto after = world.Get<gp::Transform>(bomb)->position;
+		const Fixed keep = Fixed::FromRatio(99, 100), toward = Fixed::One() - keep;
+		BOOST_TEST((after.x == spot.x * toward + before.x * keep));
+		BOOST_TEST((after.y == spot.y * toward + before.y * keep));
+	}
+}
+
+// EMPUpdate.cpp (LeafletDropBehavior: constructor, update, onDie, doDisableAttack) on the shipped LeafletContainer
+// (DisabledDuration 20000 ms: 600 frames; AffectRadius 110; LeafletFXParticleSystem LeafletParticles1): its first update
+// starts its leaflets on it (then, before its Delay, it sleeps for good, as the retail game); dying (its HeightDieUpdate,
+// on the ground at once), every enemy infantry and vehicle within 110 of it is DISABLED_EMP until 600 frames later; its
+// own side's and a building are spared.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_leaflet_drop_stuns_enemy_troops_and_vehicles)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t usa = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity redguard = game.Place("ChinaInfantryRedguard", match->At(60, -300), {}, china);
+	const ecs::Entity tank = game.Place("ChinaTankBattleMaster", match->At(-70, -300), {}, china);
+	const ecs::Entity far = game.Place("ChinaInfantryRedguard", match->At(0, -120), {}, china);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -260), {}, usa);
+	const ecs::Entity bunker = game.Place("ChinaBunker", match->At(0, -380), {}, china);
+	game.Tick();
+	const ecs::Entity container = game.Place("LeafletContainer", match->At(0, -300), {}, usa);
+	BOOST_TEST_REQUIRE(world.Get<ga::LeafletDrop>(container) != nullptr);
+	// Dropped from 150 up, as its plane lets it go: it falls to its HeightDieUpdate's 5.
+	world.Get<gp::Transform>(container)->position.z = world.Get<gp::Transform>(container)->position.z + Fixed::FromInt(150);
+	std::optional<std::uint64_t> fell;
+	bool leaflets = false;
+	for (int n = 0; n < 600 && !fell; ++n)
+	{
+		game.Tick();
+		for (const auto &cue : world.Resource<ga::EffectCues>().list)
+			leaflets = leaflets || (cue.particleSystem && cue.effect == "LeafletParticles1" && cue.on == container);
+		if (!world.IsAlive(container) || world.Get<gp::Dying>(container) != nullptr)
+			fell = game.CurrentTick();
+	}
+	BOOST_TEST(leaflets);
+	BOOST_TEST_REQUIRE(fell.has_value());
+	BOOST_TEST_MESSAGE("came down on " << *fell);
+	const auto empUntil = [&](ecs::Entity entity) -> std::uint64_t {
+		const auto *off = world.Get<gp::Disabled>(entity);
+		const auto *until = world.Get<gp::DisabledUntil>(entity);
+		if (off == nullptr || (off->mask & gp::disabled_type::Emp) == 0 || until == nullptr)
+			return 0;
+		return until->until[static_cast<std::size_t>(std::countr_zero(gp::disabled_type::Emp))];
+	};
+	BOOST_TEST(empUntil(redguard) == *fell + 600);
+	BOOST_TEST(empUntil(tank) == *fell + 600);
+	BOOST_TEST(empUntil(far) == 0u);
+	BOOST_TEST(empUntil(ranger) == 0u);
+	BOOST_TEST(empUntil(bunker) == 0u);
+}
+
+// DynamicGeometryInfoUpdate.cpp and FirestormDynamicGeometryInfoUpdate.cpp (update, doDamageScan) on the shipped
+// FirestormSmall (InitialDelay 800 ms: 24 frames; radius 1 to 90 over TransitionTime 3000 ms: 90 frames, then back;
+// DelayBetweenDamageFrames 500 ms: 15; DamageAmount 100 FLAME; ScorchSize 100; FX_FireStorm): made on frame P it starts on
+// P + 24 (its FX, its first damage scan: a Red Guard at its centre is hurt, one 60 away not yet), its radius on each later
+// frame the lerp of the frames since (1 + 89 x t / 90), scanning every 15 frames; on P + 114 it turns to shrink and leaves
+// its scorch. The same on 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_firestorm_grows_burns_and_leaves_its_scorch)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	game.Tick();
+	four.Tick();
+	ecs::Entity storm, near, far;
+	for (session::Session *g : {&game, &four})
+	{
+		near = g->Place("ChinaInfantryRedguard", match->At(2, -300), {}, match->Team(*g, 1));
+		far = g->Place("ChinaInfantryRedguard", match->At(60, -300), {}, match->Team(*g, 1));
+		g->Tick();
+		storm = g->Place("FirestormSmall", match->At(0, -300), {}, match->Team(*g, 0));
+	}
+	BOOST_TEST_REQUIRE(world.Get<ga::Firestorm>(storm) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::DynamicGeometry>(storm) != nullptr);
+	const std::uint64_t made = game.CurrentTick();
+	const auto hurt = [&](ecs::Entity entity) { return world.Get<gp::PendingDamage>(entity) != nullptr; };
+	std::optional<std::uint64_t> started, firstFarHit, scorched;
+	bool fx = false;
+	for (int n = 0; n < 130; ++n)
+	{
+		game.Tick();
+		four.Tick();
+		const std::uint64_t now = game.CurrentTick();
+		const auto &geometry = *world.Get<gp::DynamicGeometry>(storm);
+		if (!started && geometry.started != 0)
+		{
+			started = now;
+			BOOST_TEST(hurt(near));
+			BOOST_TEST(!hurt(far));
+		}
+		if (started && geometry.switched == 0)
+		{
+			const std::int64_t t = static_cast<std::int64_t>(now - *started);
+			const Fixed expected = Fixed::FromInt(1) + Fixed::FromInt(89) * Fixed::FromInt(t) / Fixed::FromInt(90);
+			BOOST_TEST((geometry.major == expected), "frame " << now << ": " << Engine::Math::ToFloat(geometry.major));
+		}
+		for (const auto &cue : world.Resource<ga::EffectCues>().list)
+		{
+			fx = fx || (cue.effect == "FX_FireStorm" && cue.on == storm);
+			if (!scorched && cue.scorch == Fixed::FromInt(100))
+				scorched = now;
+		}
+		if (started && !firstFarHit && hurt(far))
+			firstFarHit = now;
+	}
+	BOOST_TEST_REQUIRE(started.has_value());
+	BOOST_TEST(*started == made + 24);
+	BOOST_TEST(fx);
+	BOOST_TEST_REQUIRE(scorched.has_value());
+	BOOST_TEST(*scorched == made + 114);
+	BOOST_TEST_REQUIRE(firstFarHit.has_value());
+	BOOST_TEST_MESSAGE("started " << *started << ", far one first hurt " << *firstFarHit << ", scorch " << *scorched);
+	BOOST_TEST((*firstFarHit - *started) % 15 == 0u);
+	BOOST_TEST((game.StateHash() == four.StateHash()));
+}
+
+// Weapon.cpp (WeaponTemplate::processHistoricDamage and trimOldHistoricDamage as retail has them: RETAIL_COMPATIBLE_CRC)
+// on the shipped NapalmMissileWeapon (HistoricBonusTime 3000 ms: 90 frames, HistoricBonusCount 8, HistoricBonusRadius
+// 100, HistoricBonusWeapon FirestormSmallCreationWeapon; GameData HistoricDamageLimit 5000 ms: 150 frames). Each hit
+// counts the weapon's hits within 90 frames and 100 of it; with 7 of them (8 with itself) the bonus weapon fires there
+// (FireOCL OCL_FirestormSmall: a FirestormSmall) and the history is cleared, else the hit is remembered. Hits 120 apart
+// never add up. Before frame 150 the 32-bit expiration (frame - 150) wraps: every hit clears what came before, so an
+// early volley makes no firestorm. The same on 1 and 4 workers; a checkpoint mid-volley carries the history on.
+BOOST_AUTO_TEST_CASE(legacy_parity_napalm_hits_in_one_place_make_a_firestorm)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	BOOST_TEST_REQUIRE(shell.game.gameData.historicDamageLimitTicks == 150u);
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity plane;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made{std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers))};
+		made.game->Tick();
+		made.plane = made.game->Place("ChinaTankDragon", match->At(0, -700), {}, match->Team(*made.game, 1));
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	const std::uint32_t napalm = one.game->Game().templates.Weapon("NapalmMissileWeapon");
+	const std::uint32_t bonus = one.game->Game().templates.Weapon("FirestormSmallCreationWeapon");
+	BOOST_TEST_REQUIRE(four.game->Game().templates.Weapon("NapalmMissileWeapon") == napalm); // the same weapons in the same order
+	BOOST_TEST_REQUIRE(four.game->Game().templates.Weapon("FirestormSmallCreationWeapon") == bonus);
+	BOOST_TEST_REQUIRE(napalm != gp::WeaponCatalog::None);
+	const gp::WeaponDefinition &definition = one.game->Game().templates.weapons.At(napalm);
+	BOOST_TEST(definition.historicBonusTicks == 90u);
+	BOOST_TEST(definition.historicBonusCount == 8u);
+	BOOST_TEST((definition.historicBonusRadius == Fixed::FromInt(100)));
+	BOOST_TEST(definition.historicBonusWeapon == bonus);
+	const auto storms = [](session::Session &g) {
+		std::size_t count = 0;
+		ecs::Query<ecs::Read<ga::Firestorm>> query(g.World());
+		query.ForEachChunk([&](auto chunk) { count += chunk.Entities().size(); });
+		return count;
+	};
+	// A hit of the napalm missile's weapon at `at` (DamageDealtAtSelfPosition: where it went off).
+	const auto fire = [&](session::Session &g, ecs::Entity plane, Engine::Math::FixedVector2 at) {
+		auto &w = g.World();
+		const Engine::Math::FixedVector3 spot{at.x, at.y, g.Game().ground.At(at)};
+		w.Resource<gp::TemporaryWeaponFires>().Add({plane, napalm, w.Get<gp::Owner>(plane)->player, spot, spot});
+	};
+	const auto hit = [&](Game &g, Engine::Math::FixedVector2 at) { fire(*g.game, g.plane, at); };
+	const auto tick = [&](int count = 1) {
+		for (int n = 0; n < count; ++n)
+		{
+			one.game->Tick();
+			four.game->Tick();
+		}
+	};
+	auto &history = one.game->World().Resource<gp::HistoricDamage>();
+	std::unique_ptr<session::Session> restored;
+	// A volley: one missile every 5 ticks at each spot, then long enough for the last to land (guided missiles: they
+	// hit where they detonate).
+	const auto volley = [&](const std::vector<Engine::Math::FixedVector2> &spots, std::optional<std::size_t> checkpointAfter = std::nullopt) {
+		for (std::size_t index = 0; index < spots.size(); ++index)
+		{
+			hit(one, spots[index]);
+			hit(four, spots[index]);
+			if (restored)
+				fire(*restored, one.plane, spots[index]);
+			for (int step = 0; step < 5; ++step)
+			{
+				tick();
+				if (restored)
+					restored->Tick();
+			}
+			if (checkpointAfter && index == *checkpointAfter)
+			{
+				restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+				BOOST_TEST_REQUIRE(restored != nullptr);
+			}
+		}
+		for (int step = 0; step < 30; ++step)
+		{
+			tick();
+			if (restored)
+				restored->Tick();
+		}
+	};
+	// Early: eight hits in one place before frame 150; each one's trim wraps and clears the rest.
+	volley(std::vector<Engine::Math::FixedVector2>(8, match->At(300, -300)));
+	BOOST_TEST(one.game->CurrentTick() < 150u);
+	BOOST_TEST(history.For(napalm).size() == 1u);
+	BOOST_TEST(storms(*one.game) == 0u);
+	while (one.game->CurrentTick() < 200)
+		tick();
+	// Spread hits (120 apart on a grid: beyond the radius) never add up.
+	std::vector<Engine::Math::FixedVector2> spread;
+	for (int n = 0; n < 8; ++n)
+		spread.push_back(match->At(300 + (n % 4) * 120, -300 - (n / 4) * 120));
+	volley(spread);
+	for (const auto &entry : history.For(napalm))
+		BOOST_TEST_MESSAGE("hit on " << entry.tick << " at " << Engine::Math::ToFloat(entry.at.x) << "," << Engine::Math::ToFloat(entry.at.y));
+	BOOST_TEST(history.For(napalm).size() == 8u);
+	BOOST_TEST(storms(*one.game) == 0u);
+	// Seven hits together (within 100, away from the grid): remembered; a checkpoint half way (missiles in the air)
+	// carries them on.
+	std::vector<Engine::Math::FixedVector2> together;
+	for (int n = 0; n < 7; ++n)
+		together.push_back(match->At(300 + n * 10, -600));
+	volley(together, 3);
+	BOOST_TEST(storms(*one.game) == 0u);
+	BOOST_TEST(history.For(napalm).size() == 15u);
+	// The eighth: the bonus weapon fires there (the next tick's firing makes the firestorm) and the history clears.
+	volley({match->At(310, -590)});
+	BOOST_TEST(history.For(napalm).empty());
+	BOOST_TEST(storms(*one.game) == 1u);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(storms(*restored) == 1u);
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+	BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+}
+
+// Mine clearing (DozerAIUpdate's MINE_CLEARING_DETAIL weapon set flag, Weapon::privateFireWeapon's DAMAGE_DISARM,
+// MinefieldBehavior::disarm, AIAttackState's IGNORING_STEALTH and ContinueAttackRange) on Tournament Continent: an idle
+// America dozer carries its DozerMineDisarmingWeapon (AttackRange 5, PreAttackDelay 1200 PER_ATTACK, ClipSize 1,
+// ClipReloadTime 4000, ContinueAttackRange 100). Ordered at a China ChinaStandardMine still hidden by its innate stealth,
+// it sees through it (the attack has not fired yet) and, the wind-up done, disarms it: nothing is fired, the minefield
+// (it regenerates) is brought down to 0.1 health, its eight mines spent, and the weapon's fire FX plays on it. It goes on
+// to the closest mine of the same player within 100 of where that one stood, and from that to the next, each after its
+// reload and a new wind-up; a mine further than 100 from the last is left, and the attack is over, until the dozer, idle,
+// is bored and goes for a mine of itself. The same on 1 and 4 workers, and a checkpoint taken between the first two plays on
+// exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_disarms_a_mine_and_goes_on_to_the_next)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	std::array<ecs::Entity, 4> mines{};
+	ecs::Entity dozer;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		dozer = g->Place("AmericaVehicleDozer", match->At(0, -350), {}, match->Team(*g, 0));
+		// In a row: 70 and 90 apart, then 130 on.
+		int x = 100;
+		for (std::size_t index = 0; index < mines.size(); ++index)
+		{
+			mines[index] = g->Place("ChinaStandardMine", match->At(x, -350), {}, match->Team(*g, 1));
+			x += index == 0 ? 70 : index == 1 ? 90 : 130;
+		}
+	}
+	const auto hidden = [&](ecs::Entity mine) { return world.Get<gp::Stealth>(mine)->Hidden(); };
+	for (int tick = 0; tick < 60 && !hidden(mines[0]); ++tick)
+	{
+		game->Tick();
+		four->Tick();
+	}
+	BOOST_TEST_REQUIRE(hidden(mines[0]));
+	// Idle, it carries its disarming weapon.
+	const auto *armament = world.Get<gp::Armament>(dozer);
+	BOOST_TEST_REQUIRE(armament != nullptr);
+	const gp::WeaponDefinition &weapon = game->Game().templates.weapons.At(armament->weapon);
+	BOOST_TEST_REQUIRE(weapon.damageType == game->Game().templates.weapons.disarm);
+	BOOST_TEST((weapon.continueAttackRange == Fixed::FromInt(100)));
+	for (session::Session *g : {game.get(), four.get()})
+		gameplay::OrderAttack(g->Game(), dozer, mines[0]);
+	std::size_t shots = 0, cues = 0;
+	std::array<std::uint64_t, 4> disarmed{};
+	std::unique_ptr<session::Session> restored;
+	for (int tick = 0; tick < 1500 && disarmed[2] == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		if (restored)
+			restored->Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { shots += shot.source == dozer ? 1u : 0u; });
+		for (const auto &cue : world.Resource<gameplay::EffectCues>().list)
+			cues += cue.effect == "WeaponFX_DozerMineDisarming" ? 1u : 0u;
+		for (std::size_t index = 0; index < mines.size(); ++index)
+			if (disarmed[index] == 0 && world.Get<gp::Minefield>(mines[index])->remaining == 0)
+			{
+				disarmed[index] = game->CurrentTick();
+				BOOST_TEST((world.Get<gp::Health>(mines[index])->current == Fixed::FromRatio(1, 10)));
+				if (index < 2)
+					BOOST_TEST((world.Get<gp::AttackTarget>(dozer)->target == mines[index + 1]));
+			}
+		if (disarmed[0] != 0 && !restored)
+			restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game->Checkpoint());
+	}
+	BOOST_TEST_MESSAGE("disarmed " << disarmed[0] << ", " << disarmed[1] << ", " << disarmed[2]);
+	BOOST_TEST_REQUIRE(disarmed[2] != 0u);
+	// Each the next after the reload (4000 ms, 120 frames): the new victim's wind-up (1200 ms, 36 frames) starts the frame
+	// it is ready and it fires on the wind-up's last.
+	BOOST_TEST(weapon.clipReload == 120u);
+	BOOST_TEST(weapon.preAttackDelay == 36u);
+	BOOST_TEST(disarmed[1] == disarmed[0] + weapon.clipReload + weapon.preAttackDelay - 1);
+	BOOST_TEST(disarmed[2] == disarmed[1] + weapon.clipReload + weapon.preAttackDelay - 1);
+	BOOST_TEST(shots == 0u);
+	BOOST_TEST(cues == 3u);
+	// The last, 130 on, is out of reach: the attack is over. Then idle, the dozer is bored 151 frames after it last did
+	// anything and goes of itself for the closest mine it may attack (DozerPrimaryIdleState's findMine: one shot,
+	// CMD_FROM_DOZER); by then the mines it disarmed have healed back (they regenerate) and are mines again.
+	std::uint64_t lastBusy = 0, bored = 0;
+	for (int tick = 0; tick < 600 && bored == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		restored->Tick();
+		const auto &attack = *world.Get<gp::AttackTarget>(dozer);
+		if (lastBusy != 0 && attack.target != ecs::Entity{})
+		{
+			bored = game->CurrentTick();
+			BOOST_TEST((attack.source == gp::CommandSource::Dozer));
+			BOOST_TEST(attack.shotsLeft == 1u);
+		}
+		else if (attack.target != ecs::Entity{} || world.Get<gp::MoveOrder>(dozer)->mode != gp::MoveMode::Idle)
+			lastBusy = 0;
+		else if (lastBusy == 0)
+			lastBusy = game->CurrentTick() - 1;
+	}
+	BOOST_TEST_MESSAGE("idle from " << lastBusy << ", bored " << bored);
+	BOOST_TEST_REQUIRE(bored != 0u);
+	BOOST_TEST(bored == lastBusy + 151);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// DozerPrimaryIdleState::update's boredom on Tournament Continent: an America dozer (BoredTime 5000 = 150 frames,
+// BoredRange 150) left idle is bored the frame its idle stretch passes 150 frames (151 after it was made): with a hurt
+// power plant of its own 100 away it goes to repair it (aiRepair, CMD_FROM_AI: its own order); another, with nothing to
+// repair but a China mine 100 away (seen by the dozer's own detector), goes to clear it (aiAttackObject for one shot,
+// CMD_FROM_DOZER) and disarms it. The same on 1 and 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bored_dozer_repairs_what_is_near_else_clears_a_mine)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	ecs::Entity fixer, clearer, plant, mine;
+	std::uint64_t made = 0;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		made = g->CurrentTick();
+		fixer = g->Place("AmericaVehicleDozer", match->At(-300, -350), {}, match->Team(*g, 0));
+		plant = g->Place("AmericaPowerPlant", match->At(-300, -250), {}, match->Team(*g, 0));
+		auto &health = *g->World().Get<gp::Health>(plant);
+		health.current = health.maximum / Fixed::FromInt(2);
+		clearer = g->Place("AmericaVehicleDozer", match->At(0, -350), {}, match->Team(*g, 0));
+		mine = g->Place("ChinaStandardMine", match->At(100, -350), {}, match->Team(*g, 1));
+	}
+	const auto *boredom = world.Get<gameplay::BuilderBoredom>(fixer);
+	BOOST_TEST_REQUIRE(boredom != nullptr);
+	BOOST_TEST(boredom->boredTicks == 150u);
+	BOOST_TEST((boredom->boredRange == Fixed::FromInt(150)));
+	std::uint64_t repairing = 0, clearing = 0, cleared = 0;
+	for (int tick = 0; tick < 600 && cleared == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		if (repairing == 0)
+			if (const auto *task = world.Get<gp::Builder>(fixer); task != nullptr && task->target == plant && task->repair != 0)
+				repairing = game->CurrentTick();
+		if (clearing == 0 && world.Get<gp::AttackTarget>(clearer) != nullptr && world.Get<gp::AttackTarget>(clearer)->target == mine)
+		{
+			clearing = game->CurrentTick();
+			BOOST_TEST((world.Get<gp::AttackTarget>(clearer)->source == gp::CommandSource::Dozer));
+			BOOST_TEST(world.Get<gp::AttackTarget>(clearer)->shotsLeft == 1u);
+		}
+		if (cleared == 0 && world.Get<gp::Minefield>(mine)->remaining == 0)
+			cleared = game->CurrentTick();
+	}
+	BOOST_TEST_MESSAGE("made " << made << ", repairing " << repairing << ", clearing " << clearing << ", cleared " << cleared);
+	BOOST_TEST(repairing == made + 151);
+	BOOST_TEST(clearing == made + 151);
+	BOOST_TEST(cleared != 0u);
+	BOOST_TEST((four->StateHash() == game->StateHash()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

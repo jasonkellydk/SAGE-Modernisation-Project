@@ -65,7 +65,11 @@ struct PlayerTemplateInfo
 	std::string baseSide;         // BaseSide: USA, China or GLA (the score screen's sides)
 	std::string scoreScreenImage; // ScoreScreenImage: the single-player score screen's backdrop
 	std::string sideIconImage;    // SideIconImage
+	std::string beaconName;       // BeaconName: the object its players' beacons are
 	std::string startingBuilding; // empty: not a faction a player can pick
+	std::string displayName;      // DisplayName: a label (INI:FactionAmerica)
+	std::string features;         // Features: the load screen's general features (a label)
+	std::string loadScreenMusic;  // LoadScreenMusic: the multiplayer load screen's music
 	std::array<std::string, 10> startingUnits; // StartingUnit0..9 (MAX_MP_STARTING_UNITS)
 	bool playable{false};
 	bool oldFaction{false};
@@ -73,6 +77,7 @@ struct PlayerTemplateInfo
 	bool startsLocked{false};     // ChallengeGenerals: a general that starts disabled
 	std::vector<std::string> intrinsicSciences; // IntrinsicSciences: what its side knows from the start
 	std::int32_t intrinsicSciencePurchasePoints{0}; // IntrinsicSciencePurchasePoints
+	std::int64_t startMoney{0};   // StartMoney (Player::init: 0 takes the game's starting cash)
 	// The General's Powers screen's buttons by rank (PurchaseScienceCommandSetRank1 / 3 / 8).
 	std::array<std::string, 3> purchaseScienceCommandSets{};
 	// The general's powers shortcut bar: its command set, its layout (a Window/ file) and how many of its buttons it uses
@@ -116,14 +121,24 @@ inline PlayerTemplates BindPlayerTemplates(const engine::config::Document &docum
 		for (const Node &field : root.children)
 			if (field.key == "Side")
 				info->side = ReadText(field);
+			else if (field.key == "StartMoney")
+				info->startMoney = engine::config::values::ParseInt(field.Value()).value_or(0);
 			else if (field.key == "BaseSide")
 				info->baseSide = ReadText(field);
 			else if (field.key == "ScoreScreenImage")
 				info->scoreScreenImage = ReadText(field);
 			else if (field.key == "SideIconImage")
 				info->sideIconImage = ReadText(field);
+			else if (field.key == "BeaconName")
+				info->beaconName = ReadText(field);
 			else if (field.key == "StartingBuilding")
 				info->startingBuilding = ReadText(field);
+			else if (field.key == "DisplayName")
+				info->displayName = ReadText(field);
+			else if (field.key == "Features")
+				info->features = ReadText(field);
+			else if (field.key == "LoadScreenMusic")
+				info->loadScreenMusic = ReadText(field);
 			else if (field.key.starts_with("StartingUnit") && field.key.size() == 13 && field.key[12] >= '0' && field.key[12] <= '9')
 				info->startingUnits[static_cast<std::size_t>(field.key[12] - '0')] = ReadText(field);
 			else if (field.key == "PlayableSide")

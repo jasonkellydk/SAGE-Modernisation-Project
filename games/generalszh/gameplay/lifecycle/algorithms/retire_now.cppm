@@ -6,6 +6,7 @@ import engine.gameplay.rts.lifecycle.algorithms.retirement;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.health.components.pending_damage;
 import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.health_floor;
 import engine.gameplay.rts.death.components.dying;
 import games.generalszh.content.combat.combat_catalog;
 
@@ -58,10 +59,42 @@ void DamageNow(GameWorld &game, ecs::Entity entity, Engine::Math::Fixed amount)
 	*game.world.Get<gp::PendingDamage>(entity) = gp::PendingDamage{{}, amount, type, death};
 }
 
-// Killed outright: it dies with this tick's casualties.
+// Object::attemptDamage from game logic between ticks: `amount` of `type` / `death` from `source`, dealt in the next tick's
+// damage (added to any already waiting of the same kind from the same source; a different kind replaces it).
+void DamageFrom(GameWorld &game, ecs::Entity victim, ecs::Entity source, Engine::Math::Fixed amount, std::uint32_t type, std::uint32_t death)
+{
+	namespace gp = engine::gameplay;
+	auto &world = game.world;
+	if (!world.IsAlive(victim) || world.Get<gp::Health>(victim) == nullptr)
+		return;
+	if (auto *waiting = world.Get<gp::PendingDamage>(victim))
+	{
+		if (waiting->damageType == type && waiting->deathType == death && waiting->source == source)
+			waiting->amount += amount;
+		else
+			*waiting = gp::PendingDamage{source, amount, type, death};
+		return;
+	}
+	world.Add<gp::PendingDamage>(victim);
+	*world.Get<gp::PendingDamage>(victim) = gp::PendingDamage{source, amount, type, death};
+}
+
+// Killed outright (Object::kill): it dies with this tick's casualties. Object::kill is damage (unresistable, its whole
+// health, m_kill): an immortal body keeps its last point and takes the rest as damage, so what reacts to damage on it
+// does (FireWeaponWhenDamagedBehavior: the shell map's battleship targets explode as its scripts kill them); here dealt
+// with the next tick's damage.
 void KillNow(GameWorld &game, ecs::Entity entity)
 {
-	if (game.world.IsAlive(entity))
-		game.kills.entities.push_back(entity);
+	namespace gp = engine::gameplay;
+	if (!game.world.IsAlive(entity))
+		return;
+	const auto *floor = game.world.Get<gp::HealthFloor>(entity);
+	const auto *health = game.world.Get<gp::Health>(entity);
+	if (floor != nullptr && floor->Immortal() && health != nullptr && !health->indestructible)
+	{
+		DamageNow(game, entity, health->current);
+		return;
+	}
+	game.kills.entities.push_back(entity);
 }
 }

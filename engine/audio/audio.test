@@ -190,6 +190,48 @@ BOOST_AUTO_TEST_CASE(legacy_parity_full_sample_pools_give_way_only_to_higher_pri
 	BOOST_TEST(player.Playing(loud));
 }
 
+// legacy_parity: MilesAudioManager::pauseAudio / resumeAudio (AudioAffect_Sound, as SUSPEND_BACKGROUND_SOUNDS and
+// RESUME_BACKGROUND_SOUNDS call them): each playing 2D sample stops where it is (AIL_stop_sample) and resumes from
+// there (AIL_resume_sample); 3D samples and streams are not touched, and a sound started while suspended plays.
+// A flat sound of 10 frames at 0.1, paused after 4: 20 frames later it has neither advanced nor finished, the world
+// sound beside it went on and finished; resumed, it plays its last 6 frames and finishes.
+BOOST_AUTO_TEST_CASE(legacy_parity_suspended_flat_sounds_hold_and_resume_where_they_were)
+{
+	Mixer mixer(1000);
+	FakeLibrary library;
+	SoundPlayer player(mixer, library);
+	const SoundEventDefinition flat = Event("ui", {"a"});
+	SoundEventDefinition world = Event("boom", {"b"});
+	world.type = sound_type::World | sound_type::Everyone;
+	const SoundHandle ui = player.Play(flat);
+	const SoundHandle boom = player.Play(world, Vec3{});
+	BOOST_TEST_REQUIRE(ui != 0u);
+	BOOST_TEST_REQUIRE(boom != 0u);
+	const std::vector<float> first = Run(mixer, 4);
+	BOOST_TEST(first[3 * 2] > 0.0f);
+	player.PauseFlat(true);
+	const std::vector<float> held = Run(mixer, 20);
+	player.Update();
+	BOOST_TEST(player.Playing(ui));    // held, not finished
+	BOOST_TEST(!player.Playing(boom)); // the world sound went on to its end
+	for (std::size_t frame = 0; frame < 20; ++frame)
+		BOOST_TEST(held[frame * 2] <= 0.2f + 1e-6f); // only the world sound's 0.2 (and silence after it)
+	BOOST_TEST(held[19 * 2] == 0.0f);
+	// Started while suspended: it plays.
+	const SoundHandle later = player.Play(Event("later", {"c"}));
+	BOOST_TEST(Run(mixer, 1)[0] > 0.29f);
+	player.Stop(later, false);
+	Run(mixer, 70);
+	player.Update();
+	player.PauseFlat(false);
+	const std::vector<float> resumed = Run(mixer, 8);
+	player.Update();
+	BOOST_TEST(resumed[0] == 0.1f);
+	BOOST_TEST(resumed[5 * 2] == 0.1f);  // frames 4..9 of the sound
+	BOOST_TEST(resumed[6 * 2] == 0.0f);  // then done
+	BOOST_TEST(!player.Playing(ui));
+}
+
 BOOST_AUTO_TEST_CASE(all_attack_loop_count_and_decay_sequence_in_order)
 {
 	Mixer mixer(1000);

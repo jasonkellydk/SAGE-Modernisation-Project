@@ -270,6 +270,52 @@ struct CollapseDefinition
 	std::array<std::vector<std::uint32_t>, static_cast<std::size_t>(CollapsePhase::Count)> objects; // creation lists
 };
 
+// A structure toppling over when it dies (the original's StructureToppleUpdate): after between the least and most
+// topple delay it tips over away from its killer (or any way, killed by nothing), faster as it goes, until it lies
+// flat; then it stands again, turned to where it fell, showing its post-collapse look. Late in the fall its crushing
+// weapon goes off along the ground it lands on. Its effects play only when the killing blow's damage type is among
+// `damageFxTypes` (DamageFXTypes); its creation lists, one pick per phase, always.
+enum class TopplePhase : std::uint8_t
+{
+	Initial, // as it dies, where it stands
+	Delay,   // with each burst, at its burst point
+	Final,   // along each crushed line, and where it stands once flat
+	Count,
+};
+
+struct ToppleAngleEffect
+{
+	std::int64_t angle{0}; // radians, Q32 (the fall passing it plays the effect)
+	std::uint32_t effect{0};
+	std::uint32_t reserved{0};
+};
+
+struct StructureToppleDefinition
+{
+	static constexpr std::uint32_t None = 0xFFFFFFFFu;
+	static constexpr std::int64_t One = std::int64_t{1} << 32; // Q32
+	DeathFilter filter;
+	std::uint64_t minToppleDelay{0};
+	std::uint64_t maxToppleDelay{0};
+	std::uint64_t minBurstDelay{0};
+	std::uint64_t maxBurstDelay{0};
+	std::int64_t integrity{One / 10}; // StructuralIntegrity, Q32
+	std::int64_t decay{0};            // StructuralDecay, Q32
+	std::uint64_t damageFxTypes{~std::uint64_t{0}};
+	std::uint32_t startEffect{None};    // ToppleStartFX, where it stands
+	std::uint32_t delayEffect{None};    // ToppleDelayFX, at its burst point
+	std::uint32_t doneEffect{None};     // ToppleDoneFX, on it once flat
+	std::uint32_t crushingEffect{None}; // CrushingFX, where each crushing shot lands
+	std::uint32_t crushingWeapon{None}; // CrushingWeaponName (a DeathEffectKind::Weapon id)
+	std::uint32_t reserved{0};
+	std::vector<ToppleAngleEffect> angleEffects;
+	std::array<std::vector<std::uint32_t>, static_cast<std::size_t>(TopplePhase::Count)> objects; // creation lists
+	// Its geometry: the height of its top above its position (taken standing) and its radii.
+	Engine::Math::Fixed height;
+	Engine::Math::Fixed majorRadius;
+	Engine::Math::Fixed minorRadius;
+};
+
 // CrushDie: crushed to death (the catalog's crush damage), the body is crushed at the end nearest the crusher
 // (the front or back crush point, half its major radius along its facing, or its centre: all of it), and plays that
 // crush's sound (Total, Back, FrontEndCrushSound) that percent of the time.
@@ -298,6 +344,7 @@ struct DeathDefinition
 	std::vector<SlowDeathDefinition> slow;    // one is chosen
 	std::vector<CrushDieDefinition> crushed;  // CrushDie
 	std::vector<CollapseDefinition> collapses; // the first that applies runs
+	std::vector<StructureToppleDefinition> topples; // the first that applies runs
 	Engine::Math::Fixed majorRadius;          // its geometry (where its crush points are)
 	bool hulk{false};                         // KINDOF_HULK: a script's hulk lifetime applies to it
 };

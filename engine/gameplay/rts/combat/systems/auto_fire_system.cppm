@@ -64,6 +64,7 @@ struct AutoFireSystem
 			const auto &at = transforms[row].position;
 			const WeaponBonus bonus = weapons.Bonus(weapon, bonusRows.empty() ? 0u : bonusRows[row].Effective());
 			Shot &shot = shots.emplace_back(Shot{entities[row], {}, fire.weapon, owners.empty() ? 0u : owners[row].player, at, at, tick, tick});
+			shot.quiet = tick < fire.suspendFxUntil ? 1 : 0;
 			shot.damageScale = bonus.Get(WeaponBonusField::Damage);
 			shot.radiusScale = bonus.Get(WeaponBonusField::Radius);
 			auto random = Engine::Math::Stream(seed, {tick, entities[row].index, entities[row].generation});

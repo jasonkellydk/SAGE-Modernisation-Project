@@ -198,21 +198,31 @@ inline void UpdateTeamStates(GameWorld &game, const TeamScriptHooks &hooks)
 		}
 		return *gathered;
 	};
+	// The instances' lists, one reused buffer (each list is still taken before it is walked, as a copy was).
+	std::vector<std::uint32_t> instances;
 	for (std::uint32_t player = 0; player < game.roster.PlayerCount(); ++player)
 		for (std::uint32_t prototype = 0; prototype < game.roster.TeamCount(); ++prototype)
 		{
 			const gp::Team &level = game.roster.TeamAt(prototype);
 			if (level.prototype != gp::Team::Own || !level.alive || level.owner != player)
 				continue;
-			for (const std::uint32_t instance : game.roster.Instances(prototype))
+			game.roster.InstancesInto(prototype, instances);
+			for (const std::uint32_t instance : instances)
 				UpdateTeamState(game, instance, hooks, sightings);
 			if (game.roster.TeamAt(prototype).singleton)
 				continue;
-			const auto defaultTeam = game.roster.DefaultTeam(player);
-			for (const std::uint32_t instance : game.roster.Instances(prototype))
+			// The player's default team, looked up only when an empty active instance is met (the same answer: nothing
+			// between here and there changes it).
+			std::optional<std::optional<std::uint32_t>> defaultTeam;
+			game.roster.InstancesInto(prototype, instances);
+			for (const std::uint32_t instance : instances)
 			{
 				const gp::Team &team = game.roster.TeamAt(instance);
-				if (!team.members.empty() || !team.active || (defaultTeam && *defaultTeam == instance))
+				if (!team.members.empty() || !team.active)
+					continue;
+				if (!defaultTeam)
+					defaultTeam = game.roster.DefaultTeam(player);
+				if (*defaultTeam && **defaultTeam == instance)
 					continue;
 				game.roster.DeleteInstance(instance);
 			}
@@ -223,17 +233,24 @@ inline void UpdateTeamStates(GameWorld &game, const TeamScriptHooks &hooks)
 // exists, newest first).
 inline void UpdateGenericScripts(GameWorld &game, std::uint32_t player, const TeamScriptHooks &hooks)
 {
+	std::vector<std::uint32_t> instances;
 	for (std::uint32_t prototype = 0; prototype < game.roster.TeamCount(); ++prototype)
 	{
 		const auto &level = game.roster.TeamAt(prototype);
 		if (level.prototype != engine::gameplay::Team::Own || level.owner != player)
 			continue;
-		for (const std::uint32_t index : game.roster.Instances(prototype))
+		game.roster.InstancesInto(prototype, instances);
+		for (const std::uint32_t index : instances)
 			for (int hook = 0; hook < 16; ++hook)
 			{
 				if ((game.roster.TeamAt(index).genericDone & (1u << hook)) != 0)
 					continue;
-				const std::string script = TeamScript(game, index, "teamGenericScriptHook" + std::to_string(hook));
+				// The hook's key, spelled once (no string built per team and hook each tick).
+				static constexpr std::array<std::string_view, 16> Keys{"teamGenericScriptHook0", "teamGenericScriptHook1", "teamGenericScriptHook2",
+					"teamGenericScriptHook3", "teamGenericScriptHook4", "teamGenericScriptHook5", "teamGenericScriptHook6", "teamGenericScriptHook7",
+					"teamGenericScriptHook8", "teamGenericScriptHook9", "teamGenericScriptHook10", "teamGenericScriptHook11", "teamGenericScriptHook12",
+					"teamGenericScriptHook13", "teamGenericScriptHook14", "teamGenericScriptHook15"};
+				const std::string script = TeamScript(game, index, Keys[static_cast<std::size_t>(hook)]);
 				if (script.empty() || !hooks.exists(script))
 				{
 					game.roster.TeamAt(index).genericDone |= static_cast<std::uint16_t>(1u << hook);

@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -11,10 +12,12 @@
 #include <string>
 #include <string_view>
 #include <random>
+#include <variant>
 #include <vector>
 
 import games.generalszh.presentation.effects.fx_playback;
 import games.generalszh.presentation.effects.damage_effects;
+import games.generalszh.presentation.effects.heat_haze;
 import games.generalszh.content.death.death_content;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -282,6 +285,59 @@ BOOST_AUTO_TEST_CASE(legacy_parity_scorch_marks_keep_500_and_skip_near_duplicate
 
 // TerrainScorchFXNugget on real data: WeaponFX_BattleshipTargetExplode's TerrainScorch (Type RANDOM, Radius 15) leaves a
 // mark of radius 15 where it plays, one of SCORCH_1..SCORCH_4.
+// Legacy parity (FXList.cpp, TracerFXNugget::doFXPos; W3DTracerDraw::doDrawModule): WeaponFX_GenericMachineGunFire's
+// tracer (DecayAt 1, Length 10, Width 0.3, white, Speed 600: 20 a frame, Probability 0.5) fired from (0, 0, 10) at a spot
+// 110 away: a GenericTracer heading there at 600 a second, living ceil(100 / 20 x 1) = 5 frames (1/6 s), half faded
+// halfway; played many times, about half make one; with no second point, none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_machine_gun_fires_tracers_that_fly_and_fade)
+{
+	Install &install = Data();
+	if (!install.effects)
+		return;
+	const auto &effects = *install.effects;
+	const presentation::FxList *list = effects.fx.Find("WeaponFX_GenericMachineGunFire");
+	BOOST_TEST_REQUIRE(list != nullptr);
+	const presentation::TracerNugget *nugget = nullptr;
+	for (const auto &entry : list->nuggets)
+		if (const auto *tracer = std::get_if<presentation::TracerNugget>(&entry))
+			nugget = tracer;
+	BOOST_TEST_REQUIRE(nugget != nullptr);
+	BOOST_TEST(nugget->name == "GenericTracer");
+	BOOST_TEST(nugget->speed == 20.0f);
+	BOOST_TEST(nugget->decayAt == 1.0f);
+	BOOST_TEST(nugget->length == 10.0f);
+	BOOST_TEST(nugget->width == 0.3f);
+	BOOST_TEST(nugget->probability == 0.5f);
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	presentation::Tracers tracers;
+	std::mt19937 random(5);
+	presentation::FxRequest fire{"WeaponFX_GenericMachineGunFire", {0, 0, 10}};
+	fire.hasSecondary = true;
+	fire.secondary = {110, 0, 10};
+	for (int shot = 0; shot < 400; ++shot)
+		presentation::PlayFx(effects, world, random, {}, fire, sounds, shakes, nullptr, nullptr, 0, nullptr, &tracers);
+	BOOST_TEST(tracers.Size() > 150u);
+	BOOST_TEST(tracers.Size() < 250u);
+	BOOST_TEST_REQUIRE(tracers.Size() > 0u);
+	BOOST_TEST(tracers.speeds[0] == 600.0f);
+	BOOST_TEST(tracers.lives[0] == 5.0f / 30.0f);
+	BOOST_TEST((tracers.directions[0] == std::array<float, 3>{1, 0, 0}));
+	presentation::Tracers one;
+	presentation::MakeTracer(one, {0, 0, 10}, {110, 0, 10}, nugget->speed, 0.0f, nugget->decayAt, nugget->length, nugget->width, nugget->color);
+	one.Advance(2.5f / 30.0f);
+	BOOST_TEST(one.Opacity(0) == 0.5f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(one.positions[0][0] == 50.0f, boost::test_tools::tolerance(1e-4f));
+	one.Advance(2.5f / 30.0f);
+	BOOST_TEST(one.Size() == 0u); // expired
+	presentation::Tracers none;
+	presentation::FxRequest nowhere{"WeaponFX_GenericMachineGunFire", {0, 0, 10}};
+	for (int shot = 0; shot < 20; ++shot)
+		presentation::PlayFx(effects, world, random, {}, nowhere, sounds, shakes, nullptr, nullptr, 0, nullptr, &none);
+	BOOST_TEST(none.Size() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(legacy_parity_fx_leave_scorch_marks)
 {
 	Install &install = Data();
@@ -302,4 +358,69 @@ BOOST_AUTO_TEST_CASE(legacy_parity_fx_leave_scorch_marks)
 	BOOST_TEST(scorches.marks.front().radius == 15.0f);
 	BOOST_TEST(scorches.marks.front().type <= 3u);
 	BOOST_TEST((scorches.marks.front().at == std::array<float, 3>{300, 400, 7}));
+}
+
+// Legacy parity (W3DParticleSys.cpp W3DParticleSystemManager::doParticles, EA's original): a system whose texture's
+// name starts with "SMUD" is a smudge system whatever its INI Type (the retail Microwave tank's MicrowaveEmitter is
+// Type = PARTICLE with SMUDGE.tga). With heat effects on each of its particles is a smudge this frame at the
+// particle, its size and alpha (Alpha1 1.00 holds: the later keys sit at frame 0), its offsets
+// GameClientRandomValueReal(-0.06, 0.06) and (-0.03, 0.03); off, none. The first frame bursts 2 or 3 particles.
+// The name test is the DWORD compare: case matters, and drawables never smudge.
+BOOST_AUTO_TEST_CASE(legacy_parity_smudge_textured_particles_become_heat_haze)
+{
+	BOOST_TEST(presentation::IsHeatHazeTexture("SMUDGE.tga"));
+	BOOST_TEST(!presentation::IsHeatHazeTexture("smudge.tga"));
+	BOOST_TEST(!presentation::IsHeatHazeTexture("SMU"));
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const presentation::EffectsContent &effects = *install.effects;
+	const engine::effects::ParticleSystemDefinition *microwave = effects.particles.Find("MicrowaveEmitter");
+	BOOST_TEST_REQUIRE(microwave != nullptr);
+	BOOST_TEST((microwave->kind == engine::effects::ParticleKind::Particle));
+	BOOST_TEST(presentation::IsHeatHaze(*microwave));
+	engine::effects::ParticleSystemDefinition drawn = *microwave;
+	drawn.kind = engine::effects::ParticleKind::Drawable;
+	BOOST_TEST(!presentation::IsHeatHaze(drawn));
+	const engine::effects::ParticleSystemDefinition *smoke = effects.particles.Find("JetContrailThin");
+	BOOST_TEST_REQUIRE(smoke != nullptr);
+	BOOST_TEST(!presentation::IsHeatHaze(*smoke));
+
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	world.Create(*microwave, engine::effects::EmitterTransform::At(50, 60, 5));
+	world.Step();
+	const std::size_t count = world.ParticleCount();
+	BOOST_TEST(count >= 2u);
+	BOOST_TEST(count <= 3u);
+	std::mt19937 random(9);
+	std::vector<std::pair<float, float>> ranges;
+	const auto draw = [&](float low, float high) {
+		ranges.emplace_back(low, high);
+		return std::uniform_real_distribution<float>(low, high)(random);
+	};
+	presentation::HeatHaze haze;
+	presentation::ExtractHeatHaze(world, 0.0f, false, draw, haze);
+	BOOST_TEST(haze.Size() == 0u);
+	BOOST_TEST(ranges.empty());
+	presentation::ExtractHeatHaze(world, 0.0f, true, draw, haze);
+	BOOST_TEST_REQUIRE(haze.Size() == count);
+	BOOST_TEST_REQUIRE(ranges.size() == 2 * count);
+	for (std::size_t smudge = 0; smudge < count; ++smudge)
+	{
+		BOOST_TEST(haze.x[smudge] == world.X()[smudge]);
+		BOOST_TEST(haze.y[smudge] == world.Y()[smudge]);
+		BOOST_TEST(haze.z[smudge] == world.Z()[smudge]);
+		BOOST_TEST(haze.size[smudge] == world.Size()[smudge]);
+		BOOST_TEST(haze.size[smudge] >= 8.0f);
+		BOOST_TEST(haze.opacity[smudge] == 1.0f);
+		BOOST_TEST(ranges[2 * smudge].first == -0.06f);
+		BOOST_TEST(ranges[2 * smudge].second == 0.06f);
+		BOOST_TEST(ranges[2 * smudge + 1].first == -0.03f);
+		BOOST_TEST(ranges[2 * smudge + 1].second == 0.03f);
+		BOOST_TEST(std::fabs(haze.offsetX[smudge]) <= 0.06f);
+		BOOST_TEST(std::fabs(haze.offsetY[smudge]) <= 0.03f);
+	}
 }

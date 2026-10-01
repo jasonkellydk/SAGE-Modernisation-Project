@@ -4,6 +4,8 @@ export import engine.gameplay.common.status.components.ai_activity;
 export import engine.gameplay.common.areas.resources.trigger_areas;
 export import engine.gameplay.rts.combat.resources.attack_priorities;
 export import engine.gameplay.rts.combat.resources.mood_ranges;
+export import engine.gameplay.common.random.resources.random_seed;
+import Engine.Core.Math.FixedRandom;
 export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.common.identity.components.team_member;
 export import engine.gameplay.common.identity.components.definition_ref;
@@ -11,6 +13,8 @@ export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.status.components.disabled;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.algorithms.attack_goal;
+export import engine.gameplay.rts.combat.algorithms.target_pitch;
+export import engine.gameplay.rts.combat.algorithms.weapon_fitness;
 export import engine.gameplay.rts.construction.components.under_construction;
 export import engine.gameplay.rts.construction.components.sale;
 export import engine.gameplay.rts.combat.components.aggression;
@@ -58,7 +62,7 @@ struct TargetingSystem
 {
 	using Query = ecs::Query<ecs::Write<Aggression>, ecs::Write<AttackTarget>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Read<Armament>,
 		ecs::OptionalWrite<MoveOrder>, ecs::Optional<WeaponSlots>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
-		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<AiActivity>, ecs::Optional<Health>, ecs::Optional<TeamMember>, ecs::Optional<AttackMove>, ecs::Exclude<UnderConstruction>,
+		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<AiActivity>, ecs::Optional<Health>, ecs::Optional<TeamMember>, ecs::Optional<AttackMove>, ecs::Optional<BodyExtent>, ecs::Optional<MoveEnded>, ecs::Exclude<UnderConstruction>,
 		ecs::Exclude<Sale>>; // isAbleToAttack: not unbuilt or sold
 
 	// What a weapon set can do, for choosing and keeping targets: whatever any of its weapons may target, as far
@@ -86,23 +90,69 @@ struct TargetingSystem
 			}
 		return reach;
 	}
-	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Read<WeaponCatalog>, ecs::Read<TeamRoster>,
-		ecs::Read<TriggerAreas>, ecs::Read<AttackPriorities>, ecs::Read<MoodRanges>>;
-	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>>;
+	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Read<WeaponCatalog>, ecs::Read<ArmorCatalog>, ecs::Read<TeamRoster>,
+		ecs::Read<TriggerAreas>, ecs::Read<AttackPriorities>, ecs::Read<MoodRanges>, ecs::Read<RandomSeed>>;
+	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>>;
+
+	// WeaponSet::getAbleToUseWeaponAgainstTarget for an object, past what the victim's classes already settle: with a
+	// damage weapon, a victim none of its weapons may pitch to (isAnyWithinTargetPitch), or none of the weighed ones is
+	// reckoned to hurt (estimateWeaponDamage), is an invalid shot.
+	struct AttackGate
+	{
+		const WeaponCatalog &weapons;
+		const ArmorCatalog &armors;
+		const Armament &armament;
+		const WeaponSlots *set;
+		PitchBody source;
+		std::uint32_t sourceClasses{0};
+		std::uint32_t conditions{0};
+		const ecs::EntityLookup<Lookup> &lookup;
+		bool damaging{false};
+		bool pitched{false};
+		bool details{false};
+
+		static AttackGate For(const WeaponCatalog &weapons, const ArmorCatalog &armors, const Armament &armament, const WeaponSlots *set, PitchBody source,
+			std::uint32_t sourceClasses, std::uint32_t conditions, const ecs::EntityLookup<Lookup> &lookup)
+		{
+			AttackGate gate{weapons, armors, armament, set, source, sourceClasses, conditions, lookup};
+			gate.damaging = HasDamageWeapon(weapons, armament, set);
+			gate.pitched = AnyPitchLimited(weapons, armament, set);
+			gate.details = DetailsMatter(weapons, armors, armament, set, sourceClasses);
+			return gate;
+		}
+
+		bool Allows(const SpatialEntry &entry) const
+		{
+			if (!damaging)
+				return true;
+			if (pitched)
+			{
+				const BodyExtent *extent = lookup.IsAlive(entry.entity) ? lookup.template Get<BodyExtent>(entry.entity) : nullptr;
+				if (!AnyWithinTargetPitch(weapons, armament, set, source, PitchBodyOf(entry.position, extent)))
+					return false;
+			}
+			if (!FitnessMatters(weapons, armors, armament, set, sourceClasses, entry.classes))
+				return true;
+			return AnyWeaponHurts(weapons, armors, armament, set, sourceClasses, conditions, FitnessOf(entry, lookup, details));
+		}
+	};
 
 	// `unfogged`: only what is clear to the player through the shroud (AI::UNFOGGED, PartitionFilterFreeOfFog).
 	// `team`: its team (Object::getRelationship: its team's view, overrides included; none: NoTeam).
 	static bool Acceptable(const Relationships &relationships, const SpatialEntry &entry, ecs::Entity self, std::uint32_t team, std::uint32_t player,
-		const WeaponDefinition &weapon, const Aggression &aggression, bool unfogged = false)
+		const WeaponDefinition &weapon, const Aggression &aggression, bool unfogged = false, const AttackGate *gate = nullptr)
 	{
-		if (entry.entity == self || (entry.classes & (target_class::Unattackable | target_class::Hidden | target_class::Undetected | target_class::NoAttackFromAi)) != 0 ||
-			!relationships.Enemies(team, player, entry.team, entry.player))
+		if (entry.entity == self || (entry.classes & (target_class::Unattackable | target_class::Undetected | target_class::NoAttackFromAi)) != 0 ||
+			HiddenFrom(entry.classes, entry.disguisePlayer, entry.disguiseTeam, player, relationships) || !relationships.Enemies(team, player, entry.team, entry.player))
 			return false;
 		if (unfogged && (player >= 64 || (entry.clearTo & (std::uint64_t{1} << player)) == 0))
 			return false;
-		if ((entry.classes & target_class::Structure) != 0 && !aggression.attackBuildings && aggression.stance != Stance::Hunt)
+		// PartitionFilterRejectBuildings: never a building unless it is a base defence (KINDOF_FS_BASE_DEFENSE) or a
+		// container able to attack (a garrison firing out).
+		if ((entry.classes & target_class::Structure) != 0 && !aggression.attackBuildings && aggression.stance != Stance::Hunt &&
+			(entry.classes & (target_class::BaseDefense | target_class::ArmedContainer)) == 0)
 			return false;
-		return CanTarget(weapon, entry.classes);
+		return CanTarget(weapon, entry.classes) && (gate == nullptr || gate->Allows(entry));
 	}
 
 	// Inside the area (PartitionFilterPolygonTrigger: the object's whole position; none: anywhere).
@@ -139,8 +189,9 @@ struct TargetingSystem
 	static const SpatialEntry *Closest(const SpatialIndex &spatial, const Relationships &relationships, Engine::Math::FixedVector2 from, Engine::Math::FixedVector2 around, Engine::Math::Fixed range, bool anywhere,
 		ecs::Entity self, std::uint32_t team, std::uint32_t player, const WeaponDefinition &weapon, const Aggression &aggression, bool unfogged = false,
 		const TriggerArea *area = nullptr, const Prioritized *prioritized = nullptr, const Reachable *withinAttack = nullptr,
-		Engine::Math::Fixed selfRadius = {})
+		Engine::Math::Fixed selfRadius = {}, const AttackGate *gate = nullptr)
 	{
+		// (The gate last: it may look the victim up.)
 		const auto accepted = [&](const SpatialEntry &entry) {
 			return Acceptable(relationships, entry, self, team, player, weapon, aggression, unfogged) && InArea(area, entry) &&
 				(withinAttack == nullptr || WithinAttackRange(withinAttack->range, from, withinAttack->radius, entry));
@@ -149,7 +200,7 @@ struct TargetingSystem
 		{
 			std::vector<std::pair<Engine::Math::Fixed, const SpatialEntry *>> near;
 			const auto gather = [&](const SpatialEntry &entry) {
-				if (!accepted(entry))
+				if (!accepted(entry) || (gate != nullptr && !gate->Allows(entry)))
 					return;
 				const Engine::Math::Fixed gap = Engine::Math::Distance(from, entry.position.XY()) - entry.radius - prioritized->selfRadius;
 				near.emplace_back(std::max(gap, Engine::Math::Fixed{}), &entry);
@@ -190,7 +241,7 @@ struct TargetingSystem
 			if (!accepted(entry))
 				return;
 			const Engine::Math::Fixed gap = std::max(Engine::Math::Distance(from, entry.position.XY()) - entry.radius - selfRadius, Engine::Math::Fixed{});
-			if (best == nullptr || gap < bestGap)
+			if ((best == nullptr || gap < bestGap) && (gate == nullptr || gate->Allows(entry)))
 			{
 				best = &entry;
 				bestGap = gap;
@@ -217,6 +268,7 @@ struct TargetingSystem
 		const SpatialIndex &spatial = context.Read<SpatialIndex>();
 		const Relationships &relationships = context.Read<Relationships>();
 		const WeaponCatalog &weapons = context.Read<WeaponCatalog>();
+		const ArmorCatalog &armors = context.Read<ArmorCatalog>();
 		const TeamRoster &roster = context.Read<TeamRoster>();
 		auto aggressions = chunk.Get<Aggression>();
 		auto targets = chunk.Get<AttackTarget>();
@@ -235,6 +287,8 @@ struct TargetingSystem
 		const auto attackMovesAll = chunk.Get<AttackMove>();
 		const auto healthRows = chunk.Get<Health>();
 		const auto teamRows = chunk.Get<TeamMember>();
+		const auto extents = chunk.Get<BodyExtent>();
+		const auto endedRows = chunk.Get<MoveEnded>();
 		const auto lookup = context.Lookup<Lookup>();
 		for (std::size_t row = 0; row < aggressions.size(); ++row)
 		{
@@ -253,12 +307,21 @@ struct TargetingSystem
 			const std::uint32_t selfTeam = teamRows.empty() ? Relationships::NoTeam : teamRows[row].team;
 			const Engine::Math::FixedVector2 self = transforms[row].position.XY();
 			MoveOrder *move = moves.empty() || carried ? nullptr : &moves[row];
+			const AttackGate attackGate = AttackGate::For(weapons, armors, armaments[row], sets.empty() ? nullptr : &sets[row],
+				PitchBodyOf(transforms[row].position, extents.empty() ? nullptr : &extents[row]), targetables.empty() ? 0u : targetables[row].classes,
+				bonuses.empty() ? 0u : bonuses[row].Effective(), lookup);
+			const AttackGate *gate = &attackGate;
 
 			// Keep the target while it is there and within reach of the stance (a spot on the ground stays).
 			SpatialEntry point;
 			const SpatialEntry *current = AttackGoal(spatial, target, point);
-			// A target that went into hiding is lost.
-			if (current != nullptr && target.atPosition == 0 && (current->classes & target_class::Hidden) != 0)
+			// A target masked or unattackable is no target (getAbleToAttackSpecificObject: OBJECT_STATUS_MASKED,
+			// KINDOF_UNATTACKABLE); one that went into hiding is lost, unless its weapon has a continue range and has not fired in this attack
+			// yet (AIAttackState's IGNORING_STEALTH).
+			if (current != nullptr && target.atPosition == 0 && (current->classes & target_class::Unattackable) != 0)
+				current = nullptr;
+			if (current != nullptr && target.atPosition == 0 && HiddenFrom(current->classes, current->disguisePlayer, current->disguiseTeam, owners[row].player, relationships) &&
+				!(target.fired == 0 && weapons.At(armaments[row].weapon).continueAttackRange > Engine::Math::Fixed{}))
 				current = nullptr;
 			if (current != nullptr && !target.ordered)
 			{
@@ -270,6 +333,9 @@ struct TargetingSystem
 				if (aggression.stance != Stance::Hunt && Engine::Math::DistanceSquared(anchor, current->position.XY()) > leash * leash)
 					current = nullptr;
 			}
+			// cannotPossiblyAttackObject: its attack ends once none of its weapons may pitch to the victim or hurt it.
+			if (current != nullptr && target.atPosition == 0 && !gate->Allows(*current))
+				current = nullptr;
 			if (current == nullptr)
 				target = {};
 
@@ -285,23 +351,50 @@ struct TargetingSystem
 				const Team &team = roster.TeamAt(teamRows[row].team);
 				if (team.attackCommonTarget && team.commonTarget != ecs::Entity{})
 					if (const SpatialEntry *victim = spatial.Find(team.commonTarget);
-						victim != nullptr && Acceptable(relationships, *victim, entities[row], selfTeam, owners[row].player, weapon, aggression))
+						victim != nullptr && Acceptable(relationships, *victim, entities[row], selfTeam, owners[row].player, weapon, aggression, false, gate))
 					{
 						current = victim;
 						target = {victim->entity, false};
 					}
 			}
 
+			// AIIdleState::onEnter (resetNextMoodCheckTime): a unit that has just gone idle (nothing to attack, going nowhere,
+			// not busy) first looks ForceIdleMSEC later, its look after that randomly offset.
+			const bool idleNow = current == nullptr && aggression.stance == Stance::Idle && (move == nullptr || move->mode == MoveMode::Idle) &&
+				(activityRows.empty() || !activityRows[row].Occupied()) && attackMovesAll.empty();
+			if (!idleNow)
+				aggression.moodFlags &= static_cast<std::uint8_t>(~mood_flag::SeenIdle);
+			else if ((aggression.moodFlags & mood_flag::SeenIdle) == 0)
+			{
+				aggression.moodFlags |= mood_flag::SeenIdle | mood_flag::OffsetNext;
+				// Gone idle as its move ended: on the tick it ended.
+				const std::uint64_t entered = !endedRows.empty() && endedRows[row].tick + 1 >= tick ? endedRows[row].tick : tick;
+				aggression.nextScan = entered + context.Read<MoodRanges>().forceIdleTicks;
+			}
+
 			// Look for a new one on the scan tick (an undetected defector sees everyone as neutral: it looks for no one).
 			const bool defecting = !targetables.empty() && (targetables[row].classes & target_class::Undetected) != 0;
 			if (current == nullptr && tick >= aggression.nextScan && !defecting)
 			{
+				// getNextMoodTarget: the next look MoodAttackCheckRate on, the first after an idle entry or a wake-up
+				// moved by GameLogicRandomValue(-half, half).
 				aggression.nextScan = tick + aggression.scanInterval;
+				if ((aggression.moodFlags & mood_flag::OffsetNext) != 0 && aggression.stance == Stance::Idle)
+				{
+					const std::int64_t half = static_cast<std::int64_t>(aggression.scanInterval >> 1);
+					auto random = Engine::Math::Stream(context.Read<RandomSeed>().value, {tick, entities[row].index, entities[row].generation, 0x4D6Fu});
+					aggression.nextScan = static_cast<std::uint64_t>(static_cast<std::int64_t>(aggression.nextScan) + Engine::Math::UniformInt(random, -half, half));
+					aggression.moodFlags &= static_cast<std::uint8_t>(~mood_flag::OffsetNext);
+				}
 				const bool idle = move == nullptr || move->mode == MoveMode::Idle;
 				// Mood targeting (AIUpdateInterface::getNextMoodTarget called by the AI) of a human player's unit takes only
 				// what is clear to its player.
 				const std::uint32_t player = owners[row].player;
 				const bool unfogged = player < roster.PlayerCount() && roster.PlayerAt(player).human;
+				// PartitionFilterRejectBuildings: a computer player's units take enemy buildings too (m_acquireEnemies).
+				Aggression looking = aggression;
+				if (player < roster.PlayerCount() && !roster.PlayerAt(player).human)
+					looking.attackBuildings = true;
 				// Its attack priority set (AIUpdateInterface::getAttackInfo), if it has one.
 				std::optional<Prioritized> prioritized;
 				if (aggression.prioritySet != 0)
@@ -348,29 +441,31 @@ struct TargetingSystem
 						// (aiAttackObject then: its attack state takes only what it may attack.)
 						const SpatialEntry *attacker =
 							health != nullptr && health->lastDamageType != moods.healingDamageType ? spatial.Find(health->lastAttacker) : nullptr;
-						if (attacker != nullptr && Acceptable(relationships, *attacker, entities[row], selfTeam, player, weapon, aggression, unfogged))
+						if (attacker != nullptr && Acceptable(relationships, *attacker, entities[row], selfTeam, player, weapon, looking, unfogged, gate))
 							current = attacker;
 						break;
 					}
 					const Reachable reach{weapon.attackRange, radius};
 					// Within `range` of the gap between the bounding circles.
-					current = Closest(spatial, relationships, self, self, range + radius, false, entities[row], selfTeam, player, weapon, aggression, unfogged, nullptr, ranked,
-						human ? &reach : nullptr, radius);
+					current = Closest(spatial, relationships, self, self, range + radius, false, entities[row], selfTeam, player, weapon, looking, unfogged, nullptr, ranked,
+						human ? &reach : nullptr, radius, gate);
 					break;
 				}
 				case Stance::Hold:
-					current = Closest(spatial, relationships, self, self, weapon.attackRange + radius, false, entities[row], selfTeam, player, weapon, aggression, unfogged, nullptr,
-						ranked, nullptr, radius);
+					current = Closest(spatial, relationships, self, self, weapon.attackRange + radius, false, entities[row], selfTeam, player, weapon, looking, unfogged, nullptr,
+						ranked, nullptr, radius, gate);
 					break;
 				case Stance::Guard:
-					current = Closest(spatial, relationships, self, aggression.guardCenter, aggression.guardRadius, false, entities[row], selfTeam, owners[row].player, weapon, aggression,
-						false, AreaOf(context, aggression), ranked);
+					current = Closest(spatial, relationships, self, aggression.guardCenter, aggression.guardRadius, false, entities[row], selfTeam, owners[row].player, weapon, looking,
+						false, AreaOf(context, aggression), ranked, nullptr, {}, gate);
 					break;
 				case Stance::Hunt:
-					current = Closest(spatial, relationships, self, self, {}, true, entities[row], selfTeam, owners[row].player, weapon, aggression, false, AreaOf(context, aggression), ranked);
+					current = Closest(spatial, relationships, self, self, {}, true, entities[row], selfTeam, owners[row].player, weapon, aggression, false, AreaOf(context, aggression), ranked,
+						nullptr, {}, gate);
 					// AIHuntState: its player all hunting (getUnitsShouldHunt), none found by its priorities, it looks again without.
 					if (current == nullptr && ranked != nullptr && player < roster.PlayerCount() && roster.PlayerAt(player).unitsShouldHunt)
-						current = Closest(spatial, relationships, self, self, {}, true, entities[row], selfTeam, owners[row].player, weapon, aggression, false, AreaOf(context, aggression), nullptr);
+						current = Closest(spatial, relationships, self, self, {}, true, entities[row], selfTeam, owners[row].player, weapon, aggression, false, AreaOf(context, aggression), nullptr,
+							nullptr, {}, gate);
 					// AIAttackAreaState: no enemy left in the area, it is done (and idles).
 					if (current == nullptr && aggression.area != TriggerAreas::None)
 					{
@@ -388,8 +483,24 @@ struct TargetingSystem
 				continue;
 			if (current != nullptr)
 			{
-				if (!WithinAttackRange(weapon.attackRange, self, radius, *current))
-					*move = MoveToPoint(current->position.XY());
+				// outOfWeaponRangeObject: a weapon with leech range active is never out of range (it fires on where it stands).
+				const std::uint8_t slot = sets.empty() ? std::uint8_t{0} : sets[row].current;
+				const bool leeching = (target.leech >> slot & 1u) != 0;
+				if (!leeching && !WithinAttackRange(weapon.attackRange, self, radius, *current))
+				{
+					// Pathfinder::findAttackPath: to a spot it may attack from, on the line between them (halfway into its
+					// reach beyond the two bodies), slowing to arrive there rather than running on into the target; it
+					// stops once in reach.
+					const Engine::Math::FixedVector2 away = self - current->position.XY();
+					const Engine::Math::Fixed apart = Engine::Math::Length(away);
+					const Engine::Math::Fixed reach = weapon.attackRange / Engine::Math::Fixed::FromInt(2) + radius + current->radius;
+					Engine::Math::FixedVector2 approach = current->position.XY();
+					if (reach > Engine::Math::Fixed{} && apart > reach)
+						approach = approach + away * (reach / apart);
+					const Engine::Math::Fixed repath = Engine::Math::Fixed::FromInt(10);
+					if (move->mode != MoveMode::Point || Engine::Math::DistanceSquared(move->destination, approach) > repath * repath)
+						*move = MoveToPoint(approach, GoalClaim::Keep); // AIAttackApproachTargetState: no adjusting, its path's end claimed
+				}
 				else if (move->mode == MoveMode::Point)
 					move->mode = MoveMode::Idle;
 			}
@@ -410,6 +521,8 @@ template<>
 struct SystemTraits<engine::gameplay::TargetingSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.targeting";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<engine::gameplay::MovementSystem>;
 	using After = SystemTypeList<>;

@@ -37,7 +37,10 @@ public:
 					event.key.scancode == SDL_SCANCODE_UP ? KeyCode::up :
 					event.key.scancode == SDL_SCANCODE_DOWN ? KeyCode::down :
 					event.key.scancode == SDL_SCANCODE_LEFT ? KeyCode::left :
-					event.key.scancode == SDL_SCANCODE_RIGHT ? KeyCode::right : KeyCode::unknown;
+					event.key.scancode == SDL_SCANCODE_RIGHT ? KeyCode::right :
+					event.key.scancode == SDL_SCANCODE_DELETE ? KeyCode::del :
+					event.key.scancode >= SDL_SCANCODE_A && event.key.scancode <= SDL_SCANCODE_Z
+						? static_cast<KeyCode>(static_cast<int>(KeyCode::a) + (event.key.scancode - SDL_SCANCODE_A)) : KeyCode::unknown;
 				out.modifiers = ((event.key.mod & SDL_KMOD_ALT) ? modifier_alt : 0u) |
 					((event.key.mod & SDL_KMOD_CTRL) ? modifier_control : 0u) |
 					((event.key.mod & SDL_KMOD_SHIFT) ? modifier_shift : 0u) |

@@ -38,6 +38,15 @@ struct CameraScriptCommand
 		LookTowardObject,   // rotateCameraTowardObject: unit, timed, hold
 		LookTowardWaypoint, // rotateCameraTowardPosition: points {location}, timed, flag (reverse)
 		Shake,              // doScreenShake: count (the shake type), at the camera's position
+		ShakerAt,           // doC3CameraShake: points {waypoint}; values {amplitude (degrees), duration (seconds), radius}
+		Slave,              // doC3CameraEnableSlaveMode: unit (the named unit), bone: the camera rides the bone
+		SlaveOff,           // doC3CameraDisableSlaveMode
+		MotionBlur,         // doCameraMotionBlur: flag (zoom in), count (1: saturate)
+		MotionBlurJump,     // doCameraMotionBlurJump: points {waypoint}, count (1: saturate)
+		MotionBlurFollow,   // CAMERA_MOTION_BLUR_FOLLOW: count (the pan filter's amount: FM_VIEW_MB_PAN_ALPHA + count)
+		MotionBlurEndFollow, // CAMERA_MOTION_BLUR_END_FOLLOW
+		MoveToSelection,    // doModCameraMoveToSelection
+		TimeMultiplier,     // SET_VISUAL_SPEED_MULTIPLIER: count (View::setTimeMultiplier)
 	};
 
 	Kind kind{Kind::MoveTo};
@@ -53,6 +62,7 @@ struct CameraScriptCommand
 	std::int64_t holdMilliseconds{0};
 	std::int64_t count{0};
 	bool flag{false};
+	std::string bone; // Slave: the bone of `unit` the camera rides
 };
 
 struct CameraScriptHost
@@ -251,6 +261,55 @@ inline void AddCameraVocabulary(engine::scripting::Vocabulary &vocabulary, const
 			push(std::move(command));
 		}
 	});
+	// CAMERA_ADD_SHAKER_AT(waypoint, amplitude, seconds, radius): doC3CameraShake (W3DView::Add_Camera_Shake); the original
+	// has no answer to a missing waypoint (it reads through a null one), so none queues nothing.
+	vocabulary.AddAction("CAMERA_ADD_SHAKER_AT", [waypoints, push](ScriptCallContext &c) {
+		if (const auto *waypoint = waypoints->Find(parameters::Text(c, 0)))
+		{
+			CameraScriptCommand command{Kind::ShakerAt, {waypoint->position}};
+			command.values = {parameters::Number(c, 1), parameters::Number(c, 2), parameters::Number(c, 3)};
+			push(std::move(command));
+		}
+	});
+	// CAMERA_ENABLE_SLAVE_MODE(unit, bone) / CAMERA_DISABLE_SLAVE_MODE: W3DView::cameraEnableSlaveMode / cameraDisableSlaveMode.
+	vocabulary.AddAction("CAMERA_ENABLE_SLAVE_MODE", [push](ScriptCallContext &c) {
+		CameraScriptCommand command{Kind::Slave};
+		command.unit = parameters::Text(c, 0);
+		command.bone = parameters::Text(c, 1);
+		push(std::move(command));
+	});
+	vocabulary.AddAction("CAMERA_DISABLE_SLAVE_MODE", [push](ScriptCallContext &) { push({Kind::SlaveOff}); });
+	// CAMERA_MOTION_BLUR(zoom in, saturate); CAMERA_MOTION_BLUR_JUMP(waypoint, saturate) (a missing waypoint: nothing);
+	// CAMERA_MOTION_BLUR_FOLLOW(amount); CAMERA_MOTION_BLUR_END_FOLLOW.
+	vocabulary.AddAction("CAMERA_MOTION_BLUR", [push](ScriptCallContext &c) {
+		CameraScriptCommand command{Kind::MotionBlur};
+		command.flag = parameters::Integer(c, 0) != 0;
+		command.count = parameters::Integer(c, 1) != 0 ? 1 : 0;
+		push(std::move(command));
+	});
+	vocabulary.AddAction("CAMERA_MOTION_BLUR_JUMP", [waypoints, push](ScriptCallContext &c) {
+		if (const auto *waypoint = waypoints->Find(parameters::Text(c, 0)))
+		{
+			CameraScriptCommand command{Kind::MotionBlurJump, {waypoint->position}};
+			command.count = parameters::Integer(c, 1) != 0 ? 1 : 0;
+			push(std::move(command));
+		}
+	});
+	vocabulary.AddAction("CAMERA_MOTION_BLUR_FOLLOW", counted(Kind::MotionBlurFollow));
+	vocabulary.AddAction("CAMERA_MOTION_BLUR_END_FOLLOW", [push](ScriptCallContext &) { push({Kind::MotionBlurEndFollow}); });
+	// MOVE_CAMERA_TO_SELECTION: doModCameraMoveToSelection (the selection is the player's, which the client holds).
+	vocabulary.AddAction("MOVE_CAMERA_TO_SELECTION", [push](ScriptCallContext &) { push({Kind::MoveToSelection}); });
+	// SET_VISUAL_SPEED_MULTIPLIER(multiple): View::setTimeMultiplier.
+	vocabulary.AddAction("SET_VISUAL_SPEED_MULTIPLIER", counted(Kind::TimeMultiplier));
+	// CAMERA_SET_AUDIBLE_DISTANCE(distance): doCameraSetAudibleDistance is empty in the original ("No-op").
+	vocabulary.AddAction("CAMERA_SET_AUDIBLE_DISTANCE", [](ScriptCallContext &) {});
+	// OVERSIZE_TERRAIN(tiles): doOversizeTheTerrain grew the block of terrain tiles the W3D height map drew around the
+	// camera (and forceRedraw). The port's terrain renderer draws the whole map, so there is nothing to grow.
+	vocabulary.AddAction("OVERSIZE_TERRAIN", [](ScriptCallContext &) {});
+	// RESIZE_VIEW_GUARDBAND(x, y): doResizeViewGuardband (View::setGuardBandBias) only widened the coarse region
+	// W3DView::getAxisAlignedViewRegion gathered drawables from before W3D culled them; the port's renderer culls each
+	// object against the view itself, so a wider region draws nothing more.
+	vocabulary.AddAction("RESIZE_VIEW_GUARDBAND", [](ScriptCallContext &) {});
 	// doCameraMoveHome: does nothing.
 	vocabulary.AddAction("CAMERA_MOVE_HOME", [](ScriptCallContext &) {});
 	vocabulary.AddCondition("CAMERA_MOVEMENT_FINISHED", [host](ScriptCallContext &) {

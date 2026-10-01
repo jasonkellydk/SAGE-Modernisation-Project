@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <utility>
 
 import engine.gameplay.rts.vision.systems.vision_system;
@@ -99,6 +100,91 @@ BOOST_AUTO_TEST_SUITE(vision)
 // DiscreteCircle (Core DiscreteCircle.cpp: generateEdgePairs' Bresenham variant, removeDuplicates keeping the last line
 // of a row, drawCircle mirroring about the centre row): a radius of 1 clears a column of three cells; 3 and 5 the rows
 // below, retail's shapes exactly.
+// ShroudMap::CellOf's multiply is the division it replaces ((x / cellSize).Floor(), worldToCell), for every cell size
+// tried, at cell edges and a spread of coordinates, negative and huge ones included.
+BOOST_AUTO_TEST_CASE(cell_of_matches_the_division)
+{
+	for (const Fixed cellSize : {Fixed::FromInt(40), Fixed::FromInt(10), Fixed::FromRatio(25, 2), Fixed::FromRaw(65537), Fixed::FromRaw(3000001), Fixed::FromInt(1)})
+	{
+		ShroudMap map;
+		map.Init(Fixed::FromInt(800), Fixed::FromInt(800), cellSize, 1, 150);
+		const auto check = [&](std::int64_t raw) {
+			const Fixed x = Fixed::FromRaw(raw);
+			BOOST_REQUIRE_EQUAL(map.CellIndexOf(x), static_cast<std::int32_t>((x / map.CellSize()).Floor()));
+		};
+		for (std::int64_t cell = -3; cell < 200; ++cell)
+			for (std::int64_t offset = -3; offset <= 3; ++offset)
+			{
+				check(cell * cellSize.Raw() + offset);
+				check(cell * cellSize.Raw() + cellSize.Raw() / 2 + offset);
+			}
+		std::uint64_t state = 0x9E3779B97F4A7C15u;
+		for (int sample = 0; sample < 200000; ++sample)
+		{
+			state = state * 6364136223846793005u + 1442695040888963407u;
+			check(static_cast<std::int64_t>(state >> 32) - (std::int64_t{1} << 20));
+		}
+		for (std::int64_t raw : {std::int64_t{0}, std::int64_t{1}, (std::int64_t{1} << 32) - 70000, (std::int64_t{1} << 32) - 1, std::int64_t{1} << 32, (std::int64_t{1} << 40) + 12345})
+			check(raw);
+	}
+}
+
+// FootprintCells' box of cells (a 64-bit map, the allowance only when it could bind) takes doRectFill's cells in its
+// order (PartitionData::doRectFill, addSubPixToCoverage: each once, while under calcMaxCoiForShape's allowance), as the
+// straight sampling below does, for boxes of every size and turn, on and off the map's edges.
+BOOST_AUTO_TEST_CASE(rect_cells_match_the_sampled_fill)
+{
+	for (const Fixed cellSize : {Fixed::FromInt(40), Fixed::FromInt(10)})
+	{
+		ShroudMap map;
+		map.Init(Fixed::FromInt(800), Fixed::FromInt(600), cellSize, 1, 150);
+		std::uint64_t state = 0x2545F4914F6CDD1Du;
+		const auto next = [&](std::uint64_t range) {
+			state = state * 6364136223846793005u + 1442695040888963407u;
+			return (state >> 33) % range;
+		};
+		std::vector<std::array<std::int32_t, 2>> cells, expected;
+		for (int sample = 0; sample < 20000; ++sample)
+		{
+			PartitionFootprint footprint;
+			footprint.box = 1;
+			footprint.major = Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{160} << 16)) + (sample % 7 == 0 ? 0 : 1));
+			footprint.minor = sample % 5 == 0 ? footprint.major : Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{80} << 16)));
+			const Engine::Math::FixedVector2 at{Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{880} << 16)) - (std::int64_t{40} << 16)),
+				Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{680} << 16)) - (std::int64_t{40} << 16))};
+			const Engine::Math::TurnAngle facing{sample % 3 == 0 ? static_cast<std::uint32_t>(next(4)) << 30 : static_cast<std::uint32_t>(next(std::uint64_t{1} << 32))};
+			FootprintCells(map, footprint, at, facing, cells);
+			// doRectFill, straight: every sample, a set of the cells taken, the allowance always.
+			expected.clear();
+			const Footprint shape = footprint.Shape();
+			const std::size_t allowance = footprint_cells_detail::Allowance(map, shape);
+			std::set<std::pair<std::int32_t, std::int32_t>> taken;
+			const Fixed c = Engine::Math::Cos(facing), s = Engine::Math::Sin(facing);
+			const Fixed step = map.CellSize() / Fixed::FromInt(2);
+			const Fixed ydx = s * step, ydy = -c * step, xdx = c * step, xdy = s * step;
+			const std::int64_t stepsX = (shape.major * Fixed::FromInt(2) / step).Ceil();
+			const std::int64_t stepsY = (shape.minor * Fixed::FromInt(2) / step).Ceil();
+			Fixed rowX = at.x - shape.major * c - shape.minor * s;
+			Fixed rowY = at.y + shape.minor * c - shape.major * s;
+			for (std::int64_t iy = 0; iy < stepsY; ++iy, rowX += ydx, rowY += ydy)
+			{
+				Fixed x = rowX, y = rowY;
+				for (std::int64_t ix = 0; ix < stepsX; ++ix, x += xdx, y += xdy)
+				{
+					const auto cell = map.CellOf(x, y);
+					if (cell[0] < 0 || cell[1] < 0 || cell[0] >= map.CellsX() || cell[1] >= map.CellsY() || expected.size() >= allowance)
+						continue;
+					if (taken.insert({cell[0], cell[1]}).second)
+						expected.push_back(cell);
+				}
+			}
+			BOOST_REQUIRE_EQUAL(cells.size(), expected.size());
+			for (std::size_t index = 0; index < cells.size(); ++index)
+				BOOST_REQUIRE(cells[index][0] == expected[index][0] && cells[index][1] == expected[index][1]);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(legacy_parity_discrete_circle_scanlines)
 {
 	using Rows = std::map<std::int32_t, std::pair<std::int32_t, std::int32_t>>;

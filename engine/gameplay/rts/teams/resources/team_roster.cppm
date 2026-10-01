@@ -91,7 +91,9 @@ public:
 	std::uint32_t AddTeam(Team team)
 	{
 		m_teams.push_back(std::move(team));
-		return static_cast<std::uint32_t>(m_teams.size() - 1);
+		const auto index = static_cast<std::uint32_t>(m_teams.size() - 1);
+		Index(index);
+		return index;
 	}
 
 	std::optional<std::uint32_t> FindPlayer(std::string_view name) const
@@ -104,10 +106,8 @@ public:
 
 	std::optional<std::uint32_t> FindTeam(std::string_view name) const
 	{
-		for (std::uint32_t index = 0; index < m_teams.size(); ++index)
-			if (m_teams[index].name == name)
-				return index;
-		return std::nullopt;
+		const auto found = m_firstNamed.find(name);
+		return found != m_firstNamed.end() ? std::optional(found->second) : std::nullopt;
 	}
 
 	Player &PlayerAt(std::uint32_t index) { return m_players.at(index); }
@@ -145,23 +145,32 @@ public:
 		instance.active = false;
 		instance.attackCommonTarget = of.attackCommonTarget;
 		m_teams.push_back(std::move(instance));
-		return static_cast<std::uint32_t>(m_teams.size() - 1);
+		const auto index = static_cast<std::uint32_t>(m_teams.size() - 1);
+		Index(index);
+		return index;
 	}
 	// The team's instances, newest first (TeamPrototype's instance list): the further ones, then the level's own
 	// record while it holds anything, was made, or is a singleton.
 	std::vector<std::uint32_t> Instances(std::uint32_t prototype) const
 	{
 		std::vector<std::uint32_t> out;
-		for (std::uint32_t index = static_cast<std::uint32_t>(m_teams.size()); index-- > 0;)
-			if (m_teams[index].alive && m_teams[index].prototype == prototype)
-				out.push_back(index);
+		InstancesInto(prototype, out);
+		return out;
+	}
+	// The same into `out` (cleared first): a caller walking many teams reuses one buffer.
+	void InstancesInto(std::uint32_t prototype, std::vector<std::uint32_t> &out) const
+	{
+		out.clear();
+		if (prototype < m_instancesOf.size())
+			for (auto it = m_instancesOf[prototype].rbegin(); it != m_instancesOf[prototype].rend(); ++it)
+				if (m_teams[*it].alive)
+					out.push_back(*it);
 		if (prototype < m_teams.size())
 		{
 			const Team &own = m_teams[prototype];
 			if (own.alive && (own.singleton || own.created || !own.members.empty()))
 				out.push_back(prototype);
 		}
-		return out;
 	}
 	// An instance deleted (its members, if any, must have left): gone, its index unused.
 	void DeleteInstance(std::uint32_t team)
@@ -314,10 +323,27 @@ public:
 			return false;
 		m_players = std::move(players);
 		m_teams = std::move(teams);
+		m_firstNamed.clear();
+		m_instancesOf.clear();
+		for (std::uint32_t index = 0; index < m_teams.size(); ++index)
+			Index(index);
 		return true;
 	}
 
 private:
+	// The lookups kept beside the teams (rebuilt on load): the first team of each name (FindTeam), and each level
+	// team's further instances in the order they were made (Instances).
+	void Index(std::uint32_t index)
+	{
+		const Team &team = m_teams[index];
+		m_firstNamed.try_emplace(team.name, index);
+		if (m_instancesOf.size() < m_teams.size())
+			m_instancesOf.resize(m_teams.size());
+		if (team.prototype != Team::Own && team.prototype < m_instancesOf.size())
+			m_instancesOf[team.prototype].push_back(index);
+	}
+	std::map<std::string, std::uint32_t, std::less<>> m_firstNamed;
+	std::vector<std::vector<std::uint32_t>> m_instancesOf;
 	std::vector<Player> m_players;
 	std::vector<Team> m_teams;
 };

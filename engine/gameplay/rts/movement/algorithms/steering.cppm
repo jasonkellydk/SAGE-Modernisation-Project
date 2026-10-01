@@ -34,6 +34,13 @@ inline Fixed ArrivalDistance(const Locomotion &motion, bool final) noexcept
 	return distance;
 }
 
+// Locomotor::getMaxTurnRate: its turn rate a tick, twice that when ultra-accurate (TURN_FACTOR: "monster turning ability").
+inline std::int64_t MaxTurnRate(const Locomotion &motion) noexcept
+{
+	const auto rate = static_cast<std::int64_t>(motion.locomotor.turnRate.units);
+	return motion.ultraAccurate != 0 ? rate * 2 : rate;
+}
+
 inline Fixed Approach(Fixed value, Fixed target, Fixed up, Fixed down) noexcept
 {
 	if (value < target)
@@ -63,6 +70,9 @@ inline void HoldHeight(Transform &transform, const Locomotion &motion, Fixed gro
 		target = surface + locomotor.preferredHeight;
 		break;
 	}
+	// PRECISE_Z_POS: its goal's height instead (handleBehaviorZ: preferredHeight = goalPos.z).
+	if (motion.preciseZ != 0)
+		target = motion.preciseHeight;
 	transform.position.z += (target - transform.position.z) * std::clamp(locomotor.preferredHeightDamping, Fixed{}, Fixed::One());
 }
 
@@ -111,7 +121,7 @@ inline bool Face(Transform &transform, Locomotion &motion, FixedVector2 goal) no
 		Steer(transform, motion, goal, false);
 		return false;
 	}
-	const auto limit = static_cast<std::int64_t>(locomotor.turnRate.units);
+	const auto limit = MaxTurnRate(motion);
 	const std::int64_t turn = std::clamp<std::int64_t>(wanted, -limit, limit);
 	motion.turning = static_cast<std::int8_t>(wanted > limit ? 1 : wanted < -limit ? -1 : 0);
 	transform.facing += TurnAngle{static_cast<std::uint32_t>(turn)};
@@ -156,7 +166,7 @@ inline bool Steer(Transform &transform, Locomotion &motion, FixedVector2 goal, b
 		heading += TurnAngle{static_cast<std::uint32_t>(motion.wanderOffset)};
 	}
 	const std::int32_t wanted = Engine::Math::DeltaTo(transform.facing, heading);
-	const auto limit = static_cast<std::int64_t>(locomotor.turnRate.units);
+	const auto limit = MaxTurnRate(motion);
 	const std::int64_t turn = std::clamp<std::int64_t>(wanted, -limit, limit);
 	// Locomotor::rotateObjAroundLocoPivot: turning when it needs more than its rate allows.
 	motion.turning = static_cast<std::int8_t>(wanted > limit ? 1 : wanted < -limit ? -1 : 0);
@@ -274,7 +284,12 @@ inline bool IsGroundLocomotor(const LocomotorDefinition &locomotor) noexcept
 	}
 }
 
-inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 goal, bool final, Fixed onPath, std::uint64_t tick) noexcept
+// `desiredSpeed`: the speed its AI asks for (no more than its locomotor's); `blocked`: held back by a unit in its way
+// (AIUpdateInterface::doLocomotor's blocked, locoUpdate_moveTowardsPosition): going no slower than it asks, it is not;
+// otherwise it slows to that speed (scrubVelocity2D), turns toward its goal where it is and carries on along its facing,
+// still blocked while it turns (a wanderer does not turn and stays blocked).
+inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 goal, bool final, Fixed onPath, std::uint64_t tick, Fixed desiredSpeed,
+	bool *blocked) noexcept
 {
 	using namespace ground_detail;
 	const auto &locomotor = motion.locomotor;
@@ -293,9 +308,26 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 	onPath = std::max(onPath, distance);
 	const bool wasBraking = motion.brakingStatus != 0;
 	motion.turning = 0;
-	const Fixed desired = locomotor.maxSpeed;
+	const Fixed desired = std::min(locomotor.maxSpeed, desiredSpeed);
 	const TurnAngle heading = Engine::Math::Heading(toGoal);
-	const auto rate = static_cast<std::int64_t>(locomotor.turnRate.units);
+	const auto rate = MaxTurnRate(motion);
+	if (blocked != nullptr && *blocked && desired > Abs(motion.speed))
+		*blocked = false;
+	if (blocked != nullptr && *blocked)
+	{
+		motion.speed = std::clamp(motion.speed, Fixed{} - desired, desired);
+		if (locomotor.wanderWidth == Fixed{})
+		{
+			TurnToward(transform, motion, heading, rate);
+			*blocked = motion.turning != 0;
+		}
+		if (motion.braking == 0)
+		{
+			transform.position.x += Engine::Math::Cos(transform.facing) * motion.speed;
+			transform.position.y += Engine::Math::Sin(transform.facing) * motion.speed;
+		}
+		return false;
+	}
 	switch (locomotor.appearance)
 	{
 	case LocomotorAppearance::Treads:
@@ -459,5 +491,11 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 		transform.position.y += Engine::Math::Sin(transform.facing) * motion.speed;
 	}
 	return false;
+}
+
+// Unhindered, at its locomotor's speed.
+inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 goal, bool final, Fixed onPath, std::uint64_t tick) noexcept
+{
+	return SteerGround(transform, motion, goal, final, onPath, tick, motion.locomotor.maxSpeed, nullptr);
 }
 }

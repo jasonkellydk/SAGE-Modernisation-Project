@@ -1,0 +1,31 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+
+import games.generalszh.presentation.objects.algorithms.cloud_drift;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(cloud_layer)
+
+// TerrainShader2Stage::updateNoise1 (W3DShaderManager.cpp): the clouds slide -0.02 texture widths a second in x and
+// -0.03 in y (1.5 times), kept within one width either way (an offset below -1 gains a width); the terrain reads them at
+// its position over 315 units (STRETCH_FACTOR: 1 / (63 * MAP_XY_FACTOR / 2)) plus the slide. After 10 s: (-0.2, -0.3);
+// after 30 s more: x -0.8, y -1.2 + 1 = -0.2.
+BOOST_AUTO_TEST_CASE(legacy_parity_clouds_slide_and_wrap_as_update_noise1)
+{
+	CloudLayer clouds;
+	DriftClouds(clouds, 10.0f);
+	BOOST_TEST(clouds.x == -0.2f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(clouds.y == -0.3f, boost::test_tools::tolerance(1e-5f));
+	DriftClouds(clouds, 30.0f);
+	BOOST_TEST(clouds.x == -0.8f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(clouds.y == -0.2f, boost::test_tools::tolerance(1e-5f));
+	const std::array<float, 4> projection = CloudProjection(clouds);
+	BOOST_TEST(projection[0] == 1.0f / 315.0f, boost::test_tools::tolerance(1e-7f));
+	BOOST_TEST(projection[1] == 1.0f / 315.0f, boost::test_tools::tolerance(1e-7f));
+	BOOST_TEST(projection[2] == clouds.x);
+	BOOST_TEST(projection[3] == clouds.y);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

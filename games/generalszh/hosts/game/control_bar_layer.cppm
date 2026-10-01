@@ -13,10 +13,14 @@ import games.generalszh.content.control_bar.control_bar_scheme;
 import games.generalszh.hosts.game.shell_menu;
 import games.generalszh.hosts.game.game_client;
 import games.generalszh.hud.control_bar_view;
+import games.generalszh.hud.idle_workers;
+import engine.gameplay.common.spatial.components.transform;
 import games.generalszh.hud.generals_powers_view;
 import games.generalszh.hud.shortcut_bar_view;
 import games.generalszh.hosts.game.radar_minimap;
 import games.generalszh.presentation.hud.algorithms.power_bar;
+import games.generalszh.presentation.hud.algorithms.experience_bar;
+import games.generalszh.presentation.hud.algorithms.cameo_flash_steps;
 import Engine.Core.Math.FixedPresentation;
 
 // The in-game control bar in a match (the original's InGameUI with ControlBar.wnd and its side's ControlBarScheme):
@@ -57,6 +61,16 @@ public:
 					cell.border_color.alpha = 0.0f;
 					cell.image = {};
 				}
+		DressRightHud();
+		// W3DCommandBarGenExpDraw draws the general's experience bar alone, never the window's own look.
+		if (Engine::UI::WND::WNDWindow *experience = m_menu.Document().Find_Window("ControlBar.wnd:GeneralsExp"))
+			for (auto &state : experience->draw_states)
+				for (auto &cell : state.cells)
+				{
+					cell.color.alpha = 0.0f;
+					cell.border_color.alpha = 0.0f;
+					cell.image = {};
+				}
 		m_powerBar = {game.View() != nullptr ? game.View()->Content().gameData.powerBarBase : 7,
 			game.View() != nullptr ? Engine::Math::ToFloat(game.View()->Content().gameData.powerBarIntervals) : 3.0f,
 			game.View() != nullptr ? game.View()->Content().gameData.powerBarYellowRange : 5};
@@ -66,6 +80,29 @@ public:
 		m_moneyPattern = Localized(strings, "GUI:ControlBarMoneyDisplay");
 		m_viewModel = std::make_unique<hud::ControlBarViewModel>([&game](commands::GameCommand command) { game.Submit(command); },
 			[this](std::int64_t money) { return Money(money); });
+		// The panels' texts (CONTROLBAR:UnderConstructionDesc, CONTROLBAR:OCLTimerDesc).
+		m_viewModel->SetLabels([&strings](std::string_view label) { return Localized(strings, label); });
+		// InGameUI::selectNextIdleWorker: the next idle worker selected alone and the view centred on it (userLookAt).
+		m_viewModel->SetSelectNextIdleWorker([&game] {
+			session::SessionView *now = game.View();
+			const auto player = game.LocalPlayer();
+			if (now == nullptr || !player)
+				return;
+			const std::vector<ecs::Entity> idle = hud::IdleWorkers(*now, *player);
+			const std::vector<ecs::Entity> selected = game.Selection();
+			const auto next = hud::NextIdleWorker(*now, idle, selected);
+			if (!next)
+				return;
+			game.SelectOnly({*next});
+			if (const auto *at = now->World().Get<engine::gameplay::Transform>(*next))
+				game.UserLookAt(Engine::Math::ToFloat(at->position.x), Engine::Math::ToFloat(at->position.y));
+		});
+		// ControlBar::processCommandUI: a pressed button stops its CAMEO_FLASH.
+		m_viewModel->SetPressed([&game](std::size_t slot, std::string_view button) {
+			if (session::SessionView *now = game.View())
+				if (auto *flashes = now->World().FindResource<presentation::CameoFlashes>())
+					presentation::StopCameoFlash(*flashes, button, slot);
+		});
 		m_bindings.emplace(m_menu.Document());
 		const std::array<int, 4> clock = m_scheme != nullptr ? m_scheme->buildUpClockColor : std::array<int, 4>{0, 0, 0, 100};
 		m_view.emplace(*m_bindings, m_menu.Document(), *m_viewModel, [this](std::string_view name) { return m_menu.Image(name); },
@@ -98,7 +135,24 @@ public:
 			m_scheme = m_schemes.ForSide(side);
 		}
 		const std::vector<ecs::Entity> selection = game.Selection();
-		m_viewModel->Apply(hud::ReadControlBar(*view, player, selection));
+		hud::ControlBarState state = hud::ReadControlBar(*view, player, selection);
+		// CAMEO_FLASH: ControlBar::update's flash check over the command windows' buttons as they show (once a logic
+		// frame); no selection (CB_CONTEXT_NONE) clears every window's flash.
+		if (auto *flashes = view->World().FindResource<presentation::CameoFlashes>())
+		{
+			std::array<std::string_view, hud::CommandButtons> buttons{};
+			for (std::size_t slot = 0; slot < hud::CommandButtons; ++slot)
+				if (state.slots[slot].button != nullptr && state.slots[slot].state != gameplay::ButtonState::Hidden)
+					buttons[slot] = state.slots[slot].button->name;
+			if (selection.empty())
+				presentation::ClearCameoFlashing(*flashes);
+			presentation::StepCameoFlash(*flashes, view->CurrentTick(), buttons);
+			for (std::size_t slot = 0; slot < hud::CommandButtons; ++slot)
+				state.slots[slot].flashing = flashes->flashing[slot];
+		}
+		m_viewModel->Apply(std::move(state));
+		m_viewModel->ApplyPortrait(hud::ReadPortrait(*view, player, selection));
+		ShowRightHudImage(!m_viewModel->portraitShown.Get());
 		if (m_shortcut)
 		{
 			m_shortcut->Apply(hud::ReadShortcutBar(*view, player));
@@ -239,6 +293,7 @@ public:
 		DrawScheme(renderer, true);
 		m_menu.Draw(renderer);
 		DrawPowerBar(renderer);
+		DrawExperienceBar(renderer);
 		DrawRadar(renderer);
 		DrawScheme(renderer, false);
 		if (ShortcutShown())
@@ -441,6 +496,88 @@ private:
 							window->draw_states[state].cells[0].image = m_menu.Image(image);
 						}
 		}
+		// ControlBarScheme::init: the experience bar's frame (ExpBarForeground) shows the scheme's ExpBarForegroundImage.
+		if (Engine::UI::WND::WNDWindow *frame = document.Find_Window("ControlBar.wnd:ExpBarForeground"))
+			if (const std::string_view image = scheme.Image("ExpBarForegroundImage"); !image.empty())
+			{
+				frame->draw_states[0].cells[0].image_name = std::string(image);
+				frame->draw_states[0].cells[0].image = m_menu.Image(image);
+			}
+		// ControlBarScheme::init -> ControlBar::updateUpDownImages / setUpDownImages: the scheme does not dress the
+		// minimise button itself (its MinMaxButton images are never set); the bar's stage does. At its default stage the
+		// button shows ToggleButtonDownOn, pointed at ToggleButtonDownIn, pressed while pointed at ToggleButtonDownPushed
+		// (GadgetButtonSetEnabledImage, SetHiliteImage, SetHiliteSelectedImage).
+		if (Engine::UI::WND::WNDWindow *toggle = document.Find_Window("ControlBar.wnd:ButtonLarge"))
+		{
+			const auto images = scheme.MinimizeButtonImages(false); // the bar's default stage (no minimised stage yet)
+			for (const auto &[state, cell, image] : {std::tuple{0, 0, images.enabled}, std::tuple{2, 0, images.hilite}, std::tuple{2, 1, images.hiliteSelected}})
+				if (!image.empty() && static_cast<std::size_t>(cell) < toggle->draw_states[state].cells.size())
+				{
+					toggle->draw_states[state].cells[cell].image_name = std::string(image);
+					toggle->draw_states[state].cells[cell].image = m_menu.Image(image);
+				}
+		}
+	}
+
+	// W3DCommandBarGenExpDraw: the local player's progress into their rank as a bar rising up the GeneralsExp window
+	// (none for a player no longer playing: no powers state then), in screen pixels.
+	void DrawExperienceBar(Graphics::Renderer2D &renderer)
+	{
+		const Engine::UI::WND::WNDWindow *window = m_menu.Document().Find_Window("ControlBar.wnd:GeneralsExp");
+		if (window == nullptr || Engine::UI::WND::Has_Flag(window->flags, Engine::UI::WND::WindowFlag::Hidden) || !m_powers || !m_powers->generalEnabled.Get())
+			return;
+		const auto bottom = m_menu.ImageSize("GenExpBarBottom1"), centre = m_menu.ImageSize("GenExpBar1"), top = m_menu.ImageSize("GenExpBarTop1");
+		if (!bottom || !centre || !top)
+			return;
+		const float left = static_cast<float>(window->screen_region.left) * m_menu.ScaleX();
+		const float right = static_cast<float>(window->screen_region.right) * m_menu.ScaleX();
+		const float above = static_cast<float>(window->screen_region.top) * m_menu.ScaleY();
+		const int height = static_cast<int>(static_cast<float>(window->screen_region.bottom - window->screen_region.top) * m_menu.ScaleY());
+		const auto quads = presentation::LayOutExperienceBar(m_powers->progress.Get(), height, bottom->second, centre->second, top->second);
+		if (quads.empty())
+			return;
+		m_list.Clear();
+		for (const presentation::ExperienceQuad &quad : quads)
+		{
+			Engine::UI::WND::ImageRef image = m_menu.Image(quad.piece == presentation::ExperiencePiece::Bottom ? "GenExpBarBottom1"
+					: quad.piece == presentation::ExperiencePiece::Top                                        ? "GenExpBarTop1"
+																											  : "GenExpBar1");
+			const float v0 = image.uv.top, v1 = image.uv.bottom;
+			image.uv.top = v0 + (v1 - v0) * quad.vTop;
+			image.uv.bottom = v0 + (v1 - v0) * quad.vBottom;
+			m_list.Add_Image(image, {left, above + static_cast<float>(quad.top), right, above + static_cast<float>(quad.bottom)}, {1.0f, 1.0f, 1.0f, 1.0f});
+		}
+		m_renderer.Render_Draw_List(m_list, renderer);
+	}
+
+	// The right HUD (ControlBar.wnd:RightHUD, drawn by W3DRightHUDDraw): its image the scheme's RightHUDImage
+	// (ControlBarScheme::init -> updateRightHUDImage: winSetEnabledImage), drawn alone while its IMAGE status is on and
+	// nothing at all otherwise (W3DRightHUDDraw draws the default look only with WIN_STATUS_IMAGE; never its colour).
+	void DressRightHud()
+	{
+		Engine::UI::WND::WNDWindow *hud = m_menu.Document().Find_Window("ControlBar.wnd:RightHUD");
+		if (hud == nullptr)
+			return;
+		for (auto &state : hud->draw_states)
+			for (auto &cell : state.cells)
+			{
+				cell.color.alpha = 0.0f;
+				cell.border_color.alpha = 0.0f;
+			}
+		if (m_scheme != nullptr)
+			if (const std::string_view image = m_scheme->RightHudImage(); !image.empty())
+			{
+				hud->draw_states[0].cells[0].image_name = std::string(image);
+				hud->draw_states[0].cells[0].image = m_menu.Image(image);
+			}
+	}
+
+	// setPortraitByObject / setPortraitByImage: no portrait (nothing selected, or the build queue in its place) sets the
+	// right HUD's IMAGE status, a portrait clears it.
+	void ShowRightHudImage(bool shown)
+	{
+		if (Engine::UI::WND::WNDWindow *hud = m_menu.Document().Find_Window("ControlBar.wnd:RightHUD"))
+			hud->image_style = shown;
 	}
 
 	// W3DPowerDraw: the power made as a green, yellow or red strip tiled from the window's left, the power used as the

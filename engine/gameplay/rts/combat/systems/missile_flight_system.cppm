@@ -1,5 +1,7 @@
 export module engine.gameplay.rts.combat.systems.missile_flight_system;
 import std;
+export import engine.gameplay.rts.combat.resources.garrison_kills;
+export import engine.gameplay.common.lifetime.components.lifetime;
 
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.components.countermeasures;
@@ -64,12 +66,16 @@ struct MissileFlightSystem
 {
 	using Query = ecs::Query<ecs::Write<MissileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<GroundHeight>, ecs::Read<WeaponCatalog>, ecs::Read<PhysicsSettings>,
-		ecs::Read<Relationships>, ecs::Write<MissileDetonations>>;
+		ecs::Read<Relationships>, ecs::Write<MissileDetonations>, ecs::Write<MissileGarrisonHits>>;
 	// Whether a victim that left the fight still exists (dying, its hulk still there) or is gone; a decoyed victim's
 	// flares and where they are.
-	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<Countermeasures>, ecs::Read<Transform>>;
+	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<Countermeasures>, ecs::Read<Transform>, ecs::Read<Health>>;
 
-	void BeforeChunks(Query &query, ecs::SystemContext &context) { context.Write<MissileDetonations>().Reset(query.PreparedChunkCount()); }
+	void BeforeChunks(Query &query, ecs::SystemContext &context)
+	{
+		context.Write<MissileDetonations>().Reset(query.PreparedChunkCount());
+		context.Write<MissileGarrisonHits>().Reset(query.PreparedChunkCount());
+	}
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -79,6 +85,7 @@ struct MissileFlightSystem
 		const Fixed gravity = context.Read<PhysicsSettings>().gravity;
 		const Relationships &relationships = context.Read<Relationships>();
 		auto &detonated = context.Write<MissileDetonations>().Slot(context);
+		auto &garrisonHits = context.Write<MissileGarrisonHits>().Slot(context);
 		auto missiles = chunk.Get<MissileFlight>();
 		auto transforms = chunk.Get<Transform>();
 		auto attitudes = chunk.Get<Attitude>();
@@ -97,7 +104,21 @@ struct MissileFlightSystem
 				if (m.noDamage != 0)
 					landed.damageScale = Fixed{}; // handleProjectileDetonation without damage
 				detonated.push_back(landed);
-				context.Commands().Destroy(entities[row]);
+				// MissileCallsOnDie: it stays for the impact to kill it (its die modules run), and takes itself away once its
+				// KILL_SELF state has held KillSelfDelay (doKillSelfState: destroyObject); else it takes itself away now.
+				if (weapons.At(m.shot.weapon).missileCallsOnDie && lookup.Get<Health>(entities[row]) != nullptr)
+				{
+					context.Commands().Remove<MissileFlight>(entities[row]);
+					context.Commands().Add<Lifetime>(entities[row], Lifetime{tick + d.killSelfTicks, d.detonateCallsKill ? 0u : 1u, weapons.normalDeath});
+				}
+				// DetonateCallsKill alone: it holds KILL_SELF for KillSelfDelay, then is killed (DEATH_NORMAL).
+				else if (d.detonateCallsKill && lookup.Get<Health>(entities[row]) != nullptr)
+				{
+					context.Commands().Remove<MissileFlight>(entities[row]);
+					context.Commands().Add<Lifetime>(entities[row], Lifetime{tick + d.killSelfTicks, 0u, weapons.normalDeath});
+				}
+				else
+					context.Commands().Destroy(entities[row]);
 			};
 			// The distance flown since the last tick counts against the straight run once ignited.
 			if (m.noTurnLeft > Fixed{} && m.state >= MissileState::Ignition)
@@ -251,8 +272,20 @@ struct MissileFlightSystem
 			if (gone)
 				continue;
 			// Running into its victim or anything its weapon collides with, armed, it blows up (projectileHandleCollision).
-			if (m.armed && ProjectileCollision(weapons.At(m.shot.weapon), m.shot, entities[row], position, d.radius, spatial, relationships) != nullptr)
+			if (const SpatialEntry *other = m.armed ? ProjectileCollision(weapons.At(m.shot.weapon), m.shot, entities[row], position, d.radius, spatial, relationships) : nullptr)
 			{
+				// GarrisonHitKillCount: a building is left to the garrison clearing (it kills riders instead, or it detonates).
+				if (d.garrisonHitKill > 0 && (other->classes & target_class::Structure) != 0)
+				{
+					Shot landed = m.shot;
+					landed.aim = position;
+					landed.carrier = entities[row];
+					const DefinitionRef *ref = lookup.Get<DefinitionRef>(entities[row]);
+					garrisonHits.push_back({landed, other->entity, d.garrisonHitKill, d.garrisonHitRequired, d.garrisonHitForbidden,
+						ref != nullptr ? ref->index : 0xFFFFFFFFu});
+					context.Commands().Destroy(entities[row]);
+					continue;
+				}
 				detonate();
 				continue;
 			}

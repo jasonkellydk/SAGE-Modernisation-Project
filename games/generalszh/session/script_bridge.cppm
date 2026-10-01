@@ -1,4 +1,9 @@
 export module games.generalszh.session.script_bridge;
+import games.generalszh.gameplay.scripts.algorithms.value_groups;
+import games.generalszh.gameplay.world.resources.music_progress;
+import engine.gameplay.rts.containment.components.garrison;
+import games.generalszh.gameplay.world.algorithms.water_levels;
+import games.generalszh.gameplay.railroad.components.railcar;
 import games.generalszh.gameplay.ai.algorithms.ai_players;
 import games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
 import games.generalszh.gameplay.teams.algorithms.team_states;
@@ -48,6 +53,7 @@ import engine.ecs.query.query;
 import games.generalszh.gameplay.construction.algorithms.selling;
 import games.generalszh.gameplay.scripts.algorithms.team_sequences;
 import games.generalszh.gameplay.orders.algorithms.command_buttons;
+import games.generalszh.gameplay.orders.algorithms.command_availability;
 import games.generalszh.gameplay.orders.algorithms.command_button_readiness;
 import games.generalszh.gameplay.scripts.algorithms.unit_script_orders;
 import games.generalszh.gameplay.scripts.algorithms.command_button_targets;
@@ -64,6 +70,7 @@ import games.generalszh.gameplay.orders.resources.command_bar_overrides;
 import games.generalszh.gameplay.orders.resources.buildable_overrides;
 import engine.gameplay.rts.death.resources.hulk_lifetime;
 import engine.gameplay.rts.topple.components.topple;
+import engine.gameplay.rts.death.components.structure_topple;
 
 // The unit script actions and conditions, answered by the gameplay domains:
 // this only turns script names (units, teams, waypoints) into entities and
@@ -233,12 +240,14 @@ public:
 	{
 		domain::ForTeam(m_game, team, [&](ecs::Entity entity) { domain::SetUnmanned(m_game, entity); });
 	}
+	// doTeamUseCommandButtonAbilityAtWaypoint -> groupDoCommandButtonAtPosition: every member uses the button there.
 	void TeamUseCommandButtonAtWaypoint(const std::string &team, const std::string &button, const std::string &waypoint) override
 	{
-		if (m_game.waypoints.Find(waypoint) == engine::gameplay::WaypointGraph::None || m_game.templates.Content().commands.Button(button) == nullptr)
+		const auto at = Waypoint(waypoint);
+		const auto *found = m_game.templates.Content().commands.Button(button);
+		if (!at || found == nullptr)
 			return;
-		domain::ForTeam(m_game, team,
-			[&](ecs::Entity entity) { NamedUseCommandButtonAtWaypoint(engine::gameplay::NameRegistry::Reference(entity), button, waypoint); });
+		domain::ForTeam(m_game, team, [&](ecs::Entity entity) { domain::DoCommandButtonAtPosition(m_game, entity, *found, *at); });
 	}
 	void NamedExitAll(const std::string &transport) override { domain::OrderUnload(m_game, m_game.names.Find(transport)); }
 	void TeamExitAll(const std::string &team) override
@@ -246,11 +255,45 @@ public:
 		domain::ForTeam(m_game, team, [&](ecs::Entity entity) { domain::OrderUnload(m_game, entity); });
 	}
 
+	// doNamedUseCommandButtonAbilityAtWaypoint: each button of the unit's command set so named used at the waypoint
+	// (doCommandButtonAtPosition).
 	void NamedUseCommandButtonAtWaypoint(const std::string &name, const std::string &button, const std::string &waypoint) override
 	{
-		const auto &powers = m_game.templates.Content().powers.buttonPowers;
-		if (const auto power = powers.find(button); power != powers.end())
-			NamedFireSpecialPowerAtWaypoint(name, power->second, waypoint);
+		const ecs::Entity unit = m_game.names.Find(name);
+		const auto at = Waypoint(waypoint);
+		if (!m_game.world.IsAlive(unit) || !at)
+			return;
+		const content::GameContent &content = m_game.templates.Content();
+		const auto set = domain::EffectiveCommandSet(content.commands, m_game.world.FindResource<domain::CommandBarOverrides>(), domain::CommandSetOf(m_game, unit));
+		if (!set)
+			return;
+		for (const std::string &slot : set->buttons)
+			if (const auto *found = slot.empty() || slot != button ? nullptr : content.commands.Button(slot))
+				domain::DoCommandButtonAtPosition(m_game, unit, *found, *at);
+	}
+	// Object::doCommandButtonUsingWaypoints for each button of the unit's command set so named: only one that may use
+	// waypoints (CAN_USE_WAYPOINTS) and fires a special power does anything; not while the unit is disabled.
+	void NamedUseCommandButtonUsingWaypointPath(const std::string &name, const std::string &button, const std::string &path) override
+	{
+		const ecs::Entity unit = m_game.names.Find(name);
+		const auto *at = m_game.world.IsAlive(unit) ? m_game.world.Get<engine::gameplay::Transform>(unit) : nullptr;
+		if (at == nullptr)
+			return;
+		const std::uint32_t waypoint = m_game.waypoints.ClosestOnPath(at->position.XY(), path);
+		if (waypoint == engine::gameplay::WaypointGraph::None)
+			return;
+		const content::GameContent &content = m_game.templates.Content();
+		const auto set = domain::EffectiveCommandSet(content.commands, m_game.world.FindResource<domain::CommandBarOverrides>(), domain::CommandSetOf(m_game, unit));
+		if (!set)
+			return;
+		for (const std::string &slot : set->buttons)
+		{
+			const auto *found = slot.empty() || slot != button ? nullptr : content.commands.Button(slot);
+			if (found == nullptr || (found->options & content::button_option::CanUseWaypoints) == 0 || found->command != content::ButtonCommand::SpecialPower ||
+				found->specialPower.empty())
+				continue;
+			domain::FireSpecialPowerUsingWaypoints(m_game, unit, found->specialPower, waypoint);
+		}
 	}
 	void NamedFireSpecialPowerAtWaypoint(const std::string &name, const std::string &power, const std::string &waypoint) override
 	{
@@ -296,9 +339,27 @@ public:
 	{
 		// doNamedAttack: on its normal locomotors first.
 		domain::NormalLocomotors(m_game, m_game.names.Find(attacker));
-		domain::OrderAttack(m_game, m_game.names.Find(attacker), m_game.names.Find(target));
+		domain::OrderAttack(m_game, m_game.names.Find(attacker), m_game.names.Find(target), 0, engine::gameplay::CommandSource::Script);
 	}
 	void NamedSetHeld(const std::string &name, bool held) override { domain::OrderHold(m_game, m_game.names.Find(name), held); }
+	// ContainModuleInterface::setEvacDisposition: only a garrison's matters (GarrisonContain), measured by its geometry.
+	void NamedSetEvacDisposition(const std::string &name, std::int64_t disposition) override
+	{
+		const ecs::Entity unit = m_game.names.Find(name);
+		auto *garrison = m_game.world.IsAlive(unit) ? m_game.world.Get<gameplay::Garrison>(unit) : nullptr;
+		const auto *ref = garrison != nullptr ? m_game.world.Get<gameplay::DefinitionRef>(unit) : nullptr;
+		if (ref == nullptr)
+			return;
+		const auto &geometry = m_game.templates.DefinitionAt(ref->index).geometry;
+		garrison->evac = disposition == 1 || disposition == 2 ? static_cast<std::uint8_t>(disposition) : 0u;
+		garrison->halfLength = geometry.majorRadius;
+		garrison->halfWidth = geometry.minorRadius;
+	}
+	void SetTrainHeld(const std::string &name, bool held) override
+	{
+		if (auto *train = m_game.world.IsAlive(m_game.names.Find(name)) ? m_game.world.Get<domain::Railcar>(m_game.names.Find(name)) : nullptr)
+			train->held = held ? 1 : 0;
+	}
 	// doNamedStop: aiIdle.
 	void NamedStop(const std::string &name) override { domain::OrderStop(m_game, m_game.names.Find(name)); }
 	bool NamedIdle(const std::string &name) override
@@ -370,7 +431,7 @@ public:
 		if (!index || !m_game.world.IsAlive(victim))
 			return;
 		for (const ecs::Entity member : domain::button_target_detail::GroupOf(m_game, *index))
-			domain::OrderAttack(m_game, member, victim);
+			domain::OrderAttack(m_game, member, victim, 0, engine::gameplay::CommandSource::Script);
 	}
 	void CreateObject(const std::string &name, const std::string &type, const std::string &team, Engine::Math::FixedVector3 at, Engine::Math::Fixed angle) override
 	{
@@ -446,6 +507,13 @@ public:
 		{
 			topple->scriptedDirection = direction.XY();
 			topple->scripted = 1;
+		}
+		// A structure that topples when it dies (StructureToppleUpdate: adjustToppleDirection).
+		else if (m_game.world.IsAlive(named))
+		{
+			if (!m_game.world.Has<gameplay::ScriptedTopple>(named))
+				m_game.world.Add<gameplay::ScriptedTopple>(named);
+			m_game.world.Get<gameplay::ScriptedTopple>(named)->direction = direction.XY();
 		}
 	}
 	bool NamedSelected(const std::string &unit) override
@@ -669,6 +737,14 @@ public:
 			return;
 		domain::TeamAllUseCommandButtonOnNearest(m_game, team, button, targets[nearest], kindName, type);
 	}
+	void TeamUseCommandButtonOnMostValuable(const std::string &team, const std::string &button, Engine::Math::Fixed range) override
+	{
+		domain::TeamUseCommandButtonOnMostValuable(m_game, team, button, range);
+	}
+	void TeamAttackNearestGroupWithValue(const std::string &team, std::int32_t comparison, std::int64_t value) override
+	{
+		domain::SkirmishAttackNearestGroupWithValue(m_game, team, comparison, value);
+	}
 	void TeamLoadTransports(const std::string &team) override { domain::TeamLoadTransports(m_game, team); }
 	void UnitMoveTowardsNearest(std::size_t participant, const std::string &unit, const std::string &type, const std::string &area) override
 	{
@@ -759,6 +835,11 @@ public:
 		return resolved.empty() ? std::nullopt : m_game.roster.FindPlayer(resolved);
 	}
 	std::int64_t Money(std::uint32_t player) const override { return m_game.world.Resource<gameplay::PlayerMoney>().Balance(player); }
+	bool MusicCompleted(const std::string &track, std::int64_t times) const override
+	{
+		const auto *music = m_game.world.FindResource<domain::MusicProgress>();
+		return music != nullptr && music->Completed(track, times);
+	}
 	std::pair<std::int64_t, std::int64_t> Power(std::uint32_t player) const override
 	{
 		const auto &energy = m_game.world.Resource<gameplay::PlayerEnergy>();
@@ -1056,6 +1137,11 @@ public:
 		// (Int)(seconds * LOGICFRAMES_PER_SECOND): toward zero.
 		hulks.overrideTicks = seconds < Engine::Math::Fixed{} ? -1 : (seconds * Engine::Math::Fixed::FromInt(30)).Floor();
 	}
+	void ChangeWaterHeight(const std::string &water, Engine::Math::Fixed height, Engine::Math::Fixed seconds, Engine::Math::Fixed damage) override
+	{
+		domain::ChangeWaterHeightOverTime(m_game, water, height, seconds, damage);
+	}
+	void SetWaterHeight(const std::string &water, Engine::Math::Fixed height) override { domain::ChangeWaterHeight(m_game, water, height); }
 	void SwitchBoundary(std::int64_t boundary) override
 	{
 		auto &ground = m_game.ground;

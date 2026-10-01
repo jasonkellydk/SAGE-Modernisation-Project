@@ -3,6 +3,7 @@ import std;
 
 export import engine.config.binding.schema;
 export import games.generalszh.content.objects.object_definition;
+export import games.generalszh.content.global.radius_decal;
 
 // Special powers as content: which power a command button fires
 // ("CommandButton" blocks, Data/INI/CommandButton.ini), which object
@@ -37,6 +38,49 @@ struct DeliveryNugget
 	std::uint64_t delayDeliveryMax{0};     // DelayDeliveryMax, ticks
 	bool startAtPreferredHeight{true};
 	bool startAtMaxSpeed{false};
+	// DeliveryDecal and DeliveryDecalRadius: the first carrier's decal on its target (DeliverPayloadAIUpdate::deliverPayload).
+	RadiusDecalLook deliveryDecal;
+	Engine::Math::Fixed deliveryDecalRadius;
+	// FireWeapon: each rider is fired off as its carrier's current weapon at the target (plus DropOffset) and destroyed.
+	bool fireWeapon{false};
+	// DiveStartDistance / DiveEndDistance (0 start: no dive), StrafingWeaponSlot (-1: none; PRIMARY 0, SECONDARY 1,
+	// TERTIARY 2) and StrafeWeaponFX (none: empty). StrafeLength is parsed and saved by the original but never read.
+	Engine::Math::Fixed diveStartDistance;
+	Engine::Math::Fixed diveEndDistance;
+	std::int32_t strafingWeaponSlot{-1};
+	std::string strafeFx;
+	Engine::Math::Fixed strafeLength;
+	// The visible payload: VisibleNumBones items, VisibleItemsDroppedPerInterval a drop, each made as it goes
+	// (VisiblePayloadTemplateName at its VisibleDropBoneBaseName bone, flying VisiblePayloadWeaponTemplate; its carrier's
+	// VisibleSubObjectBaseName part shown until then); InheritTransportVelocity and ExitPitchRate (radians a tick) for
+	// what it drops. `visibleRun`: its entry in SpecialPowerContent::visibleRuns (none: nothing is made).
+	std::int32_t visibleNumBones{0};
+	std::int32_t visibleItemsPerInterval{0};
+	std::string visibleDropBone;
+	std::string visibleSubObject;
+	std::string visiblePayload;
+	std::string visiblePayloadWeapon;
+	bool inheritTransportVelocity{false};
+	Engine::Math::Fixed exitPitchRate;
+	std::uint32_t visibleRun{0xFFFFFFFFu};
+};
+
+// A run's visible payload items (DeliveringState::update): what each is (VisiblePayloadTemplateName), the weapon it
+// flies for when it is a projectile (VisiblePayloadWeaponTemplate), where each is let go on its carrier at rest
+// (VisibleDropBoneBaseName01, 02, ... on the transport's model; none: its carrier's position), the part of its carrier
+// it was shown as (VisibleSubObjectBaseName01, ...), whether it keeps its carrier's velocity and how fast a bomb pitches
+// down (radians a tick).
+struct VisibleRun
+{
+	std::string transport;
+	std::string payload;
+	std::string weapon;
+	std::string dropBone;
+	std::string subObject;
+	std::vector<std::optional<Engine::Math::FixedVector3>> bones;
+	bool inheritVelocity{false};
+	Engine::Math::Fixed exitPitchRate;
+	std::int32_t count{0}; // VisibleNumBones
 };
 
 enum class CreateLocation : std::uint8_t
@@ -53,6 +97,12 @@ struct OclPower
 {
 	std::string creationList;
 	CreateLocation location{CreateLocation::AtEdgeNearSource};
+	// OCLAdjustPositionToPassable: the target moves to the nearest clear spot within 500 (findPositionAround,
+	// FPF_CLEAR_CELLS_ONLY) first.
+	bool adjustToPassable{false};
+	// UpgradeOCL: a science and the creation list it gives the power instead, in module order (findOCL: the first its
+	// player has; none: `creationList`).
+	std::vector<std::pair<std::string, std::string>> upgrades;
 };
 
 // A SpecialPower block (SpecialPowerTemplate): its type (Enum), how long it recharges (ReloadTime, in ticks), the
@@ -119,6 +169,7 @@ struct SpecialPowerContent
 {
 	std::map<std::string, std::string, std::less<>> buttonPowers;                       // command button -> special power
 	std::map<std::string, std::vector<DeliveryNugget>, std::less<>> deliveries;         // creation list -> payload runs
+	std::vector<VisibleRun> visibleRuns;                                                 // the runs' visible payloads, in file order
 	std::vector<SpecialPowerTemplate> templates;                                         // SpecialPower.ini, in order
 
 	std::optional<std::uint32_t> Template(std::string_view name) const
@@ -230,6 +281,52 @@ SpecialPowerContent BindSpecialPowers(const engine::config::Document &commandBut
 					run.startAtPreferredHeight = detail::Yes(&field);
 				else if (field.key == "StartAtMaxSpeed")
 					run.startAtMaxSpeed = detail::Yes(&field);
+				else if (field.key == "DeliveryDecal")
+					run.deliveryDecal = ReadRadiusDecal(field, step.TicksPerSecond());
+				else if (field.key == "DeliveryDecalRadius")
+					run.deliveryDecalRadius = detail::Fixed(&field);
+				else if (field.key == "FireWeapon")
+					run.fireWeapon = detail::Yes(&field);
+				else if (field.key == "DiveStartDistance")
+					run.diveStartDistance = detail::Fixed(&field);
+				else if (field.key == "DiveEndDistance")
+					run.diveEndDistance = detail::Fixed(&field);
+				else if (field.key == "StrafingWeaponSlot")
+				{
+					// INI::parseLookupList over TheWeaponSlotTypeNamesLookupList.
+					static constexpr std::array<std::string_view, 3> slots{"PRIMARY", "SECONDARY", "TERTIARY"};
+					for (std::size_t index = 0; index < slots.size(); ++index)
+						if (detail::Same(field.Value(), slots[index]))
+							run.strafingWeaponSlot = static_cast<std::int32_t>(index);
+				}
+				else if (field.key == "StrafeWeaponFX")
+					run.strafeFx = detail::Same(field.Value(), "None") ? std::string{} : std::string(field.Value());
+				else if (field.key == "StrafeLength")
+					run.strafeLength = detail::Fixed(&field);
+				else if (field.key == "VisibleNumBones")
+					run.visibleNumBones = static_cast<std::int32_t>(engine::config::values::ParseInt(field.Value()).value_or(0));
+				else if (field.key == "VisibleItemsDroppedPerInterval")
+					run.visibleItemsPerInterval = static_cast<std::int32_t>(engine::config::values::ParseInt(field.Value()).value_or(0));
+				else if (field.key == "VisibleDropBoneBaseName")
+					run.visibleDropBone = std::string(field.Value());
+				else if (field.key == "VisibleSubObjectBaseName")
+					run.visibleSubObject = std::string(field.Value());
+				else if (field.key == "VisiblePayloadTemplateName")
+					run.visiblePayload = std::string(field.Value());
+				else if (field.key == "VisiblePayloadWeaponTemplate")
+					run.visiblePayloadWeapon = detail::Same(field.Value(), "None") ? std::string{} : std::string(field.Value());
+				else if (field.key == "InheritTransportVelocity")
+					run.inheritTransportVelocity = detail::Yes(&field);
+				else if (field.key == "ExitPitchRate")
+					// INI::parseAngularVelocityReal: degrees a second, as radians a tick.
+					run.exitPitchRate = detail::Fixed(&field) * Engine::Math::Fixed::FromRaw(205887) / Engine::Math::Fixed::FromInt(180) /
+						Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(step.TicksPerSecond()));
+			}
+			if (!run.visiblePayload.empty())
+			{
+				run.visibleRun = static_cast<std::uint32_t>(content.visibleRuns.size());
+				content.visibleRuns.push_back({run.transport, run.visiblePayload, run.visiblePayloadWeapon, run.visibleDropBone, run.visibleSubObject, {},
+					run.inheritTransportVelocity, run.exitPitchRate, run.visibleNumBones});
 			}
 			if (!run.transport.empty())
 				runs.push_back(std::move(run));
@@ -624,6 +721,8 @@ struct PayloadModule
 	std::uint64_t dropDelay{0};
 	Engine::Math::FixedVector3 dropOffset;
 	Engine::Math::FixedVector3 dropVariance;
+	RadiusDecalLook deliveryDecal;           // DeliveryDecal
+	Engine::Math::Fixed deliveryDecalRadius; // DeliveryDecalRadius
 };
 
 std::optional<PayloadModule> ReadDeliverPayloadModule(const ObjectDefinition &object, const engine::time::FixedStep &step)
@@ -653,6 +752,10 @@ std::optional<PayloadModule> ReadDeliverPayloadModule(const ObjectDefinition &ob
 				data.dropOffset = detail::Coord(field);
 			else if (field.key == "DropVariance")
 				data.dropVariance = detail::Coord(field);
+			else if (field.key == "DeliveryDecal")
+				data.deliveryDecal = ReadRadiusDecal(field, step.TicksPerSecond());
+			else if (field.key == "DeliveryDecalRadius")
+				data.deliveryDecalRadius = detail::Fixed(&field);
 		}
 		return data;
 	}
@@ -680,6 +783,11 @@ std::optional<OclPower> FindOclPower(const ObjectDefinition &object, std::string
 			for (const auto &[name, location] : locations)
 				if (detail::Same(where->Value(), name))
 					found.location = location;
+		if (const auto *adjust = module.block->Find("OCLAdjustPositionToPassable"))
+			found.adjustToPassable = detail::Yes(adjust);
+		for (const engine::config::Node &field : module.block->children)
+			if (detail::Same(field.key, "UpgradeOCL") && field.values.size() >= 2)
+				found.upgrades.emplace_back(std::string(field.Value(0)), std::string(field.Value(1)));
 		return found;
 	}
 	return std::nullopt;

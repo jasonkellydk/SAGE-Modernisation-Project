@@ -1,5 +1,7 @@
 export module engine.gameplay.rts.mines.systems.minefield_system;
 import std;
+export import engine.gameplay.common.weapons.resources.weapon_catalog;
+export import engine.gameplay.common.weapons.components.armament;
 
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.mines.components.minefield;
@@ -16,12 +18,32 @@ export import engine.gameplay.common.healing.components.healing;
 export import engine.gameplay.common.lifetime.components.lifetime;
 export import engine.gameplay.rts.combat.resources.shots;
 export import engine.gameplay.rts.death.components.dying;
+export import engine.ecs.system.chunk_outputs;
 
 // MinefieldBehavior (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/MinefieldBehavior.cpp), see Minefield.
 // MineDrainSystem: a draining mine hurts itself (update: its most times DegenPercentPerSecond over the second's ticks,
 // UNRESISTABLE, from itself), joining the tick's damage after the impacts.
 // MinefieldSystem, once the tick's damage is taken: each mine scoots, checks on its producer, lets its health say how
-// many of its virtual mines live (onDamage / onHealing), and goes off under what stands in it (onCollide).
+// many of its virtual mines live (onDamage / onHealing), and goes off under what stands in it (onCollide). Chunk-parallel:
+// a mine writes only its own row and reads the others through the spatial index and lookups; the shots its
+// detonations fire are gathered per chunk and queued in chunk order once all have run (as one pass over the mines
+// queued them), and its commands commit in chunk order.
+export namespace engine::gameplay
+{
+struct MineShots : ecs::ChunkOutputs<Shot>
+{
+};
+}
+
+export namespace ecs
+{
+template<>
+struct ResourceTraits<engine::gameplay::MineShots>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.mine_shots";
+};
+}
+
 export namespace engine::gameplay
 {
 struct MineDrainSystem
@@ -56,8 +78,9 @@ struct MinefieldSystem
 {
 	using Query = ecs::Query<ecs::Write<Minefield>, ecs::Write<Transform>, ecs::Write<Health>, ecs::Read<Owner>, ecs::Read<Targetable>,
 		ecs::Optional<Dying>>;
-	using Lookup = ecs::Lookup<ecs::Read<Dying>, ecs::Read<MineSafe>>;
-	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Read<GroundHeight>, ecs::Write<ShotQueue>>;
+	using Lookup = ecs::Lookup<ecs::Read<Dying>, ecs::Read<MineSafe>, ecs::Read<Armament>, ecs::Read<AttackTarget>>;
+	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Read<GroundHeight>, ecs::Write<ShotQueue>, ecs::Write<MineShots>,
+		ecs::Read<WeaponCatalog>>;
 
 	// MIN_HEALTH: what a spent mine keeps.
 	static Engine::Math::Fixed Least() noexcept { return Engine::Math::Fixed::FromRatio(1, 10); }
@@ -73,16 +96,25 @@ struct MinefieldSystem
 		return static_cast<std::uint32_t>(std::clamp<std::int64_t>(count, 0, mine.total));
 	}
 
-	void Execute(Query &query, ecs::SystemContext &context) const
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<MineShots>().Reset(query.PreparedChunkCount()); }
+
+	void AfterChunks(Query &, ecs::SystemContext &context) const
+	{
+		ShotQueue &queue = context.Write<ShotQueue>();
+		context.Write<MineShots>().ForEach([&](const Shot &shot) { queue.Add(shot); });
+	}
+
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
 		const SpatialIndex &spatial = context.Read<SpatialIndex>();
 		const Relationships &relationships = context.Read<Relationships>();
 		const GroundHeight &ground = context.Read<GroundHeight>();
-		ShotQueue &shots = context.Write<ShotQueue>();
+		auto &shots = context.Write<MineShots>().Slot(context);
 		const auto lookup = context.Lookup<Lookup>();
+		const WeaponCatalog &weapons = context.Read<WeaponCatalog>();
 		auto &commands = context.Commands();
 		const std::uint64_t tick = context.Tick();
-		query.ForEachChunk([&](auto chunk) {
+		{
 			auto mines = chunk.template Get<Minefield>();
 			auto transforms = chunk.template Get<Transform>();
 			auto healths = chunk.template Get<Health>();
@@ -103,7 +135,7 @@ struct MinefieldSystem
 				// not regenerate is removed once spent).
 				const auto detonate = [&](Engine::Math::FixedVector3 at) {
 					if (mine.weapon != Minefield::NoWeapon)
-						shots.Add(Shot{self, {}, mine.weapon, owners[row].player, at, at, tick, tick});
+						shots.push_back(Shot{self, {}, mine.weapon, owners[row].player, at, at, tick, tick});
 					if (mine.remaining > 0)
 						--mine.remaining;
 					if (mine.regenerates == 0 && mine.remaining == 0)
@@ -156,8 +188,12 @@ struct MinefieldSystem
 					else
 						break;
 				}
+				// update: an immunity lapses once its holder is gone or has not touched it for 2 frames.
+				for (MineImmune &immune : mine.immunes)
+					if (immune.who.IsValid() && (!lookup.IsAlive(immune.who) || tick > immune.touched + 2))
+						immune = MineImmune{};
 				// onCollide: what stands in it sets it off, once per move of RepeatDetonateMoveThresh.
-				if (!gone && mine.remaining > 0 && mine.scootLeft == 0)
+				if (!gone && mine.remaining > 0)
 				{
 					const auto center = transform.position;
 					spatial.ForEachWithin(center.XY(), mine.radius, [&](const SpatialEntry &entry) {
@@ -168,12 +204,37 @@ struct MinefieldSystem
 						const Engine::Math::Fixed reach = mine.radius + entry.radius;
 						if (Engine::Math::DistanceSquared(entry.position.XY(), center.XY()) > reach * reach)
 							return;
+						// First, one immune to it (its immunity kept up while it keeps touching it).
+						for (MineImmune &immune : mine.immunes)
+							if (immune.who == entry.entity)
+							{
+								immune.touched = tick;
+								return;
+							}
 						const Relationship relation = relationships.Between(owners[row].player, entry.player);
 						const std::uint8_t bit = relation == Relationship::Allies ? 1 : relation == Relationship::Enemies ? 2 : 4;
 						if ((mine.detonatedBy & bit) == 0)
 							return;
 						if (mine.workersDetonate == 0 && lookup.Get<MineSafe>(entry.entity) != nullptr)
 							return;
+						// Still scooting: not live yet.
+						if (mine.scootLeft > 0)
+							return;
+						// One clearing mines (attacking something with a WEAPON_ANTI_MINE weapon in hand: isClearingMines, with a
+						// goal object) is made immune to it for as long as it keeps touching it (a free place, or its own).
+						const Armament *armament = lookup.Get<Armament>(entry.entity);
+						const AttackTarget *attack = lookup.Get<AttackTarget>(entry.entity);
+						if (armament != nullptr && attack != nullptr && attack->target.IsValid() && attack->atPosition == 0 &&
+							armament->weapon != WeaponCatalog::None && (weapons.At(armament->weapon).anti & weapon_anti::Mine) != 0)
+						{
+							for (MineImmune &immune : mine.immunes)
+								if (!immune.who.IsValid() || immune.who == entry.entity)
+								{
+									immune = {entry.entity, tick};
+									break;
+								}
+							return;
+						}
 						MineDetonator *known = nullptr;
 						for (std::uint8_t index = 0; index < mine.detonatorCount; ++index)
 							if (mine.detonators[index].who == entry.entity)
@@ -219,7 +280,7 @@ struct MinefieldSystem
 				}
 				mine.lastHealth = health.current;
 			}
-		});
+		}
 	}
 };
 }
@@ -241,7 +302,8 @@ template<>
 struct SystemTraits<engine::gameplay::MinefieldSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.minefields";
-	static constexpr bool Batch = true;
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	// The game orders it after the damage is taken (HealthSystem).
 	using Before = SystemTypeList<>;

@@ -32,12 +32,24 @@ struct Shot
 	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
 	// What its firer rides in (a passenger allowed to fire): its shots never run into it.
 	ecs::Entity shelter;
-	std::uint32_t reserved2{0};
+	// Its firer's veterancy level when it fired (the weapon's FX, creation lists and exhaust for that level).
+	std::uint8_t veterancy{0};
+	// Its weapon's FX are still suspended (SuspendFXDelay): it shows none.
+	std::uint8_t quiet{0};
+	std::uint8_t reserved2[2]{};
 	// Its firer's weapon bonus when it fired (Weapon::computeBonus): damage and damage radius multipliers.
 	Engine::Math::Fixed damageScale{Engine::Math::Fixed::One()};
 	Engine::Math::Fixed radiusScale{Engine::Math::Fixed::One()};
 	// Reach added to both damage radii after the bonus (a blast round something's edge rather than its middle).
 	Engine::Math::Fixed radiusBonus;
+	// Its firer's producer and kind (Object::getProducerID, its DefinitionRef) when the firer will be gone as it lands (a
+	// death weapon); none: the firer's own, looked up as it lands. Weapon::dealDamageInternal spares the firer's
+	// producer and, with NOT_SIMILAR, allies of the firer's kind.
+	ecs::Entity producer;
+	std::uint32_t kind{NoKind};
+	std::uint32_t reserved3{0};
+
+	static constexpr std::uint32_t NoKind = 0xFFFFFFFFu;
 };
 
 // A shot whose projectile object carries it lands when (and where) that projectile detonates.
@@ -48,9 +60,28 @@ struct Impact
 	ecs::Entity source;
 	std::uint32_t weapon{0};
 	Engine::Math::FixedVector3 position;
+	std::uint8_t veterancy{0}; // its shot's
+	std::uint8_t reserved[7]{};
 };
 
 using FiredShots = ecs::ChunkOutputs<Shot>;
+
+// Weapon::privateFireWeapon's DAMAGE_DISARM: a disarming weapon fired at `victim` fires nothing; the game disarms it
+// (its minefield, or the mine or trap itself) and plays the weapon's fire FX there.
+struct Disarm
+{
+	ecs::Entity source;
+	ecs::Entity victim;
+	std::uint32_t weapon{0};
+	std::uint32_t sourcePlayer{0};
+	Engine::Math::FixedVector3 at;
+	std::uint8_t veterancy{0}; // its firer's (the fire FX for that level)
+	std::uint8_t reserved[7]{};
+};
+
+struct Disarms : ecs::ChunkOutputs<Disarm>
+{
+};
 
 // Shots whose projectiles detonated this tick, per chunk, each with `aim` where it went off.
 struct Detonations : ecs::ChunkOutputs<Shot>
@@ -59,6 +90,13 @@ struct Detonations : ecs::ChunkOutputs<Shot>
 
 // Shots whose guided missiles detonated this tick, per chunk, each with `aim` where it went off.
 struct MissileDetonations : ecs::ChunkOutputs<Shot>
+{
+};
+
+// Shots a behaviour fired from an object's own current weapon this tick before the weapons fire (Object::
+// fireCurrentWeapon at a spot: a payload carrier's strafing run or its FireWeapon delivery), per chunk: the weapon
+// system puts them among the tick's shots.
+struct DirectShots : ecs::ChunkOutputs<Shot>
 {
 };
 
@@ -180,6 +218,8 @@ public:
 			writer.I64(shot.damageScale.Raw());
 			writer.I64(shot.radiusScale.Raw());
 			writer.I64(shot.radiusBonus.Raw());
+			ecs::WriteEntity(writer, shot.producer);
+			writer.U32(shot.kind);
 		}
 	}
 
@@ -212,6 +252,8 @@ public:
 			shot.damageScale = fixed();
 			shot.radiusScale = fixed();
 			shot.radiusBonus = fixed();
+			shot.producer = ecs::ReadEntity(reader).value_or(ecs::Entity{});
+			shot.kind = reader.U32().value_or(Shot::NoKind);
 			pending.push_back(shot);
 		}
 		if (!count || reader.Failed())
@@ -238,6 +280,12 @@ struct ResourceTraits<engine::gameplay::FiredShots>
 };
 
 template<>
+struct ResourceTraits<engine::gameplay::Disarms>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.disarms";
+};
+
+template<>
 struct ResourceTraits<engine::gameplay::Detonations>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.detonations";
@@ -247,6 +295,12 @@ template<>
 struct ResourceTraits<engine::gameplay::MissileDetonations>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.missile_detonations";
+};
+
+template<>
+struct ResourceTraits<engine::gameplay::DirectShots>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.direct_shots";
 };
 
 template<>

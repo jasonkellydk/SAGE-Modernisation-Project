@@ -147,4 +147,15 @@ constexpr std::size_t KindOfBit(std::string_view name) noexcept
 			return index;
 	return KindOfNames.size();
 }
+
+// A kind named by a string literal: its bit found by the compiler, so testing it is one load and a mask (no name
+// search in the tick). An unknown name is KindOfNames.size(), as KindOfBit gives.
+struct KindOfName
+{
+	std::size_t bit;
+	template<std::size_t N>
+	consteval KindOfName(const char (&name)[N]) noexcept : bit(KindOfBit(std::string_view(name, N - 1)))
+	{
+	}
+};
 }

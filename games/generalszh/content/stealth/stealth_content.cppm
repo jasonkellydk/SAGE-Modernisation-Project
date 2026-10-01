@@ -25,6 +25,12 @@ struct ObjectStealth
 	Engine::Math::Fixed friendlyOpacityMin{Engine::Math::Fixed::FromRatio(1, 2)};
 	Engine::Math::Fixed friendlyOpacityMax{Engine::Math::Fixed::One()};
 	std::uint64_t pulseTicks{30};
+	// The disguise's FX lists (DisguiseFX, DisguiseRevealFX) and the EVA events of its detection
+	// (EnemyDetectionEvaEvent for the detector's side, OwnDetectionEvaEvent for its own): names, none empty.
+	std::string disguiseFx;
+	std::string disguiseRevealFx;
+	std::string enemyDetectionEva;
+	std::string ownDetectionEva;
 };
 
 namespace stealth_detail
@@ -66,9 +72,16 @@ std::optional<ObjectStealth> ReadObjectStealth(const ObjectDefinition &object, c
 		engine::config::BindContext bind{diagnostics, step};
 		ObjectStealth result;
 		auto &stealth = result.stealth;
-		// The original's defaults: innate, never stealthing without a delay.
-		stealth.delay = std::numeric_limits<std::uint32_t>::max();
+		// The original's defaults: innate; no StealthDelay is UINT_MAX frames, which the original adds to the frame in 32
+		// bits (m_stealthAllowedFrame = now + delay, m_detectionExpiresFrame = now + delay) and so wraps to the frame
+		// before: stealthed at once, and never detected by a markAsDetected of its own delay. A delay of 0 does exactly that.
+		stealth.delay = 0;
 		bool innate = true;
+		const auto text = [](const engine::config::Node &field) { return std::string(field.Value()); };
+		const auto option = [&](const engine::config::Node &field, std::uint32_t bit) {
+			const bool on = engine::config::ReadBool(field, bind).value_or(false);
+			stealth.options = on ? (stealth.options | bit) : (stealth.options & ~bit);
+		};
 		for (const engine::config::Node &field : block.children)
 		{
 			const std::string_view key = field.key;
@@ -100,9 +113,37 @@ std::optional<ObjectStealth> ReadObjectStealth(const ObjectDefinition &object, c
 				result.friendlyOpacityMax = engine::config::ReadPercent(field, bind).value_or(result.friendlyOpacityMax);
 			else if (Same(key, "PulseFrequency"))
 				result.pulseTicks = std::max<std::uint64_t>(1, engine::config::ReadDurationTicks(field, bind).value_or(30));
+			else if (Same(key, "DisguisesAsTeam"))
+				option(field, engine::gameplay::stealth_option::DisguisesAsTeam);
+			else if (Same(key, "OrderIdleEnemiesToAttackMeUponReveal"))
+				option(field, engine::gameplay::stealth_option::OrderIdleEnemies);
+			else if (Same(key, "GrantedBySpecialPower"))
+				option(field, engine::gameplay::stealth_option::GrantedBySpecialPower);
+			else if (Same(key, "UseRiderStealth"))
+				option(field, engine::gameplay::stealth_option::UseRiderStealth);
+			else if (Same(key, "RevealDistanceFromTarget"))
+				stealth.revealDistance = engine::config::ReadFixed(field, bind).value_or(Engine::Math::Fixed{});
+			else if (Same(key, "DisguiseTransitionTime"))
+				stealth.disguiseTicks = static_cast<std::uint32_t>(engine::config::ReadDurationTicks(field, bind).value_or(0));
+			else if (Same(key, "DisguiseRevealTransitionTime"))
+				stealth.revealTicks = static_cast<std::uint32_t>(engine::config::ReadDurationTicks(field, bind).value_or(0));
+			else if (Same(key, "DisguiseFX"))
+				result.disguiseFx = text(field);
+			else if (Same(key, "DisguiseRevealFX"))
+				result.disguiseRevealFx = text(field);
+			else if (Same(key, "EnemyDetectionEvaEvent"))
+				result.enemyDetectionEva = text(field);
+			else if (Same(key, "OwnDetectionEvaEvent"))
+				result.ownDetectionEva = text(field);
 		}
 		if (innate)
 			stealth.flags |= engine::gameplay::stealth_flag::CanStealth;
+		// A disguiser's update starts off (m_enabled = !m_teamDisguised) till it takes a disguise; a grant's sleeps till it
+		// is granted (setWakeFrame UPDATE_SLEEP_FOREVER).
+		if (stealth.Option(engine::gameplay::stealth_option::DisguisesAsTeam))
+			stealth.flags |= engine::gameplay::stealth_flag::Off;
+		if (stealth.Option(engine::gameplay::stealth_option::GrantedBySpecialPower))
+			stealth.flags |= engine::gameplay::stealth_flag::Asleep;
 		return result;
 	}
 	return std::nullopt;

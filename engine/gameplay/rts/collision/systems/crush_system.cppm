@@ -84,6 +84,8 @@ template<>
 struct SystemTraits<engine::gameplay::CrushSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.crush";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	// After the contacts, before the tick's damage is applied.
 	using Before = SystemTypeList<engine::gameplay::HealthSystem>;

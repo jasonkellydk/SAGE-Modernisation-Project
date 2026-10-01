@@ -77,11 +77,15 @@ const ModelEntry *Resolve(ModelTable &models, std::string_view model)
 		return nullptr;
 	auto found = models.find(model);
 	if (found == models.end())
-		found = models.emplace(std::string(model), ModelEntry{cache->Request_Model(model), false, {}}).first;
+		// The model's file, as the model library asks for it (W3DAssetManager: <name>.w3d).
+		found = models.emplace(std::string(model), ModelEntry{cache->Request_Model(std::string(model) + ".w3d"), false, {}}).first;
 	ModelEntry &entry = found->second;
 	if (!entry.resolved)
 	{
-		if (cache->Get_State(entry.handle) != Assets::AssetState::Ready)
+		// Still loading: not known yet. Failed to load: known, without bones (what rides a bone it lacks sits at the
+		// object's origin, as the original's).
+		const auto state = cache->Get_State(entry.handle);
+		if (state == Assets::AssetState::Loading || state == Assets::AssetState::Unloaded)
 			return nullptr;
 		entry.resolved = true;
 		if (const Assets::ModelAsset *asset = cache->Try_Get_Model(entry.handle))

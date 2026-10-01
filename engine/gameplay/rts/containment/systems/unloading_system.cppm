@@ -87,6 +87,9 @@ struct UnloadingSystem
 					motion->vertical = (transport.landing && !transport.seekingSpot) || transport.takingOff;
 			};
 			const bool airborne = motion != nullptr && IsAirborne(motion->locomotor) && at.z - ground.Surface(at.XY()) > LandedHeight();
+			// TransportContain::isExitBusy: DelayExitInAir holds every exit while it is above the terrain at all (a Battle
+			// Bus in the air off a bump).
+			const bool heldInAir = transport.definition.delayExitInAir && at.z > ground.At(at.XY());
 			const auto land = [&] {
 				if (!transport.landing)
 				{
@@ -140,7 +143,7 @@ struct UnloadingSystem
 				{
 					if (airborne && !transport.definition.unloadInAir)
 						land();
-					else if (context.Tick() >= transport.nextExitTick)
+					else if (context.Tick() >= transport.nextExitTick && !heldInAir)
 					{
 						asked.push_back({entities[row], leaving});
 						transport.nextExitTick = context.Tick() + std::max<std::uint64_t>(transport.definition.exitDelay, 1);
@@ -172,7 +175,7 @@ struct UnloadingSystem
 				continue;
 			}
 			vertical();
-			if (context.Tick() < transport.nextExitTick)
+			if (context.Tick() < transport.nextExitTick || heldInAir)
 				continue;
 			out.push_back({entities[row]});
 			transport.nextExitTick = context.Tick() + std::max<std::uint64_t>(transport.definition.exitDelay, 1);

@@ -28,7 +28,8 @@ inline void ApplyMobOrders(GameWorld &game)
 			OrderMove(game, event.member, event.at, false, false);
 			break;
 		case MobOrder::Attack:
-			OrderAttack(game, event.member, event.target);
+			// MobMemberSlavedUpdate: aiAttackObject(target, 999, CMD_FROM_AI).
+			OrderAttack(game, event.member, event.target, 999, engine::gameplay::CommandSource::Ai);
 			AiCommanded(game, event.member);
 			break;
 		case MobOrder::Idle:

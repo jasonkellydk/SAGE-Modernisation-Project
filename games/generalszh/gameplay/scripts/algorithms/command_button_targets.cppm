@@ -263,4 +263,61 @@ inline void TeamAllUseCommandButtonOnNearest(GameWorld &game, const std::string 
 	if (best != ecs::Entity{})
 		button_target_detail::GroupDoAtObject(game, group, *button, best);
 }
+
+// doSkirmishCommandButtonOnMostValuable(team, button, range, all members: unused): of the objects within `range` of the
+// group's centre (FROM_CENTER_2D), on the map as the source member is, that the team's player counts enemies (its own
+// too, as the filter lets them) and the source member may use the button on, the most expensive to build
+// (ITER_SORTED_EXPENSIVE_TO_CHEAP: the template's BuildCost, a stable sort; ties in entity order): every member uses it
+// there (groupDoCommandButtonAtObject).
+inline void TeamUseCommandButtonOnMostValuable(GameWorld &game, const std::string &team, const std::string &ability, Engine::Math::Fixed range)
+{
+	namespace gp = engine::gameplay;
+	const auto index = ResolveTeam(game, team);
+	const auto *button = game.templates.Content().commands.Button(ability);
+	const auto *relationships = game.world.FindResource<gp::Relationships>();
+	if (!index || button == nullptr || relationships == nullptr)
+		return;
+	const std::vector<ecs::Entity> group = button_target_detail::GroupOf(game, *index);
+	const ecs::Entity source = ButtonSourceIn(game, group, *button);
+	if (source == ecs::Entity{})
+		return;
+	const auto center = button_target_detail::CenterOf(game, group);
+	if (!center)
+		return;
+	const std::uint32_t player = game.roster.TeamAt(*index).owner;
+	const bool sourceOffMap = game.world.Get<gp::OffMap>(source) != nullptr;
+	const Engine::Math::Fixed reach = range * range;
+	struct Candidate
+	{
+		ecs::Entity entity;
+		std::int32_t cost;
+	};
+	std::vector<Candidate> candidates;
+	ecs::Query<ecs::Read<gp::DefinitionRef>, ecs::Read<gp::Owner>, ecs::Read<gp::Transform>> query(game.world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<gp::DefinitionRef>();
+		const auto owners = chunk.template Get<gp::Owner>();
+		const auto transforms = chunk.template Get<gp::Transform>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+		{
+			const std::uint32_t theirs = owners[row].player;
+			if (theirs != player && !relationships->Enemies(player, theirs))
+				continue;
+			if ((game.world.Get<gp::OffMap>(entities[row]) != nullptr) != sourceOffMap)
+				continue;
+			if (Engine::Math::DistanceSquared(transforms[row].position.XY(), *center) > reach)
+				continue;
+			candidates.push_back({entities[row], game.templates.DefinitionAt(refs[row].index).buildCost});
+		}
+	});
+	// Most expensive first: the first valid one is the iterator's first, and the costly validity test stops there.
+	std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) { return a.cost > b.cost; });
+	for (const Candidate &candidate : candidates)
+		if (ButtonValidOnObject(game, source, *button, candidate.entity))
+		{
+			button_target_detail::GroupDoAtObject(game, group, *button, candidate.entity);
+			return;
+		}
+}
 }

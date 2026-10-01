@@ -42,6 +42,8 @@ struct ObjectInstance
 	// view of it: the model's own pass skipped).
 	float heatVision{0.0f};
 	bool heatOnly{false};
+	// KINDOF_INFANTRY: lit by the scene's lights scaled by the infantry light scale (RTS3DScene's m_infantryLight).
+	bool infantry{false};
 	// The front tires' steering, and the cab's and trailer's swing (radians about their z).
 	float steer{0.0f};
 	float cab{0.0f};
@@ -52,5 +54,10 @@ struct ObjectInstance
 	// The sphere dynamic lights must reach to light it (centre, radius): its geometry's bounding sphere, centred half its
 	// height up (the original uses its render object's sphere; see the ledger).
 	std::array<float, 4> lightSphere{};
+	// The simulation entity it draws (index and generation; 0: none), for picking it.
+	std::uint64_t key{0};
+	// The look its animation runs in (its model state's own; `look` may be a copy of it drawn with other parts shown), whose
+	// clip its animation clock reads.
+	std::uint32_t clipLook{0};
 };
 }

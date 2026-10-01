@@ -1,4 +1,6 @@
 export module games.generalszh.gameplay.aircraft.algorithms.airfields;
+import engine.gameplay.rts.lifecycle.resources.casualties;
+import engine.gameplay.rts.lifecycle.resources.kill_requests;
 import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
@@ -18,8 +20,37 @@ import engine.gameplay.rts.construction.components.sale;
 // such a jet looks for the nearest allied airfield with a free space (not
 // under construction nor being sold), as
 // the original's circling jets do, and flies there to land.
+// KillParkedJets (ParkingPlaceBehavior / FlightDeckBehavior::onDie: killAllParkedUnits): an airfield killed kills its
+// jets that are not flying free (on the ground, or taking off or landing), dying with the next tick's casualties.
 export namespace generalszh::gameplay
 {
+inline void KillParkedJets(GameWorld &game, std::span<const engine::gameplay::Casualty> casualties)
+{
+	namespace gp = engine::gameplay;
+	std::vector<ecs::Entity> fields;
+	for (const gp::Casualty &casualty : casualties)
+		if (casualty.departure == gp::Departure::Killed && casualty.definition < game.templates.DefinitionCount() &&
+			game.templates.Content().parking.contains(game.templates.DefinitionAt(casualty.definition).name))
+			fields.push_back(casualty.entity);
+	if (fields.empty())
+		return;
+	ecs::Query<ecs::Read<gp::Jet>> query(game.world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto jets = chunk.template Get<gp::Jet>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < jets.size(); ++row)
+		{
+			if (std::ranges::find(fields, jets[row].airfield) == fields.end())
+				continue;
+			const gp::JetState state = jets[row].state;
+			const bool free = state == gp::JetState::Flying || state == gp::JetState::Returning || state == gp::JetState::AwaitLanding ||
+				state == gp::JetState::ReturnToDeadAirfield || state == gp::JetState::CirclingDeadAirfield;
+			if (!free)
+				game.kills.entities.push_back(entities[row]);
+		}
+	});
+}
+
 // An airfield's first parking space no jet holds, after skipping `skip` free ones (none: full).
 std::optional<std::uint32_t> FreeSpace(GameWorld &game, ecs::Entity airfield, std::uint32_t skip = 0)
 {

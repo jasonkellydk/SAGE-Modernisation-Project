@@ -56,7 +56,8 @@ inline void Flee(GameWorld &game, ecs::Entity unit, ecs::Entity threat)
 	const Engine::Math::FixedVector2 away = apart > Engine::Math::Fixed{}
 		? Engine::Math::FixedVector2{(at.x - from.x) * reach / apart, (at.y - from.y) * reach / apart}
 		: Engine::Math::FixedVector2{reach, Engine::Math::Fixed{}};
-	*world.Get<gp::MoveOrder>(unit) = gp::MoveToPoint(from + away);
+	// AIMoveAwayFromRepulsorsState: no adjusting, no claim.
+	*world.Get<gp::MoveOrder>(unit) = gp::MoveToPoint(from + away, gp::GoalClaim::None);
 	if (auto *route = world.Get<gp::Route>(unit))
 		route->planned = false;
 	world.Get<Repulsable>(unit)->fleeing = 1;

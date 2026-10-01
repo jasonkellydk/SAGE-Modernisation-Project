@@ -1,5 +1,7 @@
 export module games.generalszh.gameplay.abilities.systems.command_button_hunt_system;
 import std;
+import engine.gameplay.common.weapons.components.weapon_slots;
+import engine.gameplay.common.weapons.components.armament;
 
 export import engine.ecs.system.system;
 export import games.generalszh.gameplay.abilities.components.command_button_hunt;
@@ -92,7 +94,7 @@ struct CommandButtonHuntSystem
 		ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::DefinitionRef>, ecs::OptionalWrite<engine::gameplay::MoveOrder>,
 		ecs::OptionalWrite<engine::gameplay::AttackTarget>, ecs::OptionalWrite<engine::gameplay::Route>, ecs::OptionalWrite<engine::gameplay::Aggression>,
 		ecs::Optional<engine::gameplay::Builder>, ecs::Optional<SpecialAbilities>, ecs::Optional<engine::gameplay::SpecialPowerTimers>,
-		ecs::Optional<engine::gameplay::TeamMember>>;
+		ecs::Optional<engine::gameplay::TeamMember>, ecs::OptionalWrite<engine::gameplay::WeaponSlots>, ecs::OptionalWrite<engine::gameplay::Armament>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Disabled>>;
 	using Resources = ecs::Resources<ecs::Read<ObjectTemplates>, ecs::Read<engine::gameplay::SpatialIndex>, ecs::Read<engine::gameplay::Relationships>,
 		ecs::Read<engine::gameplay::AttackPriorities>, ecs::Read<engine::gameplay::SpecialPowerRules>, ecs::Read<engine::gameplay::SharedPowerTimers>,
@@ -123,6 +125,8 @@ struct CommandButtonHuntSystem
 		auto attacks = chunk.Get<gp::AttackTarget>();
 		auto routes = chunk.Get<gp::Route>();
 		auto aggressions = chunk.Get<gp::Aggression>();
+		auto slotRows = chunk.Get<gp::WeaponSlots>();
+		auto armamentRows = chunk.Get<gp::Armament>();
 		const auto builders = chunk.Get<gp::Builder>();
 		const auto abilities = chunk.Get<SpecialAbilities>();
 		const auto timers = chunk.Get<gp::SpecialPowerTimers>();
@@ -225,7 +229,10 @@ struct CommandButtonHuntSystem
 			}
 			else if (button->commandName == "SWITCH_WEAPON" || button->commandName == "FIRE_WEAPON")
 			{
-				// huntWeapon: aiHunt when idle (the temporary weapon lock is not ported).
+				// huntWeapon: aiHunt when idle; every update its button's weapon slot is locked for the attack
+				// (setWeaponLock LOCKED_TEMPORARILY: until the clip is empty or the attack is done).
+				if (!slotRows.empty() && !armamentRows.empty())
+					gp::LockSlotTemporarily(slotRows[row], armamentRows[row], button->weaponSlot);
 				if (idle && !aggressions.empty())
 				{
 					if (!routes.empty())
@@ -238,11 +245,13 @@ struct CommandButtonHuntSystem
 				}
 				sleep = 1;
 			}
-			else if (button->commandName == "CONVERT_TO_CARBOMB")
+			else if (button->commandName == "CONVERT_TO_CARBOMB" || button->commandName == "HIJACK_VEHICLE" || button->commandName == "SABOTAGE_BUILDING")
 			{
 				// huntEnter: idle, it scans (scanClosestTarget) within ScanRange of its centre for the living, not hidden,
-				// neutral to it, near to far; the first it may convert (canConvertObjectToCarBomb) gets the button.
+				// neutral to it (a car bomber's) or its enemies (a hijacker's, a saboteur's), near to far; the first it may
+				// enter (canConvertObjectToCarBomb, canHijackVehicle, canSabotageBuilding) gets the button.
 				sleep = hunt.scanTicks;
+				const gp::Relationship wanted = button->commandName == "CONVERT_TO_CARBOMB" ? gp::Relationship::Neutral : gp::Relationship::Enemies;
 				if (idle)
 				{
 					const std::uint32_t player = owners[row].player;
@@ -253,7 +262,7 @@ struct CommandButtonHuntSystem
 						if (entry.entity == entities[row] || (entry.classes & gp::target_class::Hidden) != 0)
 							return;
 						const Fixed centre = Engine::Math::DistanceSquared(entry.position.XY(), self);
-						if (centre > hunt.scanRange * hunt.scanRange || relationships.Between(team, player, entry.team, entry.player) != gp::Relationship::Neutral)
+						if (centre > hunt.scanRange * hunt.scanRange || relationships.Between(team, player, entry.team, entry.player) != wanted)
 							return;
 						seen.emplace_back(centre, entry.entity);
 					});
@@ -267,8 +276,6 @@ struct CommandButtonHuntSystem
 					}
 				}
 			}
-			else if (button->commandName == "HIJACK_VEHICLE" || button->commandName == "SABOTAGE_BUILDING")
-				sleep = hunt.scanTicks; // huntEnter: canHijackVehicle / canSabotageBuilding are not ported
 			// setCommandButton wakes it again the next tick, whatever this update said.
 			hunt.nextTick = again ? tick + 1 : sleep ? tick + std::max<std::uint64_t>(*sleep, 1) : std::numeric_limits<std::uint64_t>::max();
 		}

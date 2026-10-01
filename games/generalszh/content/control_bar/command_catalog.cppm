@@ -1,5 +1,6 @@
 export module games.generalszh.content.control_bar.command_catalog;
 import std;
+import games.generalszh.content.global.radius_decal;
 
 export import engine.config.binding.schema;
 
@@ -48,6 +49,7 @@ inline constexpr std::uint32_t NotQueueable = 1u << 14;       // NOT_QUEUEABLE: 
 inline constexpr std::uint32_t OptionOne = 1u << 15;          // OPTION_ONE (a Strategy Center's bombardment)
 inline constexpr std::uint32_t OptionTwo = 1u << 16;          // OPTION_TWO (hold the line)
 inline constexpr std::uint32_t OptionThree = 1u << 17;        // OPTION_THREE (search and destroy)
+inline constexpr std::uint32_t CanUseWaypoints = 1u << 18;    // CAN_USE_WAYPOINTS: a script may fire it along a waypoint path
 // COMMAND_OPTION_NEED_OBJECT_TARGET: any of the object targets.
 inline constexpr std::uint32_t NeedObjectTarget = NeedTargetEnemy | NeedTargetNeutral | NeedTargetAlly;
 }
@@ -72,6 +74,8 @@ struct CommandButtonContent
 	// MaxShotsToFire (0: no limit, the original's NO_MAX_SHOTS_LIMIT).
 	std::uint32_t maxShotsToFire{0};
 	std::uint8_t weaponSlot{0}; // WeaponSlot: PRIMARY 0, SECONDARY 1, TERTIARY 2
+	// RadiusCursorType: the radius cursor (a RadiusCursorType) that follows the pointer while it waits for its target.
+	std::uint8_t radiusCursor{0};
 	std::vector<std::string> sciences; // Science (a list)
 };
 
@@ -156,6 +160,7 @@ inline CommandCatalog BindCommandCatalog(const engine::config::Document &command
 		button.specialPower = text("SpecialPower");
 		button.buttonImage = text("ButtonImage");
 		button.cursorName = text("CursorName");
+		button.radiusCursor = RadiusCursorIndex(text("RadiusCursorType"));
 		button.invalidCursorName = text("InvalidCursorName");
 		button.textLabel = text("TextLabel");
 		button.descriptLabel = text("DescriptLabel");
@@ -209,6 +214,8 @@ inline CommandCatalog BindCommandCatalog(const engine::config::Document &command
 					button.options |= button_option::OptionTwo;
 				else if (Same(option, "OPTION_THREE"))
 					button.options |= button_option::OptionThree;
+				else if (Same(option, "CAN_USE_WAYPOINTS"))
+					button.options |= button_option::CanUseWaypoints;
 			}
 		catalog.buttons.insert_or_assign(button.name, std::move(button));
 	}

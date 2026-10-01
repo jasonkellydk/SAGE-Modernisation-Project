@@ -46,7 +46,7 @@ inline std::uint64_t ObjectStatusBits(const GameWorld &game, ecs::Entity entity,
 	std::uint64_t bits = 0;
 	if (const auto *flags = world.Get<gp::StatusFlags>(entity))
 		bits = flags->bits;
-	bits &= ~(bit("UNDER_CONSTRUCTION") | bit("SOLD") | bit("CAN_STEALTH") | bit("STEALTHED") | bit("DETECTED") | bit("USING_ABILITY") |
+	bits &= ~(bit("UNDER_CONSTRUCTION") | bit("SOLD") | bit("CAN_STEALTH") | bit("STEALTHED") | bit("DETECTED") | bit("DISGUISED") | bit("USING_ABILITY") |
 		bit("IS_FIRING_WEAPON"));
 	if (world.Has<gp::UnderConstruction>(entity))
 		bits |= bit("UNDER_CONSTRUCTION");
@@ -60,6 +60,8 @@ inline std::uint64_t ObjectStatusBits(const GameWorld &game, ecs::Entity entity,
 			bits |= bit("STEALTHED");
 		if (stealth->Has(gp::stealth_flag::Detected))
 			bits |= bit("DETECTED");
+		if (stealth->Has(gp::stealth_flag::Disguised))
+			bits |= bit("DISGUISED");
 	}
 	if (const auto *activity = world.Get<gp::AiActivity>(entity); activity != nullptr && activity->usingAbility != 0)
 		bits |= bit("USING_ABILITY");
@@ -123,7 +125,7 @@ inline bool EnteredBy(const GameWorld &game, ecs::Entity container, std::uint32_
 	return transport != nullptr && transport->enteredTick != 0 && transport->enteredTick + 1 == now && transport->enteredBy == player;
 }
 
-// evaluateNamedDiscovered for one object: not held, not stealthed out of sight (disguises are not ported), and clear or
+// evaluateNamedDiscovered for one object: not held, not stealthed out of sight (stealthed, undetected and not disguised), and clear or
 // partly clear to the player through the shroud (getShroudedStatus).
 inline bool DiscoveredBy(const GameWorld &game, ecs::Entity entity, std::uint32_t player)
 {
@@ -132,7 +134,7 @@ inline bool DiscoveredBy(const GameWorld &game, ecs::Entity entity, std::uint32_
 		return false;
 	if (const auto *off = game.world.Get<gp::Disabled>(entity); off != nullptr && (off->mask & gp::disabled_type::Held) != 0)
 		return false;
-	if (const auto *stealth = game.world.Get<gp::Stealth>(entity); stealth != nullptr && stealth->Hidden())
+	if (const auto *stealth = game.world.Get<gp::Stealth>(entity); stealth != nullptr && stealth->HiddenUndisguised())
 		return false;
 	const auto *shroud = game.world.Get<gp::ObjectShroud>(entity);
 	return shroud == nullptr || shroud->SeenBy(player);

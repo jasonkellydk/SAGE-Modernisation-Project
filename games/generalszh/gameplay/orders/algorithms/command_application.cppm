@@ -1,9 +1,17 @@
 export module games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.common.status.components.ai_activity;
+import games.generalszh.gameplay.containment.algorithms.railed_transports;
+import games.generalszh.gameplay.world.resources.music_progress;
+import games.generalszh.gameplay.combat_drop.resources.deferred_orders;
+import games.generalszh.gameplay.combat_drop.components.combat_drop;
+import games.generalszh.gameplay.combat_drop.algorithms.combat_drop_orders;
+import games.generalszh.gameplay.beacons.algorithms.beacons;
 import std;
 import games.generalszh.gameplay.crates.algorithms.hijacking;
 import games.generalszh.gameplay.orders.algorithms.repair_orders;
 import games.generalszh.gameplay.ai.resources.retaliation_modes;
 import games.generalszh.gameplay.crates.algorithms.car_bombs;
+import games.generalszh.gameplay.crates.algorithms.sabotage;
 import games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
 import games.generalszh.gameplay.powers.algorithms.particle_cannons;
 import games.generalszh.gameplay.powers.components.spectre_gunship;
@@ -16,6 +24,7 @@ import games.generalszh.gameplay.powers.algorithms.special_power_launch;
 import games.generalszh.gameplay.upgrades.algorithms.research;
 import games.generalszh.gameplay.construction.algorithms.selling;
 import games.generalszh.gameplay.construction.algorithms.building;
+import games.generalszh.gameplay.construction.algorithms.construction_cancel;
 import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.rts.containment.components.transport;
@@ -28,16 +37,183 @@ import games.generalszh.gameplay.orders.algorithms.group_orders;
 import games.generalszh.gameplay.ai.algorithms.guards;
 import games.generalszh.gameplay.production.algorithms.rally_points;
 import games.generalszh.gameplay.containment.algorithms.player_evacuation;
+import games.generalszh.gameplay.aircraft.algorithms.airfields;
+import games.generalszh.gameplay.crates.systems.pilot_seek_system;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.construction.components.sale;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.physics.resources.physics_settings;
+import engine.gameplay.rts.veterancy.components.experience;
 
 // A player's command off the lockstep bus, applied to the units that player
 // owns (anything else in it is ignored: a peer cannot order another's units).
 export namespace generalszh::gameplay
 {
-void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCommand &command)
+// ChinookAIUpdate::aiDoCommand: a transport of the player's busy with a combat drop keeps the order for afterwards
+// (DeferredOrders: the last one given it); any other unit of the order takes it now, and an order reaching a unit forgets
+// what was kept for it (passItThru). False: nobody is left to take it now.
+inline bool DeferDropOrders(GameWorld &game, std::uint32_t player, commands::GameCommand &command)
 {
+	auto *deferred = game.world.FindResource<DeferredOrders>();
+	return std::visit(
+		[&](auto &order) -> bool {
+			using T = std::decay_t<decltype(order)>;
+			if constexpr (requires { { order.units } -> std::same_as<std::vector<ecs::Entity> &>; })
+			{
+				if (deferred == nullptr || order.units.empty())
+					return true;
+				std::vector<ecs::Entity> now;
+				for (const ecs::Entity unit : order.units)
+				{
+					const bool alive = game.world.IsAlive(unit);
+					const auto *owner = alive ? game.world.Get<engine::gameplay::Owner>(unit) : nullptr;
+					const CombatDrop *drop = alive ? game.world.Get<CombatDrop>(unit) : nullptr;
+					if (owner != nullptr && owner->player == player && drop != nullptr && drop->stage == CombatDropStage::Dropping)
+					{
+						T one = order;
+						one.units = {unit};
+						deferred->Keep(unit, player, commands::Encode(one));
+						continue;
+					}
+					deferred->Forget(unit);
+					now.push_back(unit);
+				}
+				order.units = std::move(now);
+				return !order.units.empty();
+			}
+			else
+				return true;
+		},
+		command);
+}
+
+namespace enter_detail
+{
+namespace gp = engine::gameplay;
+
+// ActionManager::canEnterObject's first checks, for a player's order: not itself, the target not dead nor fogged to a
+// human player, neither under construction, the target not sold, neither IGNORED_IN_GUI nor the unit a MOB_NEXUS, the
+// target not subdued, the unit neither STRUCTURE nor IMMOBILE.
+inline bool MayEnterAtAll(GameWorld &game, ecs::Entity unit, ecs::Entity target)
+{
+	auto &world = game.world;
+	const auto *self = world.IsAlive(unit) ? world.Get<gp::DefinitionRef>(unit) : nullptr;
+	const auto *into = world.IsAlive(target) ? world.Get<gp::DefinitionRef>(target) : nullptr;
+	if (self == nullptr || into == nullptr || unit == target || world.Has<gp::Dying>(target) || ShroudedForAction(game, unit, target))
+		return false;
+	if (world.Has<gp::UnderConstruction>(unit) || world.Has<gp::UnderConstruction>(target) || world.Has<gp::Sale>(target))
+		return false;
+	const content::ObjectDefinition &kind = game.templates.DefinitionAt(self->index);
+	const content::ObjectDefinition &intoKind = game.templates.DefinitionAt(into->index);
+	if (kind.Is("IGNORED_IN_GUI") || kind.Is("MOB_NEXUS") || intoKind.Is("IGNORED_IN_GUI"))
+		return false;
+	if (const auto *off = world.Get<gp::Disabled>(target); off != nullptr && (off->mask & gp::disabled_type::Subdued) != 0)
+		return false;
+	return !kind.Is("STRUCTURE") && !kind.Is("IMMOBILE");
+}
+
+// canEnterObject for an AIRCRAFT at an FS_AIRFIELD (after MayEnterAtAll): above the ground, of the airfield's own player,
+// holding a space there (hasReservedSpace), or one free there for it (shouldReserveDoorWhenQueued and
+// hasAvailableSpaceFor: not a PRODUCED_AT_HELIPAD one's).
+inline bool MayLandAt(GameWorld &game, ecs::Entity unit, ecs::Entity airfield)
+{
+	auto &world = game.world;
+	const auto *jet = world.Get<gp::Jet>(unit);
+	const auto *at = world.Get<gp::Transform>(unit);
+	const auto *mine = world.Get<gp::Owner>(unit);
+	const auto *theirs = world.Get<gp::Owner>(airfield);
+	if (at == nullptr || mine == nullptr || theirs == nullptr || at->position.z - game.ground.At(at->position.XY()) <= Engine::Math::Fixed{})
+		return false;
+	if (mine->player != theirs->player || !world.Has<gp::Airfield>(airfield))
+		return false;
+	if (jet != nullptr && jet->airfield == airfield)
+		return true;
+	return !game.templates.DefinitionAt(world.Get<gp::DefinitionRef>(unit)->index).Is("PRODUCED_AT_HELIPAD") && FreeSpace(game, airfield).has_value();
+}
+
+// JetAIUpdate::privateEnter at an airfield: ignored while landing (LANDING_IN_PROGRESS: coming down or taxiing in) or
+// parked there (aiDoCommand's isParkedAt); else, canEnterObject letting it, doLandingCommand: it reserves a space there
+// (its old one let go) and turns back to land (RETURNING_FOR_LANDING, as its airfield's recall).
+inline void OrderJetLanding(GameWorld &game, ecs::Entity unit, ecs::Entity airfield)
+{
+	auto &world = game.world;
+	gp::Jet *jet = world.Get<gp::Jet>(unit);
+	if (jet == nullptr || jet->state == gp::JetState::Landing || jet->state == gp::JetState::TaxiToParking)
+		return;
+	if (!MayEnterAtAll(game, unit, airfield) || !MayLandAt(game, unit, airfield))
+		return;
+	if (jet->airfield != airfield)
+	{
+		const auto space = FreeSpace(game, airfield);
+		if (!space)
+			return;
+		jet->airfield = airfield;
+		jet->space = *space;
+	}
+	Commanded(game, unit);
+	jet->order = gp::Jet::Recall;
+}
+
+// canEnterObject for a pilot (its VeterancyCrateCollide would like to collide with the vehicle, after MayEnterAtAll),
+// then privateEnter (a mobile unit): it goes for the vehicle and climbs in on reaching it (PilotSeekSystem). False: no
+// pilot's enter.
+inline bool OrderPilotJoin(GameWorld &game, ecs::Entity unit, ecs::Entity vehicle)
+{
+	auto &world = game.world;
+	PilotSeeker *seeker = world.Get<PilotSeeker>(unit);
+	const auto *owner = world.Get<gp::Owner>(unit);
+	const auto *experience = world.Get<gp::Experience>(unit);
+	const auto *physics = world.FindResource<gp::PhysicsSettings>();
+	if (seeker == nullptr || owner == nullptr || physics == nullptr || !MayEnterAtAll(game, unit, vehicle))
+		return false;
+	const std::uint32_t levels = seeker->addsOwnerVeterancy != 0 ? (experience != nullptr ? experience->level : 0u) : 1u;
+	if (!PilotMayJoin(*seeker, owner->player, levels, vehicle, world, game.templates, game.ground, physics->SignificantHeight()))
+		return false;
+	if (!detail::Mobile(game, unit) || world.Has<gp::Passenger>(unit))
+		return true;
+	OrderMove(game, unit, world.Get<gp::Transform>(vehicle)->position.XY(), true, true, gp::GoalClaim::None); // AIEnterState
+	seeker->goal = vehicle;
+	return true;
+}
+}
+
+// aiEnter (CMD_FROM_PLAYER), as canEnterObject goes: a jet lands at its player's airfield, an unmanned vehicle is taken
+// over by infantry, a vehicle hijacked or made a car bomb, a building sabotaged, a vehicle joined by a pilot, else a
+// transport boarded.
+inline void EnterAsOrdered(GameWorld &game, ecs::Entity unit, ecs::Entity target)
+{
+	namespace gp = engine::gameplay;
+	const auto *self = game.world.IsAlive(unit) ? game.world.Get<gp::DefinitionRef>(unit) : nullptr;
+	const auto *into = game.world.IsAlive(target) ? game.world.Get<gp::DefinitionRef>(target) : nullptr;
+	if (self != nullptr && into != nullptr && game.world.Has<gp::Jet>(unit) && game.templates.DefinitionAt(self->index).Is("AIRCRAFT") &&
+		game.templates.DefinitionAt(into->index).Is("FS_AIRFIELD"))
+	{
+		enter_detail::OrderJetLanding(game, unit, target);
+		return;
+	}
+	if (MayTakeOver(game, unit, target, false))
+		OrderTakeOver(game, unit, target, false);
+	else if (!OrderHijack(game, unit, target, true, false) && !OrderConvertToCarBomb(game, unit, target, true, false) &&
+		!OrderSabotage(game, unit, target, true, false) && !enter_detail::OrderPilotJoin(game, unit, target))
+		OrderBoard(game, unit, target, true);
+}
+
+void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCommand &given)
+{
+	commands::GameCommand command = given;
+	if (!DeferDropOrders(game, player, command))
+		return;
+	// RailedTransportAIUpdate::aiDoCommand: a railed transport takes no order of its player's but to set off or to let its
+	// riders out.
+	const bool railedOrder = std::holds_alternative<commands::ExecuteRailedTransport>(command) || std::holds_alternative<commands::Evacuate>(command);
 	const auto owns = [&](ecs::Entity unit) {
 		const auto *owner = game.world.IsAlive(unit) ? game.world.Get<engine::gameplay::Owner>(unit) : nullptr;
-		return owner != nullptr && owner->player == player;
+		return owner != nullptr && owner->player == player && (railedOrder || !game.world.Has<RailedTransport>(unit));
 	};
 	std::visit(
 		[&](const auto &order) {
@@ -166,22 +342,37 @@ void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCom
 			}
 			else if constexpr (std::is_same_v<T, commands::Enter>)
 			{
-				// aiEnter (CMD_FROM_PLAYER), as canEnterObject goes: an unmanned vehicle taken over by infantry, a vehicle
-				// made a car bomb, else a transport boarded.
 				for (const ecs::Entity unit : order.units)
 					if (owns(unit))
-					{
-						if (MayTakeOver(game, unit, order.target, false))
-							OrderTakeOver(game, unit, order.target, false);
-						else if (!OrderHijack(game, unit, order.target, true, false) && !OrderConvertToCarBomb(game, unit, order.target, true, false))
-							OrderBoard(game, unit, order.target, true);
-					}
+						EnterAsOrdered(game, unit, order.target);
 			}
 			else if constexpr (std::is_same_v<T, commands::GetRepaired>)
 			{
 				for (const ecs::Entity unit : order.units)
 					if (owns(unit))
 						OrderGetRepaired(game, unit, order.depot, true);
+			}
+			// GameLogic::onGetHealed -> groupGetHealed -> privateGetHealed: canGetHealedAt, then aiEnter the pad.
+			else if constexpr (std::is_same_v<T, commands::GetHealed>)
+			{
+				for (const ecs::Entity unit : order.units)
+					if (owns(unit) && CanGetHealedAt(game, unit, order.target, true))
+						EnterAsOrdered(game, unit, order.target);
+			}
+			// GameLogic::onResumeConstruction -> groupResumeConstruction: each member's aiResumeConstruction (only one of
+			// them gets to build it: it becomes its builder).
+			else if constexpr (std::is_same_v<T, commands::ResumeConstruction>)
+			{
+				for (const ecs::Entity unit : order.units)
+					if (owns(unit))
+						OrderResumeConstruction(game, unit, order.target, true);
+			}
+			// GameLogic::onDoRepair -> groupRepair: each member's aiRepair (only one of them gets to: its heal lock).
+			else if constexpr (std::is_same_v<T, commands::Repair>)
+			{
+				for (const ecs::Entity unit : order.units)
+					if (owns(unit))
+						OrderRepair(game, unit, order.target, true);
 			}
 			else if constexpr (std::is_same_v<T, commands::Stop>)
 			{
@@ -242,6 +433,8 @@ void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCom
 				if (owns(order.building))
 					BeginSale(game, order.building);
 			}
+			else if constexpr (std::is_same_v<T, commands::CancelConstruction>)
+				CancelConstruction(game, player, order.building);
 			else if constexpr (std::is_same_v<T, commands::QueueUnit>)
 			{
 				if (owns(order.factory))
@@ -268,6 +461,43 @@ void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCom
 			}
 			else if constexpr (std::is_same_v<T, commands::SelfDestruct>)
 				PlayerSelfDestruct(game, player, order.transferToAlly);
+			else if constexpr (std::is_same_v<T, commands::CombatDrop>)
+			{
+				// AIGroup::groupCombatDrop (CMD_FROM_PLAYER): each of the player's units, in order; at an object, its
+				// position.
+				for (const ecs::Entity unit : order.units)
+					if (owns(unit))
+						OrderCombatDrop(game, unit, order.target, order.position, true);
+			}
+			else if constexpr (std::is_same_v<T, commands::PlaceBeacon>)
+				PlaceBeacon(game, player, order.position);
+			else if constexpr (std::is_same_v<T, commands::RemoveBeacon>)
+				RemoveBeacons(game, player, order.units);
+			else if constexpr (std::is_same_v<T, commands::SetBeaconText>)
+				SetBeaconText(game, player, order.units, order.text);
+			else if constexpr (std::is_same_v<T, commands::ExecuteRailedTransport>)
+			{
+				// AIGroup::groupExecuteRailedTransport: each of the sender's railed transports.
+				for (const ecs::Entity unit : order.units)
+					if (owns(unit))
+						ExecuteRailedTransport(game, unit);
+			}
+			// GameLogic::onExit: the rider must be the sender's (getControllingPlayer() == msgPlayer); it gets out of the
+			// container the sender has selected.
+			else if constexpr (std::is_same_v<T, commands::Exit>)
+			{
+				if (owns(order.rider))
+					PlayerExit(game, order.rider, order.container);
+			}
+			else if constexpr (std::is_same_v<T, commands::MusicProgress>)
+			{
+				// The local music's progress (only a single-player session's scripts ask it).
+				if (auto *music = game.world.FindResource<MusicProgress>())
+				{
+					music->track = order.track;
+					music->completions = order.completions;
+				}
+			}
 			else if constexpr (std::is_same_v<T, commands::EnableRetaliation>)
 			{
 				// GameLogic::onEnableRetaliationMode: the sender's own player only.
@@ -289,5 +519,50 @@ void ApplyCommand(GameWorld &game, std::uint32_t player, const commands::GameCom
 				FireSpecialPower(game, order.source, order.power, order.target, false, order.atLocation, order.options);
 		},
 		command);
+	// aiDoCommand(CMD_FROM_PLAYER): the units a player's AI order reached last took an order from their player
+	// (getLastCommandSource), which ends a temporary stealth grant.
+	const auto fromPlayer = [&](ecs::Entity unit) {
+		if (owns(unit))
+			if (auto *activity = game.world.Get<engine::gameplay::AiActivity>(unit))
+				activity->fromPlayer = 1;
+	};
+	std::visit(
+		[&](const auto &order) {
+			using T = std::decay_t<decltype(order)>;
+			if constexpr (std::is_same_v<T, commands::MoveTo> || std::is_same_v<T, commands::Attack> || std::is_same_v<T, commands::Stop> ||
+				std::is_same_v<T, commands::AttackPosition> || std::is_same_v<T, commands::Dock> || std::is_same_v<T, commands::GetRepaired> ||
+				std::is_same_v<T, commands::Enter> || std::is_same_v<T, commands::ResumeConstruction> || std::is_same_v<T, commands::Repair> ||
+				std::is_same_v<T, commands::GetHealed> || std::is_same_v<T, commands::GuardPosition> || std::is_same_v<T, commands::FireWeapon> ||
+				std::is_same_v<T, commands::AttackMoveTo> || std::is_same_v<T, commands::Evacuate> || std::is_same_v<T, commands::GuardObject> ||
+				std::is_same_v<T, commands::CombatDrop> || std::is_same_v<T, commands::ExecuteRailedTransport>)
+				for (const ecs::Entity unit : order.units)
+					fromPlayer(unit);
+			else if constexpr (std::is_same_v<T, commands::BuildStructure> || std::is_same_v<T, commands::WorkOn>)
+				fromPlayer(order.builder);
+			else if constexpr (std::is_same_v<T, commands::Exit>)
+				fromPlayer(order.rider);
+		},
+		command);
+}
+
+// ChinookAIUpdate::update: its drop over (idle again), the order kept for a transport is carried out (and forgotten);
+// one whose transport is gone is forgotten.
+void ApplyDeferredOrders(GameWorld &game)
+{
+	auto *deferred = game.world.FindResource<DeferredOrders>();
+	if (deferred == nullptr || deferred->list.empty())
+		return;
+	std::vector<DeferredOrder> due;
+	std::erase_if(deferred->list, [&](const DeferredOrder &kept) {
+		if (!game.world.IsAlive(kept.unit))
+			return true;
+		if (const CombatDrop *drop = game.world.Get<CombatDrop>(kept.unit); drop != nullptr && drop->stage == CombatDropStage::Dropping)
+			return false;
+		due.push_back(kept);
+		return true;
+	});
+	for (const DeferredOrder &kept : due)
+		if (const auto order = commands::Decode(kept.order))
+			ApplyCommand(game, kept.player, *order);
 }
 }

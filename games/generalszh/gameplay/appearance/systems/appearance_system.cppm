@@ -1,4 +1,7 @@
 export module games.generalszh.gameplay.appearance.systems.appearance_system;
+import games.generalszh.gameplay.containment.components.railed_transport;
+import games.generalszh.gameplay.combat.components.checkpoint;
+import games.generalszh.gameplay.combat_drop.components.combat_drop;
 import std;
 export import engine.gameplay.common.identity.components.owner;
 export import engine.gameplay.rts.teams.resources.team_roster;
@@ -27,6 +30,8 @@ export import engine.gameplay.rts.stealth.components.stealth;
 export import engine.gameplay.rts.production.components.production_doors;
 export import engine.gameplay.rts.death.components.crash;
 export import engine.gameplay.rts.death.components.collapse;
+export import engine.gameplay.rts.death.components.structure_topple;
+export import games.generalszh.gameplay.combat.components.enemy_near;
 export import engine.gameplay.rts.death.components.blast_wave;
 export import engine.gameplay.rts.topple.components.topple;
 export import engine.gameplay.rts.containment.components.mount;
@@ -35,6 +40,7 @@ export import engine.gameplay.rts.construction.components.sale;
 export import engine.gameplay.rts.construction.components.under_construction;
 export import engine.gameplay.rts.construction.components.builder;
 export import engine.gameplay.rts.docking.components.docking;
+export import engine.gameplay.rts.docking.components.dock_look;
 import engine.gameplay.rts.combat.components.deploy;
 import games.generalszh.gameplay.powers.components.launcher_door;
 import games.generalszh.gameplay.powers.components.particle_cannon;
@@ -43,8 +49,10 @@ export import engine.gameplay.rts.harvesting.components.harvester;
 export import engine.gameplay.rts.harvesting.components.resource_store;
 export import engine.gameplay.rts.loadout.components.loadout;
 export import engine.gameplay.rts.death.systems.slow_death_system;
+export import engine.gameplay.rts.slaves.components.slaved;
 export import games.generalszh.gameplay.objects.resources.object_templates;
 import games.generalszh.content.objects.model_conditions;
+export import engine.gameplay.rts.blocking.components.blocked_state;
 import games.generalszh.content.combat.loadout_content;
 
 // Zero Hour's model conditions from the simulation state, each tick, in
@@ -82,17 +90,17 @@ export namespace generalszh::gameplay
 {
 struct AppearanceSystem
 {
-	using Query = ecs::Query<ecs::Write<gameplay::Appearance>, ecs::Optional<gameplay::Locomotion>, ecs::Optional<gameplay::AttackTarget>,
+	using Query = ecs::Query<ecs::Write<gameplay::Appearance>, ecs::Optional<gameplay::Locomotion>, ecs::Optional<gameplay::BlockedState>, ecs::Optional<gameplay::AttackTarget>,
 		ecs::Optional<gameplay::Armament>, ecs::Optional<gameplay::Health>, ecs::Optional<gameplay::Descent>,
 		ecs::Optional<gameplay::Transport>, ecs::Optional<gameplay::Dying>, ecs::Optional<gameplay::DefinitionRef>,
 		ecs::Optional<gameplay::Flammable>, ecs::Optional<gameplay::Stealth>, ecs::Optional<gameplay::ProductionDoors>, ecs::Optional<gameplay::Crash>,
 		ecs::Optional<gameplay::Docking>, ecs::Optional<gameplay::Harvester>, ecs::Optional<gameplay::ResourceStore>, ecs::Optional<gameplay::Loadout>,
-		ecs::Optional<gameplay::Collapse>, ecs::Optional<gameplay::Sale>, ecs::Optional<gameplay::UnderConstruction>, ecs::Optional<gameplay::Builder>,
+		ecs::Optional<gameplay::Collapse>, ecs::Optional<gameplay::StructureTopple>, ecs::Optional<EnemyNear>, ecs::Optional<gameplay::Sale>, ecs::Optional<gameplay::UnderConstruction>, ecs::Optional<gameplay::Builder>,
 		ecs::Optional<gameplay::Parachute>, ecs::Optional<gameplay::ParachuteRider>, ecs::Optional<gameplay::Disabled>, ecs::Optional<TechBuilding>,
 		ecs::Optional<gameplay::Owner>, ecs::Optional<gameplay::Scorched>, ecs::Optional<gameplay::Topple>, ecs::Optional<gameplay::Mounted>, ecs::Optional<gameplay::Minefield>,
 		ecs::Optional<gameplay::Deploy>, ecs::Optional<LauncherDoor>, ecs::Optional<ParticleCannon>, ecs::Optional<SpectreGunship>,
-		ecs::Optional<gameplay::FiringTracker>, ecs::Optional<RiderChange>>;
-	using Lookup = ecs::Lookup<ecs::Read<gameplay::Parachute>, ecs::Read<gameplay::Health>>;
+		ecs::Optional<gameplay::FiringTracker>, ecs::Optional<RiderChange>, ecs::Optional<Rappel>, ecs::Optional<Checkpoint>, ecs::Optional<RailedHaul>, ecs::Optional<gameplay::Slaved>, ecs::Optional<gameplay::DockLook>>;
+	using Lookup = ecs::Lookup<ecs::Read<gameplay::Parachute>, ecs::Read<gameplay::Health>, ecs::Read<gameplay::DefinitionRef>>;
 	using Resources = ecs::Resources<ecs::Read<ObjectTemplates>, ecs::Read<AppearanceSettings>, ecs::Read<gameplay::TeamRoster>>;
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
@@ -111,6 +119,7 @@ struct AppearanceSystem
 		const auto mounts = chunk.Get<gameplay::Mounted>();
 		const auto minefields = chunk.Get<gameplay::Minefield>();
 		const auto motion = chunk.Get<gameplay::Locomotion>();
+		const auto blockedRows = chunk.Get<gameplay::BlockedState>();
 		const auto targets = chunk.Get<gameplay::AttackTarget>();
 		const auto armaments = chunk.Get<gameplay::Armament>();
 		const auto healths = chunk.Get<gameplay::Health>();
@@ -123,8 +132,11 @@ struct AppearanceSystem
 		const auto doorSets = chunk.Get<gameplay::ProductionDoors>();
 		const auto crashes = chunk.Get<gameplay::Crash>();
 		const auto dockings = chunk.Get<gameplay::Docking>();
+		const auto dockLooks = chunk.Get<gameplay::DockLook>();
 		const auto deploys = chunk.Get<gameplay::Deploy>();
 		const auto launchers = chunk.Get<LauncherDoor>();
+		const auto checkpoints = chunk.Get<Checkpoint>();
+		const auto hauls = chunk.Get<RailedHaul>();
 		const auto cannons = chunk.Get<ParticleCannon>();
 		const auto gunships = chunk.Get<SpectreGunship>();
 		const auto trackers = chunk.Get<gameplay::FiringTracker>();
@@ -133,11 +145,15 @@ struct AppearanceSystem
 		const auto stores = chunk.Get<gameplay::ResourceStore>();
 		const auto loadouts = chunk.Get<gameplay::Loadout>();
 		const auto collapses = chunk.Get<gameplay::Collapse>();
+		const auto structureTopples = chunk.Get<gameplay::StructureTopple>();
+		const auto enemyNears = chunk.Get<EnemyNear>();
 		const auto sales = chunk.Get<gameplay::Sale>();
 		const auto sites = chunk.Get<gameplay::UnderConstruction>();
 		const auto builders = chunk.Get<gameplay::Builder>();
 		const auto chutes = chunk.Get<gameplay::Parachute>();
 		const auto riders = chunk.Get<gameplay::ParachuteRider>();
+		const auto rappels = chunk.Get<Rappel>();
+		const auto slavedRows = chunk.Get<gameplay::Slaved>();
 		const auto lookup = context.Lookup<Lookup>();
 		constexpr std::uint32_t crateArmorOne = content::SetFlag(content::ArmorSetFlagNames, "CRATE_UPGRADE_ONE");
 		constexpr std::uint32_t crateArmorTwo = content::SetFlag(content::ArmorSetFlagNames, "CRATE_UPGRADE_TWO");
@@ -154,7 +170,10 @@ struct AppearanceSystem
 		for (std::size_t row = 0; row < appearances.size(); ++row)
 		{
 			gameplay::Appearance &look = appearances[row];
-			look.Set(mc::Moving, !motion.empty() && motion[row].speed > Engine::Math::Fixed{});
+			// RailedTransportDockUpdate: MOVING while pulled into or pushed out of a railed transport.
+			// AIInternalMoveToState::update: held up by a unit in its way over a quarter second (7 ticks), it is not MOVING.
+			const bool heldUp = !blockedRows.empty() && blockedRows[row].frames > 7u;
+			look.Set(mc::Moving, (!motion.empty() && motion[row].speed > Engine::Math::Fixed{} && !heldUp) || !hauls.empty());
 			const bool attacking = !targets.empty() && targets[row].target.IsValid();
 			look.Set(mc::Attacking, attacking);
 			bool firing = false, reloading = false;
@@ -173,6 +192,15 @@ struct AppearanceSystem
 				look.Set(content::ModelConditionBit("CONTINUOUS_FIRE_FAST"), trackers[row].level == 2);
 				look.Set(content::ModelConditionBit("CONTINUOUS_FIRE_SLOW"), trackers[row].slow != 0);
 			}
+			// CheckpointUpdate: its gate DOOR_1_OPENING or DOOR_1_CLOSING (clearAndSetModelConditionState), neither at first.
+			if (!checkpoints.empty() && checkpoints[row].gate != CheckpointGate::None)
+			{
+				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), checkpoints[row].gate == CheckpointGate::Opening);
+				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), checkpoints[row].gate == CheckpointGate::Closing);
+			}
+			// EnemyNearUpdate: ENEMYNEAR while an enemy was near at its last look.
+			if (!enemyNears.empty())
+				look.Set(content::ModelConditionBit("ENEMYNEAR"), enemyNears[row].near != 0);
 			// Object::adjustModelConditionForWeaponStatus: PREATTACK while it winds up (Weapon::getStatus PRE_ATTACK).
 			look.Set(mc::PreattackA, !armaments.empty() && armaments[row].preAttackUntil != 0 && tick < armaments[row].preAttackUntil);
 			look.Set(mc::UsingWeaponA, attacking || firing);
@@ -184,8 +212,9 @@ struct AppearanceSystem
 				const Engine::Math::Fixed current = healths[row].current, maximum = healths[row].maximum;
 				const bool alive = current > Engine::Math::Fixed{};
 				const bool reallyDamaged = current <= maximum * settings.reallyDamaged;
-				// Come down (StructureCollapseUpdate): its post-collapse look, not its rubble.
-				const bool collapsed = !collapses.empty() && collapses[row].state == gameplay::CollapseState::Done;
+				// Come down (StructureCollapseUpdate) or toppled flat (StructureToppleUpdate): its post-collapse look, not its rubble.
+				const bool collapsed = (!collapses.empty() && collapses[row].state == gameplay::CollapseState::Done) ||
+					(!structureTopples.empty() && structureTopples[row].state == gameplay::StructureToppleState::Done);
 				look.Set(mc::Rubble, !alive && !collapsed);
 				look.Set(mc::PostCollapse, collapsed);
 				// While under construction its looks do not follow its damage (evaluateVisualCondition waits for it to stand).
@@ -230,6 +259,8 @@ struct AppearanceSystem
 			look.Set(mc::Freefall, (riding != nullptr && !open) || (held != nullptr && (held->mask & gameplay::disabled_type::Freefall) != 0));
 			look.Set(mc::Parachuting, !descents.empty() || open || (!chutes.empty() && chutes[row].Has(gameplay::parachute_flag::Opened)));
 			look.Set(mc::Loaded, !transports.empty() && transports[row].occupied > 0);
+			// AIRappelState: RAPPELLING on its rope until it lands.
+			look.Set(mc::Rappelling, !rappels.empty());
 			// OpenContain's door: DOOR_1_OPENING from each exit until DoorOpenTime has passed, then DOOR_1_CLOSING.
 			if (!transports.empty() && transports[row].doorOpenedTick != 0 && transports[row].definition.doorOpenTicks > 0)
 			{
@@ -237,8 +268,13 @@ struct AppearanceSystem
 				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), open);
 				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), !open);
 			}
-			look.Set(mc::StealthedLook, !stealths.empty() && stealths[row].Has(gameplay::stealth_flag::Stealthed));
-			look.Set(mc::DetectedLook, !stealths.empty() && stealths[row].Has(gameplay::stealth_flag::Detected));
+			// A disguiser never looks stealthed (calcStealthedStatusForPlayer: STEALTHLOOK_DISGUISED_ENEMY or NONE); disguised it
+			// shows MODELCONDITION_DISGUISED (changeVisualDisguise).
+			const bool disguiser = !stealths.empty() && stealths[row].Option(gameplay::stealth_option::DisguisesAsTeam);
+			look.Set(mc::StealthedLook, !stealths.empty() && !disguiser && stealths[row].Has(gameplay::stealth_flag::Stealthed));
+			look.Set(mc::DetectedLook, !stealths.empty() && !disguiser && stealths[row].Has(gameplay::stealth_flag::Detected));
+			static constexpr std::uint32_t disguisedLook = content::ModelConditionBit("DISGUISED");
+			look.Set(disguisedLook, !stealths.empty() && stealths[row].Has(gameplay::stealth_flag::Disguised));
 			look.Set(mc::Aflame, !fires.empty() && fires[row].state == gameplay::FlameState::Aflame);
 			look.Set(mc::Smoldering, !fires.empty() && fires[row].burned != 0);
 			// NeutronMissileSlowDeathBehavior::doScorchBlast: burned by a blast's scorch wave, for good.
@@ -299,6 +335,19 @@ struct AppearanceSystem
 				look.Set(mc::Packing, state == gameplay::DeployState::Undeploy);
 				look.Set(mc::Deployed, state == gameplay::DeployState::ReadyToAttack || state == gameplay::DeployState::AligningTurrets);
 			}
+			// SlavedUpdate::setRepairModelConditionStates: a drone that repairs shows its arm (PACKING from its creation and
+			// whenever a repair ends, UNPACKING, FIRING_B extending and welding, FIRING_C retracting).
+			if (!slavedRows.empty() && slavedRows[row].definition.repairPerTick > Engine::Math::Fixed{})
+			{
+				using gameplay::SlaveRepairLook;
+				static constexpr std::uint32_t firingB = content::ModelConditionBit("FIRING_B");
+				static constexpr std::uint32_t firingC = content::ModelConditionBit("FIRING_C");
+				const SlaveRepairLook arm = slavedRows[row].repairLook;
+				look.Set(mc::Packing, arm == SlaveRepairLook::Packing);
+				look.Set(mc::Unpacking, arm == SlaveRepairLook::Unpacking);
+				look.Set(firingB, arm == SlaveRepairLook::FiringB);
+				look.Set(firingC, arm == SlaveRepairLook::FiringC);
+			}
 			// Docking (DockUpdate::onEnterReached / onDockReached / onExitReached): beginning on the way in, active at
 			// the business and on the way out, ending once out.
 			if (!dockings.empty())
@@ -310,6 +359,25 @@ struct AppearanceSystem
 				look.Set(mc::DockingBeginning, in && !active);
 				look.Set(mc::DockingActive, active);
 				look.Set(mc::DockingEnding, !gameplay::IsDocking(docking) && docking.left);
+				// DockUpdate::update on a supply source (KINDOF_SUPPLY_SOURCE): its active docker, a worker (DOZER and
+				// HARVESTER), shows no MOVING while DOCKING_BEGINNING (its pick-up, not its walk).
+				if (look.Test(mc::DockingBeginning) && !definitions.empty())
+				{
+					const content::ObjectDefinition &self = templates.DefinitionAt(definitions[row].index);
+					const auto *dockRef = lookup.template Get<gameplay::DefinitionRef>(docking.dock);
+					if (self.Is("DOZER") && self.Is("HARVESTER") && dockRef != nullptr && templates.DefinitionAt(dockRef->index).Is("SUPPLY_SOURCE"))
+						look.Set(mc::Moving, false);
+				}
+			}
+			// A dock's own (DockUpdate's flags on `me`: the supply center's arm and box).
+			if (!dockLooks.empty())
+			{
+				const std::uint8_t on = dockLooks[row].flags;
+				namespace dl = gameplay::dock_look;
+				look.Set(mc::Docking, (on & dl::Docking) != 0);
+				look.Set(mc::DockingBeginning, (on & dl::Beginning) != 0);
+				look.Set(mc::DockingActive, (on & dl::Active) != 0);
+				look.Set(mc::DockingEnding, (on & dl::Ending) != 0);
 			}
 			// A crashed helicopter's wreck, down.
 			look.Set(mc::SpecialDamaged, !crashes.empty() && crashes[row].groundTick != 0);
@@ -355,6 +423,8 @@ template<>
 struct SystemTraits<generalszh::gameplay::AppearanceSystem>
 {
 	static constexpr std::string_view StableName = "generalszh.gameplay.appearance";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
 	using Before = SystemTypeList<engine::gameplay::SnapshotSystem>;
 	// Sees this tick's deaths and slow deaths.

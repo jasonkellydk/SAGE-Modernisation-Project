@@ -60,6 +60,7 @@ struct Base
 		world.EmplaceResource<Relationships>(2u);
 		world.EmplaceResource<TeamRoster>();
 		world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<ArmorCatalog>();
 		world.EmplaceResource<JetDamage>();
 		registry.Register(targeting);
 		registry.Register(jets);
@@ -77,13 +78,18 @@ struct Base
 		target.RegisterComponent<Locomotion>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
 		target.RegisterComponent<Armament>();
 		target.RegisterComponent<StatusFlags>();
+		target.RegisterComponent<BodyExtent>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<UnderConstruction>();
 		target.RegisterComponent<AttackTarget>();
 		target.RegisterComponent<Aggression>();
 		target.RegisterComponent<DefinitionRef>();
 		target.RegisterComponent<Owner>();
 		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
 		target.RegisterComponent<OffMap>();
 		target.RegisterComponent<Appearance>();
 		target.RegisterComponent<DrawOffset>();
@@ -190,6 +196,47 @@ BOOST_AUTO_TEST_CASE(a_hunting_jet_taxies_out_takes_off_down_the_runway_and_come
 	BOOST_TEST((base.world.Get<Transform>(mig)->position.z == Fixed{}));
 	BOOST_TEST(base.Until(mig, JetState::Parked) == parked + 60);
 	BOOST_TEST(base.world.Get<Armament>(mig)->readyTick != OutOfAmmo);
+}
+
+// JetAIUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp): idle in the
+// air (ALLOW_AIR_LOCO), its first idle tick sets m_returnToBaseFrame to that tick plus ReturnToBaseIdleTime (10000 ms
+// on the shipped jets: 300 ticks) and on that tick it goes home (RETURNING_FOR_LANDING); a busy tick in between (an
+// order) disarms it, so the count starts again from the next idle tick.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_jet_goes_home_after_its_return_to_base_idle_time)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	base.world.Get<Jet>(mig)->idleReturnTicks = 300;
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Flying) != 0u);
+	base.world.Get<Aggression>(mig)->stance = Stance::Idle;
+	const auto busy = [&] { *base.world.Get<MoveOrder>(mig) = MoveToPoint({Fixed::FromInt(2000), Fixed::FromInt(2000)}); };
+	const auto idle = [&] {
+		*base.world.Get<MoveOrder>(mig) = {};
+		*base.world.Get<AttackTarget>(mig) = {};
+	};
+	busy();
+	base.Step();
+	idle();
+	const std::uint64_t firstIdle = base.tick + 1;
+	for (int step = 0; step < 100; ++step)
+		base.Step();
+	// Busy for a tick: the count starts again.
+	busy();
+	base.Step();
+	idle();
+	const std::uint64_t idleAgain = base.tick + 1;
+	std::uint64_t home = 0;
+	for (int step = 0; step < 400 && home == 0; ++step)
+	{
+		base.Step();
+		if (base.world.Get<Jet>(mig)->state == JetState::Returning)
+			home = base.tick;
+		else
+			*base.world.Get<MoveOrder>(mig) = {}; // it wheels about where it is, idle
+	}
+	BOOST_TEST(firstIdle + 300 > idleAgain); // the first count was cut short
+	BOOST_TEST(home == idleAgain + 300);
 }
 
 // JetPauseBeforeTakeoffState (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp, the

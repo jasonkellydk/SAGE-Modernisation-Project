@@ -8,6 +8,7 @@ export import engine.gameplay.rts.production.components.production_doors;
 export import engine.gameplay.rts.production.components.production_exit_gate;
 export import engine.gameplay.rts.economy.resources.player_energy;
 export import engine.gameplay.common.identity.components.owner;
+export import engine.gameplay.common.status.components.disabled;
 
 // Factories build, in parallel per chunk: the front of each queue advances a
 // tick's work, less when its player is short of power (as the original:
@@ -45,7 +46,8 @@ export namespace engine::gameplay
 {
 struct ProductionSystem
 {
-	using Query = ecs::Query<ecs::Write<ProductionQueue>, ecs::Optional<Owner>, ecs::OptionalWrite<ProductionDoors>, ecs::OptionalWrite<ProductionExitGate>>;
+	using Query = ecs::Query<ecs::Write<ProductionQueue>, ecs::Optional<Owner>, ecs::OptionalWrite<ProductionDoors>, ecs::OptionalWrite<ProductionExitGate>,
+		ecs::Optional<Disabled>>;
 	using Resources = ecs::Resources<ecs::Read<PlayerEnergy>, ecs::Read<EnergySettings>, ecs::Write<ProductionDone>>;
 
 	// A tick of a factory's doors: open ones stay open a while, then close.
@@ -100,8 +102,13 @@ struct ProductionSystem
 		const EnergySettings &settings = context.Read<EnergySettings>();
 		const std::uint64_t tick = context.Tick();
 		const auto entities = chunk.Entities();
+		const auto disabledRows = chunk.Get<Disabled>();
 		for (std::size_t row = 0; row < queues.size(); ++row)
 		{
+			// GameLogic runs its ProductionUpdate only while it is not disabled but by the types it processes
+			// (DisabledTypesToProcess): an EMPed, hacked or script-disabled factory stops, doors and all.
+			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], queues[row].runsWhileDisabled))
+				continue;
 			ProductionDoors *doors = doorSets.empty() ? nullptr : &doorSets[row];
 			if (doors != nullptr)
 				UpdateDoors(*doors, tick);

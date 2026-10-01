@@ -1,0 +1,137 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.algorithms.look_models;
+import games.generalszh.presentation.objects.algorithms.model_state_changes;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.appearance.components.appearance;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(infantry_states)
+
+// W3DModelDraw::setModelState / doDrawModule (Core/GameEngineDevice/.../W3DModelDraw.cpp) on the ranger's own condition
+// states, fed the conditions the simulation sets (AIUpdate's MODELCONDITION_MOVING while its locomotor moves it): a
+// ranger standing shows its rest state (AIRngr_STA); ordered to walk, it first plays the transition between its states'
+// keys once (TransitionState: AIRngr_STA2RNA), then shows the state its MOVING conditions pick (AIRngr_RNA) while it
+// walks, and the rest state again once it stops. (Every clip here lasts one second.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_walking_ranger_shows_its_run_state)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at, {}, america);
+	game.Tick();
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const auto definition = game.DefinitionIndex("AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(definition.has_value());
+	const DefinitionLooks &looks = catalog.byDefinition[*definition];
+	BOOST_TEST_REQUIRE(!looks.states.Empty());
+	LookClips clips;
+	clips.byLook.assign(catalog.looks.size(), LookClip{30.0f, 30.0f}); // every clip one second long
+	const auto pick = [&] {
+		return static_cast<std::uint32_t>(content::SelectModelState(looks.states, game.World().Get<gp::Appearance>(ranger)->flags));
+	};
+	const std::uint32_t rest = pick();
+	ShownLook shown;
+	double clock = 0.0;
+	ShowModelState(shown, looks, clips, rest, clock, ModelStateRolls{1, 0}, false);
+	shown.state = rest;
+	const auto animationOf = [&](std::uint32_t look) { return LookModelOf(catalog, nullptr, look).animation; };
+	const std::string restAnimation = animationOf(shown.look);
+	gameplay::OrderMove(game.Game(), ranger, at + FixedVector2{Fixed::FromInt(150), Fixed{}});
+	bool ran = false, transitioned = false;
+	std::uint64_t frame = 0;
+	for (int tick = 0; tick < 120; ++tick)
+	{
+		game.Tick();
+		for (int half = 0; half < 2; ++half) // two frames a tick
+		{
+			clock += 1.0 / 60.0;
+			StepModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, ++frame});
+		}
+		const bool moving = game.World().Get<gp::Appearance>(ranger)->Test(content::model_condition::Moving);
+		transitioned = transitioned || animationOf(shown.look) == "AIRngr_SKL.AIRngr_STA2RNA";
+		if (moving && tick > 45) // past the one-second transition
+		{
+			BOOST_TEST_REQUIRE(shown.shown == pick(), "tick " << tick);
+			BOOST_TEST_REQUIRE(animationOf(shown.look) == "AIRngr_SKL.AIRngr_RNA", "tick " << tick);
+			ran = true;
+		}
+	}
+	BOOST_TEST(restAnimation == "AIRngr_SKL.AIRngr_STA");
+	BOOST_TEST(transitioned);
+	BOOST_TEST(ran);
+	// Stopped, it stands again.
+	for (int tick = 0; tick < 120; ++tick)
+	{
+		game.Tick();
+		clock += 1.0 / 30.0;
+		StepModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, ++frame});
+	}
+	BOOST_TEST(!game.World().Get<gp::Appearance>(ranger)->Test(content::model_condition::Moving));
+	BOOST_TEST(shown.shown == pick());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

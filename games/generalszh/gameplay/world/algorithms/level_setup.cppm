@@ -13,6 +13,8 @@ export import engine.gameplay.common.areas.resources.trigger_areas;
 import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.spatial.resources.deck_surfaces;
 import engine.gameplay.common.spatial.components.surface_layer;
+import games.generalszh.gameplay.movement.algorithms.goal_claim_rules;
+import games.generalszh.gameplay.world.resources.map_scenery;
 
 // Reading a Zero Hour level into the game: its waypoints (with their path
 // labels), its water areas, and its placed objects.
@@ -40,7 +42,7 @@ void AddWater(const engine::level::Level &level, engine::gameplay::GroundHeight 
 			std::vector<Engine::Math::FixedVector2> outline;
 			for (const auto &point : region.points)
 				outline.push_back(point.XY());
-			ground.AddWater(std::move(outline), region.points.front().z);
+			ground.AddWater(std::move(outline), region.points.front().z, region.name);
 		}
 }
 
@@ -72,9 +74,15 @@ void PlaceObjects(GameWorld &game)
 			continue;
 		if (const auto *kind = game.templates.Content().objects.Find(placement.type); kind != nullptr && (kind->isBridge || kind->Is("WALK_ON_TOP_OF_WALL")))
 			continue;
+		// Shrubbery left out, trees and props the client's alone (MapObjectRoleOf).
+		if (const auto *kind = game.templates.Content().objects.Find(placement.type);
+			kind != nullptr && MapObjectRoleOf(*kind, game.world.Resource<MapSceneryRules>()) != MapObjectRole::Object)
+			continue;
 		const std::uint32_t team = TeamIndex(game, placement.properties.Get<std::string>("originalOwner").value_or(""));
 		const ecs::Entity entity = SpawnObject(game, placement.type, placement.position.XY(), placement.orientation, team,
 			placement.properties.Get<std::string>("objectName").value_or(""));
+		// GameLogic::startNewGame: a map object counts as built (its create modules' onBuildComplete).
+		CreateModulesBuildComplete(game, entity);
 		if (auto *transform = game.world.IsAlive(entity) ? game.world.Get<engine::gameplay::Transform>(entity) : nullptr)
 		{
 			transform->position.z += placement.position.z;
@@ -91,6 +99,8 @@ void PlaceObjects(GameWorld &game)
 		{
 			game.roster.SetActive(team);
 			OnBuildComplete(game, entity);
+			// addObjectToPathfindMap; a mover's place adjusted off those placed before it and claimed.
+			ClaimStartingGoal(game.world, entity);
 		}
 		if (const auto level = placement.properties.Get<std::int64_t>("objectVeterancy"); level && game.world.IsAlive(entity))
 			PlaceAtVeterancy(game, entity, *level);

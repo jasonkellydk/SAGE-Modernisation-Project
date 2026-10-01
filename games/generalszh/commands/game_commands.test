@@ -3,6 +3,7 @@
 
 #include <string>
 #include <variant>
+#include <vector>
 
 import games.generalszh.commands.game_commands;
 
@@ -122,6 +123,31 @@ BOOST_AUTO_TEST_CASE(sell_orders_round_trip)
 	BOOST_TEST(!Decode(padded).has_value());
 }
 
+// legacy_parity: GameLogic::onExit (GameLogicDispatch.cpp) reads MSG_EXIT's one object argument, the rider wanting out
+// (ControlBar::processCommandUI, GUI_COMMAND_EXIT_CONTAINER: appendObjectIDArgument(objWantingExit)), and the container
+// from the sender's single selected object; here both travel in the command: rider then container, nothing else.
+BOOST_AUTO_TEST_CASE(legacy_parity_exit_orders_round_trip)
+{
+	ecs::Entity rider;
+	rider.index = 17;
+	rider.generation = 3;
+	ecs::Entity humvee;
+	humvee.index = 9;
+	humvee.generation = 1;
+	const auto exit = Decode(Encode(Exit{rider, humvee}));
+	BOOST_TEST_REQUIRE(exit.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<Exit>(*exit));
+	BOOST_TEST((std::get<Exit>(*exit).rider == rider));
+	BOOST_TEST((std::get<Exit>(*exit).container == humvee));
+	BOOST_TEST(Encode(Exit{rider, humvee}).payload.size() == 16u);
+	auto padded = Encode(Exit{rider, humvee});
+	padded.payload.push_back(std::byte{0});
+	BOOST_TEST(!Decode(padded).has_value());
+	auto truncated = Encode(Exit{rider, humvee});
+	truncated.payload.pop_back();
+	BOOST_TEST(!Decode(truncated).has_value());
+}
+
 // Overcharging (MSG_TOGGLE_OVERCHARGE) travels the bus: the units to switch, nothing else in it.
 BOOST_AUTO_TEST_CASE(toggle_overcharge_orders_round_trip)
 {
@@ -180,6 +206,33 @@ BOOST_AUTO_TEST_CASE(self_destruct_round_trips_its_flag)
 		BOOST_TEST(std::get<SelfDestruct>(*decoded).transferToAlly == transfer);
 	}
 	auto truncated = Encode(SelfDestruct{});
+	truncated.payload.clear();
+	BOOST_TEST(!Decode(truncated).has_value());
+}
+
+// The beacon messages (MSG_PLACE_BEACON, MSG_REMOVE_BEACON, MSG_SET_BEACON_TEXT) travel the bus: the spot, the
+// selection, the selection and the text.
+BOOST_AUTO_TEST_CASE(beacon_commands_round_trip)
+{
+	ecs::Entity unit;
+	unit.index = 7;
+	unit.generation = 2;
+	const Engine::Math::FixedVector2 spot{Engine::Math::Fixed::FromInt(12), Engine::Math::Fixed::FromInt(-40)};
+	const auto placed = Decode(Encode(PlaceBeacon{spot}));
+	BOOST_TEST_REQUIRE(placed.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<PlaceBeacon>(*placed));
+	BOOST_TEST((std::get<PlaceBeacon>(*placed).position == spot));
+	const auto removed = Decode(Encode(RemoveBeacon{{unit}}));
+	BOOST_TEST_REQUIRE(removed.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<RemoveBeacon>(*removed));
+	BOOST_TEST_REQUIRE(std::get<RemoveBeacon>(*removed).units.size() == 1u);
+	BOOST_TEST((std::get<RemoveBeacon>(*removed).units[0] == unit));
+	const auto text = Decode(Encode(SetBeaconText{{unit}, "Here"}));
+	BOOST_TEST_REQUIRE(text.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<SetBeaconText>(*text));
+	BOOST_TEST(std::get<SetBeaconText>(*text).text == "Here");
+	BOOST_TEST((std::get<SetBeaconText>(*text).units[0] == unit));
+	auto truncated = Encode(PlaceBeacon{spot});
 	truncated.payload.clear();
 	BOOST_TEST(!Decode(truncated).has_value());
 }
@@ -248,6 +301,31 @@ BOOST_AUTO_TEST_CASE(enter_round_trips)
 	BOOST_TEST_REQUIRE(order.units.size() == 1u);
 	BOOST_TEST((order.units.front() == unit));
 	BOOST_TEST((order.target == target));
+}
+
+// The context commands MSG_RESUME_CONSTRUCTION, MSG_DO_REPAIR and MSG_GET_HEALED travel the bus as their own
+// commands: the units and the object; each decodes to its own kind.
+BOOST_AUTO_TEST_CASE(resume_repair_and_heal_orders_round_trip)
+{
+	ecs::Entity unit;
+	ecs::Entity target;
+	unit.index = 4;
+	unit.generation = 1;
+	target.index = 30;
+	target.generation = 5;
+	const auto resumed = Decode(Encode(ResumeConstruction{{unit}, target}));
+	BOOST_TEST_REQUIRE(resumed.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<ResumeConstruction>(*resumed));
+	BOOST_TEST((std::get<ResumeConstruction>(*resumed).units == std::vector<ecs::Entity>{unit}));
+	BOOST_TEST((std::get<ResumeConstruction>(*resumed).target == target));
+	const auto repaired = Decode(Encode(Repair{{unit, target}, target}));
+	BOOST_TEST_REQUIRE(repaired.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<Repair>(*repaired));
+	BOOST_TEST(std::get<Repair>(*repaired).units.size() == 2u);
+	const auto healed = Decode(Encode(GetHealed{{unit}, target}));
+	BOOST_TEST_REQUIRE(healed.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<GetHealed>(*healed));
+	BOOST_TEST((std::get<GetHealed>(*healed).target == target));
 }
 
 // Driving a power's effect (MSG_DO_SPECIAL_POWER_OVERRIDE_DESTINATION) travels the bus: the units and the spot.

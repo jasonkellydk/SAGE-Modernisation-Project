@@ -6,9 +6,11 @@ export import Engine.UI.WND.Bindings;
 import Engine.UI.WND.Document;
 
 // Binds Window/ControlBar.wnd to the ControlBarViewModel (the original's ControlBar windows): the command buttons
-// (ButtonCommand01..14: shown, enabled, their art (drawn by overlay states: grey while unavailable), clicked), the money readout (MoneyDisplay), and the production queue
+// (ButtonCommand01..14: shown, enabled, their art (drawn by overlay states: grey while unavailable, dimmed for the
+// structure inventory's), an inventory rider's rank over it, clicked), the money readout (MoneyDisplay), and the production queue
 // (ProductionQueueWindow with ButtonQueue01..09) in place of the unit's portrait (WinUnitSelected) while something is
-// queued. The bar's other panels (observers, beacons, OCL timers, construction) stay hidden until they are ported.
+// queued; the under-construction and OCL timer panels. The bar's other panels (observers, beacons) stay hidden until they
+// are ported.
 // This table is the whole view: no control bar logic here.
 export namespace generalszh::hud
 {
@@ -39,6 +41,12 @@ public:
 			bindings.BindCommand(name, viewModel.commandClicked[slot]);
 			// getCommandAvailability: a charging power draws its inverse clock (m_buildUpClockColor).
 			bindings.BindClock(name, viewModel.commandClock[slot], buildClockColor, true);
+			// CAMEO_FLASH: WIN_STATUS_FLASHING, drawn as the Cameo_push overlay.
+			bindings.BindFlag(name, WindowFlag::Flashing, viewModel.commandFlashing[slot]);
+			// An inventory rider's rank over its art (GadgetButtonDrawOverlayImage).
+			bindings.BindOverlay(name, viewModel.commandOverlay[slot], resolve);
+			// The structure inventory's buttons dim rather than grey while disabled (WIN_STATUS_ALWAYS_COLOR).
+			bindings.BindFlag(name, WindowFlag::AlwaysColor, viewModel.commandAlwaysColor[slot]);
 			// ControlBar::init: command buttons draw by overlay states (their art, grey while unavailable).
 			document.Set_Window_Flag(name, WindowFlag::UseOverlayStates, true);
 		}
@@ -46,7 +54,16 @@ public:
 		bindings.BindText("ControlBar.wnd:MoneyDisplay", viewModel.money);
 		bindings.BindVisible("ControlBar.wnd:MoneyDisplay", viewModel.shown);
 		bindings.BindVisible("ControlBar.wnd:ProductionQueueWindow", viewModel.queueShown);
-		bindings.BindVisible("ControlBar.wnd:WinUnitSelected", viewModel.queueShown, [](bool queued) { return !queued; });
+		bindings.BindVisible("ControlBar.wnd:WinUnitSelected", viewModel.portraitShown);
+		bindings.BindImage("ControlBar.wnd:CameoWindow", viewModel.portraitImage, resolve);
+		bindings.BindOverlay("ControlBar.wnd:CameoWindow", viewModel.portraitOverlay, resolve);
+		for (std::size_t slot = 0; slot < UpgradeCameos; ++slot)
+		{
+			const std::string name = "ControlBar.wnd:UnitUpgrade" + std::to_string(slot + 1);
+			bindings.BindVisible(name, viewModel.upgradeShown[slot]);
+			bindings.BindImage(name, viewModel.upgradeImage[slot], resolve);
+			bindings.BindEnabled(name, viewModel.upgradeEnabled[slot]);
+		}
 		for (std::size_t slot = 0; slot < QueueButtons; ++slot)
 		{
 			const std::string name = QueueWindowName(slot);
@@ -56,8 +73,23 @@ public:
 		}
 		// ControlBar::updateContextCommand: the front of the queue shows its build as an inverse clock.
 		bindings.BindClock(QueueWindowName(0), viewModel.buildProgress, buildClockColor, true);
-		for (const char *panel : {"ControlBar.wnd:ObserverPlayerListWindow", "ControlBar.wnd:ObserverPlayerInfoWindow", "ControlBar.wnd:BeaconWindow",
-				 "ControlBar.wnd:OCLTimerWindow", "ControlBar.wnd:UnderConstructionWindow"})
+		// CB_CONTEXT_UNDER_CONSTRUCTION: its panel, Cancel (overlay states, as populateUnderConstruction sets) and the percent.
+		bindings.BindVisible("ControlBar.wnd:UnderConstructionWindow", viewModel.underConstructionShown);
+		bindings.BindText("ControlBar.wnd:UnderConstructionDesc", viewModel.constructionText);
+		bindings.BindImage("ControlBar.wnd:ButtonCancelConstruction", viewModel.cancelConstructionImage, resolve);
+		bindings.BindCommand("ControlBar.wnd:ButtonCancelConstruction", viewModel.cancelConstructionClicked);
+		document.Set_Window_Flag("ControlBar.wnd:ButtonCancelConstruction", WindowFlag::UseOverlayStates, true);
+		// CB_CONTEXT_OCL_TIMER: its panel, the Sell (or rally point) button, the countdown text and bar.
+		bindings.BindVisible("ControlBar.wnd:OCLTimerWindow", viewModel.oclTimerShown);
+		bindings.BindText("ControlBar.wnd:OCLTimerStaticText", viewModel.oclTimerText);
+		bindings.BindProgress("ControlBar.wnd:OCLTimerProgressBar", viewModel.oclTimerProgress);
+		bindings.BindVisible("ControlBar.wnd:OCLTimerSellButton", viewModel.oclButtonShown);
+		bindings.BindImage("ControlBar.wnd:OCLTimerSellButton", viewModel.oclButtonImage, resolve);
+		bindings.BindCommand("ControlBar.wnd:OCLTimerSellButton", viewModel.oclButtonClicked);
+		document.Set_Window_Flag("ControlBar.wnd:OCLTimerSellButton", WindowFlag::UseOverlayStates, true);
+		bindings.BindEnabled("ControlBar.wnd:ButtonIdleWorker", viewModel.idleWorkerEnabled);
+		bindings.BindCommand("ControlBar.wnd:ButtonIdleWorker", viewModel.idleWorkerClicked);
+		for (const char *panel : {"ControlBar.wnd:ObserverPlayerListWindow", "ControlBar.wnd:ObserverPlayerInfoWindow", "ControlBar.wnd:BeaconWindow"})
 			document.Set_Window_Flag(panel, WindowFlag::Hidden, true);
 	}
 };

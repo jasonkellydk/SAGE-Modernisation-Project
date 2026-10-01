@@ -15,6 +15,8 @@ struct AutoFire
 	std::uint32_t clip{0};
 	std::uint64_t readyTick{0};
 	std::uint64_t exclusiveDelay{0};
+	// Its weapon's FX suspended until this tick (made plus SuspendFXDelay).
+	std::uint64_t suspendFxUntil{0};
 };
 }
 
@@ -24,7 +26,7 @@ template<>
 struct ComponentTraits<engine::gameplay::AutoFire>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.auto_fire";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }

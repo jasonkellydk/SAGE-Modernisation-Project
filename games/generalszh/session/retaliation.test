@@ -20,6 +20,9 @@ import engine.gameplay.common.health.components.health;
 import engine.gameplay.common.health.components.pending_damage;
 import engine.gameplay.common.status.components.ai_activity;
 import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.navigation.algorithms.goal_claims;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.rts.combat.components.aggression;
 import games.generalszh.gameplay.ai.components.guard;
 import games.generalszh.gameplay.orders.algorithms.command_application;
@@ -146,6 +149,19 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_struck_players_tanks_strike_back_at_the_agg
 	const ecs::Entity beside = game.Place("AmericaTankCrusader", match->At(0, -250), {}, america);
 	const ecs::Entity far = game.Place("AmericaTankCrusader", match->At(-400, -300), {}, america);
 	const ecs::Entity aggressor = game.Place("ChinaTankBattleMaster", match->At(200, -300), {}, china);
+	// Standing where a move of theirs would have left them: on their cells' points (Pathfinder::snapPosition,
+	// adjustCoordToCell), where the return's adjusted goal (AIGuardRetaliateReturnState::onEnter: adjustDestination) is.
+	for (const ecs::Entity tank : {struck, beside})
+	{
+		auto &at = world.Get<gp::Transform>(tank)->position;
+		const auto *agent = world.Get<gp::NavigationAgent>(tank);
+		BOOST_TEST_REQUIRE(agent != nullptr);
+		const Engine::Math::Fixed half = agent->centered != 0 ? Engine::Math::Fixed{} : Engine::Math::Fixed::FromInt(5);
+		const auto [x, y] = gp::WorldToCell(world.Resource<gp::NavigationGrid>(), {at.x + half, at.y + half});
+		const auto point = gp::GoalCellPoint(x, y, agent->centered != 0);
+		at.x = point.x;
+		at.y = point.y;
+	}
 	const std::uint32_t player = world.Get<gp::Owner>(struck)->player;
 	game.Tick();
 	BOOST_TEST(!game.RetaliationEnabled(player));

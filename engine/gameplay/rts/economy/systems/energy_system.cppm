@@ -46,12 +46,13 @@ struct EnergySystem
 	{
 		PlayerEnergy &energy = context.Write<PlayerEnergy>();
 		energy.Clear();
+		energy.Refresh(context.Tick());
 		context.Write<EnergyShares>().ForEach([&](const EnergyShare &share) { energy.Add(share.player, share.amount); });
 	}
 };
 
 // Player::onPowerBrownOutChange / doPowerDisable: a POWERED object is DISABLED_UNDERPOWERED while its player's
-// production is below its consumption, and no longer once it is not.
+// production is below its consumption or its power is sabotaged, and no longer once it is not.
 struct BrownOutSystem
 {
 	using Query = ecs::Query<ecs::Read<Powered>, ecs::Read<Owner>, ecs::Optional<Disabled>>;
@@ -66,7 +67,7 @@ struct BrownOutSystem
 		auto &commands = context.Commands();
 		for (std::size_t row = 0; row < owners.size(); ++row)
 		{
-			const bool brownOut = !energy.Sufficient(owners[row].player);
+			const bool brownOut = energy.BrownOut(owners[row].player);
 			const std::uint32_t mask = disabled.empty() ? 0u : disabled[row].mask;
 			const bool underpowered = (mask & disabled_type::Underpowered) != 0;
 			if (brownOut == underpowered)

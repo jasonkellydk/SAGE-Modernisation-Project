@@ -28,9 +28,48 @@ export import engine.gameplay.rts.veterancy.resources.experience_awards;
 // still take it gives it its own levels (gainExpForLevel, unscaled) and is gone (destroyObject); one it may no longer
 // join is given up. Every ScanRate an idle pilot (not moving, attacking or going for one) looks within ScanRange, nearest
 // first, for its player's vehicle at least MinHealth healthy that it may join (CrateCollide / VeterancyCrateCollide::
-// isValidToExecute) and goes for it (aiEnter). Human players' pilots stay put; so do pilots hanging from a parachute.
+// isValidToExecute) and goes for it (aiEnter). Human players' pilots look for none (they go for one their player sends
+// them into: aiEnter); pilots hanging from a parachute stay put.
 export namespace generalszh::gameplay
 {
+// CrateCollide / VeterancyCrateCollide::isValidToExecute for a pilot bringing `levels` to `vehicle` (with an AI, of its
+// kinds, alive, on the ground, trainable and short of the top level; a pilot's: its player's, not flying), through
+// `access` (a world or a system's lookup).
+template<typename Access>
+bool PilotMayJoin(const PilotSeeker &seeker, std::uint32_t player, std::uint32_t levels, ecs::Entity vehicle, const Access &access,
+	const ObjectTemplates &templates, const engine::gameplay::GroundHeight &ground, Engine::Math::Fixed significant)
+{
+	namespace gp = engine::gameplay;
+	if (!access.IsAlive(vehicle) || access.template Get<gp::Dying>(vehicle) != nullptr || access.template Get<gp::OffMap>(vehicle) != nullptr)
+		return false;
+	const auto *definition = access.template Get<gp::DefinitionRef>(vehicle);
+	const auto *owner = access.template Get<gp::Owner>(vehicle);
+	const auto *place = access.template Get<gp::Transform>(vehicle);
+	if (definition == nullptr || owner == nullptr || place == nullptr)
+		return false;
+	const content::ObjectDefinition &object = templates.DefinitionAt(definition->index);
+	if (!templates.HasAI(definition->index))
+		return false;
+	for (std::size_t word = 0; word < seeker.required.size(); ++word)
+		if ((object.kinds[word] & seeker.required[word]) != seeker.required[word] || (object.kinds[word] & seeker.forbidden[word]) != 0)
+			return false;
+	if (const auto *health = access.template Get<gp::Health>(vehicle); health != nullptr && gp::IsDead(*health))
+		return false;
+	if (place->position.z - ground.At(place->position.XY()) > significant)
+		return false;
+	const auto *experience = access.template Get<gp::Experience>(vehicle);
+	if (levels == 0 || experience == nullptr || !experience->trainable || experience->level + 1u >= gp::VeterancyLevelCount)
+		return false;
+	if (seeker.isPilot != 0)
+	{
+		if (owner->player != player)
+			return false;
+		if (const auto *motion = access.template Get<gp::Locomotion>(vehicle); motion != nullptr && gp::IsAirborne(motion->locomotor))
+			return false;
+	}
+	return true;
+}
+
 struct PilotSeekSystem
 {
 	using Query = ecs::Query<ecs::Write<PilotSeeker>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::Owner>,
@@ -67,10 +106,7 @@ struct PilotSeekSystem
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < seekers.size(); ++row)
 			{
-				// PilotFindVehicleUpdate::update: an AI-only behaviour.
 				const std::uint32_t player = owners[row].player;
-				if (!players.Computer(player))
-					continue;
 				PilotSeeker &seeker = seekers[row];
 				const gp::Transform &at = transforms[row];
 				const bool pilotAloft = at.position.z - ground.At(at.position.XY()) > Fixed{};
@@ -78,34 +114,7 @@ struct PilotSeekSystem
 				const std::uint32_t levels = seeker.addsOwnerVeterancy != 0 ? experiences[row].level : 1u;
 				// CrateCollide / VeterancyCrateCollide::isValidToExecute, for the vehicle (and the pilot on the ground).
 				const auto joinable = [&](ecs::Entity vehicle) {
-					if (!lookup.IsAlive(vehicle) || lookup.template Get<gp::Dying>(vehicle) != nullptr || lookup.template Get<gp::OffMap>(vehicle) != nullptr)
-						return false;
-					const auto *definition = lookup.template Get<gp::DefinitionRef>(vehicle);
-					const auto *owner = lookup.template Get<gp::Owner>(vehicle);
-					const auto *place = lookup.template Get<gp::Transform>(vehicle);
-					if (definition == nullptr || owner == nullptr || place == nullptr)
-						return false;
-					const content::ObjectDefinition &object = templates.DefinitionAt(definition->index);
-					if (!templates.HasAI(definition->index))
-						return false;
-					for (std::size_t word = 0; word < seeker.required.size(); ++word)
-						if ((object.kinds[word] & seeker.required[word]) != seeker.required[word] || (object.kinds[word] & seeker.forbidden[word]) != 0)
-							return false;
-					if (const auto *health = lookup.template Get<gp::Health>(vehicle); health != nullptr && gp::IsDead(*health))
-						return false;
-					if (place->position.z - ground.At(place->position.XY()) > significant)
-						return false;
-					const auto *experience = lookup.template Get<gp::Experience>(vehicle);
-					if (levels == 0 || experience == nullptr || !experience->trainable || experience->level + 1u >= gp::VeterancyLevelCount)
-						return false;
-					if (seeker.isPilot != 0)
-					{
-						if (owner->player != player)
-							return false;
-						if (const auto *motion = lookup.template Get<gp::Locomotion>(vehicle); motion != nullptr && gp::IsAirborne(motion->locomotor))
-							return false;
-					}
-					return true;
+					return PilotMayJoin(seeker, player, levels, vehicle, lookup, templates, ground, significant);
 				};
 				// Going for a vehicle: joined on meeting it, given up once it may no longer be joined.
 				if (seeker.goal != ecs::Entity{})
@@ -126,11 +135,12 @@ struct PilotSeekSystem
 						}
 						// aiEnter follows it.
 						if (Engine::Math::DistanceSquared(moves[row].destination, there.XY()) > Fixed::FromInt(100) || moves[row].mode == gp::MoveMode::Idle)
-							moves[row] = gp::MoveToPoint(there.XY());
+							moves[row] = gp::MoveToPoint(there.XY(), gp::GoalClaim::None); // AIEnterState: no adjusting, no claim
 						continue;
 					}
 				}
-				if (tick < seeker.nextScan)
+				// PilotFindVehicleUpdate::update: an AI-only behaviour.
+				if (!players.Computer(player) || tick < seeker.nextScan)
 					continue;
 				seeker.nextScan = tick + std::max<std::uint64_t>(seeker.scanTicks, 1);
 				// AIUpdateInterface::isIdle.
@@ -150,7 +160,7 @@ struct PilotSeekSystem
 					if (health == nullptr || health->current < health->maximum * seeker.minHealth || pilotAloft || !joinable(vehicle))
 						continue;
 					seeker.goal = vehicle;
-					moves[row] = gp::MoveToPoint(lookup.template Get<gp::Transform>(vehicle)->position.XY());
+					moves[row] = gp::MoveToPoint(lookup.template Get<gp::Transform>(vehicle)->position.XY(), gp::GoalClaim::None);
 					break;
 				}
 			}

@@ -163,6 +163,16 @@ public:
 			Stop(handle, false);
 	}
 
+	// Every flat (2D) sound playing now held where it is, or let go on (MilesAudioManager::pauseAudio / resumeAudio with
+	// AudioAffect_Sound: AIL_stop_sample / AIL_resume_sample on each playing 2D sample; world sounds and streams go on,
+	// and sounds started later play as usual).
+	void PauseFlat(bool paused)
+	{
+		for (const auto &[handle, instance] : m_instances)
+			if (!instance.streamed && !instance.positional && instance.voice != 0)
+				m_mixer.Pause(instance.voice, paused);
+	}
+
 	bool Playing(SoundHandle handle) const { return m_instances.contains(handle); }
 	std::size_t PlayingCount() const noexcept { return m_instances.size(); }
 

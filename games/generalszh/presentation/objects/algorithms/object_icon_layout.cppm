@@ -78,6 +78,16 @@ inline IconRect PlaceIcon(ObjectIcon icon, const IconRegion &region, int frameWi
 }
 
 // drawVeterancy's rectangle for its image (`imageWidth` by `imageHeight`).
+// Drawable::drawAmmo: its `index`th ammo pip (image `width` by `height`), left-aligned with its health bar and 1 apart,
+// its top 1 under the screen height of its top (plus AmmoPipWorldOffset) moved by AmmoPipScreenOffset's y of its
+// bounding sphere radius (REAL_TO_INT: truncated).
+inline IconRect PlaceAmmoPip(const IconRegion &health, int centerY, float screenOffsetY, float boundingRadius, int width, int height, int index) noexcept
+{
+	const int x = health.loX + index * (width + 1);
+	const int y = centerY + static_cast<int>(screenOffsetY * boundingRadius) + 1;
+	return {x, y, width, height};
+}
+
 inline IconRect PlaceVeterancy(int screenX, int screenY, float healthBoxWidth, float zoom, int imageWidth, int imageHeight) noexcept
 {
 	const float scale = 1.3f / zoom;

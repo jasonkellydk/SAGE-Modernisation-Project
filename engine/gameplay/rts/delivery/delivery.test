@@ -5,6 +5,9 @@
 #include <optional>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.spatial.components.attitude;
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.delivery.systems.delivery_system;
 import engine.gameplay.rts.containment.systems.boarding_system;
@@ -30,6 +33,8 @@ struct Run
 	CargoManifest *manifest{nullptr};
 	DropExits *drops{nullptr};
 	DeliveriesDone *done{nullptr};
+	VisibleDrops *visible{nullptr};
+	DeliveryCues *cues{nullptr};
 	ecs::Entity plane;
 	std::vector<ecs::Entity> riders;
 	std::optional<ecs::Scheduler> scheduler;
@@ -60,12 +65,17 @@ struct Run
 		world.EmplaceResource<NavigationGrid>();
 		world.EmplaceResource<ExitRequests>();
 		drops = &world.EmplaceResource<DropExits>();
+		world.EmplaceResource<PlacedExits>();
 		world.EmplaceResource<RiderExits>();
 		world.EmplaceResource<IntentExits>();
 		done = &world.EmplaceResource<DeliveriesDone>();
 		world.EmplaceResource<Relationships>(1u);
 		world.EmplaceResource<TeamRoster>();
 		world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<LaunchLayouts>();
+		world.EmplaceResource<DirectShots>();
+		visible = &world.EmplaceResource<VisibleDrops>();
+		cues = &world.EmplaceResource<DeliveryCues>();
 		world.EmplaceResource<RandomSeed>(RandomSeed{5});
 		world.EmplaceResource<DropSettings>(DropSettings{Fixed::FromInt(2)});
 		world.RegisterComponent<Transform>();
@@ -75,6 +85,7 @@ struct Run
 		world.RegisterComponent<Locomotion>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Transport>();
 		world.RegisterComponent<Passenger>();
 		world.RegisterComponent<Boarding>();
@@ -82,13 +93,26 @@ struct Run
 		world.RegisterComponent<OffMap>();
 		world.RegisterComponent<Delivery>();
 		world.RegisterComponent<Descent>();
+		world.RegisterComponent<FloorLift>();
+		world.RegisterComponent<DropHoming>();
+		world.RegisterComponent<Attitude>();
 		world.RegisterComponent<Aggression>();
 		world.RegisterComponent<DefinitionRef>();
 		world.RegisterComponent<AttackTarget>();
 		world.RegisterComponent<Armament>();
 		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<UnderConstruction>();
 		world.RegisterComponent<CargoSize>();
+		world.RegisterComponent<Garrison>();
 		world.RegisterComponent<Appearance>();
+		world.RegisterComponent<WeaponSlots>();
+		world.RegisterComponent<FiringTracker>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<Experience>();
+		world.RegisterComponent<Disabled>();
 		world.FinalizeComponents();
 		LocomotorDefinition wings;
 		wings.maxSpeed = Fixed::FromInt(8);
@@ -241,6 +265,32 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_payload_left_aboard_is_brought_round_again)
 	BOOST_TEST(left);
 	BOOST_TEST(first < 8u);
 	BOOST_TEST(giving.manifest->Count(giving.plane) == 8u - first);
+}
+
+// DeliveringState::update (DropVariance, DropOffset): each rider leaves at the carrier moved by
+// GameLogicRandomValueReal(-v, v) on each axis whose variance is above zero (none on the others), then by the drop
+// offset: the ClusterMines / EMPPulse spread X:20 Y:20, a carpet bomb's X:30 Y:40.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drop_varies_by_its_drop_variance)
+{
+	Delivery delivery = Paradrop();
+	delivery.dropVariance = {Fixed::FromInt(30), Fixed::FromInt(40), Fixed{}};
+	Run run(delivery, 8);
+	std::vector<Engine::Math::FixedVector3> offsets;
+	for (int step = 0; step < 1500 && offsets.size() < 8u; ++step)
+	{
+		run.Step();
+		run.drops->ForEach([&](const DropExit &drop) { offsets.push_back(drop.offset); });
+	}
+	BOOST_TEST_REQUIRE(offsets.size() == 8u);
+	bool varied = false;
+	for (const auto &offset : offsets)
+	{
+		BOOST_TEST((offset.x >= Fixed::FromInt(-30) && offset.x <= Fixed::FromInt(30)));
+		BOOST_TEST((offset.y >= Fixed::FromInt(-40) && offset.y <= Fixed::FromInt(40)));
+		BOOST_TEST((offset.z == Fixed::FromInt(-10))); // no variance on z: just the offset
+		varied = varied || offset.x != offsets.front().x || offset.y != offsets.front().y;
+	}
+	BOOST_TEST(varied);
 }
 
 // The run is the same on one worker as on four.

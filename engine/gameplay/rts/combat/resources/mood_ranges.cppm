@@ -20,7 +20,21 @@ struct MoodRanges
 	// The inner guard ranges (AI_VISIONFACTOR_GUARDINNER: GuardInnerModifierHuman / AI), a guard's own look.
 	Engine::Math::Fixed guardInnerHuman{Engine::Math::Fixed::One()};
 	Engine::Math::Fixed guardInnerAi{Engine::Math::Fixed::One()};
+	// TAiData::m_forceIdleFramesCount (ForceIdleMSEC): an idle unit's first look comes this many ticks after it went idle
+	// (AIUpdateInterface::resetNextMoodCheckTime from AIIdleState::onEnter).
+	std::uint64_t forceIdleTicks{1};
 };
+
+// AI::getAdjustedVisionRangeForObject (AI_VISIONFACTOR_OWNERTYPE | MOOD | GUARDINNER or GUARDOUTER): a unit's vision
+// by its controller's guard modifier (a human's or a computer's); a computer player's then by its mood (the attitude:
+// asleep -2 nowhere, alert 1 and aggressive 2 by their modifiers). The inner one is AIGuardMachine::getStdGuardRange.
+inline Engine::Math::Fixed GuardVision(const MoodRanges &moods, Engine::Math::Fixed vision, bool human, bool inner, std::int8_t attitude) noexcept
+{
+	const Engine::Math::Fixed reach = vision * (inner ? (human ? moods.guardInnerHuman : moods.guardInnerAi) : (human ? moods.guardOuterHuman : moods.guardOuterAi));
+	if (human)
+		return reach;
+	return attitude == -2 ? Engine::Math::Fixed{} : attitude == 1 ? reach * moods.alert : attitude == 2 ? reach * moods.aggressive : reach;
+}
 }
 
 export namespace ecs

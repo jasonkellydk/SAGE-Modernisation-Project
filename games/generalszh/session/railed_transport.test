@@ -1,0 +1,388 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+#include <cmath>
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.containment.components.railed_transport;
+import games.generalszh.gameplay.containment.algorithms.railed_transports;
+import games.generalszh.content.objects.object_status;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.rts.docking.components.docking;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import Engine.Core.Math.FixedPresentation;
+
+// RailedTransportAIUpdate, RailedTransportDockUpdate and RailedTransportContain on the shipped MD_GLA04, whose ferry
+// (CivilianVehicleFerry: PathPrefixName Ferry, PullInsideDuration and PushOutsideDuration 4500 = 135 frames,
+// ToleranceDistance 400, NumberApproachPositions 9) runs FerryStart01 - FerryEnd01 and FerryStart02 - FerryEnd02.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(railed_transport)
+
+// Legacy parity (RailedTransportAIUpdate::update / privateExecuteRailedTransport / privateEvacuate;
+// RailedTransportDockUpdate::action / doPullInDocking / doPushOutDocking / unloadNext; RailedTransportContain::
+// onRemoving): the ferry sets off for its nearest path end on its first update and, there, opens its dock. A vehicle
+// docking with it is captured on its first business frame within 400 of it: held, unselectable, turned to face it and
+// pulled its distance / 135 a frame (the three-dimensional direction laid flat) until within 6 of its centre, when it
+// stops docking and goes inside (the frame count the original's float steps give, which fixed point matches exactly
+// here). Sent on, the ferry follows its next path (dock shut), and arrives open. Evacuated, the rider comes out at its
+// centre facing its way, is pushed to DockEnd on the ground over 135 frames' steps until within 3, then is free and
+// selectable, walking to DockWaiting07; the emptied ferry's dock stays open. One and four workers agree; a checkpoint
+// taken mid-pull plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_ferry_pulls_in_carries_and_pushes_out_a_vehicle)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_GLA04/MD_GLA04.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	// The mission's own scripts (its cutscenes delete teams) are left out: the ferry is what is under test.
+	for (auto &side : read->level.scenario.participants)
+		side.scripts = {};
+	const auto options = [&](std::size_t workers) {
+		session::SessionOptions made{7, workers, {}, seats};
+		made.singlePlayer = true;
+		return made;
+	};
+	session::Session game(read->level, shell.game, options(1));
+	session::Session four(read->level, shell.game, options(4));
+	std::unique_ptr<session::Session> restored;
+	const auto both = [&](auto &&action) {
+		action(game);
+		action(four);
+		if (restored)
+			action(*restored);
+	};
+	const auto step = [&] { both([](session::Session &session) { session.Tick(); }); };
+	step();
+	auto &world = game.World();
+	ecs::Entity ferry;
+	ecs::Query<ecs::Read<gameplay::RailedTransport>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			ferry = entity;
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(ferry));
+	const auto railed = [&] { return *world.Get<gameplay::RailedTransport>(ferry); };
+	BOOST_TEST(railed().pathCount == 2u);
+	// Its first update: on its way to its nearest end, dock shut.
+	BOOST_TEST(railed().currentPath >= 0);
+	std::uint64_t arrived = 0;
+	for (int tick = 0; tick < 900 && arrived == 0; ++tick)
+	{
+		step();
+		if (railed().inTransit == 0)
+			arrived = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(arrived != 0u);
+	BOOST_TEST(world.Get<gp::Dock>(ferry)->open);
+	// A vehicle of the player's docks with it from its first approach point.
+	const auto team = *game.Teams().FindTeam("team" + seats.front());
+	const FixedVector2 start = world.Get<gp::Dock>(ferry)->approach[0];
+	ecs::Entity tank;
+	both([&](session::Session &session) {
+		const ecs::Entity made = session.Place("GLAVehicleTechnical", start, {}, team);
+		// The far shore's defenders would shoot it: it is made indestructible (ActiveBody::setIndestructible) so only the
+		// ferry is under test.
+		session.World().Get<gp::Health>(made)->indestructible = true;
+		auto &docking = *session.World().Get<gp::Docking>(made);
+		gp::StartDocking(docking, ferry, 0);
+		tank = made;
+	});
+	BOOST_TEST_REQUIRE(world.Has<gp::Docking>(tank));
+	std::uint64_t captured = 0, loaded = 0;
+	Fixed pull, distance;
+	Engine::Math::FixedVector3 capturedAt;
+	for (int tick = 0; tick < 3000 && loaded == 0; ++tick)
+	{
+		step();
+		if (captured == 0 && railed().docking == tank)
+		{
+			captured = game.CurrentTick();
+			pull = railed().pullPerTick;
+			capturedAt = world.Get<gp::Transform>(tank)->position;
+			distance = Engine::Math::Distance(world.Get<gp::Transform>(ferry)->position, world.Get<gp::Transform>(tank)->position);
+			BOOST_TEST(((world.Get<gp::Disabled>(tank)->mask & gp::disabled_type::Held) != 0));
+			BOOST_TEST(((world.Get<gp::StatusFlags>(tank)->bits & (std::uint64_t{1} << content::ObjectStatusBit("UNSELECTABLE"))) != 0));
+			restored = session::Session::Restore(read->level, shell.game, options(1), game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+		}
+		if (world.Has<gp::Passenger>(tank))
+			loaded = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(captured != 0u);
+	BOOST_TEST_REQUIRE(loaded != 0u);
+	BOOST_TEST((distance <= Fixed::FromInt(400)));
+	BOOST_TEST((Engine::Math::Abs(pull * Fixed::FromInt(135) - distance) <= Fixed::FromRatio(1, 100)));
+	// The original's frames (doPullInDocking in floats): each frame the three-dimensional unit vector toward the ferry's
+	// centre, its x and y scaled by the pull, until within 6 in two dimensions; the docker's height kept.
+	{
+		const auto &ferryAt = world.Get<gp::Transform>(ferry)->position;
+		double x = Engine::Math::ToFloat(capturedAt.x), y = Engine::Math::ToFloat(capturedAt.y);
+		const double z = Engine::Math::ToFloat(capturedAt.z), fx = Engine::Math::ToFloat(ferryAt.x), fy = Engine::Math::ToFloat(ferryAt.y),
+					 fz = Engine::Math::ToFloat(ferryAt.z);
+		const float step = static_cast<float>(Engine::Math::ToFloat(distance)) / 135.0f;
+		std::uint64_t frames = 0;
+		do
+		{
+			const double dx = fx - x, dy = fy - y, dz = fz - z, length = std::sqrt(dx * dx + dy * dy + dz * dz);
+			x += dx / length * step;
+			y += dy / length * step;
+			++frames;
+		} while ((fx - x) * (fx - x) + (fy - y) * (fy - y) > 36.0 && frames < 10000);
+		// Loaded the frame the pull ends (the event applied after that frame's systems).
+		BOOST_TEST(loaded - captured == frames);
+	}
+	BOOST_TEST((world.Get<gp::Docking>(tank)->dock == ecs::Entity{}));
+	// Sent on: along the next path, dock shut, until it arrives.
+	both([&](session::Session &session) { gameplay::ExecuteRailedTransport(session.Game(), ferry); });
+	BOOST_TEST(railed().inTransit == 1u);
+	BOOST_TEST(!world.Get<gp::Dock>(ferry)->open);
+	std::uint64_t crossed = 0;
+	for (int tick = 0; tick < 6000 && crossed == 0; ++tick)
+	{
+		step();
+		if (railed().inTransit == 0)
+			crossed = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(crossed != 0u);
+	BOOST_TEST(world.Get<gp::Dock>(ferry)->open);
+	// Evacuated: out at its centre, pushed to its exit, then free.
+	both([&](session::Session &session) { gameplay::RailedEvacuate(session.Game(), ferry); });
+	// The original's frames (unloadNext, doPushOutDocking in floats): the push is the distance from the ferry's centre to
+	// DockEnd over 135; each frame the unit vector toward DockEnd on the ground, laid flat, until within 3.
+	std::uint64_t pushFrames = 0;
+	{
+		const auto &frame = *world.Get<gp::Transform>(ferry);
+		const auto *config = game.Game().templates.RailedTransportOf(world.Get<gp::DefinitionRef>(ferry)->index);
+		BOOST_TEST_REQUIRE((config != nullptr && config->enter.has_value()));
+		const double c = std::cos(Engine::Math::ToRadiansFloat(frame.facing)), sn = std::sin(Engine::Math::ToRadiansFloat(frame.facing));
+		const double lx = Engine::Math::ToFloat(config->exit.x), ly = Engine::Math::ToFloat(config->exit.y), lz = Engine::Math::ToFloat(config->exit.z);
+		const double ex = Engine::Math::ToFloat(frame.position.x) + lx * c - ly * sn, ey = Engine::Math::ToFloat(frame.position.y) + lx * sn + ly * c,
+					 ez = Engine::Math::ToFloat(frame.position.z) + lz;
+		double x = Engine::Math::ToFloat(frame.position.x), y = Engine::Math::ToFloat(frame.position.y), z = Engine::Math::ToFloat(frame.position.z);
+		const float step = static_cast<float>(std::sqrt((ex - x) * (ex - x) + (ey - y) * (ey - y) + (ez - z) * (ez - z))) / 135.0f;
+		const Fixed fc = Engine::Math::Cos(frame.facing), fs = Engine::Math::Sin(frame.facing);
+		const FixedVector2 exitAt{frame.position.x + config->exit.x * fc - config->exit.y * fs, frame.position.y + config->exit.x * fs + config->exit.y * fc};
+		const double groundZ = Engine::Math::ToFloat(game.Game().ground.At(exitAt));
+		do
+		{
+			const double dx = ex - x, dy = ey - y, dz = groundZ - z, length = std::sqrt(dx * dx + dy * dy + dz * dz);
+			x += dx / length * step;
+			y += dy / length * step;
+			z = groundZ;
+			++pushFrames;
+		} while ((ex - x) * (ex - x) + (ey - y) * (ey - y) > 9.0 && pushFrames < 10000);
+	}
+	BOOST_TEST((railed().unloading == tank));
+	BOOST_TEST(!world.Has<gp::Passenger>(tank));
+	std::uint64_t out = 0;
+	for (int tick = 0; tick < 400 && out == 0; ++tick)
+	{
+		step();
+		if (!railed().unloading.IsValid())
+			out = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(out != 0u);
+	BOOST_TEST(out - crossed == pushFrames);
+	BOOST_TEST_REQUIRE(world.IsAlive(tank));
+	BOOST_TEST(((world.Get<gp::Disabled>(tank)->mask & gp::disabled_type::Held) == 0));
+	BOOST_TEST(((world.Get<gp::StatusFlags>(tank)->bits & (std::uint64_t{1} << content::ObjectStatusBit("UNSELECTABLE"))) == 0));
+	BOOST_TEST((world.Get<gp::MoveOrder>(tank)->mode != gp::MoveMode::Idle));
+	BOOST_TEST(world.Get<gp::Dock>(ferry)->open);
+	step();
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (RailedTransportAIUpdate::aiDoCommand; AIGroup::groupExecuteRailedTransport / groupEvacuate;
+// AIUpdateInterface::aiDock with ActionManager::canDockAt): the player's dock order sends a vehicle into the ferry's dock
+// machine; the player's other orders to the ferry (a move) are ignored, its execute order sets it off along its next
+// path and its evacuate order (once it is there) lets its riders out through its dock.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_ferry_takes_only_its_own_orders_from_its_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_GLA04/MD_GLA04.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	for (auto &side : read->level.scenario.participants)
+		side.scripts = {};
+	session::SessionOptions options{7, 1, {}, seats};
+	options.singlePlayer = true;
+	session::Session game(read->level, shell.game, options);
+	game.Tick();
+	auto &world = game.World();
+	ecs::Entity ferry;
+	ecs::Query<ecs::Read<gameplay::RailedTransport>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			ferry = entity;
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(ferry));
+	for (int tick = 0; tick < 900 && world.Get<gameplay::RailedTransport>(ferry)->inTransit != 0; ++tick)
+		game.Tick();
+	const auto team = *game.Teams().FindTeam("team" + seats.front());
+	const std::uint32_t player = game.Teams().TeamAt(team).owner;
+	// The ferry is the player's for its orders.
+	world.Get<gp::Owner>(ferry)->player = player;
+	const ecs::Entity tank = game.Place("GLAVehicleTechnical", world.Get<gp::Dock>(ferry)->approach[0], {}, team);
+	world.Get<gp::Health>(tank)->indestructible = true;
+	gameplay::ApplyCommand(game.Game(), player, commands::Dock{{tank}, ferry});
+	BOOST_TEST((world.Get<gp::Docking>(tank)->dock == ferry));
+	// A move: ignored.
+	const auto before = world.Get<gp::Transform>(ferry)->position;
+	gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{{ferry}, before.XY() + FixedVector2{Fixed::FromInt(300), Fixed{}}});
+	BOOST_TEST((world.Get<gp::MoveOrder>(ferry)->mode == gp::MoveMode::Idle));
+	for (int tick = 0; tick < 3000 && !world.Has<gp::Passenger>(tank); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Has<gp::Passenger>(tank));
+	const std::int32_t path = world.Get<gameplay::RailedTransport>(ferry)->currentPath;
+	gameplay::ApplyCommand(game.Game(), player, commands::ExecuteRailedTransport{{ferry}});
+	BOOST_TEST(world.Get<gameplay::RailedTransport>(ferry)->inTransit == 1u);
+	BOOST_TEST(world.Get<gameplay::RailedTransport>(ferry)->currentPath == (path + 1) % 2);
+	// Under way, an evacuation does nothing.
+	gameplay::ApplyCommand(game.Game(), player, commands::Evacuate{{ferry}});
+	BOOST_TEST(!world.Get<gameplay::RailedTransport>(ferry)->unloading.IsValid());
+	for (int tick = 0; tick < 6000 && world.Get<gameplay::RailedTransport>(ferry)->inTransit != 0; ++tick)
+		game.Tick();
+	gameplay::ApplyCommand(game.Game(), player, commands::Evacuate{{ferry}});
+	BOOST_TEST((world.Get<gameplay::RailedTransport>(ferry)->unloading == tank));
+}
+
+// Legacy parity (GameLogic::onExit; AIUpdateInterface::privateExit and AIExitState::update, AIStates.cpp;
+// RailedTransportContain::isSpecificRiderFreeToExit / exitObjectViaDoor; RailedTransportDockUpdate::unloadSingleObject):
+// a player's MSG_EXIT for a vehicle aboard the ferry while it is under way finds its dock shut (DOOR_NONE_AVAILABLE: the
+// exit fails and is not kept), so it is still aboard once the ferry has arrived; the same order there has the ferry let
+// exactly one out through its dock, starting that frame (its first aboard: unloadCount 1).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_ferrys_rider_button_lets_one_out_through_its_dock)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_GLA04/MD_GLA04.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	for (auto &side : read->level.scenario.participants)
+		side.scripts = {};
+	session::SessionOptions options{7, 1, {}, seats};
+	options.singlePlayer = true;
+	session::Session game(read->level, shell.game, options);
+	game.Tick();
+	auto &world = game.World();
+	ecs::Entity ferry;
+	ecs::Query<ecs::Read<gameplay::RailedTransport>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			ferry = entity;
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(ferry));
+	for (int tick = 0; tick < 900 && world.Get<gameplay::RailedTransport>(ferry)->inTransit != 0; ++tick)
+		game.Tick();
+	const auto team = *game.Teams().FindTeam("team" + seats.front());
+	const std::uint32_t player = game.Teams().TeamAt(team).owner;
+	world.Get<gp::Owner>(ferry)->player = player;
+	const ecs::Entity tank = game.Place("GLAVehicleTechnical", world.Get<gp::Dock>(ferry)->approach[0], {}, team);
+	world.Get<gp::Health>(tank)->indestructible = true;
+	gameplay::ApplyCommand(game.Game(), player, commands::Dock{{tank}, ferry});
+	for (int tick = 0; tick < 3000 && !world.Has<gp::Passenger>(tank); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Has<gp::Passenger>(tank));
+	gameplay::ApplyCommand(game.Game(), player, commands::ExecuteRailedTransport{{ferry}});
+	BOOST_TEST(!world.Get<gp::Dock>(ferry)->open);
+	// Under way: the dock is shut, nobody gets out.
+	gameplay::ApplyCommand(game.Game(), player, commands::Exit{tank, ferry});
+	BOOST_TEST(!world.Get<gameplay::RailedTransport>(ferry)->unloading.IsValid());
+	for (int tick = 0; tick < 6000 && world.Get<gameplay::RailedTransport>(ferry)->inTransit != 0; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gameplay::RailedTransport>(ferry)->inTransit == 0u);
+	BOOST_TEST(world.Has<gp::Passenger>(tank));
+	BOOST_TEST(!world.Get<gameplay::RailedTransport>(ferry)->unloading.IsValid());
+	// Another player's order: nothing.
+	gameplay::ApplyCommand(game.Game(), player + 1, commands::Exit{tank, ferry});
+	BOOST_TEST(!world.Get<gameplay::RailedTransport>(ferry)->unloading.IsValid());
+	// Arrived: out through the dock, one only.
+	gameplay::ApplyCommand(game.Game(), player, commands::Exit{tank, ferry});
+	BOOST_TEST((world.Get<gameplay::RailedTransport>(ferry)->unloading == tank));
+	BOOST_TEST(world.Get<gameplay::RailedTransport>(ferry)->unloadCount == 0);
+	BOOST_TEST(!world.Has<gp::Passenger>(tank));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

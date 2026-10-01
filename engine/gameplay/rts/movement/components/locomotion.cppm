@@ -39,7 +39,12 @@ struct Locomotion
 	// whether its normal set is the upgraded one (m_upgradedLocomotors).
 	std::uint8_t set{0};
 	std::uint8_t upgraded{0};
-	std::uint8_t reserved[2]{};
+	// Its locomotor's flags a unit's AI sets (a fresh locomotor has neither): PRECISE_Z_POS (Locomotor::setUsePreciseZPos:
+	// it holds `preciseHeight`, its goal's height, instead of its preferred height) and ULTRA_ACCURATE (setUltraAccurate:
+	// it turns twice as fast).
+	std::uint8_t preciseZ{0};
+	std::uint8_t ultraAccurate{0};
+	Engine::Math::Fixed preciseHeight;
 };
 
 // Locomotor::Locomotor: a weaving locomotor starts somewhere within pi/6 of straight, swinging one way or the other at
@@ -72,7 +77,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Locomotion>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.locomotion";
-	static constexpr std::uint32_t Version = 4;
+	static constexpr std::uint32_t Version = 5;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Locomotion &value, StateHasher &hasher) noexcept
 	{
@@ -89,8 +94,10 @@ struct ComponentTraits<engine::gameplay::Locomotion>
 		hasher.AppendU64(static_cast<std::uint64_t>(l.minTurnSpeed.Raw()) ^ (l.canMoveBackward ? 1ull << 63 : 0ull));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.braking) | static_cast<std::uint64_t>(value.brakingStatus) << 8 |
 			static_cast<std::uint64_t>(value.backwards) << 16 | static_cast<std::uint64_t>(value.threePointTurn) << 24 |
-			static_cast<std::uint64_t>(value.set) << 32 | static_cast<std::uint64_t>(value.upgraded) << 40);
+			static_cast<std::uint64_t>(value.set) << 32 | static_cast<std::uint64_t>(value.upgraded) << 40 |
+			static_cast<std::uint64_t>(value.preciseZ) << 48 | static_cast<std::uint64_t>(value.ultraAccurate) << 56);
 		hasher.AppendU64(static_cast<std::uint64_t>(l.wanderAboutPointRadius.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.preciseHeight.Raw()));
 	}
 };
 }

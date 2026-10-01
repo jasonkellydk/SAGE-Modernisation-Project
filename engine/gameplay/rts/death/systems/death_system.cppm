@@ -13,6 +13,8 @@ export import engine.gameplay.common.random.resources.random_seed;
 export import engine.gameplay.rts.death.components.dying;
 export import engine.gameplay.rts.death.components.crash;
 export import engine.gameplay.rts.death.components.collapse;
+export import engine.gameplay.rts.death.components.structure_topple;
+export import engine.gameplay.rts.death.algorithms.structure_topple;
 export import engine.gameplay.rts.death.components.blast_wave;
 export import engine.gameplay.common.appearance.components.draw_offset;
 export import engine.gameplay.common.physics.resources.physics_settings;
@@ -57,7 +59,7 @@ struct DeathSystem
 	using Lookup = ecs::Lookup<ecs::Read<TeamMember>, ecs::Read<DefinitionRef>, ecs::Read<Transform>, ecs::Read<Mortality>, ecs::Read<Dying>,
 		ecs::Read<Locomotion>, ecs::Read<Attitude>, ecs::Read<Experience>, ecs::Read<PhysicsBody>, ecs::Read<Upgradable>, ecs::Read<Owner>, ecs::Read<HealthFloor>,
 		ecs::Read<Health>, ecs::Read<Subdual>,
-		ecs::Read<StatusFlags>, ecs::Read<Transport>, ecs::Read<OffMap>, ecs::Read<DeathCredit>, ecs::Read<Producer>, ecs::Read<UnderConstruction>>;
+		ecs::Read<StatusFlags>, ecs::Read<Transport>, ecs::Read<OffMap>, ecs::Read<DeathCredit>, ecs::Read<Producer>, ecs::Read<UnderConstruction>, ecs::Read<ScriptedTopple>>;
 	using Resources = ecs::Resources<ecs::Read<RandomSeed>, ecs::Read<Deaths>, ecs::Write<KillRequests>, ecs::Read<Expirations>, ecs::Read<DeathCatalog>, ecs::Write<DeathEvents>,
 		ecs::Write<TeamRoster>, ecs::Write<NameRegistry>, ecs::Write<CargoManifest>, ecs::Write<Casualties>, ecs::Read<GroundHeight>, ecs::Read<PhysicsSettings>, ecs::Read<PlayerUpgrades>,
 		ecs::Read<NavigationGrid>, ecs::Read<Evacuations>, ecs::Read<HulkLifetime>>;
@@ -109,7 +111,7 @@ struct DeathSystem
 		for (const TypedKill &killed : kills.typed)
 			if (lookup.IsAlive(killed.entity) && lookup.Get<Dying>(killed.entity) == nullptr && !immortal(killed.entity))
 			{
-				retirees.push_back({killed.entity, {}, Departure::Killed});
+				retirees.push_back({killed.entity, killed.killer, Departure::Killed});
 				causes.try_emplace(key(killed.entity), Cause{killed.deathType, {}, killed.damageType});
 			}
 		kills.typed.clear();
@@ -306,7 +308,7 @@ private:
 					if (effect.kind == DeathEffectKind::Notice)
 						if (const DeathCredit *credit = lookup.template Get<DeathCredit>(entity))
 							event.credit = credit->credit;
-					if (effect.kind == DeathEffectKind::Release)
+					if (effect.kind == DeathEffectKind::Release || effect.kind == DeathEffectKind::Weapon)
 						if (const Producer *producer = lookup.template Get<Producer>(entity))
 							event.credit = producer->entity;
 					if (const DefinitionRef *kind = lookup.template Get<DefinitionRef>(entity))
@@ -363,6 +365,26 @@ private:
 				events.events.push_back({entity, retiree.killer, DeathEffectKind::Effect, *id, position, facing, team, veterancy});
 			if (const auto id = PickEffect(collapse.objects[phase], random))
 				events.events.push_back({entity, retiree.killer, DeathEffectKind::Objects, *id, position, facing, team, veterancy});
+			break;
+		}
+
+		// StructureToppleUpdate::onDie / beginStructureTopple: which way it goes over and when, and its start effects.
+		for (std::uint32_t index = 0; index < definition.topples.size(); ++index)
+		{
+			const StructureToppleDefinition &how = definition.topples[index];
+			if (!how.filter.Applies(deathType, veterancy, status))
+				continue;
+			const Transform *attacker = lookup.IsAlive(retiree.killer) ? lookup.template Get<Transform>(retiree.killer) : nullptr;
+			const ScriptedTopple *scripted = lookup.template Get<ScriptedTopple>(entity);
+			const structure_topple::ToppleContext at{how, position, facing, context.Read<GroundHeight>(), context.Tick()};
+			const StructureTopple topple = structure_topple::BeginStructureTopple(at, index,
+				attacker != nullptr ? std::optional{attacker->position.XY()} : std::nullopt, scripted != nullptr ? std::optional{scripted->direction} : std::nullopt,
+				damageType, random, [&](DeathEffectKind kind, std::uint32_t id, Engine::Math::FixedVector3 where, bool orient) {
+					DeathEvent event{entity, retiree.killer, kind, id, where, facing, team, veterancy};
+					event.orient = orient;
+					events.events.push_back(event);
+				});
+			commands.Add<StructureTopple>(entity, topple);
 			break;
 		}
 

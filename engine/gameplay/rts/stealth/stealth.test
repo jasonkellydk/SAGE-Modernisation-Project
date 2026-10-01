@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.drop_homing;
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.stealth.systems.stealth_system;
 import engine.gameplay.rts.stealth.systems.stealth_detector_system;
@@ -38,6 +39,7 @@ struct Hideout
 		relationships.Set(0, 1, Relationship::Enemies);
 		relationships.Set(1, 0, Relationship::Enemies);
 		WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<ArmorCatalog>();
 		WeaponDefinition rifle;
 		rifle.primaryDamage = Fixed::FromInt(10);
 		rifle.attackRange = Fixed::FromInt(150);
@@ -48,9 +50,16 @@ struct Hideout
 		registry.Register(grantors);
 		world.EmplaceResource<GrantOffers>();
 		world.EmplaceResource<StealthGrants>();
+		world.EmplaceResource<TemporaryStealthGrants>();
 		world.EmplaceResource<DetectionOffers>();
 		world.EmplaceResource<Detections>();
 		world.EmplaceResource<DetectorPings>();
+		world.EmplaceResource<RevealWakes>();
+		world.EmplaceResource<DetectionWakes>();
+		world.EmplaceResource<DisguiseEvents>();
+		registry.Register(riders);
+		registry.Register(wakeOnReveal);
+		registry.Register(wakeOnDetection);
 		world.EmplaceResource<CargoManifest>();
 		registry.Register(index);
 		registry.Register(targeting);
@@ -71,18 +80,25 @@ struct Hideout
 		target.RegisterComponent<Health>();
 		target.RegisterComponent<Armament>();
 		target.RegisterComponent<StatusFlags>();
+		target.RegisterComponent<BodyExtent>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<UnderConstruction>();
 		target.RegisterComponent<AttackTarget>();
 		target.RegisterComponent<Aggression>();
 		target.RegisterComponent<DefinitionRef>();
 		target.RegisterComponent<Locomotion>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
 		target.RegisterComponent<Stealth>();
 		target.RegisterComponent<StealthDetector>();
+		target.RegisterComponent<StealthRider>();
 		target.RegisterComponent<GrantStealth>();
 		target.RegisterComponent<Lifetime>();
 		target.RegisterComponent<OffMap>();
 		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<DropHoming>();
 		target.RegisterComponent<AiActivity>();
 		target.RegisterComponent<Garrison>();
 		target.RegisterComponent<TeamMember>();
@@ -157,6 +173,9 @@ struct Hideout
 	engine::level::Heightfield terrain;
 	ecs::World world{ecs::WorldConfig{4}};
 	StealthSystem stealth;
+	StealthRiderSystem riders;
+	WakeIdleEnemiesSystem<RevealWakes> wakeOnReveal;
+	WakeIdleEnemiesSystem<DetectionWakes> wakeOnDetection;
 	StealthDetectorSystem detectors;
 	StealthRevealSystem reveal;
 	GrantStealthSystem grantors;
@@ -195,6 +214,46 @@ BOOST_AUTO_TEST_CASE(a_still_rebel_hides_after_its_delay_and_moving_or_being_hit
 	hideout.world.Get<Health>(rebel)->lastDamageTick = hideout.tick + 1;
 	hideout.Step();
 	BOOST_TEST(!hideout.Of(rebel).Hidden());
+}
+
+// Legacy parity (StealthUpdate::receiveGrant and update's temporary stealth, GeneralsMD/Code/GameEngine/Source/GameLogic/
+// Object/Update/StealthUpdate.cpp): a harvester granted 5 frames of stealth (GrantTemporaryStealth) on tick G is
+// stealthed at once; each update after counts one down and the fifth (G+5) takes it back (receiveGrant(FALSE): it may not
+// stealth, its update sleeps). An order from its player (getLastCommandSource() == CMD_FROM_PLAYER) takes it back on the
+// next update.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_temporary_stealth_grant_runs_out_or_ends_on_a_player_order)
+{
+	for (const bool ordered : {false, true})
+	{
+		Hideout hideout(2);
+		const ecs::Entity truck = hideout.Rebel(0, 100, 0);
+		hideout.world.Get<Stealth>(truck)->flags = 0; // no stealth of its own
+		hideout.world.Add<AiActivity>(truck);
+		hideout.Step();
+		BOOST_TEST_REQUIRE(!hideout.Of(truck).Hidden());
+		const std::uint64_t granted = hideout.tick;
+		BOOST_TEST_REQUIRE(ReceiveGrant(*hideout.world.Get<Stealth>(truck), granted, 5));
+		BOOST_TEST(hideout.Of(truck).Hidden());
+		BOOST_TEST(TemporaryGrant(hideout.Of(truck)));
+		if (ordered)
+		{
+			hideout.world.Get<AiActivity>(truck)->fromPlayer = 1;
+			hideout.Step();
+			BOOST_TEST(!hideout.Of(truck).Hidden());
+			BOOST_TEST(!hideout.Of(truck).Has(stealth_flag::CanStealth));
+			BOOST_TEST(hideout.Of(truck).Has(stealth_flag::Asleep));
+			continue;
+		}
+		while (hideout.tick < granted + 4)
+		{
+			hideout.Step();
+			BOOST_TEST_REQUIRE(hideout.Of(truck).Hidden());
+		}
+		hideout.Step(); // G+5: the grant's last frame
+		BOOST_TEST(!hideout.Of(truck).Hidden());
+		BOOST_TEST(!TemporaryGrant(hideout.Of(truck)));
+		BOOST_TEST(hideout.Of(truck).Has(stealth_flag::Asleep));
+	}
 }
 
 // StealthUpdate::update / hintDetectableWhileUnstealthed (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/

@@ -65,8 +65,17 @@ inline bool MayAttack(GameWorld &game, ecs::Entity them, const gp::SpatialEntry 
 	const auto *relationships = world.FindResource<gp::Relationships>();
 	if (armament == nullptr || aggression == nullptr || member == nullptr || owner == nullptr || relationships == nullptr)
 		return false;
-	const gp::WeaponDefinition weapon = gp::TargetingSystem::Reach(game.templates.weapons, *armament, world.Get<gp::WeaponSlots>(them), 0);
-	return gp::TargetingSystem::Acceptable(*relationships, aggressor, them, member->team, owner->player, weapon, *aggression);
+	const auto *set = world.Get<gp::WeaponSlots>(them);
+	const auto *conditions = world.Get<gp::WeaponBonusConditions>(them);
+	const std::uint32_t bonus = conditions != nullptr ? conditions->Effective() : 0u;
+	const gp::WeaponDefinition weapon = gp::TargetingSystem::Reach(game.templates.weapons, *armament, set, bonus);
+	const auto *transform = world.Get<gp::Transform>(them);
+	const auto *body = world.Get<gp::Targetable>(them);
+	const ecs::EntityLookup<gp::TargetingSystem::Lookup> lookup(world);
+	const auto gate = gp::TargetingSystem::AttackGate::For(game.templates.weapons, game.templates.armors, *armament, set,
+		gp::PitchBodyOf(transform != nullptr ? transform->position : Engine::Math::FixedVector3{}, world.Get<gp::BodyExtent>(them)),
+		body != nullptr ? body->classes : 0u, bonus, lookup);
+	return gp::TargetingSystem::Acceptable(*relationships, aggressor, them, member->team, owner->player, weapon, *aggression, false, &gate);
 }
 }
 

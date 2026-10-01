@@ -1,4 +1,5 @@
 export module games.generalszh.gameplay.ai.algorithms.guards;
+import games.generalszh.gameplay.flight_deck.components.flight_deck;
 import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
@@ -58,6 +59,9 @@ inline void Start(GameWorld &game, ecs::Entity unit, Guard guard, bool fromPlaye
 
 void GuardPosition(GameWorld &game, ecs::Entity unit, Engine::Math::FixedVector2 position, GuardMode mode = GuardMode::Normal, bool fromPlayer = false)
 {
+	// FlightDeckBehavior::aiDoCommand: a carrier's guard goes to its jets.
+	if (DesignateFlightDeck(game.world, unit, DeckOrder::Guard, {}, position, false))
+		return;
 	if (!guard_detail::MayGuard(game, unit))
 		return;
 	if (fromPlayer)

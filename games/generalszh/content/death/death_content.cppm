@@ -7,6 +7,7 @@ export import games.generalszh.content.combat.combat_catalog;
 export import games.generalszh.content.upgrades.upgrade_content;
 import games.generalszh.content.objects.object_status;
 import Engine.Core.Math.FixedAngle;
+import engine.gameplay.rts.death.algorithms.structure_topple;
 import engine.config.binding.values;
 
 // How a Zero Hour object dies, from its die modules, bound onto the engine's
@@ -408,6 +409,67 @@ engine::gameplay::DeathDefinition ReadObjectDeath(const ObjectDefinition &object
 				}
 			}
 			death.collapses.push_back(std::move(collapse));
+		}
+		else if (type == "StructureToppleUpdate")
+		{
+			namespace topple = engine::gameplay::structure_topple;
+			engine::gameplay::StructureToppleDefinition how;
+			how.filter = Filter(block);
+			// Geometry::getMaxHeightAbovePosition (taken as it stands: its rubble state is barely tall).
+			how.height = object.geometry.shape == GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height;
+			how.majorRadius = object.geometry.majorRadius;
+			how.minorRadius = object.geometry.minorRadius;
+			const auto effect = [&](const Node &child) {
+				return child.Value().empty() || Same(child.Value(), "None") ? engine::gameplay::StructureToppleDefinition::None :
+					intern(DeathEffectKind::Effect, child.Value());
+			};
+			for (const Node &child : block.children)
+			{
+				const std::string_view key = child.key;
+				const auto ticks = [&] { return engine::config::ReadDurationTicks(child, bind).value_or(0); };
+				if (Same(key, "MinToppleDelay"))
+					how.minToppleDelay = ticks();
+				else if (Same(key, "MaxToppleDelay"))
+					how.maxToppleDelay = ticks();
+				else if (Same(key, "MinToppleBurstDelay"))
+					how.minBurstDelay = ticks();
+				else if (Same(key, "MaxToppleBurstDelay"))
+					how.maxBurstDelay = ticks();
+				else if (Same(key, "StructuralIntegrity"))
+					how.integrity = topple::FromFixed(engine::config::ReadFixed(child, bind).value_or(topple::ToFixed(how.integrity)));
+				else if (Same(key, "StructuralDecay"))
+					how.decay = topple::FromFixed(engine::config::ReadFixed(child, bind).value_or(Engine::Math::Fixed{}));
+				else if (Same(key, "DamageFXTypes"))
+					how.damageFxTypes = ParseDamageTypeFlags(child, how.damageFxTypes);
+				else if (Same(key, "ToppleStartFX"))
+					how.startEffect = effect(child);
+				else if (Same(key, "ToppleDelayFX"))
+					how.delayEffect = effect(child);
+				else if (Same(key, "ToppleDoneFX"))
+					how.doneEffect = effect(child);
+				else if (Same(key, "CrushingFX"))
+					how.crushingEffect = effect(child);
+				else if (Same(key, "CrushingWeaponName") && !child.Value().empty())
+					how.crushingWeapon = intern(DeathEffectKind::Weapon, child.Value());
+				else if (Same(key, "AngleFX") && child.values.size() >= 2)
+				{
+					// parseAngleFX: degrees, then its FX list.
+					const auto degrees = engine::config::values::ParseFixed(child.values[0]);
+					if (degrees && !Same(child.values[1], "None"))
+						how.angleEffects.push_back({topple::RadiansFromDegrees(*degrees), intern(DeathEffectKind::Effect, child.values[1])});
+				}
+				else if (Same(key, "OCL"))
+				{
+					// "OCL = INITIAL OCL_A OCL_B": candidates for that phase (INITIAL, DELAY, FINAL).
+					constexpr std::array<std::string_view, 3> phases{"INITIAL", "DELAY", "FINAL"};
+					const auto phase = IndexOf(phases, child.Value(0));
+					if (!phase)
+						continue;
+					for (std::size_t index = 1; index < child.values.size(); ++index)
+						how.objects[*phase].push_back(intern(DeathEffectKind::Objects, child.values[index]));
+				}
+			}
+			death.topples.push_back(std::move(how));
 		}
 		else if (type == "RebuildHoleExposeDie")
 		{

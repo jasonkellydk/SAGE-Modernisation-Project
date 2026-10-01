@@ -171,7 +171,9 @@ std::optional<TankTreads> ReadTankTreads(const ObjectDefinition &object)
 {
 	for (const ModuleEntry &module : object.modules)
 	{
-		if (module.slot != ModuleSlot::Draw || module.block == nullptr || !IsTankDraw(module.type))
+		// W3DTankTruckDraw scrolls its treads too, but only driving (its pivoting is commented out in the original).
+		const bool tankTruck = module.type == "W3DTankTruckDraw";
+		if (module.slot != ModuleSlot::Draw || module.block == nullptr || (!IsTankDraw(module.type) && !tankTruck))
 			continue;
 		TankTreads treads;
 		const auto fixed = [&](std::string_view key, Engine::Math::Fixed fallback) {
@@ -181,6 +183,8 @@ std::optional<TankTreads> ReadTankTreads(const ObjectDefinition &object)
 		treads.rate = fixed("TreadAnimationRate", treads.rate);
 		treads.pivotFraction = fixed("TreadPivotSpeedFraction", treads.pivotFraction);
 		treads.driveFraction = fixed("TreadDriveSpeedFraction", treads.driveFraction);
+		if (tankTruck)
+			treads.pivotFraction = Engine::Math::Fixed{};
 		return treads;
 	}
 	return std::nullopt;
@@ -190,7 +194,8 @@ std::optional<TruckTires> ReadTruckTires(const ObjectDefinition &object)
 {
 	for (const ModuleEntry &module : object.modules)
 	{
-		if (module.slot != ModuleSlot::Draw || module.block == nullptr || !IsTruckDraw(module.type))
+		// W3DTankTruckDraw's tires turn as a truck's (its mid tires, which no shipped object has, never turn there).
+		if (module.slot != ModuleSlot::Draw || module.block == nullptr || (!IsTruckDraw(module.type) && module.type != "W3DTankTruckDraw"))
 			continue;
 		TruckTires tires;
 		for (const engine::config::Node &field : module.block->children)

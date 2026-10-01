@@ -12,6 +12,13 @@ import games.generalszh.gameplay.construction.algorithms.selling;
 import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
 import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import games.generalszh.gameplay.eva.resources.eva_notices;
+import engine.ecs.query.query;
+import engine.gameplay.rts.stealth.systems.stealth_system;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.weapons.components.weapon_slots;
+import engine.gameplay.common.identity.resources.relationships;
+import games.generalszh.gameplay.hacking.algorithms.hack_effects;
 import games.generalszh.gameplay.abilities.resources.ability_notices;
 import games.generalszh.content.objects.model_conditions;
 export import games.generalszh.gameplay.abilities.algorithms.ability_setup;
@@ -25,6 +32,7 @@ import engine.gameplay.rts.navigation.components.ignored_obstacle;
 import engine.gameplay.rts.navigation.components.navigation;
 export import games.generalszh.gameplay.abilities.algorithms.special_objects;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.gameplay.stealth.algorithms.disguises;
 
 // SpecialAbilityUpdate's ends outside its system (SpecialAbilitySystem steps the abilities): starting one (its
 // SpecialAbility module's initiateIntentToDoSpecialPower, an order's entry point), and, once the systems have run, what
@@ -85,6 +93,49 @@ inline std::optional<std::uint8_t> SlotOfPower(const GameWorld &game, ecs::Entit
 // triggerAbilityEffect's checkAndDetonateBoobyTrap on the target: false when the effect goes on now. A trap that went
 // off holds the effect till its blast has landed (the next tick): then it goes on unless the unit or the target is dead
 // ("Whoops, it was mined").
+// Object::getRelationship == ALLIES (the teams' overrides, then the players').
+inline bool AlliedTo(GameWorld &game, ecs::Entity unit, ecs::Entity other)
+{
+	const auto team = [&](ecs::Entity entity) {
+		const auto *member = game.world.Get<gp::TeamMember>(entity);
+		return member != nullptr ? member->team : gp::Relationships::NoTeam;
+	};
+	return game.world.Resource<gp::Relationships>().Allies(team(unit), OwnerPlayer(game, unit), team(other), OwnerPlayer(game, other));
+}
+
+// WakeIdleEnemiesSystem for one revealed unit: idle enemies (standing, attacking nothing, not busy) that see it (within
+// their vision, 3D) look for a target on their next mood check, now.
+inline void WakeIdleEnemies(GameWorld &game, ecs::Entity revealed)
+{
+	const auto *at = game.world.Get<gp::Transform>(revealed);
+	if (at == nullptr)
+		return;
+	const auto *member = game.world.Get<gp::TeamMember>(revealed);
+	const std::uint32_t team = member != nullptr ? member->team : gp::Relationships::NoTeam, player = OwnerPlayer(game, revealed);
+	const auto &relationships = game.world.Resource<gp::Relationships>();
+	ecs::Query<ecs::Write<gp::Aggression>, ecs::Read<gp::Transform>, ecs::Read<gp::Owner>, ecs::Optional<gp::MoveOrder>, ecs::Optional<gp::AttackTarget>,
+		ecs::Optional<gp::AiActivity>> query(game.world);
+	query.ForEachChunk([&](auto chunk) {
+		auto aggressions = chunk.template Get<gp::Aggression>();
+		const auto transforms = chunk.template Get<gp::Transform>();
+		const auto owners = chunk.template Get<gp::Owner>();
+		const auto orders = chunk.template Get<gp::MoveOrder>();
+		const auto targets = chunk.template Get<gp::AttackTarget>();
+		const auto activities = chunk.template Get<gp::AiActivity>();
+		for (std::size_t row = 0; row < aggressions.size(); ++row)
+		{
+			const bool idle = (orders.empty() || orders[row].mode == gp::MoveMode::Idle) && (targets.empty() || !targets[row].target.IsValid()) &&
+				(activities.empty() || activities[row].busy == 0);
+			if (!idle || relationships.Between(gp::Relationships::NoTeam, owners[row].player, team, player) != gp::Relationship::Enemies)
+				continue;
+			const Engine::Math::FixedVector3 apart = transforms[row].position - at->position;
+			const Engine::Math::Fixed vision = aggressions[row].vision;
+			if (apart.x * apart.x + apart.y * apart.y + apart.z * apart.z <= vision * vision)
+				gp::WakeToTarget(aggressions[row], game.tick);
+		}
+	});
+}
+
 inline bool HeldByTrap(GameWorld &game, const AbilityEvent &event, std::uint8_t slot)
 {
 	if (event.afterTrap)
@@ -233,6 +284,49 @@ inline void ApplyAbilityEvents(GameWorld &game)
 						DetonateStickyBomb(game, charge);
 				break;
 			}
+			// SPECIAL_HELIX_NAPALM_BOMB: the special object is the bomb (createSpecialObject).
+			if (event.ability == AbilityKind::HelixNapalmBomb)
+			{
+				CreateSpecialObject(game, event.unit, *slot);
+				break;
+			}
+			// SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES: with a SECONDARY weapon, it locks it (LOCKED_TEMPORARILY: until
+			// the clip is empty or the attack is done) and its AI attacks the target (aiAttackObject, CMD_FROM_AI).
+			if (event.ability == AbilityKind::LaserGuidedMissiles)
+			{
+				auto *set = game.world.Get<gp::WeaponSlots>(event.unit);
+				auto *armament = game.world.Get<gp::Armament>(event.unit);
+				if (game.world.IsAlive(target) && set != nullptr && armament != nullptr && set->slots[1].weapon != gp::WeaponCatalog::None)
+				{
+					gp::LockSlotTemporarily(*set, *armament, 1);
+					OrderAttack(game, event.unit, target, 0, gameplay::CommandSource::Ai);
+				}
+				break;
+			}
+			// SPECIAL_HACKER_DISABLE_BUILDING / SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK: a target not allied to it is
+			// DISABLED_HACKED for EffectDuration (setDisabledUntil). SPECIAL_BLACKLOTUS_STEAL_CASH_HACK: EffectValue (retail:
+			// 1000, as every shipped one) or what its player has goes to the unit's (addMoneyEarned), floating over both;
+			// the victim's EVA says so.
+			if (event.ability == AbilityKind::HackerDisableBuilding || event.ability == AbilityKind::BlackLotusDisableVehicle)
+			{
+				if (game.world.IsAlive(target) && !ability_detail::AlliedTo(game, event.unit, target))
+					DisableHacked(game, target, game.tick + game.world.Get<SpecialAbilities>(event.unit)->slots[*slot].effectTicks);
+				break;
+			}
+			if (event.ability == AbilityKind::BlackLotusStealCash)
+			{
+				if (game.world.IsAlive(target) && StealCash(game, event.unit, target, game.world.Get<SpecialAbilities>(event.unit)->slots[*slot].effectValue) > 0)
+					if (auto *eva = game.world.FindResource<EvaNotices>())
+						eva->list.push_back({EvaCue::CashStolen, EvaWeapon::None, OwnerPlayer(game, target)});
+				break;
+			}
+			// SPECIAL_DISGUISE_AS_VEHICLE: the unit's StealthUpdate takes the target's disguise (disguiseAsObject).
+			if (event.ability == AbilityKind::DisguiseAsVehicle)
+			{
+				if (game.world.IsAlive(target))
+					DisguiseAsObject(game, event.unit, target);
+				break;
+			}
 			if (!game.world.IsAlive(target) || ability_detail::HeldByTrap(game, event, *slot))
 				break;
 			if (event.ability == AbilityKind::TankHunterTnt || event.ability == AbilityKind::TimedCharges || event.ability == AbilityKind::BoobyTrap ||
@@ -274,6 +368,17 @@ inline void ApplyAbilityEvents(GameWorld &game)
 		case AbilityEvent::Kind::Eva:
 			if (auto *eva = game.world.FindResource<EvaNotices>())
 				eva->list.push_back({EvaCue::BuildingBeingStolen, EvaWeapon::None, event.player});
+			break;
+		case AbilityEvent::Kind::Detect:
+			// StealthUpdate::markAsDetected(): detected for its stealth delay from now; OrderIdleEnemiesToAttackMeUponReveal
+			// wakes the idle enemies that see it (their next mood check now).
+			if (unitAlive)
+				if (auto *stealth = game.world.Get<gp::Stealth>(event.unit))
+				{
+					const auto *rider = game.world.Get<gp::StealthRider>(event.unit);
+					if (gp::MarkAsDetected(*stealth, gp::stealth_detail::RulesOf(*stealth, rider), game.tick, 0))
+						ability_detail::WakeIdleEnemies(game, event.unit);
+				}
 			break;
 		case AbilityEvent::Kind::Infiltration:
 			if (game.world.IsAlive(event.target))

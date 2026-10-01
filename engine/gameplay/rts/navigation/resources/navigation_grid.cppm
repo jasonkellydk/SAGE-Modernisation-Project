@@ -52,6 +52,8 @@ struct ClearancePlane
 	// terrain alone, buildings aside).
 	std::vector<std::uint32_t> terrainZones;
 	bool zonesStale{true};
+	// Working space of the zones' rebuild (derived, never saved): the usable cells of each zone map.
+	std::vector<std::uint8_t> zoneOpen, terrainOpen;
 };
 
 // A deck's own cells (PathfindLayer), structure of arrays over the cells its bounds cover (padded by one): Clear on the
@@ -144,6 +146,8 @@ public:
 	}
 
 	PathfindCellType Type(std::int32_t x, std::int32_t y) const noexcept { return m_type[Index(x, y)]; }
+	// Every ground cell's type in index order (Index).
+	std::span<const PathfindCellType> Types() const noexcept { return m_type; }
 	ecs::Entity Obstacle(std::int32_t x, std::int32_t y) const noexcept { return m_obstacle[Index(x, y)]; }
 	bool ObstacleIsFence(std::int32_t x, std::int32_t y) const noexcept { return m_fence[Index(x, y)] != 0; }
 	bool ObstacleIsSeeThrough(std::int32_t x, std::int32_t y) const noexcept { return m_seeThrough[Index(x, y)] != 0; }

@@ -4,6 +4,11 @@
 #include <cstdint>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.common.random.resources.random_seed;
+import engine.gameplay.rts.movement.components.floor_lift;
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.spatial.components.attitude;
 import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.rts.lifecycle.systems.removal_system;
 import engine.ecs.core.world;
@@ -26,6 +31,7 @@ BOOST_AUTO_TEST_CASE(carriers_retire_with_their_riders_and_removals_are_only_des
 	world.RegisterComponent<Passenger>();
 	world.RegisterComponent<ExitIntent>();
 	world.RegisterComponent<CargoSize>();
+	world.RegisterComponent<Garrison>();
 	world.RegisterComponent<OffMap>();
 	world.RegisterComponent<Targetable>();
 	world.RegisterComponent<Aggression>();
@@ -34,6 +40,9 @@ BOOST_AUTO_TEST_CASE(carriers_retire_with_their_riders_and_removals_are_only_des
 	world.RegisterComponent<MoveOrder>();
 	world.RegisterComponent<AttackTarget>();
 	world.RegisterComponent<Descent>();
+	world.RegisterComponent<FloorLift>();
+	world.RegisterComponent<DropHoming>();
+	world.RegisterComponent<Attitude>();
 	world.FinalizeComponents();
 
 	// The world owns the shared data; the test keeps handles to it.
@@ -76,6 +85,8 @@ BOOST_AUTO_TEST_CASE(carriers_retire_with_their_riders_and_removals_are_only_des
 	world.EmplaceResource<BoardRequests>();
 	world.EmplaceResource<ExitRequests>();
 	world.EmplaceResource<DropExits>();
+	world.EmplaceResource<PlacedExits>();
+	world.EmplaceResource<RandomSeed>();
 	world.EmplaceResource<RiderExits>();
 	world.EmplaceResource<IntentExits>();
 	world.EmplaceResource<DropSettings>();

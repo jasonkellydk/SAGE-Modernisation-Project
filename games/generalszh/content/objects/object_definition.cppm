@@ -75,6 +75,8 @@ struct ObjectDefinition
 	std::string displayName;
 	std::string buttonImage;    // its cameo on command and queue buttons (ButtonImage, a mapped image)
 	std::string selectPortrait; // its portrait while selected (SelectPortrait)
+	// The upgrades shown beside its portrait (UpgradeCameo1..5: ThingTemplate::getUpgradeCameoName), by upgrade name.
+	std::array<std::string, 5> upgradeCameos;
 	std::string editorSorting;
 	std::string commandSet;
 	// RadarPriority (INVALID when unset: the object decides; NOT_ON_RADAR, STRUCTURE, UNIT, LOCAL_UNIT_ONLY).
@@ -83,8 +85,13 @@ struct ObjectDefinition
 	Geometry geometry;
 	Engine::Math::Fixed scale{Engine::Math::Fixed::One()};
 	Engine::Math::Fixed instanceScaleFuzziness;
+	// FenceWidth: a fence's span (GameLogic::startNewGame: a CLEARED_BY_BUILD map object without one is fluff).
+	Engine::Math::Fixed fenceWidth;
 	Engine::Math::Fixed visionRange;
-	Engine::Math::Fixed shroudClearingRange;
+	// ShroudClearingRange as authored (ThingTemplate's -1: not given; see ClearingRange).
+	Engine::Math::Fixed shroudClearingRange{Engine::Math::Fixed::FromInt(-1)};
+	// Object::Object: its shroud clearing range, its vision range when none was given.
+	Engine::Math::Fixed ClearingRange() const noexcept { return shroudClearingRange == Engine::Math::Fixed::FromInt(-1) ? visionRange : shroudClearingRange; }
 	Engine::Math::Fixed shroudRevealToAllRange; // ShroudRevealToAllRange: a reveal to its enemies and neutrals
 	std::int32_t buildCost{0};
 	bool buildFacility{false}; // isBuildFacility: another object's prerequisite, or a command centre (hasAnyBuildFacility)
@@ -142,6 +149,14 @@ struct ObjectDefinition
 	// Sound events by role: "VoiceSelect", "SoundMoveLoop", "SoundAmbient", �
 	// and the UnitSpecificSounds entries (e.g. "TruckLandingSound").
 	std::map<std::string, std::string, std::less<>> sounds;
+	// UnitSpecificFX: FX lists by role (e.g. "CombatDropKillFX"), ThingTemplate::getPerUnitFX.
+	std::map<std::string, std::string, std::less<>> unitFx;
+
+	std::string_view UnitFx(std::string_view role) const noexcept
+	{
+		const auto found = unitFx.find(role);
+		return found != unitFx.end() ? std::string_view(found->second) : std::string_view{};
+	}
 
 	std::string_view Sound(std::string_view role) const noexcept
 	{
@@ -150,7 +165,14 @@ struct ObjectDefinition
 	}
 	std::vector<engine::config::SourceLocation> definedAt;
 
-	bool Is(std::string_view kind) const noexcept { return HasKindOf(kinds, KindOfBit(kind)); }
+	// Is("STRUCTURE"): the literal's bit is a compile-time constant; a name known only at run time is looked up.
+	bool Is(KindOfName kind) const noexcept { return HasKindOf(kinds, kind.bit); }
+	template<typename Name>
+		requires(!std::is_array_v<Name> && std::convertible_to<const Name &, std::string_view>)
+	bool Is(const Name &kind) const noexcept
+	{
+		return HasKindOf(kinds, KindOfBit(std::string_view(kind)));
+	}
 
 	const ModuleEntry *FindModule(ModuleSlot slot) const noexcept
 	{

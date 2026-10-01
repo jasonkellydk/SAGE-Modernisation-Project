@@ -23,6 +23,7 @@ struct WeaponSlot
 {
 	std::uint64_t readyTick{0};
 	std::uint64_t firedTick{0};
+	std::uint64_t scatterUsed{0};
 	std::uint32_t weapon{0xFFFFFFFFu};
 	std::uint32_t clip{0};
 	bool reloading{false};
@@ -30,7 +31,23 @@ struct WeaponSlot
 	std::uint8_t barrel{0};
 	std::uint8_t firedBarrel{0};
 	SlotAim aim{SlotAim::Body};
-	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	std::uint8_t barrelShots{0};
+	// Its weapon set's rules for it: which command sources may pick it (AutoChooseSources: a bit per CommandSource, and
+	// DEFAULT_SWITCH_WEAPON's bit 4) and what it is always picked against (PreferredAgainst: target_class bits).
+	std::uint8_t sources{0xFF};
+	std::uint8_t reserved{0};
+	std::uint32_t preferred{0};
+	std::uint32_t reserved2{0}; // no padding: checkpoints hold its bytes
+};
+
+// A weapon set's per-slot rules (WeaponTemplateSet's m_autoChooseMask and m_preferredAgainst), which its slots take on
+// with their weapons: all sources and nothing preferred unless it says otherwise.
+struct SlotRules
+{
+	std::array<std::uint8_t, WeaponSlotCount> sources{0xFF, 0xFF, 0xFF};
+	std::array<std::uint32_t, WeaponSlotCount> preferred{};
+	// ShareWeaponReloadTime: a shot, reload or re-timed wait of one weapon holds them all.
+	bool sharedReload{false};
 };
 
 struct WeaponSlots
@@ -42,8 +59,19 @@ struct WeaponSlots
 	std::uint8_t locked{Unlocked};
 	// The lock is only for the attack (LOCKED_TEMPORARILY): let go once that weapon empties its clip.
 	std::uint8_t temporary{0};
-	std::uint8_t reserved[5]{}; // no padding: checkpoints hold its bytes
+	// Its set shares reload times (WeaponTemplateSet::m_isReloadTimeShared).
+	std::uint8_t sharedReload{0};
+	std::uint8_t reserved[4]{}; // no padding: checkpoints hold its bytes
 };
+
+// Weapon::getRemainingAmmo: the rounds left in its clip (a clip not yet counted: full), none while it reloads or is out
+// of ammo for good.
+inline std::uint32_t RemainingAmmo(std::uint32_t clipSize, std::uint32_t clip, std::uint64_t readyTick, bool reloading, std::uint64_t tick) noexcept
+{
+	if (readyTick == OutOfAmmo || (reloading && tick < readyTick))
+		return 0;
+	return clip == 0 ? clipSize : std::min(clip, clipSize);
+}
 
 // The Armament's firing state into its slot, and back.
 inline void StoreSlot(WeaponSlot &slot, const Armament &armament) noexcept
@@ -51,10 +79,12 @@ inline void StoreSlot(WeaponSlot &slot, const Armament &armament) noexcept
 	slot.readyTick = armament.readyTick;
 	slot.clip = armament.clip;
 	slot.firedTick = armament.firedTick;
+	slot.scatterUsed = armament.scatterUsed;
 	slot.reloading = armament.reloading;
 	slot.barrels = armament.barrels;
 	slot.barrel = armament.barrel;
 	slot.firedBarrel = armament.firedBarrel;
+	slot.barrelShots = armament.barrelShots;
 }
 
 inline void LoadSlot(Armament &armament, const WeaponSlot &slot, bool turretAimed) noexcept
@@ -63,11 +93,27 @@ inline void LoadSlot(Armament &armament, const WeaponSlot &slot, bool turretAime
 	armament.readyTick = slot.readyTick;
 	armament.clip = slot.clip;
 	armament.firedTick = slot.firedTick;
+	armament.scatterUsed = slot.scatterUsed;
 	armament.reloading = slot.reloading;
 	armament.barrels = slot.barrels;
 	armament.barrel = slot.barrel;
 	armament.firedBarrel = slot.firedBarrel;
+	armament.barrelShots = slot.barrelShots;
 	armament.turret = turretAimed;
+}
+
+// Object::isReloadTimeShared after one weapon's wait was set (Weapon::privateFireWeapon, reloadWithBonus,
+// onWeaponBonusChange): every weapon of the set waits as long, between shots or reloading as `reloading` says.
+inline void ShareReloadTime(WeaponSlots &set, std::uint64_t readyTick, bool reloading) noexcept
+{
+	if (set.sharedReload == 0)
+		return;
+	for (WeaponSlot &slot : set.slots)
+		if (slot.weapon != 0xFFFFFFFFu)
+		{
+			slot.readyTick = readyTick;
+			slot.reloading = reloading;
+		}
 }
 
 // WeaponSet::setWeaponLock (LOCKED_PERMANENTLY): a slot holding a weapon becomes the current weapon at once (m_curWeapon)
@@ -114,7 +160,7 @@ template<>
 struct ComponentTraits<engine::gameplay::WeaponSlots>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.weapon_slots";
-	static constexpr std::uint32_t Version = 3;
+	static constexpr std::uint32_t Version = 4;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::WeaponSlots &value, StateHasher &hasher) noexcept
 	{
@@ -123,10 +169,12 @@ struct ComponentTraits<engine::gameplay::WeaponSlots>
 			hasher.AppendU64((std::uint64_t{slot.weapon} << 32) | slot.clip);
 			hasher.AppendU64(slot.readyTick);
 			hasher.AppendU64(slot.firedTick);
-			hasher.AppendU64((std::uint64_t{slot.barrels} << 24) | (std::uint64_t{slot.barrel} << 16) | (std::uint64_t{slot.firedBarrel} << 8) |
+			hasher.AppendU64(slot.scatterUsed);
+			hasher.AppendU64((std::uint64_t{slot.barrelShots} << 32) | (std::uint64_t{slot.barrels} << 24) | (std::uint64_t{slot.barrel} << 16) | (std::uint64_t{slot.firedBarrel} << 8) |
 				(slot.reloading ? 2u : 0u) | static_cast<std::uint64_t>(slot.aim) << 4);
+			hasher.AppendU64((std::uint64_t{slot.sources} << 32) | slot.preferred);
 		}
-		hasher.AppendU64((std::uint64_t{value.temporary} << 16) | (std::uint64_t{value.locked} << 8) | value.current);
+		hasher.AppendU64((std::uint64_t{value.sharedReload} << 24) | (std::uint64_t{value.temporary} << 16) | (std::uint64_t{value.locked} << 8) | value.current);
 	}
 };
 }

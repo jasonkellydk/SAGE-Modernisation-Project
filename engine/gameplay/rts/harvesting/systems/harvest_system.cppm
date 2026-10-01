@@ -456,7 +456,7 @@ struct HarvestSystem
 		if (value > 0)
 		{
 			round.context.Write<PlayerMoney>().Earn(depot.player, value);
-			round.context.Write<HarvestEvents>().SlotAt(0).push_back({truck.entity, HarvestEvent::Kind::Delivered, value, depot.player, truck.transform->position});
+			round.context.Write<HarvestEvents>().SlotAt(0).push_back({truck.entity, HarvestEvent::Kind::Delivered, value, depot.player, truck.transform->position, depot.entity});
 		}
 		return false;
 	}

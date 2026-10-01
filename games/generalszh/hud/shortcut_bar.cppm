@@ -7,6 +7,7 @@ export import games.generalszh.commands.game_commands;
 import engine.gameplay.rts.upgrades.resources.player_upgrades;
 import engine.gameplay.rts.sciences.resources.player_sciences;
 import games.generalszh.gameplay.orders.resources.command_bar_overrides;
+import games.generalszh.hud.science_buttons;
 
 // The general's powers shortcut bar (the original's ControlBar::initSpecialPowershortcutBar /
 // populateSpecialPowerShortcut / updateSpecialPowerShortcut / drawSpecialPowerShortcutMultiplierText /
@@ -39,41 +40,8 @@ struct ShortcutBarState
 
 namespace shortcut_bar_detail
 {
-inline const content::PlayerTemplateInfo *Faction(session::SessionView &view, std::uint32_t player)
-{
-	const std::string name = view.PlayerTemplateName(player);
-	for (const content::PlayerTemplateInfo &info : view.Content().playerTemplates.templates)
-		if (info.name == name)
-			return &info;
-	return nullptr;
-}
-
-// The purchase-science button (rank 1, 3 or 8 of the General's Powers screen) whose first science is `science`, for
-// its art (CommandButton::copyImagesFrom); none: the button keeps its own.
-inline const content::CommandButtonContent *PurchaseButtonFor(session::SessionView &view, const content::PlayerTemplateInfo &faction,
-	std::string_view science)
-{
-	static constexpr std::array<std::size_t, 3> buttons{4, 15, 4}; // MAX_PURCHASE_SCIENCE_RANK_1 / 3 / 8
-	const content::CommandCatalog &commands = view.Content().commands;
-	std::array<std::optional<content::CommandSetContent>, 3> sets;
-	for (std::size_t rank = 0; rank < 3; ++rank)
-	{
-		if (faction.purchaseScienceCommandSets[rank].empty())
-			return nullptr;
-		sets[rank] = generalszh::gameplay::EffectiveCommandSet(commands, view.World().FindResource<generalszh::gameplay::CommandBarOverrides>(),
-			faction.purchaseScienceCommandSets[rank]);
-		if (!sets[rank])
-			return nullptr;
-	}
-	for (std::size_t rank = 0; rank < 3; ++rank)
-		for (std::size_t slot = 0; slot < buttons[rank]; ++slot)
-		{
-			const content::CommandButtonContent *each = commands.Button(sets[rank]->buttons[slot]);
-			if (each != nullptr && each->command == content::ButtonCommand::PurchaseScience && !each->sciences.empty() && each->sciences.front() == science)
-				return each;
-		}
-	return nullptr;
-}
+using hud::Faction;
+using hud::PurchaseButtonFor;
 }
 
 // The bar for `player` (none: an observer): nothing unless its side names a bar, a button count and a command set that

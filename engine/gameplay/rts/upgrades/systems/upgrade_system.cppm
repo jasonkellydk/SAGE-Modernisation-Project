@@ -9,12 +9,15 @@ export import engine.gameplay.rts.upgrades.resources.upgrade_reactions;
 export import engine.gameplay.rts.upgrades.resources.object_upgrade_grants;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.identity.components.owner;
+export import engine.gameplay.rts.construction.components.under_construction;
 
 // Object::updateUpgradeModules, chunk-parallel, after the tick's production
 // (as the original, within the frame an upgrade completes): an object looks at
 // its upgrade triggers when it is new, was given an upgrade of its own (by a
 // script, or this tick's ObjectUpgradeGrants), changed hands, or its player
-// completed an upgrade. Against its player's and its own
+// completed an upgrade. Nothing upgrades while it is under construction (it
+// looks again once built: the dozer's updateUpgradeModules as it finishes).
+// Against its player's and its own
 // upgrades together (one key for the whole pass, as the original), each
 // trigger not yet gone that would upgrade goes, in module order: first its
 // removals (the object's own upgrades; triggers they set off may go again,
@@ -54,7 +57,7 @@ void UpdateUpgradeTriggers(Upgradable &object, const std::vector<UpgradeTrigger>
 
 struct UpgradeSystem
 {
-	using Query = ecs::Query<ecs::Write<Upgradable>, ecs::Read<DefinitionRef>, ecs::Read<Owner>>;
+	using Query = ecs::Query<ecs::Write<Upgradable>, ecs::Read<DefinitionRef>, ecs::Read<Owner>, ecs::Optional<UnderConstruction>>;
 	using Resources = ecs::Resources<ecs::Read<UpgradeTriggers>, ecs::Read<PlayerUpgrades>, ecs::Write<ObjectUpgradeGrants>, ecs::Write<UpgradeReactions>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context) { context.Write<UpgradeReactions>().Reset(query.PreparedChunkCount()); }
@@ -70,6 +73,7 @@ struct UpgradeSystem
 		auto objects = chunk.Get<Upgradable>();
 		const auto refs = chunk.Get<DefinitionRef>();
 		const auto owners = chunk.Get<Owner>();
+		const auto building = chunk.Get<UnderConstruction>();
 		const auto entities = chunk.Entities();
 		for (std::size_t row = 0; row < objects.size(); ++row)
 		{
@@ -80,6 +84,12 @@ struct UpgradeSystem
 					object.completed.Set(grant.upgrade); // Object::giveUpgrade
 					object.stale = 1;
 				}
+			// Object::updateUpgradeModules: none while OBJECT_STATUS_UNDER_CONSTRUCTION; it looks once that clears.
+			if (!building.empty())
+			{
+				object.stale = 1;
+				continue;
+			}
 			const std::uint32_t player = owners[row].player;
 			const std::uint32_t grants = players.Grants(player);
 			if (object.stale == 0 && object.seenPlayer == player && object.seenGrants == grants)

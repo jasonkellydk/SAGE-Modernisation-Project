@@ -1,0 +1,273 @@
+#define BOOST_TEST_MODULE EngineGameplayBlocking
+#include <boost/test/included/unit_test.hpp>
+
+import std;
+import engine.gameplay.rts.blocking.algorithms.blocking_rules;
+import engine.gameplay.rts.blocking.algorithms.locomotor_blocking;
+import engine.gameplay.rts.blocking.systems.blocked_repath_system;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+// A unit at (x, y) facing `degrees`.
+BlockingBody Body(double x, double y, std::int64_t degrees, std::uint8_t kinds = blocking_kind::Vehicle, bool moving = true, std::uint32_t id = 1)
+{
+	BlockingBody body;
+	body.position = {Fixed::FromRatio(static_cast<std::int64_t>(x * 1000.0), 1000), Fixed::FromRatio(static_cast<std::int64_t>(y * 1000.0), 1000)};
+	body.facing = Engine::Math::TurnFromDegrees(degrees);
+	body.direction = UnitDirection(body.facing);
+	body.kinds = kinds;
+	body.moving = moving;
+	body.ground = true;
+	body.id = id;
+	return body;
+}
+
+// A point `distance` off (0, 0) at `degrees`.
+std::pair<double, double> At(double degrees, double distance)
+{
+	const double radians = degrees * 3.14159265358979 / 180.0;
+	return {std::cos(radians) * distance, std::sin(radians) * distance};
+}
+
+double ToDouble(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+}
+
+BOOST_AUTO_TEST_SUITE(blocking_rules)
+
+// AIUpdate.cpp AIUpdateInterface::hasHigherPathPriority: a dozer before anything that is not, a vehicle before infantry;
+// going opposite ways (their directions' dot at most 0) the lower ObjectID; going the same way the one ahead along the sum
+// of their directions (the other ahead: lower), a tie to the lower ObjectID.
+BOOST_AUTO_TEST_CASE(legacy_parity_path_priority)
+{
+	const BlockingBody dozer = Body(0, 0, 0, blocking_kind::Vehicle | blocking_kind::Dozer, true, 9);
+	const BlockingBody tank = Body(10, 0, 0, blocking_kind::Vehicle, true, 1);
+	const BlockingBody soldier = Body(10, 0, 0, blocking_kind::Infantry, true, 1);
+	BOOST_TEST(HasHigherPathPriority(dozer, tank));
+	BOOST_TEST(!HasHigherPathPriority(tank, dozer));
+	BOOST_TEST(HasHigherPathPriority(tank, soldier));
+	BOOST_TEST(!HasHigherPathPriority(soldier, tank));
+	// Opposite ways: the lower id.
+	const BlockingBody east = Body(0, 0, 0, blocking_kind::Vehicle, true, 5);
+	const BlockingBody west = Body(10, 0, 180, blocking_kind::Vehicle, true, 9);
+	BOOST_TEST(HasHigherPathPriority(east, west));
+	BOOST_TEST(!HasHigherPathPriority(west, east));
+	// The same way: the one ahead.
+	const BlockingBody behind = Body(0, 0, 0, blocking_kind::Vehicle, true, 1);
+	const BlockingBody ahead = Body(10, 0, 0, blocking_kind::Vehicle, true, 9);
+	BOOST_TEST(!HasHigherPathPriority(behind, ahead));
+	BOOST_TEST(HasHigherPathPriority(ahead, behind));
+	// Side by side: the lower id.
+	const BlockingBody beside = Body(0, 10, 0, blocking_kind::Vehicle, true, 9);
+	BOOST_TEST(HasHigherPathPriority(behind, beside));
+	BOOST_TEST(!HasHigherPathPriority(beside, behind));
+}
+
+// AIUpdate.cpp AIUpdateInterface::blockedBy, unit by unit: a vehicle facing east (0 degrees) at the origin, the other 15
+// away.
+BOOST_AUTO_TEST_CASE(legacy_parity_what_blocks_a_unit)
+{
+	const BlockingBody self = Body(0, 0, 0);
+	// Straight ahead, standing: blocked; behind it (180 degrees off, over PI/2): not.
+	BOOST_TEST(BlockedBy(self, Body(15, 0, 0, blocking_kind::Vehicle, false), false));
+	BOOST_TEST(!BlockedBy(self, Body(-15, 0, 0, blocking_kind::Vehicle, false), false));
+	// Off to its side, standing: within 3/4 of PI/4 (33.75 degrees) blocked, beyond not; moving, within PI/4.
+	auto [x30, y30] = At(30, 15);
+	auto [x40, y40] = At(40, 15);
+	BOOST_TEST(BlockedBy(self, Body(x30, y30, 0, blocking_kind::Vehicle, false), false));
+	BOOST_TEST(!BlockedBy(self, Body(x40, y40, 0, blocking_kind::Vehicle, false), false));
+	BOOST_TEST(BlockedBy(self, Body(x40, y40, 0, blocking_kind::Vehicle, true), false));
+	// Near its goal (within a cell either way, holding a goal cell): never.
+	BlockingBody arriving = self;
+	arriving.goalCell = true;
+	arriving.goal = {Fixed::FromInt(5), Fixed::FromInt(-9)};
+	BOOST_TEST(!BlockedBy(arriving, Body(15, 0, 0, blocking_kind::Vehicle, false), false));
+	arriving.goal = {Fixed::FromInt(10), Fixed{}};
+	BOOST_TEST(BlockedBy(arriving, Body(15, 0, 0, blocking_kind::Vehicle, false), false));
+	// What it crushes, what is not on the ground, backing up, the dead: never.
+	BOOST_TEST(!BlockedBy(self, Body(15, 0, 0, blocking_kind::Vehicle, false), true));
+	BlockingBody flying = Body(15, 0, 0, blocking_kind::Vehicle, false);
+	flying.ground = false;
+	BOOST_TEST(!BlockedBy(self, flying, false));
+	BlockingBody reversing = self;
+	reversing.backwards = true;
+	BOOST_TEST(!BlockedBy(reversing, Body(15, 0, 0, blocking_kind::Vehicle, false), false));
+	BlockingBody dead = Body(15, 0, 0, blocking_kind::Vehicle, false);
+	dead.dead = true;
+	BOOST_TEST(!BlockedBy(self, dead, false));
+	// Infantry passes through infantry going another way (directions' dot at most 0.25: 90 degrees apart), not the same way
+	// (60 degrees apart: 0.5).
+	const BlockingBody soldier = Body(0, 0, 0, blocking_kind::Infantry);
+	BOOST_TEST(!BlockedBy(soldier, Body(15, 0, 90, blocking_kind::Infantry, false), false));
+	BOOST_TEST(BlockedBy(soldier, Body(15, 0, 60, blocking_kind::Infantry, false), false));
+	// Blocked over a second (30 ticks), it passes through what goes the other way.
+	BlockingBody waited = self;
+	waited.frames = 30;
+	BOOST_TEST(BlockedBy(waited, Body(15, 0, 180, blocking_kind::Vehicle, true), false));
+	waited.frames = 31;
+	BOOST_TEST(!BlockedBy(waited, Body(15, 0, 180, blocking_kind::Vehicle, true), false));
+}
+
+// AIUpdate.cpp AIUpdateInterface::blockedBy off to its side, both moving: the other 15 away at 50 degrees, facing -60
+// degrees (their directions' dot 0.5); a step on each, they are nearer (225 to 196.5), so they run into each other: the
+// lower path priority (here it, the other being ahead along their two ways) is blocked, the higher (a dozer) is not.
+// Facing 80 degrees instead (dot 0.17), a step on they are further apart (233.4): not blocked.
+BOOST_AUTO_TEST_CASE(legacy_parity_units_running_into_each_other_off_angle)
+{
+	auto [x, y] = At(50, 15);
+	BOOST_TEST(BlockedBy(Body(0, 0, 0), Body(x, y, -60), false));
+	BOOST_TEST(!BlockedBy(Body(0, 0, 0, blocking_kind::Vehicle | blocking_kind::Dozer), Body(x, y, -60), false));
+	BOOST_TEST(!BlockedBy(Body(0, 0, 0), Body(x, y, 80), false));
+}
+
+// AIUpdate.cpp AIUpdateInterface::calculateMaxBlockedSpeed: the other's speed times how much of its direction points away
+// over how much of ours points at it, no more than the current limit; 0 when it comes at us; the limit when we head away.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_speed_behind_a_unit_in_the_way)
+{
+	const Fixed fast = FastAsPossible;
+	BlockingBody leader = Body(15, 0, 0);
+	leader.speed = Fixed::FromInt(2);
+	BOOST_TEST(ToDouble(MaxBlockedSpeed(Body(0, 0, 0), leader, fast)) == 2.0, boost::test_tools::tolerance(1e-4));
+	// Ours at 60 degrees to it: half of ours points at it, so twice its speed, held to the limit of 3.
+	BOOST_TEST(ToDouble(MaxBlockedSpeed(Body(0, 0, 60), leader, fast)) == 4.0, boost::test_tools::tolerance(1e-3));
+	BOOST_TEST((MaxBlockedSpeed(Body(0, 0, 60), leader, Fixed::FromInt(3)) == Fixed::FromInt(3)));
+	// Coming at us: 0; crossing: 0; we head away: the limit.
+	BlockingBody oncoming = Body(15, 0, 180);
+	oncoming.speed = Fixed::FromInt(2);
+	BOOST_TEST((MaxBlockedSpeed(Body(0, 0, 0), oncoming, fast) == Fixed{}));
+	BlockingBody crossing = Body(15, 0, 90);
+	crossing.speed = Fixed::FromInt(2);
+	BOOST_TEST(ToDouble(MaxBlockedSpeed(Body(0, 0, 0), crossing, fast)) == 0.0, boost::test_tools::tolerance(1e-4));
+	BOOST_TEST((MaxBlockedSpeed(Body(0, 0, 120), leader, Fixed::FromInt(3)) == Fixed::FromInt(3)));
+}
+
+// AIUpdate.cpp AIUpdateInterface::needToRotate: waiting for a route, yes; a wanderer, no; else whether the point it
+// heads for is more than PI/30 (6 degrees) off its facing.
+BOOST_AUTO_TEST_CASE(legacy_parity_whether_a_unit_needs_to_turn)
+{
+	BlockingBody body = Body(0, 0, 0);
+	auto [x5, y5] = At(5, 100);
+	auto [x7, y7] = At(7, 100);
+	const FixedVector2 five{Fixed::FromRatio(static_cast<std::int64_t>(x5 * 1000), 1000), Fixed::FromRatio(static_cast<std::int64_t>(y5 * 1000), 1000)};
+	const FixedVector2 seven{Fixed::FromRatio(static_cast<std::int64_t>(x7 * 1000), 1000), Fixed::FromRatio(static_cast<std::int64_t>(y7 * 1000), 1000)};
+	BOOST_TEST(!NeedToRotate(body, five));
+	BOOST_TEST(NeedToRotate(body, seven));
+	body.wanderer = true;
+	BOOST_TEST(!NeedToRotate(body, seven));
+	body.waiting = true;
+	BOOST_TEST(NeedToRotate(body, five));
+}
+
+// AIUpdate.cpp AIUpdateInterface::doLocomotor: blocked last tick, one more tick blocked; along its route faster than the
+// collisions allow (1), it creeps at its bump limit, 0.95 of that and 0.95 less each tick (0.95, 0.9025); a tick the
+// locomotor finds it not blocked (lined up) counts it one tick blocked; free again, the limit grows back by 5% a tick
+// (0.947625, 0.995006) until its speed is under it. Fixed point holds 0.95 and 1.05 to 1/65536, so the speeds are
+// checked to 1e-3.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_blocked_locomotor_creeps_and_recovers)
+{
+	BlockedState state;
+	BlockContact contact;
+	const Fixed speed = Fixed::FromInt(3);
+	contact.blocked = 1;
+	contact.maxSpeed = Fixed::One();
+	bool blocked = BeginBlockedTick(state, contact);
+	BOOST_TEST(blocked);
+	BOOST_TEST(state.frames == 1u);
+	BOOST_TEST(contact.blocked == 0);
+	BOOST_TEST(ToDouble(BlockedSpeed(state, contact, speed, blocked)) == 0.95, boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(blocked);
+	EndBlockedTick(state, contact, blocked);
+	BOOST_TEST(state.frames == 1u);
+	BOOST_TEST((contact.maxSpeed == FastAsPossible));
+	contact.blocked = 1;
+	contact.maxSpeed = Fixed::One();
+	blocked = BeginBlockedTick(state, contact);
+	BOOST_TEST(state.frames == 2u);
+	BOOST_TEST(ToDouble(BlockedSpeed(state, contact, speed, blocked)) == 0.9025, boost::test_tools::tolerance(1e-3));
+	EndBlockedTick(state, contact, false); // lined up: the locomotor finds it not blocked
+	BOOST_TEST(state.frames == 1u);
+	blocked = BeginBlockedTick(state, contact);
+	BOOST_TEST(!blocked);
+	BOOST_TEST(state.frames == 0u);
+	BOOST_TEST(ToDouble(BlockedSpeed(state, contact, speed, blocked)) == 0.947625, boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(ToDouble(BlockedSpeed(state, contact, speed, blocked)) == 0.99500625, boost::test_tools::tolerance(1e-3));
+	// Slower than a fifth of its speed, the limit starts again from that fifth.
+	state.bumpLimit = Fixed::FromRatio(1, 10);
+	BOOST_TEST(ToDouble(BlockedSpeed(state, contact, speed, blocked)) == 0.63, boost::test_tools::tolerance(1e-3));
+	// Not blocked and never was: no limit.
+	BlockedState fresh;
+	bool free = false;
+	BOOST_TEST((BlockedSpeed(fresh, contact, speed, free) == speed));
+}
+
+// AIUpdate.cpp AIUpdateInterface::processCollision's writes to m_blockedFrames and m_isBlockedAndStuck, taken in before
+// the move's update: a first block counts one tick (an older count stays), a unit turning starts over at one, stuck stays
+// until its route is planned again.
+BOOST_AUTO_TEST_CASE(legacy_parity_what_the_collisions_leave_for_the_move)
+{
+	BlockedState state;
+	BlockContact contact;
+	contact.frames = block_frames::AtLeastOne;
+	TakeBlockedContact(state, contact);
+	BOOST_TEST(state.frames == 1u);
+	state.frames = 5;
+	contact.frames = block_frames::AtLeastOne;
+	TakeBlockedContact(state, contact);
+	BOOST_TEST(state.frames == 5u);
+	contact.frames = block_frames::One;
+	contact.stuck = 1;
+	TakeBlockedContact(state, contact);
+	BOOST_TEST(state.frames == 1u);
+	BOOST_TEST(state.stuck == 1);
+	BOOST_TEST(contact.frames == block_frames::Keep);
+	BOOST_TEST(contact.stuck == 0);
+	TakeBlockedContact(state, contact);
+	BOOST_TEST(state.stuck == 1);
+}
+
+// AIStates.cpp AIInternalMoveToState::update and AIUpdate.cpp requestPath / computePath: stuck, or blocked over 60 ticks,
+// the route is planned again now (no longer blocked nor stuck), unless its route is under three ticks old: then the
+// request waits 30 ticks and, stuck, it ignores collisions for 60 ticks; the waiting request is planned on its tick.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stuck_unit_plans_its_route_again)
+{
+	BlockedState state;
+	BlockContact contact;
+	Route route;
+	route.planned = true;
+	route.plannedTick = 100;
+	state.frames = 60;
+	BlockedRepathSystem::Replan(state, contact, route, 200);
+	BOOST_TEST(route.planned); // 60 is not over 60
+	state.frames = 61;
+	BlockedRepathSystem::Replan(state, contact, route, 200);
+	BOOST_TEST(!route.planned);
+	BOOST_TEST(state.frames == 0u);
+	// Stuck right after a route (planned on 200, now 202): wait until 232, ignoring collisions until 262.
+	route.planned = true;
+	route.plannedTick = 200;
+	state.stuck = 1;
+	state.frames = 3;
+	BlockedRepathSystem::Replan(state, contact, route, 202);
+	BOOST_TEST(route.planned);
+	BOOST_TEST(state.replanAt == 232u);
+	BOOST_TEST(state.ignoreUntil == 262u);
+	BOOST_TEST(state.stuck == 0);
+	BOOST_TEST(state.frames == 0u);
+	BlockedRepathSystem::Replan(state, contact, route, 231);
+	BOOST_TEST(route.planned);
+	BlockedRepathSystem::Replan(state, contact, route, 232);
+	BOOST_TEST(!route.planned);
+	BOOST_TEST(state.replanAt == 0u);
+	// Three ticks on, it is not too soon.
+	route.planned = true;
+	route.plannedTick = 300;
+	state.stuck = 1;
+	BlockedRepathSystem::Replan(state, contact, route, 303);
+	BOOST_TEST(!route.planned);
+	BOOST_TEST(state.replanAt == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

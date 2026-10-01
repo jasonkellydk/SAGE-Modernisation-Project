@@ -1,13 +1,19 @@
 export module games.generalszh.gameplay.objects.resources.object_templates;
+export import games.generalszh.content.aircraft.aircraft_content;
+export import games.generalszh.content.containment.railed_transport_content;
 import games.generalszh.content.objects.model_conditions;
 import std;
 import games.generalszh.content.combat.weapon_bonus_content;
+export import games.generalszh.gameplay.combat.components.firestorm;
+export import games.generalszh.gameplay.powers.components.leaflet_drop;
+export import games.generalszh.content.vision.dynamic_clearing_content;
 export import engine.gameplay.rts.parachute.definitions.parachute_definition;
 
 export import games.generalszh.content.loading.game_content;
 export import engine.gameplay.common.weapons.resources.weapon_catalog;
 export import engine.gameplay.common.health.resources.armor_catalog;
 export import engine.gameplay.rts.combat.resources.launch_layouts;
+export import engine.gameplay.common.identity.resources.template_equivalence;
 export import engine.gameplay.rts.upgrades.resources.upgrade_triggers;
 export import engine.gameplay.rts.veterancy.resources.veterancy_catalog;
 export import games.generalszh.content.horde.horde_content;
@@ -24,7 +30,11 @@ export import games.generalszh.gameplay.battleplans.components.battle_plan;
 export import games.generalszh.gameplay.economy.components.warehouse_crippling;
 export import games.generalszh.gameplay.combat.components.battle_bus;
 export import games.generalszh.gameplay.combat.components.weapon_bonus_pulse;
+export import games.generalszh.gameplay.creation.components.ocl_timer;
 export import games.generalszh.gameplay.powers.components.spectre_gunship;
+export import games.generalszh.gameplay.railroad.resources.rail_network;
+import games.generalszh.content.railroad.railroad_content;
+export import games.generalszh.content.containment.combat_drop_content;
 export import games.generalszh.content.crates.crate_content;
 import games.generalszh.content.combat.cooldown_creation_content;
 import games.generalszh.content.combat.combat_catalog;
@@ -43,6 +53,38 @@ export import engine.core.serialization.byte_stream;
 // object creation lists, weapons) are named ids the game resolves.
 export namespace generalszh::gameplay
 {
+// A definition's BunkerBusterBehavior (see bunker_busters): UpgradeRequired, DetonationFX, ShockwaveWeaponTemplate and
+// OccupantDamageWeaponTemplate by name (empty: none).
+struct BunkerBusterConfig
+{
+	bool present{false};
+	std::string upgrade;
+	std::string detonationFX;
+	std::string shockwaveWeapon;
+	std::string occupantWeapon;
+};
+
+// A definition's railed transport (the ferry): its content and its dock's bones in its own frame (DockWaitingNN,
+// DockStart, DockAction, DockEnd; no DockStart: boneless).
+struct RailedTransportConfig
+{
+	content::RailedTransportContent content;
+	std::vector<Engine::Math::FixedVector3> approach;
+	std::optional<Engine::Math::FixedVector3> enter;
+	Engine::Math::FixedVector3 action;
+	Engine::Math::FixedVector3 exit;
+};
+
+// A definition's NeutronBlastBehavior (see neutron_blasts).
+struct NeutronBlastConfig
+{
+	bool present{false};
+	bool affectAirborne{true};
+	bool affectAllies{true};
+	bool detonateCallsKill{false};
+	Engine::Math::Fixed radius{Engine::Math::Fixed::FromInt(10)};
+};
+
 class ObjectTemplates
 {
 public:
@@ -51,9 +93,11 @@ public:
 		engine::gameplay::ArmorCatalog &armors, engine::gameplay::DeathCatalog &deaths, engine::gameplay::LaunchLayouts &launches,
 		engine::gameplay::UpgradeTriggers &upgradeTriggers, UpgradeEffects &upgradeEffects, engine::gameplay::VeterancyCatalog &veterancy,
 		engine::gameplay::HordeCatalog &hordes, engine::gameplay::HarvestCatalog &harvest, engine::gameplay::LoadoutCatalog &loadouts,
-		engine::gameplay::ParachuteCatalog &parachutes) :
+		engine::gameplay::ParachuteCatalog &parachutes, engine::gameplay::DynamicClearingCatalog &dynamicClearings,
+		engine::gameplay::TemplateEquivalence &equivalence) :
 		weapons(weapons), armors(armors), deaths(deaths), launches(launches), upgradeTriggers(upgradeTriggers), upgradeEffects(upgradeEffects),
-		veterancy(veterancy), hordes(hordes), harvest(harvest), loadouts(loadouts), parachutes(parachutes),
+		veterancy(veterancy), hordes(hordes), harvest(harvest), loadouts(loadouts), parachutes(parachutes), dynamicClearings(dynamicClearings),
+		equivalence(equivalence),
 		m_content(content), m_step(step)
 	{
 	}
@@ -82,6 +126,7 @@ public:
 		if (const auto found = m_definitionIndex.find(object.name); found != m_definitionIndex.end())
 			return found->second;
 		m_definitions.push_back(&object);
+		m_catalogEntries.push_back(m_content.objects.Find(object.name));
 		m_history.emplace_back(Kind::Definition, object.name);
 		const content::ObjectCombat combat = content::ReadObjectCombat(object, m_step);
 		m_hasAI.push_back(combat.hasAI);
@@ -131,6 +176,27 @@ public:
 		launches.byDefinition.push_back(layout != m_content.launchLayouts.end() ? layout->second : engine::gameplay::LaunchLayout{});
 		// Its index is taken before its upgrades name weapons (whose projectiles are definitions in turn).
 		const auto index = static_cast<std::uint32_t>(m_definitions.size() - 1);
+		// Its DynamicShroudClearingRangeUpdate.
+		dynamicClearings.definitions.resize(std::max<std::size_t>(dynamicClearings.definitions.size(), index + 1));
+		dynamicClearings.definitions[index] = content::ReadDynamicClearing(object, m_step);
+		// Which kinds it counts as the same as (ThingTemplate::isEquivalentTo): its name's key and its reskin source's.
+		const auto family = [&](const std::string &name) {
+			return m_families.try_emplace(name, static_cast<std::uint32_t>(m_families.size())).first->second;
+		};
+		equivalence.self.resize(std::max<std::size_t>(equivalence.self.size(), index + 1), engine::gameplay::TemplateEquivalence::None);
+		equivalence.reskinnedFrom.resize(equivalence.self.size(), engine::gameplay::TemplateEquivalence::None);
+		equivalence.self[index] = family(object.name);
+		equivalence.reskinnedFrom[index] = object.reskinnedFrom.empty() ? engine::gameplay::TemplateEquivalence::None : family(object.reskinnedFrom);
+		// Its SpawnPointProductionExitUpdate's places.
+		if (const auto points = m_content.spawnPoints.find(object.name); points != m_content.spawnPoints.end())
+			m_spawnPointsOf.push_back(&points->second);
+		else
+			m_spawnPointsOf.push_back(nullptr);
+		// Its BoneFXUpdate.
+		if (const auto boneFx = m_content.boneFx.find(object.name); boneFx != m_content.boneFx.end())
+			m_boneFxOf.push_back(&boneFx->second);
+		else
+			m_boneFxOf.push_back(nullptr);
 		m_definitionIndex.emplace(object.name, index);
 		upgradeTriggers.byDefinition.emplace_back();
 		// Its veterancy (IGNORED_IN_GUI objects score no kills).
@@ -307,6 +373,159 @@ public:
 			weaponBonusPulses.resize(std::max<std::size_t>(weaponBonusPulses.size(), index + 1));
 			weaponBonusPulses[index] = pulse;
 		}
+		// Its NeutronBlastBehavior (BlastRadius 10, AffectAirborne and AffectAllies Yes unless given), and whether a projectile
+		// of its kind dies as it detonates (DumbProjectileBehavior DetonateCallsKill: its die modules then run).
+		{
+			NeutronBlastConfig blast;
+			for (const content::ModuleEntry &module : object.modules)
+			{
+				if (module.block == nullptr)
+					continue;
+				const auto flag = [&](std::string_view key, bool fallback) {
+					const auto *node = module.block->Find(key);
+					return node != nullptr ? engine::config::values::ParseBool(node->Value()).value_or(fallback) : fallback;
+				};
+				if (module.type == "NeutronBlastBehavior" && !blast.present)
+				{
+					blast.present = true;
+					if (const auto *node = module.block->Find("BlastRadius"))
+						blast.radius = engine::config::values::ParseFixed(node->Value()).value_or(blast.radius);
+					blast.affectAirborne = flag("AffectAirborne", true);
+					blast.affectAllies = flag("AffectAllies", true);
+				}
+				else if (module.type == "DumbProjectileBehavior")
+					blast.detonateCallsKill = flag("DetonateCallsKill", false);
+			}
+			neutronBlasts.resize(std::max<std::size_t>(neutronBlasts.size(), index + 1));
+			neutronBlasts[index] = blast;
+		}
+		// Its EnemyNearUpdate: ScanDelayTime (a second unless given), in ticks.
+		{
+			std::optional<std::uint32_t> scan;
+			for (const content::ModuleEntry &module : object.modules)
+				if (module.block != nullptr && module.type == "EnemyNearUpdate" && !scan)
+				{
+					scan = static_cast<std::uint32_t>(m_step.TicksPerSecond());
+					if (const auto *node = module.block->Find("ScanDelayTime"))
+					{
+						engine::config::Diagnostics diagnostics;
+						engine::config::BindContext bind{diagnostics, m_step};
+						scan = static_cast<std::uint32_t>(engine::config::ReadDurationTicks(*node, bind).value_or(*scan));
+					}
+				}
+			enemyNears.resize(std::max<std::size_t>(enemyNears.size(), index + 1));
+			enemyNears[index] = scan;
+			// Its CheckpointUpdate (no fields of its own).
+			checkpoints.resize(std::max<std::size_t>(checkpoints.size(), index + 1));
+			checkpoints[index] = std::ranges::any_of(object.modules, [](const content::ModuleEntry &module) {
+				return module.block != nullptr && module.type == "CheckpointUpdate";
+			}) ? 1u : 0u;
+		}
+		// Its FirestormDynamicGeometryInfoUpdate (DelayBetweenDamageFrames: parseDurationReal, a real number of frames).
+		{
+			FirestormConfig storm;
+			for (const content::ModuleEntry &module : object.modules)
+				if (module.block != nullptr && module.type == "FirestormDynamicGeometryInfoUpdate" && !storm.present)
+				{
+					storm.present = true;
+					const auto fixed = [&](std::string_view key, Engine::Math::Fixed fallback) {
+						const auto *node = module.block->Find(key);
+						return node != nullptr ? engine::config::values::ParseFixed(node->Value()).value_or(fallback) : fallback;
+					};
+					storm.damageDelay = fixed("DelayBetweenDamageFrames", {}) * Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(m_step.TicksPerSecond())) /
+						Engine::Math::Fixed::FromInt(1000);
+					storm.damage = fixed("DamageAmount", {});
+					storm.maxHeight = fixed("MaxHeightForDamage", storm.maxHeight);
+					storm.scorchSize = fixed("ScorchSize", {});
+					storm.particleOffsetZ = fixed("ParticleOffsetZ", {});
+					if (const auto *node = module.block->Find("FXList"); node != nullptr && node->Value() != "None")
+						storm.fx = std::string(node->Value());
+					for (int system = 1; system <= 16; ++system)
+						if (const auto *node = module.block->Find("ParticleSystem" + std::to_string(system)); node != nullptr && node->Value() != "None")
+							storm.particles.push_back(std::string(node->Value()));
+				}
+			firestorms.resize(std::max<std::size_t>(firestorms.size(), index + 1));
+			firestorms[index] = std::move(storm);
+		}
+		// Its LeafletDropBehavior (DisabledDuration ticks, AffectRadius, LeafletFXParticleSystem).
+		{
+			LeafletDropConfig leaflet;
+			for (const content::ModuleEntry &module : object.modules)
+				if (module.block != nullptr && module.type == "LeafletDropBehavior" && !leaflet.present)
+				{
+					leaflet.present = true;
+					engine::config::Diagnostics diagnostics;
+					engine::config::BindContext bind{diagnostics, m_step};
+					if (const auto *node = module.block->Find("DisabledDuration"))
+						leaflet.durationTicks = engine::config::ReadDurationTicks(*node, bind).value_or(0);
+					if (const auto *node = module.block->Find("AffectRadius"))
+						leaflet.radius = engine::config::values::ParseFixed(node->Value()).value_or(Engine::Math::Fixed{});
+					if (const auto *node = module.block->Find("LeafletFXParticleSystem"); node != nullptr && node->Value() != "None")
+						leaflet.particles = std::string(node->Value());
+				}
+			leafletDrops.resize(std::max<std::size_t>(leafletDrops.size(), index + 1));
+			leafletDrops[index] = std::move(leaflet);
+		}
+		// Its BunkerBusterBehavior.
+		{
+			BunkerBusterConfig buster;
+			for (const content::ModuleEntry &module : object.modules)
+				if (module.block != nullptr && module.type == "BunkerBusterBehavior" && !buster.present)
+				{
+					buster.present = true;
+					const auto text = [&](std::string_view key) {
+						const auto *node = module.block->Find(key);
+						return node != nullptr && !node->values.empty() && node->Value() != "None" ? std::string(node->Value()) : std::string{};
+					};
+					buster.upgrade = text("UpgradeRequired");
+					buster.detonationFX = text("DetonationFX");
+					buster.shockwaveWeapon = text("ShockwaveWeaponTemplate");
+					buster.occupantWeapon = text("OccupantDamageWeaponTemplate");
+				}
+			bunkerBusters.resize(std::max<std::size_t>(bunkerBusters.size(), index + 1));
+			bunkerBusters[index] = std::move(buster);
+		}
+		// Its OCLUpdate.
+		{
+			OclTimerConfig timer;
+			for (const content::ModuleEntry &module : object.modules)
+				if (module.block != nullptr && module.type == "OCLUpdate" && !timer.present)
+				{
+					timer.present = true;
+					engine::config::Diagnostics diagnostics;
+					engine::config::BindContext bind{diagnostics, m_step};
+					for (const engine::config::Node &child : module.block->children)
+					{
+						const std::string_view key = child.key;
+						const auto flag = [&] { return engine::config::values::ParseBool(child.Value()).value_or(false); };
+						if (key == "OCL")
+							timer.list = std::string(child.Value());
+						else if (key == "MinDelay")
+							timer.minDelay = engine::config::ReadDurationTicks(child, bind).value_or(0);
+						else if (key == "MaxDelay")
+							timer.maxDelay = engine::config::ReadDurationTicks(child, bind).value_or(0);
+						else if (key == "CreateAtEdge")
+							timer.atEdge = flag();
+						else if (key == "FactionTriggered")
+							timer.factionTriggered = flag();
+						else if (key == "FactionOCL")
+						{
+							// parseFactionObjectCreationList: "Faction:<side> OCL:<list>".
+							std::string side, list;
+							for (const std::string_view token : child.values)
+							{
+								if (token.starts_with("Faction:"))
+									side = std::string(token.substr(8));
+								else if (token.starts_with("OCL:"))
+									list = std::string(token.substr(4));
+							}
+							timer.factionLists.emplace_back(std::move(side), std::move(list));
+						}
+					}
+				}
+			oclTimers.resize(std::max<std::size_t>(oclTimers.size(), index + 1));
+			oclTimers[index] = std::move(timer);
+		}
 		// Its BattleBusSlowDeathBehavior, and which of its slow deaths (in the death content's order) it is.
 		{
 			BattleBusConfig bus;
@@ -434,7 +653,7 @@ public:
 		// Its SpectreGunshipUpdate and SpectreGunshipDeploymentUpdate.
 		{
 			SpectreGunshipConfig gunship;
-			SpectreDeploymentConfig deployment;
+			std::vector<SpectreDeploymentConfig> deployments;
 			for (const content::ModuleEntry &module : object.modules)
 			{
 				if (module.block == nullptr)
@@ -468,10 +687,17 @@ public:
 					gunship.randomOffset = real("RandomOffsetForHowitzer");
 					gunship.reticleRadius = real("TargetingReticleRadius");
 					gunship.orbitRadius = real("GunshipOrbitRadius");
+					if (const auto *decal = module.block->Find("AttackAreaDecal"))
+						gunship.attackAreaDecal = content::ReadRadiusDecal(*decal, m_step.TicksPerSecond());
+					if (const auto *decal = module.block->Find("TargetingReticleDecal"))
+						gunship.reticleDecal = content::ReadRadiusDecal(*decal, m_step.TicksPerSecond());
 				}
-				else if (module.type == "SpectreGunshipDeploymentUpdate" && !deployment.present)
+				else if (module.type == "SpectreGunshipDeploymentUpdate")
 				{
+					SpectreDeploymentConfig &deployment = deployments.emplace_back();
 					deployment.present = true;
+					if (const std::string science = name("RequiredScience"); !science.empty() && science != "SCIENCE_INVALID")
+						deployment.requiredScience = m_content.Science(science).value_or(0xFFFFFFFFu);
 					deployment.power = m_content.powers.Template(name("SpecialPowerTemplate")).value_or(0xFFFFFFFFu);
 					deployment.gunship = name("GunshipTemplateName");
 					const std::string entry = name("CreateLocation");
@@ -483,7 +709,57 @@ public:
 			spectreGunships.resize(std::max<std::size_t>(spectreGunships.size(), index + 1));
 			spectreGunships[index] = std::move(gunship);
 			spectreDeployments.resize(std::max<std::size_t>(spectreDeployments.size(), index + 1));
-			spectreDeployments[index] = std::move(deployment);
+			spectreDeployments[index] = std::move(deployments);
+		}
+		// Its RailroadBehavior.
+		if (const auto railroad = content::ReadRailroad(object, m_step))
+		{
+			RailroadConfig config{true, railroad->locomotive, railroad->carriages,
+				!railroad->carriages.empty() && m_content.objects.Find(railroad->carriages.front()) != nullptr, object.geometry.majorRadius, railroad->runningGarrisonSpeedMax,
+				railroad->killSpeedMin, railroad->speedMax, railroad->acceleration, railroad->braking, railroad->friction,
+				static_cast<std::int32_t>(railroad->waitAtStationTicks), railroad->runningSound, railroad->clicketyClackSound, railroad->whistleSound,
+				railroad->bigMetalBounceSound, railroad->smallMetalBounceSound, railroad->meatyBounceSound};
+			railroads.resize(std::max<std::size_t>(railroads.size(), index + 1));
+			railroads[index] = std::move(config);
+		}
+		// Its railed transport, with its dock's bones.
+		if (auto railed = content::ReadRailedTransport(object, m_step))
+		{
+			RailedTransportConfig config;
+			config.content = std::move(*railed);
+			if (const auto layout = m_content.docks.find(object.name); layout != m_content.docks.end())
+			{
+				for (const content::RestBone &bone : layout->second.approach)
+					config.approach.push_back(bone.position);
+				if (layout->second.enter)
+				{
+					config.enter = layout->second.enter->position;
+					config.action = layout->second.action.position;
+					config.exit = layout->second.exit.position;
+				}
+			}
+			railedTransports.resize(std::max<std::size_t>(railedTransports.size(), index + 1));
+			railedTransports[index] = std::move(config);
+		}
+		// Its FlightDeckBehavior.
+		if (auto deck = content::ReadFlightDeck(object, m_step))
+		{
+			flightDecks.resize(std::max<std::size_t>(flightDecks.size(), index + 1));
+			flightDecks[index] = std::move(*deck);
+		}
+		// Its ChinookAIUpdate's combat drop, with its model's rope bones.
+		if (auto drop = content::ReadCombatDrop(object, m_step))
+		{
+			CombatDropConfig config;
+			config.content = std::move(*drop);
+			if (const auto bones = m_content.ropeBones.find(object.name); bones != m_content.ropeBones.end())
+			{
+				config.ropeStarts = bones->second.starts;
+				config.ropeEnds = bones->second.ends;
+			}
+			config.present = true;
+			combatDrops.resize(std::max<std::size_t>(combatDrops.size(), index + 1));
+			combatDrops[index] = std::move(config);
 		}
 		// Its ConvertToCarBombCrateCollide.
 		{
@@ -493,6 +769,9 @@ public:
 			carBombs.resize(std::max<std::size_t>(carBombs.size(), index + 1));
 			carBombs[index] = std::move(carBomb);
 		}
+		// Its Sabotage*CrateCollide modules (the Saboteur's), in module order.
+		sabotages.resize(std::max<std::size_t>(sabotages.size(), index + 1));
+		sabotages[index] = content::ReadSabotageCollides(object);
 		// Its ConvertToHijackedVehicleCrateCollide and HijackerUpdate's ParachuteName.
 		{
 			std::optional<content::CrateCollideContent> hijack;
@@ -523,7 +802,7 @@ public:
 			engine::gameplay::DefinitionLoadout loadout;
 			const content::ObjectLoadout sets = content::ReadObjectLoadout(object);
 			for (const content::WeaponSetContent &set : sets.weaponSets)
-				loadout.weaponSets.push_back({set.conditions, {Weapon(set.weapons[0]), Weapon(set.weapons[1]), Weapon(set.weapons[2])}, set.lockShared});
+				loadout.weaponSets.push_back({set.conditions, {Weapon(set.weapons[0]), Weapon(set.weapons[1]), Weapon(set.weapons[2])}, set.lockShared, set.rules});
 			for (const content::ArmorSetContent &set : sets.armorSets)
 				loadout.armorSets.push_back({set.conditions, Armor(set.armor)});
 			loadouts.byDefinition.resize(std::max<std::size_t>(loadouts.byDefinition.size(), index + 1));
@@ -583,6 +862,9 @@ public:
 	}
 
 	const content::ObjectDefinition &DefinitionAt(std::uint32_t index) const { return *m_definitions.at(index); }
+	// The catalog's entry of a definition's name (content objects.Find(DefinitionAt(index).name)), found when it was
+	// added: the scripts' type tests ask it for every object they count.
+	const content::ObjectDefinition *CatalogEntryOf(std::uint32_t index) const { return m_catalogEntries.at(index); }
 	// The death (index into `deaths`) of a definition.
 	std::uint32_t DeathOf(std::uint32_t definition) const { return m_deathOf.at(definition); }
 	// Whether a definition has an AI module (its dead enter the dying state).
@@ -653,18 +935,24 @@ public:
 		if (const auto found = m_weaponIndex.find(name); found != m_weaponIndex.end())
 			return found->second;
 		m_history.emplace_back(Kind::Weapon, name);
-		const content::WeaponContent *weapon = m_content.weapons.Find(name);
+		// "weapon|object": a DeliverPayload run's visible payload item flying for its VisiblePayloadWeaponTemplate
+		// (MissileAIUpdate::projectileFireAtObjectOrPosition with that weapon): the weapon with that object as its projectile.
+		const std::size_t bar = name.find('|');
+		const content::WeaponContent *weapon = m_content.weapons.Find(bar == std::string::npos ? name : name.substr(0, bar));
 		if (weapon == nullptr)
 			return m_weaponIndex.emplace(name, engine::gameplay::WeaponCatalog::None).first->second;
+		const std::string projectileObject = bar == std::string::npos ? weapon->projectileObject : name.substr(bar + 1);
 		engine::gameplay::WeaponDefinition simulation = weapon->simulation;
+		if (bar != std::string::npos)
+			simulation.projectile = true;
 		if (simulation.projectile)
-			if (const content::ObjectDefinition *object = m_content.objects.Find(weapon->projectileObject); object != nullptr && object->geometry.majorRadius > Engine::Math::Fixed{})
+			if (const content::ObjectDefinition *object = m_content.objects.Find(projectileObject); object != nullptr && object->geometry.majorRadius > Engine::Math::Fixed{})
 				simulation.projectileRadius = object->geometry.majorRadius;
 		// A projectile object that lobs (DumbProjectileBehavior) flies as an object along its arc.
 		// A projectile object that is a guided missile (MissileAIUpdate) flies as one.
 		if (simulation.projectile)
-			if (const auto missile = m_content.missiles.find(weapon->projectileObject); missile != m_content.missiles.end())
-				if (const content::ObjectDefinition *object = m_content.objects.Find(weapon->projectileObject))
+			if (const auto missile = m_content.missiles.find(projectileObject); missile != m_content.missiles.end())
+				if (const content::ObjectDefinition *object = m_content.objects.Find(projectileObject))
 				{
 					simulation.guided = true;
 					simulation.smallMissile = object->Is("SMALL_MISSILE");
@@ -673,7 +961,7 @@ public:
 				}
 		// A projectile object that flies itself (NeutronMissileUpdate) is the game's to make and fly.
 		if (simulation.projectile && !simulation.guided)
-			if (const content::ObjectDefinition *object = m_content.objects.Find(weapon->projectileObject))
+			if (const content::ObjectDefinition *object = m_content.objects.Find(projectileObject))
 				if (const auto neutron = content::ReadNeutronMissile(*object, m_step))
 				{
 					simulation.objectFlown = true;
@@ -685,17 +973,30 @@ public:
 					simulation.projectileDefinition = Definition(*object);
 				}
 		if (simulation.projectile && !simulation.guided && !simulation.objectFlown)
-			if (const auto arc = m_content.projectileArcs.find(weapon->projectileObject); arc != m_content.projectileArcs.end())
-				if (const content::ObjectDefinition *object = m_content.objects.Find(weapon->projectileObject))
+			if (const auto arc = m_content.projectileArcs.find(projectileObject); arc != m_content.projectileArcs.end())
+				if (const content::ObjectDefinition *object = m_content.objects.Find(projectileObject))
 				{
 					simulation.lobbed = true;
 					simulation.arc = arc->second;
 					simulation.projectileDefinition = Definition(*object);
 				}
+		// Its HistoricBonusWeapon (none: itself, as the original never fires its own; a weapon being made already: none).
+		if (!weapon->historicBonusWeapon.empty() && weapon->historicBonusWeapon != name && !m_historicResolving.contains(name))
+		{
+			m_historicResolving.insert(name);
+			simulation.historicBonusWeapon = Weapon(weapon->historicBonusWeapon);
+			m_historicResolving.erase(name);
+		}
 		if (weapon->extraBonus)
 		{
 			simulation.extraBonus = static_cast<std::uint32_t>(weapons.extraBonuses.size());
 			weapons.extraBonuses.push_back(*weapon->extraBonus);
+		}
+		if (!weapon->scatterTargets.empty())
+		{
+			simulation.scatterFirst = static_cast<std::uint32_t>(weapons.scatterTargets.size());
+			simulation.scatterCount = static_cast<std::uint32_t>(weapon->scatterTargets.size());
+			weapons.scatterTargets.insert(weapons.scatterTargets.end(), weapon->scatterTargets.begin(), weapon->scatterTargets.end());
 		}
 		const std::uint32_t index = weapons.Add(simulation);
 		m_weaponContent.push_back(weapon);
@@ -800,6 +1101,48 @@ public:
 	std::vector<WarehouseCripplingConfig> warehouseCripplings; // each definition's SupplyWarehouseCripplingBehavior
 	std::vector<BattleBusConfig> battleBuses;                  // each definition's BattleBusSlowDeathBehavior
 	std::vector<WeaponBonusPulseConfig> weaponBonusPulses;     // each definition's WeaponBonusUpdate
+	std::vector<OclTimerConfig> oclTimers;                     // each definition's OCLUpdate
+	std::vector<NeutronBlastConfig> neutronBlasts;             // each definition's NeutronBlastBehavior
+	std::vector<BunkerBusterConfig> bunkerBusters;             // each definition's BunkerBusterBehavior
+	std::vector<LeafletDropConfig> leafletDrops;               // each definition's LeafletDropBehavior
+	std::vector<FirestormConfig> firestorms;                   // each definition's FirestormDynamicGeometryInfoUpdate
+	const FirestormConfig *FirestormOf(std::uint32_t definition) const noexcept
+	{
+		return definition < firestorms.size() && firestorms[definition].present ? &firestorms[definition] : nullptr;
+	}
+	const LeafletDropConfig *LeafletDropOf(std::uint32_t definition) const noexcept
+	{
+		return definition < leafletDrops.size() && leafletDrops[definition].present ? &leafletDrops[definition] : nullptr;
+	}
+	std::vector<std::optional<std::uint32_t>> enemyNears;       // each definition's EnemyNearUpdate ScanDelayTime (ticks)
+	std::vector<std::uint8_t> checkpoints;                      // each definition's CheckpointUpdate (1: has one)
+	bool CheckpointOf(std::uint32_t definition) const noexcept { return definition < checkpoints.size() && checkpoints[definition] != 0; }
+	const std::uint32_t *EnemyNearOf(std::uint32_t definition) const noexcept
+	{
+		return definition < enemyNears.size() && enemyNears[definition] ? &*enemyNears[definition] : nullptr;
+	}
+	const BunkerBusterConfig *BunkerBusterOf(std::uint32_t definition) const noexcept
+	{
+		return definition < bunkerBusters.size() && bunkerBusters[definition].present ? &bunkerBusters[definition] : nullptr;
+	}
+	const NeutronBlastConfig *NeutronBlastOf(std::uint32_t definition) const noexcept
+	{
+		return definition < neutronBlasts.size() && neutronBlasts[definition].present ? &neutronBlasts[definition] : nullptr;
+	}
+	// Its SpawnPointProductionExitUpdate's places (its SpawnPoint bones); none: it has no such exit.
+	// Its BoneFXUpdate (none: nullptr).
+	const content::BoneFxContent *BoneFxOf(std::uint32_t definition) const noexcept
+	{
+		return definition < m_boneFxOf.size() ? m_boneFxOf[definition] : nullptr;
+	}
+	const std::vector<content::RestBone> *SpawnPointsOf(std::uint32_t definition) const noexcept
+	{
+		return definition < m_spawnPointsOf.size() ? m_spawnPointsOf[definition] : nullptr;
+	}
+	const OclTimerConfig *OclTimerOf(std::uint32_t definition) const noexcept
+	{
+		return definition < oclTimers.size() && oclTimers[definition].present ? &oclTimers[definition] : nullptr;
+	}
 	const WeaponBonusPulseConfig *WeaponBonusPulseOf(std::uint32_t definition) const noexcept
 	{
 		return definition < weaponBonusPulses.size() && weaponBonusPulses[definition].present ? &weaponBonusPulses[definition] : nullptr;
@@ -830,8 +1173,30 @@ public:
 		return definition < stickyBombs.size() && stickyBombs[definition].present ? &stickyBombs[definition] : nullptr;
 	}
 	std::vector<SpectreGunshipConfig> spectreGunships;      // each definition's SpectreGunshipUpdate (present or not)
-	std::vector<SpectreDeploymentConfig> spectreDeployments; // each definition's SpectreGunshipDeploymentUpdate
+	std::vector<RailroadConfig> railroads;                  // each definition's RailroadBehavior (present or not)
+	std::vector<std::vector<SpectreDeploymentConfig>> spectreDeployments; // each definition's SpectreGunshipDeploymentUpdates, in module order
 	std::vector<std::optional<content::CrateCollideContent>> carBombs; // each definition's ConvertToCarBombCrateCollide
+	// Each definition's ChinookAIUpdate combat drop (present: it has one) and its model's rope bones (RopeStart01..,
+	// RopeEnd01..: where each rope hangs from and where its rappellers start down it, in its own frame).
+	struct CombatDropConfig
+	{
+		bool present{false};
+		content::CombatDropContent content;
+		std::vector<Engine::Math::FixedVector3> ropeStarts;
+		std::vector<content::RestBone> ropeEnds;
+	};
+	std::vector<CombatDropConfig> combatDrops;
+	std::vector<std::optional<content::FlightDeckContent>> flightDecks; // each definition's FlightDeckBehavior
+	std::vector<std::optional<RailedTransportConfig>> railedTransports; // each definition's railed transport
+	const RailedTransportConfig *RailedTransportOf(std::uint32_t definition) const noexcept
+	{
+		return definition < railedTransports.size() && railedTransports[definition] ? &*railedTransports[definition] : nullptr;
+	}
+	std::vector<std::vector<content::SabotageCollideContent>> sabotages; // each definition's Sabotage*CrateCollides
+	std::span<const content::SabotageCollideContent> SabotagesOf(std::uint32_t definition) const noexcept
+	{
+		return definition < sabotages.size() ? std::span<const content::SabotageCollideContent>(sabotages[definition]) : std::span<const content::SabotageCollideContent>{};
+	}
 	std::vector<std::optional<content::CrateCollideContent>> hijacks;  // each definition's ConvertToHijackedVehicleCrateCollide
 	std::vector<std::string> hijackerParachutes;                      // each definition's HijackerUpdate ParachuteName
 	const content::CrateCollideContent *HijackOf(std::uint32_t definition) const noexcept
@@ -842,17 +1207,29 @@ public:
 	{
 		return definition < hijackerParachutes.size() ? hijackerParachutes[definition] : std::string{};
 	}
+	const content::FlightDeckContent *FlightDeckOf(std::uint32_t definition) const noexcept
+	{
+		return definition < flightDecks.size() && flightDecks[definition] ? &*flightDecks[definition] : nullptr;
+	}
+	const CombatDropConfig *CombatDropOf(std::uint32_t definition) const noexcept
+	{
+		return definition < combatDrops.size() && combatDrops[definition].present ? &combatDrops[definition] : nullptr;
+	}
 	const content::CrateCollideContent *CarBombOf(std::uint32_t definition) const noexcept
 	{
 		return definition < carBombs.size() && carBombs[definition] ? &*carBombs[definition] : nullptr;
+	}
+	const RailroadConfig *RailroadOf(std::uint32_t definition) const noexcept
+	{
+		return definition < railroads.size() && railroads[definition].present ? &railroads[definition] : nullptr;
 	}
 	const SpectreGunshipConfig *SpectreGunshipOf(std::uint32_t definition) const noexcept
 	{
 		return definition < spectreGunships.size() && spectreGunships[definition].present ? &spectreGunships[definition] : nullptr;
 	}
-	const SpectreDeploymentConfig *SpectreDeploymentOf(std::uint32_t definition) const noexcept
+	std::span<const SpectreDeploymentConfig> SpectreDeploymentsOf(std::uint32_t definition) const noexcept
 	{
-		return definition < spectreDeployments.size() && spectreDeployments[definition].present ? &spectreDeployments[definition] : nullptr;
+		return definition < spectreDeployments.size() ? std::span<const SpectreDeploymentConfig>(spectreDeployments[definition]) : std::span<const SpectreDeploymentConfig>{};
 	}
 	const MobMemberConfig *MobMemberOf(std::uint32_t definition) const noexcept
 	{
@@ -871,6 +1248,8 @@ public:
 	engine::gameplay::HarvestCatalog &harvest;
 	engine::gameplay::LoadoutCatalog &loadouts;
 	engine::gameplay::ParachuteCatalog &parachutes;
+	engine::gameplay::DynamicClearingCatalog &dynamicClearings;
+	engine::gameplay::TemplateEquivalence &equivalence;
 
 private:
 	enum class Kind : std::uint8_t
@@ -888,6 +1267,9 @@ private:
 	std::vector<std::uint32_t> m_deathOf;
 	std::vector<bool> m_hasAI;
 	std::vector<std::uint32_t> m_parachuteOf;
+	std::vector<const std::vector<content::RestBone> *> m_spawnPointsOf;
+	std::vector<const content::BoneFxContent *> m_boneFxOf;
+	std::set<std::string, std::less<>> m_historicResolving; // weapons whose historic bonus weapon is being made
 	std::vector<ProjectileBody> m_bodies;
 	std::vector<std::string> m_modelNames;
 	std::map<std::string, std::uint32_t, std::less<>> m_modelIndex;
@@ -895,7 +1277,10 @@ private:
 	std::array<std::map<std::string, std::uint32_t, std::less<>>, engine::gameplay::DeathEffectKinds> m_deathEffectIndex;
 	std::vector<std::pair<Kind, std::string>> m_history;
 	std::vector<const content::ObjectDefinition *> m_definitions;
+	std::vector<const content::ObjectDefinition *> m_catalogEntries;
 	std::map<std::string, std::uint32_t, std::less<>> m_definitionIndex;
+	// Kinds' names as TemplateEquivalence keys, in the order met.
+	std::map<std::string, std::uint32_t, std::less<>> m_families;
 	std::vector<const content::WeaponContent *> m_weaponContent;
 	std::map<std::string, std::uint32_t, std::less<>> m_weaponIndex;
 	std::map<std::string, std::uint32_t, std::less<>> m_armorIndex;

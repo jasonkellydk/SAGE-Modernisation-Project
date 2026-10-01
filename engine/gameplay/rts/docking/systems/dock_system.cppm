@@ -1,4 +1,5 @@
 export module engine.gameplay.rts.docking.systems.dock_system;
+export import engine.gameplay.rts.containment.components.cargo_size;
 import std;
 
 export import engine.ecs.system.system;
@@ -25,13 +26,14 @@ import Engine.Core.Math.FixedRandom;
 // success and failure phases, each start in turn, as the original's state
 // machine). A docking that ends (the dock gone or closed, the business done
 // and the mover out, or no approach point to be had) leaves the mover idle.
+export import engine.gameplay.rts.docking.components.dock_look;
 export namespace engine::gameplay
 {
 struct DockSystem
 {
 	using Query = ecs::Query<ecs::Write<Docking>, ecs::Write<MoveOrder>, ecs::Read<Transform>, ecs::Optional<Targetable>, ecs::Optional<NavigationAgent>,
-		ecs::OptionalWrite<Route>>;
-	using Lookup = ecs::Lookup<ecs::Read<Dock>, ecs::Read<Transform>, ecs::Read<Targetable>>;
+		ecs::OptionalWrite<Route>, ecs::Optional<CargoSize>>;
+	using Lookup = ecs::Lookup<ecs::Read<Dock>, ecs::Read<Transform>, ecs::Read<Targetable>, ecs::Read<DockLook>>;
 	using Resources = ecs::Resources<ecs::Read<NavigationGrid>, ecs::Read<RandomSeed>>;
 
 	enum class Status : std::uint8_t
@@ -50,6 +52,7 @@ struct DockSystem
 		Engine::Math::Fixed radius;
 		const NavigationAgent *agent;
 		Route *route;
+		std::uint32_t slots; // the room it takes in a dock that carries it (CargoSize)
 	};
 
 	void Execute(Query &query, ecs::SystemContext &context) const
@@ -63,12 +66,13 @@ struct DockSystem
 			const auto targetables = chunk.template Get<Targetable>();
 			const auto agents = chunk.template Get<NavigationAgent>();
 			auto routes = chunk.template Get<Route>();
+			const auto sizes = chunk.template Get<CargoSize>();
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < dockings.size(); ++row)
 				if (IsDocking(dockings[row]))
 					movers.push_back({entities[row], &dockings[row], &orders[row], &transforms[row],
 						targetables.empty() ? Engine::Math::Fixed{} : targetables[row].radius, agents.empty() ? nullptr : &agents[row],
-						routes.empty() ? nullptr : &routes[row]});
+						routes.empty() ? nullptr : &routes[row], sizes.empty() ? 1u : sizes[row].slots});
 		});
 		if (movers.empty())
 			return;
@@ -128,7 +132,7 @@ struct DockSystem
 			}
 			const bool success = status == Status::Success;
 			const DockPhase from = docking.phase;
-			Leave(mover, from, context);
+			Leave(mover, from, success, lookup, context);
 			const std::optional<DockPhase> next = Next(from, success);
 			if (!next)
 			{
@@ -184,7 +188,8 @@ struct DockSystem
 
 	static void MoveTo(Mover &mover, Engine::Math::FixedVector2 point, bool straight) noexcept
 	{
-		*mover.order = straight ? MoveStraightTo(point) : MoveToPoint(point);
+		// AIDock's approach: no adjusting, no claim.
+		*mover.order = straight ? MoveStraightTo(point) : MoveToPoint(point, GoalClaim::None);
 		if (mover.route != nullptr)
 			mover.route->planned = false;
 	}
@@ -316,7 +321,8 @@ struct DockSystem
 		case DockPhase::WaitForClearance:
 			if (!dock->open)
 				return Status::Failure;
-			if (docking.granted)
+			// DockUpdate::isClearToEnter: its turn, and room for it in a dock that carries it off.
+			if (docking.granted && mover.slots <= dock->room)
 				return Status::Success;
 			return docking.since + DockClearanceTimeoutTicks < context.Tick() ? Status::Failure : Status::Continue;
 		case DockPhase::Process:
@@ -327,10 +333,29 @@ struct DockSystem
 		return Status::Failure;
 	}
 
-	// A phase's end (its onExit): the dock's books on the mover.
-	static void Leave(Mover &mover, DockPhase phase, ecs::SystemContext &context)
+	// The dock's own docking look (DockLook), when it shows one.
+	template<typename LookupType>
+	static void ShowOnDock(const Mover &mover, const LookupType &lookup, ecs::SystemContext &context, std::uint8_t flags)
+	{
+		const ecs::Entity dock = mover.docking->dock;
+		if (lookup.IsAlive(dock) && lookup.template Get<DockLook>(dock) != nullptr)
+			context.Commands().Set<DockLook>(dock, DockLook{flags});
+	}
+
+	// A phase's end (its onExit): the dock's books on the mover, and the dock's look (onEnterReached, onDockReached,
+	// onExitReached; cancelDock for its active mover when the way in fails: the dock closed).
+	template<typename LookupType>
+	static void Leave(Mover &mover, DockPhase phase, bool success, const LookupType &lookup, ecs::SystemContext &context)
 	{
 		Docking &docking = *mover.docking;
+		if (!success && docking.granted && (phase == DockPhase::MoveToEntry || phase == DockPhase::MoveToDock))
+			ShowOnDock(mover, lookup, context, 0);
+		else if (phase == DockPhase::MoveToEntry)
+			ShowOnDock(mover, lookup, context, dock_look::Docking | dock_look::Beginning);
+		else if (phase == DockPhase::MoveToDock)
+			ShowOnDock(mover, lookup, context, dock_look::Docking | dock_look::Active);
+		else if (phase == DockPhase::MoveToExit)
+			ShowOnDock(mover, lookup, context, dock_look::Ending);
 		switch (phase)
 		{
 		case DockPhase::Approach:

@@ -24,6 +24,18 @@ export import engine.gameplay.common.spatial.components.attitude;
 // it when it locks on).
 export namespace engine::gameplay
 {
+// DumbProjectileBehavior::projectileFireAtObjectOrPosition's flight speed: WeaponSpeed, or with ScaleWeaponSpeed the
+// share of the way the 2D range from launch to aim is from MinimumAttackRange to (the unmodified) AttackRange, of the
+// way from MinWeaponSpeed to WeaponSpeed (beyond either end it carries on the same line).
+inline Engine::Math::Fixed LobSpeed(const WeaponDefinition &weapon, Engine::Math::FixedVector2 from, Engine::Math::FixedVector2 to) noexcept
+{
+	const Engine::Math::Fixed span = weapon.attackRange - weapon.minimumRange;
+	if (!weapon.scaleWeaponSpeed || span == Engine::Math::Fixed{})
+		return weapon.speed;
+	const Engine::Math::Fixed ratio = (Engine::Math::Length(to - from) - weapon.minimumRange) / span;
+	return ratio * (weapon.speed - weapon.minWeaponSpeed) + weapon.minWeaponSpeed;
+}
+
 struct ProjectileLaunchSystem
 {
 	static void Launch(ecs::CommandBuffer &commands, const Shot &shot, const WeaponDefinition &weapon, std::uint64_t decoyTick = 0)
@@ -91,7 +103,7 @@ struct ProjectileLaunchSystem
 			commands.Add<DefinitionRef>(projectile, DefinitionRef{weapon.projectileDefinition});
 			commands.Add<Owner>(projectile, Owner{shot.sourcePlayer});
 			commands.Add<Attitude>(projectile, Attitude{});
-			ProjectileFlight flight{points, ArcSegments(points, weapon.speed), 0, weapon.arc, shot};
+			ProjectileFlight flight{points, ArcSegments(points, LobSpeed(weapon, shot.origin.XY(), shot.aim.XY())), 0, weapon.arc, shot};
 			if (weapon.arc.tumble)
 			{
 				// TumbleRandomly: pitch, yaw and roll rates each in [-1/PI, 1/PI] radians a frame.

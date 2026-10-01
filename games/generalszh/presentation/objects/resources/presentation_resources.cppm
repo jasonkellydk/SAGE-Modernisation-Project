@@ -95,14 +95,23 @@ struct WeaponFireLoops
 	}
 };
 
-// Each weapon's ProjectileExhaust (by weapon index; empty: none), kept up with the weapons in play.
+// Each weapon's WeaponRecoil in radians (by weapon index; 0: none), kept up with the weapons in play.
+struct WeaponRecoils
+{
+	std::vector<float> byWeapon;
+
+	float Of(std::uint32_t weapon) const noexcept { return weapon < byWeapon.size() ? byWeapon[weapon] : 0.0f; }
+};
+
+// Each weapon's ProjectileExhaust by its firer's veterancy level (by weapon index; empty: none), kept up with the
+// weapons in play.
 struct WeaponExhausts
 {
-	std::vector<std::string> byWeapon;
+	std::vector<std::array<std::string, 4>> byWeapon;
 
-	std::string_view Of(std::uint32_t weapon) const noexcept
+	std::string_view Of(std::uint32_t weapon, std::uint8_t level) const noexcept
 	{
-		return weapon < byWeapon.size() ? std::string_view(byWeapon[weapon]) : std::string_view{};
+		return weapon < byWeapon.size() ? std::string_view(byWeapon[weapon][std::min<std::size_t>(level, 3)]) : std::string_view{};
 	}
 };
 
@@ -126,6 +135,17 @@ struct WeaponLasers
 		if (weapon >= ObjectBase)
 			return weapon - ObjectBase < byObject.size() && byObject[weapon - ObjectBase].second.valid ? &byObject[weapon - ObjectBase].second : nullptr;
 		return weapon < byWeapon.size() && byWeapon[weapon].valid ? &byWeapon[weapon] : nullptr;
+	}
+};
+
+// The weapons' projectile streams (ProjectileStreamName's W3DProjectileStreamDraw), by weapon index; none: no stream.
+struct WeaponStreams
+{
+	std::vector<std::optional<content::StreamLook>> byWeapon;
+
+	const content::StreamLook *Of(std::uint32_t weapon) const noexcept
+	{
+		return weapon < byWeapon.size() && byWeapon[weapon] ? &*byWeapon[weapon] : nullptr;
 	}
 };
 
@@ -195,6 +215,9 @@ struct BonePoses
 	std::function<std::vector<std::array<float, 3>>(std::string_view model, std::string_view bone, bool family)> locate;
 	// Whether `bone` hangs below `ancestor` in the model's hierarchy (false when either is unknown).
 	std::function<bool(std::string_view model, std::string_view bone, std::string_view ancestor)> descends;
+	// Where a bone sits in a look's model `seconds` into its animation (started `start` of the way in): the model's
+	// animated pose (W3DModelDraw::updateBonesForClientParticleSystems: Get_Bone_Transform). Not found: its rest pose.
+	std::function<BoneLookup(std::uint32_t look, float seconds, float start, std::string_view bone)> animated;
 };
 
 // Effects asked for this frame (FX lists to play; the sounds and camera
@@ -293,6 +316,11 @@ struct ResourceTraits<generalszh::presentation::WeaponLasers>
 	static constexpr std::string_view StableName = "generalszh.presentation.weapon_lasers";
 };
 template<>
+struct ResourceTraits<generalszh::presentation::WeaponStreams>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.weapon_streams";
+};
+template<>
 struct ResourceTraits<generalszh::presentation::LaserRequests>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.laser_requests";
@@ -306,6 +334,11 @@ template<>
 struct ResourceTraits<generalszh::presentation::LaserFrame>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.laser_frame";
+};
+template<>
+struct ResourceTraits<generalszh::presentation::WeaponRecoils>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.weapon_recoils";
 };
 template<>
 struct ResourceTraits<generalszh::presentation::WeaponExhausts>

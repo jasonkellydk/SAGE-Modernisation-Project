@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.containment.components.drop_homing;
 import engine.gameplay.common.health.components.subdual;
 import engine.gameplay.common.spatial.components.body_extent;
 import engine.gameplay.common.spatial.resources.spatial_index;
@@ -189,9 +191,12 @@ struct Pipeline
 		target.RegisterComponent<Boarding>();
 		target.RegisterComponent<ExitIntent>();
 		target.RegisterComponent<CargoSize>();
+		target.RegisterComponent<Garrison>();
 		target.RegisterComponent<OffMap>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<DropHoming>();
 		target.RegisterComponent<PhysicsBody>();
 		target.RegisterComponent<Crash>();
 		target.RegisterComponent<BoundingVolume>();
@@ -203,6 +208,8 @@ struct Pipeline
 		target.RegisterComponent<DeathCredit>();
 		target.RegisterComponent<Producer>();
 		target.RegisterComponent<UnderConstruction>();
+		target.RegisterComponent<ScriptedTopple>();
+		target.RegisterComponent<StructureTopple>();
 		target.RegisterComponent<ObjectShroud>();
 		target.RegisterComponent<BlastWave>();
 		target.RegisterComponent<Scorched>();
@@ -270,6 +277,7 @@ struct Pipeline
 	BoardRequests &boards{world.EmplaceResource<BoardRequests>()};
 	ExitRequests &exits{world.EmplaceResource<ExitRequests>()};
 	DropExits &dropExits{world.EmplaceResource<DropExits>()};
+	PlacedExits &placedExits{world.EmplaceResource<PlacedExits>()};
 	RiderExits &riderExits{world.EmplaceResource<RiderExits>()};
 	IntentExits &intentExits{world.EmplaceResource<IntentExits>()};
 	DropSettings &drop{world.EmplaceResource<DropSettings>()};

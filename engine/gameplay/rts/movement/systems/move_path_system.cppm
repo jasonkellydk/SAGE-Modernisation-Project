@@ -4,20 +4,23 @@ import std;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.movement.components.move_path;
 export import engine.gameplay.rts.movement.components.move_order;
+export import engine.gameplay.rts.navigation.components.navigation;
 
 // Following a path of positions (FollowPath: the next point once the last is reached), each tick before movement,
-// chunk-parallel: a mover whose move is done heads for its path's next point; past the last, the path is done. A new
-// order in between (a move, or anything else) ends it.
+// chunk-parallel: a mover whose move is done heads for its path's next point (a leg on the way claims no goal, the
+// last one's goal is adjusted); past the last, the path is done. A new order in between (a move, or anything else)
+// ends it.
 export namespace engine::gameplay
 {
 struct MovePathSystem
 {
-	using Query = ecs::Query<ecs::Write<MovePath>, ecs::Write<MoveOrder>>;
+	using Query = ecs::Query<ecs::Write<MovePath>, ecs::Write<MoveOrder>, ecs::OptionalWrite<Route>>;
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
 		auto paths = chunk.Get<MovePath>();
 		auto orders = chunk.Get<MoveOrder>();
+		auto routes = chunk.Get<Route>();
 		const auto entities = chunk.Entities();
 		auto &commands = context.Commands();
 		for (std::size_t row = 0; row < paths.size(); ++row)
@@ -38,6 +41,13 @@ struct MovePathSystem
 				continue;
 			}
 			orders[row] = MoveToPoint(path.points[path.next++]);
+			// AIFollowPathState: a leg with more after it keeps no goal (setAdjustsDestination(false)); the last is adjusted
+			// and claimed.
+			if (path.next < path.count)
+				orders[row].claim = GoalClaim::None;
+			// A new move: its route is planned afresh (AIFollowPathState::update: computePath for the next point).
+			if (!routes.empty())
+				routes[row].planned = false;
 		}
 	}
 };

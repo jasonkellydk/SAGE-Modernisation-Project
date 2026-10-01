@@ -6,6 +6,8 @@ export import games.generalszh.gameplay.abilities.components.command_button_hunt
 export import games.generalszh.gameplay.abilities.systems.command_button_hunt_system;
 import games.generalszh.gameplay.orders.algorithms.command_buttons;
 import games.generalszh.gameplay.crates.algorithms.car_bombs;
+import games.generalszh.gameplay.crates.algorithms.hijacking;
+import games.generalszh.gameplay.crates.algorithms.sabotage;
 import games.generalszh.gameplay.orders.algorithms.command_availability;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.powers.algorithms.special_power_launch;
@@ -92,10 +94,14 @@ inline void ApplyHuntScans(GameWorld &game)
 		if (hunt == nullptr || hunt->set != scan.set || hunt->slot != scan.slot)
 			continue;
 		const auto *button = hunt_system_detail::ButtonOf(game.templates, game.world.FindResource<CommandBarOverrides>(), *hunt);
-		if (button != nullptr && button->commandName == "CONVERT_TO_CARBOMB")
+		if (button != nullptr && (button->commandName == "CONVERT_TO_CARBOMB" || button->commandName == "HIJACK_VEHICLE" || button->commandName == "SABOTAGE_BUILDING"))
 		{
+			const auto valid = [&](ecs::Entity other) {
+				return button->commandName == "CONVERT_TO_CARBOMB" ? CanConvertToCarBomb(game, scan.unit, other, false)
+					: button->commandName == "HIJACK_VEHICLE" ? CanHijack(game, scan.unit, other, false) : CanSabotageBuilding(game, scan.unit, other, false);
+			};
 			for (const HuntCandidate &candidate : scan.candidates)
-				if (game.world.IsAlive(candidate.entity) && CanConvertToCarBomb(game, scan.unit, candidate.entity, false))
+				if (game.world.IsAlive(candidate.entity) && valid(candidate.entity))
 				{
 					DoCommandButtonAtObject(game, scan.unit, *button, candidate.entity, true);
 					break;

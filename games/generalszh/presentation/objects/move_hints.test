@@ -1,0 +1,83 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cmath>
+#include <cstdint>
+
+import games.generalszh.presentation.objects.systems.move_hint_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(move_hints)
+
+// InGameUI::createMoveHint (HintSpy on MSG_DO_MOVETO / MSG_DO_ATTACKMOVETO) and W3DInGameUI::drawMoveHints: a move and an
+// attack move ordered show the move hint model where they go, on the ground (z its height, aligned with its slope),
+// playing its animation once from the order; a hint shows for 40 client frames (40/30 s) and then no more; nothing for
+// a stop; nothing while the one thing selected is IMMOBILE (a building told where to go).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_move_ordered_shows_its_hint_for_forty_frames)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<Selected>();
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.clock = 5.0;
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.moveHintLook = 9;
+	SelectionCatalog &selection = world.EmplaceResource<SelectionCatalog>();
+	selection.kinds.resize(2);
+	selection.kinds[1][content::KindOfName("IMMOBILE").bit / 64] |= std::uint64_t{1} << (content::KindOfName("IMMOBILE").bit % 64);
+	world.EmplaceResource<TerrainHeightHandle>().at = [](float x, float) { return 20.0f + 0.5f * x; }; // rising along x
+	PlayerOrders &orders = world.EmplaceResource<PlayerOrders>();
+	MoveHints &hints = world.EmplaceResource<MoveHints>();
+	MoveHintSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&] {
+		scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		orders.pending.clear();
+	};
+	orders.pending.push_back(commands::MoveTo{{}, {Fixed::FromInt(100), Fixed::FromInt(40)}});
+	orders.pending.push_back(commands::AttackMoveTo{{}, {Fixed::FromInt(200), Fixed::FromInt(40)}});
+	orders.pending.push_back(commands::Stop{{}});
+	run();
+	BOOST_TEST_REQUIRE(hints.instances.size() == 2u);
+	const ObjectInstance &first = hints.instances[0];
+	BOOST_TEST(first.look == 9u);
+	BOOST_TEST(first.world[3] == 100.0f);
+	BOOST_TEST(first.world[7] == 40.0f);
+	BOOST_TEST(first.world[11] == 70.0f);
+	BOOST_TEST(first.animationSeconds == 0.0f);
+	// Its up leans back along the slope (1 in 2 rising along x): (-0.5, 0, 1) normalised.
+	BOOST_TEST(first.world[2] == -0.5f / std::sqrt(1.25f), boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(first.world[10] == 1.0f / std::sqrt(1.25f), boost::test_tools::tolerance(1e-5f));
+	frame.clock = 5.0 + 40.0 / 30.0;
+	run();
+	BOOST_TEST(hints.instances.size() == 2u); // the fortieth frame still shows
+	BOOST_TEST(hints.instances[0].animationSeconds == static_cast<float>(40.0 / 30.0));
+	frame.clock = 5.0 + 41.0 / 30.0;
+	run();
+	BOOST_TEST(hints.instances.empty());
+
+	// A building selected alone: no hint.
+	const ecs::Entity factory = world.Create();
+	world.Add<gp::DefinitionRef>(factory);
+	world.Get<gp::DefinitionRef>(factory)->index = 1;
+	world.Side<Selected>().Emplace(factory);
+	orders.pending.push_back(commands::MoveTo{{}, {Fixed::FromInt(10), Fixed::FromInt(10)}});
+	run();
+	BOOST_TEST(hints.instances.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

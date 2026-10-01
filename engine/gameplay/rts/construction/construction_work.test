@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_raises_a_structure_frame_by_frame)
 	site.world.Resource<PlayerEnergy>().Add(0, 10); // produces 10, uses none: ratio 10, full speed
 	const ecs::Entity structure = site.Structure(90, 0);
 	site.world.Add<SelfHealing>(structure); // its base regeneration waits until it stands
-	site.world.Get<SelfHealing>(structure)->onlyWhenStanding = 1;
+	site.world.Get<SelfHealing>(structure)->Add({Fixed{}, 1, 0, 0, 0, 1});
 	site.world.Get<SelfHealing>(structure)->waiting = 1;
 	site.Dozer(structure, 20);
 	std::uint64_t standing = 0;

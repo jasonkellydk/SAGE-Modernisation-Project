@@ -1,4 +1,5 @@
 export module games.generalszh.gameplay.creation.algorithms.creation_list_runner;
+import games.generalszh.gameplay.effects.algorithms.radius_decals;
 import std;
 import engine.gameplay.rts.collision.components.body_collision;
 import games.generalszh.gameplay.containment.algorithms.parachuting;
@@ -342,6 +343,9 @@ ecs::Entity RunCreationList(GameWorld &game, std::string_view listName, const Cr
 				if (auto *armament = game.world.Get<gameplay::Armament>(source.entity))
 					gameplay::LockSlot(*slots, *armament, static_cast<std::uint8_t>(nugget.weaponSlot));
 			OrderAttackPosition(game, source.entity, *source.secondary, nugget.shots, false);
+			// Its RadiusDecalUpdate (if it has one) lays the DeliveryDecal at the target, until it is no longer attacking.
+			if (game.world.Has<RadiusDecal>(source.entity))
+				LayRadiusDecal(game, source.entity, nugget.deliveryDecal, nugget.deliveryDecalRadius, *source.secondary, RadiusDecalUntil::NoLongerAttacking);
 			continue;
 		}
 		if (nugget.names.empty())

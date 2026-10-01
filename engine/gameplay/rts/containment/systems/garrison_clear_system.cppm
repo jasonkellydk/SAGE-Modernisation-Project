@@ -20,7 +20,8 @@ struct GarrisonClearSystem
 {
 	using Query = ecs::Query<ecs::Read<Garrison>>;
 	using Lookup = ecs::Lookup<ecs::Read<Garrison>, ecs::Read<Targetable>, ecs::Read<Health>>;
-	using Resources = ecs::Resources<ecs::Read<GarrisonHits>, ecs::Write<GarrisonClears>, ecs::Read<CargoManifest>, ecs::Read<WeaponCatalog>>;
+	using Resources = ecs::Resources<ecs::Read<GarrisonHits>, ecs::Read<MissileGarrisonHits>, ecs::Write<GarrisonClears>, ecs::Read<CargoManifest>,
+		ecs::Read<WeaponCatalog>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -29,7 +30,7 @@ struct GarrisonClearSystem
 		clears.detonations.clear();
 		const CargoManifest &manifest = context.Read<CargoManifest>();
 		const auto lookup = context.Lookup<Lookup>();
-		context.Read<GarrisonHits>().ForEach([&](const GarrisonHit &hit) {
+		const auto clear = [&](const GarrisonHit &hit) {
 			std::uint32_t killed = 0;
 			const Garrison *garrison = lookup.IsAlive(hit.building) ? lookup.Get<Garrison>(hit.building) : nullptr;
 			if (garrison != nullptr && garrison->immuneToClear == 0)
@@ -49,7 +50,9 @@ struct GarrisonClearSystem
 				}
 			if (killed == 0)
 				clears.detonations.push_back(hit.shot);
-		});
+		};
+		context.Read<GarrisonHits>().ForEach(clear);
+		context.Read<MissileGarrisonHits>().ForEach(clear);
 	}
 };
 }

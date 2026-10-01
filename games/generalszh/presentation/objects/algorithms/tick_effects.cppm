@@ -1,9 +1,11 @@
 export module games.generalszh.presentation.objects.algorithms.tick_effects;
+import games.generalszh.gameplay.effects.resources.effect_cues;
 import std;
 import games.generalszh.gameplay.combat.algorithms.battle_bus;
 import games.generalszh.gameplay.powers.components.launcher_door;
 import games.generalszh.gameplay.powers.components.particle_cannon;
 import engine.gameplay.rts.combat.components.neutron_flight;
+import engine.gameplay.rts.delivery.components.delivery;
 import games.generalszh.content.combat.combat_catalog;
 import engine.gameplay.rts.combat.resources.assists;
 import engine.gameplay.rts.death.resources.blast_waves;
@@ -11,6 +13,15 @@ import engine.gameplay.rts.propaganda.resources.propaganda_scans;
 import games.generalszh.gameplay.mines.components.minefield_generator;
 import games.generalszh.gameplay.abilities.resources.sticky_bomb_cues;
 import games.generalszh.gameplay.bridges.resources.bridge_cues;
+import games.generalszh.presentation.interaction.resources.interaction_resources;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.rts.stealth.resources.detections;
+import games.generalszh.content.stealth.stealth_content;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.rts.combat.systems.auto_fire_system;
 
 export import games.generalszh.presentation.objects.resources.presentation_resources;
 export import games.generalszh.presentation.objects.resources.look_catalog;
@@ -29,6 +40,32 @@ inline std::array<float, 3> At(const Engine::Math::FixedVector3 &position)
 {
 	return {Engine::Math::ToFloat(position.x), Engine::Math::ToFloat(position.y), Engine::Math::ToFloat(position.z)};
 }
+
+// Object::isLogicallyVisible to the one watching: what it rides in (getOuterObject) seen; a disguiser always; one
+// stealthed and not detected not, by a player in the game who is not its ally.
+inline bool LogicallyVisible(const session::SessionView &view, ecs::Entity entity)
+{
+	namespace gp = engine::gameplay;
+	const auto &world = view.World();
+	if (!world.IsAlive(entity))
+		return true;
+	if (const auto *carried = world.Get<gp::OffMap>(entity); carried != nullptr && world.IsAlive(carried->holder))
+		entity = carried->holder;
+	static const std::size_t disguiser = content::KindOfBit("DISGUISER");
+	if (const auto definition = view.DefinitionOf(entity); definition && content::HasKindOf(view.Definition(*definition).kinds, disguiser))
+		return true;
+	const auto *stealth = world.Get<gp::Stealth>(entity);
+	if (stealth == nullptr || !stealth->Hidden())
+		return true;
+	const auto *local = world.FindResource<LocalPlayer>();
+	const auto *relationships = world.FindResource<gp::Relationships>();
+	const auto *owner = world.Get<gp::Owner>(entity);
+	if (local == nullptr || !local->valid || relationships == nullptr || owner == nullptr)
+		return true;
+	const auto *member = world.Get<gp::TeamMember>(entity);
+	return relationships->Between(gp::Relationships::NoTeam, local->player, member != nullptr ? member->team : gp::Relationships::NoTeam, owner->player) ==
+		gp::Relationship::Allies;
+}
 }
 
 // The weapons' exhausts, for weapons that came into play since the last tick.
@@ -37,7 +74,17 @@ void KnowExhausts(WeaponExhausts &exhausts, const session::SessionView &view)
 	for (std::uint32_t weapon = static_cast<std::uint32_t>(exhausts.byWeapon.size()); weapon < view.WeaponCount(); ++weapon)
 	{
 		const auto *content = view.WeaponContentOf(weapon);
-		exhausts.byWeapon.push_back(content != nullptr ? content->exhaust : std::string{});
+		exhausts.byWeapon.push_back(content != nullptr ? content->exhausts : std::array<std::string, 4>{});
+	}
+}
+
+// The weapons' recoils (WeaponRecoil, degrees to radians), for weapons that came into play since the last tick.
+void KnowRecoils(WeaponRecoils &recoils, const session::SessionView &view)
+{
+	for (std::uint32_t weapon = static_cast<std::uint32_t>(recoils.byWeapon.size()); weapon < view.WeaponCount(); ++weapon)
+	{
+		const auto *content = view.WeaponContentOf(weapon);
+		recoils.byWeapon.push_back(content != nullptr ? Engine::Math::ToFloat(content->weaponRecoil) * 3.14159265358979f / 180.0f : 0.0f);
 	}
 }
 
@@ -66,6 +113,20 @@ void KnowLasers(WeaponLasers &lasers, const session::SessionView &view)
 					laser.bone = content->laserBone;
 				}
 		lasers.byWeapon.push_back(std::move(laser));
+	}
+}
+
+// The weapons' projectile streams (ProjectileStreamName's W3DProjectileStreamDraw), for weapons that came into play since the
+// last tick.
+inline void KnowStreams(WeaponStreams &streams, const session::SessionView &view)
+{
+	for (std::uint32_t weapon = static_cast<std::uint32_t>(streams.byWeapon.size()); weapon < view.WeaponCount(); ++weapon)
+	{
+		std::optional<content::StreamLook> look;
+		if (const auto *content = view.WeaponContentOf(weapon); content != nullptr && !content->projectileStream.empty())
+			if (const auto *object = view.ObjectNamed(content->projectileStream))
+				look = content::ReadStreamLook(*object);
+		streams.byWeapon.push_back(std::move(look));
 	}
 }
 
@@ -133,19 +194,35 @@ void QueueTickEffects(FxRequests &fx, const LookCatalog &catalog, const session:
 				if (!name.empty())
 					fx.pending.push_back({name, At(event.position), 0.0f, 0.0f, event.entity});
 			}
-	view.Fired().ForEach([&](const engine::gameplay::Shot &shot) {
+	// Weapon::fireWeaponTemplate's FXList::doFXPos (the primary damage radius as its caller's) for what fired this tick:
+	// the weapons', and what fired itself (FireWeaponUpdate's forceFireWeapon), unless its FX are still suspended.
+	const auto fired = [&](const engine::gameplay::Shot &shot) {
 		const auto *weapon = view.WeaponContentOf(shot.weapon);
-		if (weapon == nullptr || weapon->fireFX.empty())
+		if (weapon == nullptr || weapon->FireFX(shot.veterancy).empty() || shot.quiet != 0)
+			return;
+		// Weapon::fireWeaponTemplate: a firer the one watching cannot see shows no fire FX, unless it is a mine or its
+		// weapon says to (PlayFXWhenStealthed).
+		static const std::size_t mine = content::KindOfBit("MINE");
+		const auto definition = view.DefinitionOf(shot.source);
+		if (!weapon->playFXWhenStealthed && !(definition && content::HasKindOf(view.Definition(*definition).kinds, mine)) &&
+			!LogicallyVisible(view, shot.source))
 			return;
 		const auto from = At(shot.origin), to = At(shot.aim);
-		FxRequest request{weapon->fireFX, from, std::atan2(to[1] - from[1], to[0] - from[0]), 0.0f};
+		FxRequest request{weapon->FireFX(shot.veterancy), from, std::atan2(to[1] - from[1], to[0] - from[0]),
+			Engine::Math::ToFloat(weapon->simulation.primaryRadius * shot.radiusScale)};
 		request.firedBy = shot.source; // presentation moves it onto the barrel
 		request.firedSlot = shot.slot;
+		request.hasSecondary = true;
+		request.secondary = to;
+		request.speed = Engine::Math::ToFloat(weapon->simulation.speed);
 		fx.pending.push_back(std::move(request));
-	});
+	};
+	view.Fired().ForEach(fired);
+	if (const auto *autoShots = view.World().FindResource<engine::gameplay::AutoShots>())
+		autoShots->ForEach(fired);
 	for (const auto &impact : view.Impacts())
-		if (const auto *weapon = view.WeaponContentOf(impact.weapon); weapon != nullptr && !weapon->detonationFX.empty())
-			fx.pending.push_back({weapon->detonationFX, At(impact.position), 0.0f, 0.0f});
+		if (const auto *weapon = view.WeaponContentOf(impact.weapon); weapon != nullptr && !weapon->DetonationFX(impact.veterancy).empty())
+			fx.pending.push_back({weapon->DetonationFX(impact.veterancy), At(impact.position), 0.0f, 0.0f});
 	// NeutronMissileSlowDeathBehavior::doBlast: the scorch mark its first hurting blast leaves (addScorch, SCORCH_1).
 	if (const auto *waves = view.World().FindResource<engine::gameplay::BlastWaves>())
 		for (const engine::gameplay::BlastScorchMark &mark : waves->marks)
@@ -166,6 +243,22 @@ void QueueTickEffects(FxRequests &fx, const LookCatalog &catalog, const session:
 			if (cue.kind == generalszh::gameplay::StickyBombCue::Kind::Effect)
 				fx.pending.push_back({std::string(view.DeathEffectName(engine::gameplay::DeathEffectKind::Effect, cue.effect)), At(cue.at), 0.0f,
 					Engine::Math::ToFloat(cue.radius)});
+	// The game logic's own FX lists (EffectCues: doFXObj on an object, doFXPos at a spot).
+	if (const auto *cues = view.World().FindResource<generalszh::gameplay::EffectCues>())
+		for (const auto &cue : cues->list)
+		{
+			FxRequest request{cue.particleSystem ? std::string{} : cue.effect, At(cue.at), 0.0f, 0.0f, cue.on};
+			if (cue.particleSystem)
+				request.particleSystem = cue.effect;
+			request.scorchRadius = Engine::Math::ToFloat(cue.scorch);
+			fx.pending.push_back(std::move(request));
+		}
+	// DeliverPayloadAIUpdate::update: a diving carrier's StrafeWeaponFX at each strafe point (doFXPos).
+	if (const auto *runs = view.World().FindResource<engine::gameplay::DeliveryCues>())
+		runs->ForEach([&](const engine::gameplay::DeliveryCue &cue) {
+			if (cue.kind == engine::gameplay::DeliveryCue::Kind::Strafe && cue.effect != engine::gameplay::Delivery::NoEffect)
+				fx.pending.push_back({std::string(view.DeathEffectName(engine::gameplay::DeathEffectKind::Effect, cue.effect)), At(cue.at), 0.0f, 0.0f});
+		});
 	// BattleBusSlowDeathBehavior: FXStartUndeath and FXHitGround on the bus (doFXObj).
 	if (const auto *buses = view.World().FindResource<generalszh::gameplay::BattleBusCues>())
 		for (const auto &cue : buses->list)
@@ -199,6 +292,17 @@ void QueueTickEffects(FxRequests &fx, const LookCatalog &catalog, const session:
 	if (const auto *scans = view.World().FindResource<engine::gameplay::PropagandaScans>())
 		for (const engine::gameplay::PropagandaPulse &pulse : scans->pulses)
 			fx.pending.push_back({std::string(view.DeathEffectName(engine::gameplay::DeathEffectKind::Effect, pulse.effect)), At(pulse.position), 0.0f, 0.0f, pulse.tower});
+	// StealthUpdate::changeVisualDisguise: a disguiser's DisguiseFX where it stands as it takes the look, its
+	// DisguiseRevealFX as it loses it (doFXPos).
+	if (const auto *disguises = view.World().FindResource<engine::gameplay::DisguiseEvents>())
+		disguises->ForEach([&](const engine::gameplay::DisguiseEvent &event) {
+			const auto definition = view.DefinitionOf(event.entity);
+			if (!definition)
+				return;
+			if (const auto stealth = content::ReadObjectStealth(view.Definition(*definition), engine::time::FixedStep{30}))
+				if (const std::string &name = event.disguised != 0 ? stealth->disguiseFx : stealth->disguiseRevealFx; !name.empty())
+					fx.pending.push_back({name, At(event.position), 0.0f, 0.0f});
+		});
 	for (const auto &event : view.DeathEvents())
 		if (event.kind == engine::gameplay::DeathEffectKind::Effect)
 			// FXListDie: on the object facing its way (doFXObj), or unrotated where it was (OrientToObject No: doFXPos).

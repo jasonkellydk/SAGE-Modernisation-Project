@@ -19,6 +19,8 @@
 #ifdef FindResource
 #undef FindResource // windows.h (via Boost.Test) renames it
 #endif
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.match.resources.match_outcome;
 import engine.gameplay.rts.construction.components.sale;
 import engine.gameplay.rts.construction.components.construction_progress;
 import engine.gameplay.common.appearance.components.indicator_color;
@@ -228,6 +230,103 @@ BOOST_AUTO_TEST_CASE(many_vehicles_roll_the_same_on_any_number_of_workers)
 	BOOST_TEST((run(1) == run(4)));
 }
 
+// Legacy parity (W3DScienceModelDraw.cpp, doDrawModule): a salvage crate (RequiredScience SCIENCE_GLA: here science 3)
+// is drawn for a viewer with the science, for an observer (no viewer) and for a viewer no longer playing (defeated);
+// hidden from one still playing without it; one whose science is unknown is drawn for no one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_science_models_draw_shows_only_to_those_with_its_science)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	auto &sciences = world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	sciences.Resize(4);
+	sciences.Grant(0, 3);
+	auto &outcome = world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	outcome.players = {{0, false, false}, {1, false, false}, {2, true, false}};
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks crate;
+	crate.states.states.resize(1);
+	crate.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	crate.stateLooks = {0};
+	crate.needsScience = true;
+	crate.requiredScience = 3;
+	DefinitionLooks unknown = crate;
+	unknown.requiredScience = 0xFFFFFFFFu;
+	catalog.byDefinition = {crate, unknown};
+	catalog.known = {1, 1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"PMJnkCrate"};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		world.Add<engine::gameplay::Owner>(entity);
+		world.Add<engine::gameplay::Appearance>(entity);
+		return entity;
+	};
+	make(0);
+	make(1);
+	tick.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+	const auto drawnFor = [&](std::uint32_t viewer) {
+		frame.viewer = viewer;
+		draw.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		std::vector<ObjectInstance> drawn;
+		world.Resource<ObjectInstances>().AppendTo(drawn);
+		return drawn.size();
+	};
+	BOOST_TEST(drawnFor(0) == 1u);                           // has it (the crate; the unknown one never)
+	BOOST_TEST(drawnFor(1) == 0u);                           // playing without it
+	BOOST_TEST(drawnFor(2) == 1u);                           // defeated
+	BOOST_TEST(drawnFor(PresentationFrame::NoViewer) == 1u); // an observer
+}
+
 BOOST_AUTO_TEST_CASE(objects_are_drawn_between_ticks_in_their_look_restarting_its_animation_when_it_changes)
 {
 	ecs::World world{ecs::WorldConfig{4}};
@@ -257,6 +356,8 @@ BOOST_AUTO_TEST_CASE(objects_are_drawn_between_ticks_in_their_look_restarting_it
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	// One definition, two model states (the second while stealthed), each its own look.
 	DefinitionLooks looks;
@@ -377,6 +478,108 @@ BOOST_AUTO_TEST_CASE(objects_are_drawn_between_ticks_in_their_look_restarting_it
 	BOOST_TEST(world.StateHash() == hash);
 }
 
+// W3DModelDraw::showSubObject (SubObjectsUpgrade, W3DSupplyDraw::updateDrawModuleSupplyStatus): parts shown or hidden on
+// the render object it already has; its model state and animation go on untouched (no setModelState). A truck that took
+// on a part set is drawn through its look's copy with those parts, and its animation keeps running from where it
+// started instead of starting over every frame.
+BOOST_AUTO_TEST_CASE(legacy_parity_upgraded_parts_leave_the_animation_running)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::Appearance>();
+	world.RegisterComponent<gp::Attitude>();
+	world.RegisterComponent<gp::ModelOverride>();
+	world.RegisterComponent<gp::DebrisLook>();
+	world.RegisterComponent<gp::Parachute>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::ParachuteRider>();
+	world.RegisterComponent<gp::OffMap>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Mounted>();
+	world.RegisterComponent<gp::EmpPulse>();
+	world.RegisterComponent<gp::IndicatorColor>();
+	world.RegisterComponent<gp::PartOverrides>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<gp::Relationships>(8u);
+	world.EmplaceResource<gp::Detections>();
+	world.EmplaceResource<gp::ParachuteCatalog>();
+	world.EmplaceResource<gp::PlayerSciences>();
+	world.EmplaceResource<gp::MatchOutcome>();
+	world.EmplaceResource<gp::WeaponCatalog>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.stateLooks = {0};
+	looks.ownLookFirst = 0;
+	looks.ownLookCount = 1;
+	looks.partSets = {{{"Bombload02", true}, {"Bombload01", false}}};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"TRUCK"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const ecs::Entity truck = world.Create();
+	world.Add<gp::Transform>(truck);
+	world.Add<gp::DefinitionRef>(truck);
+	world.Add<gp::Owner>(truck);
+	world.Add<gp::Appearance>(truck);
+	world.Add<gp::PartOverrides>(truck);
+	world.Get<gp::PartOverrides>(truck)->Apply(0);
+	KnowPartLooks(catalog, world);
+	const std::uint32_t copy = catalog.byDefinition[0].WithParts(0, std::vector<std::uint8_t>{0});
+	BOOST_TEST_REQUIRE(copy != 0u);
+	run(tick);
+	run(tick);
+	const auto drawnAt = [&](double clock) {
+		frame.clock = clock;
+		run(draw);
+		std::vector<ObjectInstance> drawn;
+		world.Resource<ObjectInstances>().AppendTo(drawn);
+		BOOST_TEST_REQUIRE(drawn.size() == 1u);
+		return drawn[0];
+	};
+	drawnAt(1.0); // its look starts
+	const ObjectInstance first = drawnAt(2.0);
+	const ObjectInstance second = drawnAt(3.5);
+	BOOST_TEST(first.look == copy);
+	BOOST_TEST(second.look == copy);
+	BOOST_TEST(first.animationSeconds > 0.0f);
+	BOOST_TEST(second.animationSeconds == first.animationSeconds + 1.5f, boost::test_tools::tolerance(1e-4f));
+}
+
 // W3DModelDraw with several Animation (or IdleAnimation) lines in a condition state: each object picks one of them
 // at random as it takes the state (so a crowd does not move in step), and keeps it while it stays.
 // FloatUpdate::update on a drawable (Enabled = No: swayed, not lifted): its turn kept, then Ry by
@@ -414,6 +617,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_model_keeps_the_colour_it_was_made_with_unl
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	// Two definitions, one model state each: the first's draw keeps its colour, the second's may change it.
 	DefinitionLooks keeps;
@@ -512,6 +717,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_building_rises_out_of_the_ground_as_it_is_b
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	// One definition whose state sinks it by what is left to build, 40 high.
 	DefinitionLooks building;
@@ -609,6 +816,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_wind_up_or_a_sale_stretches_the_animation_t
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	// One definition, one looping model state.
 	DefinitionLooks gun;
@@ -705,6 +914,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_tree_sways_in_the_breeze)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks looks;
 	looks.states.states.resize(1);
@@ -812,6 +1023,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_police_light_bars_and_light_pulses_are_the_fr
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	world.EmplaceResource<LightPulses>().live.push_back({{1, 2, 3}, {1, 1, 1}, 1.0f, 31.0f, 0.0f, 15.0f, 0.0f});
 	const DynamicLights &lights = world.EmplaceResource<DynamicLights>();
@@ -946,6 +1159,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_fishing_boat_rocks_like_a_buoy)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks looks;
 	looks.states.states.resize(1);
@@ -1031,6 +1246,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_state_with_several_animations_picks_one_per
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks looks;
 	looks.states.states.resize(1);
@@ -1291,6 +1508,19 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_police_cars_lights_turn_a_quarter_frame_a_f
 		const double later = ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 2.4);
 		BOOST_TEST(std::fmod(later - first + 14.0, 14.0) == 3.0, boost::test_tools::tolerance(1e-3));
 	}
+	// Shown before its model (and clip) loaded, it settles on the same rate once the clip is known: still 7.5 frames a
+	// second, not its clip's own 30 (the original never runs it at the clip's rate).
+	LookClips unknown;
+	ShownLook early;
+	ShowModelState(early, looks, unknown, 0, 2.0, ModelStateRolls{7, 1}, false);
+	BOOST_TEST(!SettlePoliceLights(early, looks, unknown, 2.5, ModelStateRolls{7, 2}));
+	BOOST_TEST(SettlePoliceLights(early, looks, clips, 3.0, ModelStateRolls{7, 3}));
+	BOOST_TEST(early.speed == 0.25f, boost::test_tools::tolerance(1e-6f));
+	const double settled = ShownClipFrame(early, clips.At(0), ModelAnimationMode::Loop, 3.0);
+	BOOST_TEST(settled <= 10.0 + 1e-4);
+	BOOST_TEST(std::fmod(ShownClipFrame(early, clips.At(0), ModelAnimationMode::Loop, 3.4) - settled + 14.0, 14.0) == 3.0,
+		boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(!SettlePoliceLights(early, looks, clips, 3.5, ModelStateRolls{7, 4}));
 }
 
 // Object::createVeterancyLevelFX for a promotion earned in play: GameData's LevelGainedAnimation where the unit is
@@ -1393,6 +1623,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_disabled_objects_animation_holds_its_frame)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 		DefinitionLooks looks;
 		looks.stateLooks = {0};
@@ -1492,6 +1724,8 @@ BOOST_AUTO_TEST_CASE(a_mounted_portable_structure_is_drawn_on_its_carriers_bone)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks overlord;
 	overlord.states.states.resize(1);
@@ -1599,6 +1833,8 @@ BOOST_AUTO_TEST_CASE(condition_states_run_their_particle_systems_on_bones_as_sid
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks dozer;
 	dozer.states.states.resize(2);
@@ -1654,6 +1890,180 @@ BOOST_AUTO_TEST_CASE(condition_states_run_their_particle_systems_on_bones_as_sid
 	BOOST_TEST(world.Side<ConditionEmission>().Size() == 0u);
 }
 
+// Legacy parity (AnimatedParticleSysBoneClientUpdate.cpp: clientUpdate; W3DModelDraw.cpp:
+// updateBonesForClientParticleSystems): with the client update (or ParticlesAttachedToAnimatedBones) each of a state's
+// particle systems sitting at a bone is put where that bone is in the model's current animated pose each frame (its
+// Get_Bone_Transform), not where it was at rest as it started; without it the systems stay where the bones were at rest.
+BOOST_AUTO_TEST_CASE(legacy_parity_bone_particle_systems_follow_the_animated_bones)
+{
+	for (const bool animatedBones : {true, false})
+	{
+		ecs::World world{ecs::WorldConfig{4}};
+		world.RegisterComponent<engine::gameplay::DefinitionRef>();
+		world.RegisterComponent<engine::gameplay::DebrisLook>();
+		RegisterObjectPresentation(world);
+		world.FinalizeComponents();
+		EffectsContent effects;
+		effects.particles.Define("Smoke");
+		engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+		PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+		LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+		DefinitionLooks mill;
+		mill.states.states.resize(1);
+		mill.states.states[0].particleBones = {{"EXHAUST", "Smoke"}};
+		mill.animatedParticleBones = animatedBones;
+		catalog.byDefinition = {mill};
+		catalog.known = {1};
+		catalog.looks = {{0, 0, 0}};
+		catalog.lookModels = {"MILL"};
+		BonePoses poses{[&](std::string_view, std::string_view bone) {
+			BoneLookup lookup;
+			lookup.ready = true;
+			lookup.found = bone == "EXHAUST";
+			lookup.position = {5, 0, 3};
+			return lookup;
+		}};
+		// The bone sweeps along x as the animation runs: 5 + its seconds.
+		poses.animated = [](std::uint32_t, float seconds, float, std::string_view bone) {
+			BoneLookup lookup;
+			lookup.ready = true;
+			lookup.found = bone == "EXHAUST";
+			lookup.position = {5 + seconds, 0, 3};
+			lookup.yaw = seconds;
+			return lookup;
+		};
+		world.EmplaceResource<BonePoses>(std::move(poses));
+		world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+		PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+		ecs::SystemRegistry systems;
+		EffectAttachmentSystem attach;
+		systems.Register(attach);
+		systems.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		const auto show = [&](float seconds) {
+			presented.Reset(1);
+			presented.SlotAt(0).push_back({entity, 0, 0, 0, 0, {50, 50, 0}, 0.0f, 1.0f, {}, false, false, true, seconds, 0.0f});
+			++frame.frame;
+			scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+		};
+		show(0.0f); // first seen: its side table is added
+		show(1.0f); // started at the bone at rest, then (animated) moved onto it as it is now
+		const auto *emission = world.Side<ConditionEmission>().Get(entity);
+		BOOST_TEST_REQUIRE(emission != nullptr);
+		BOOST_TEST_REQUIRE(emission->systems.size() == 1u);
+		BOOST_TEST(emission->systems[0].local[0] == (animatedBones ? 6.0f : 5.0f));
+		show(2.5f);
+		BOOST_TEST(emission->systems[0].local[0] == (animatedBones ? 7.5f : 5.0f));
+		BOOST_TEST(emission->systems[0].yaw == (animatedBones ? 2.5f : 0.0f));
+		BOOST_TEST(particles.Alive(emission->systems[0].id));
+	}
+}
+
+// BoneFXUpdate's particle systems (BoneFXUpdate.cpp: initTimes, update, doParticleSystemAtBone, computeNextClientFXTime,
+// changeBodyDamageState -> killRunningParticleSystems, stopAllBoneFX) as the Dragon Tank's flame projectile's and a
+// tower's slots have them: a slot at bone NULL with no delay starts its system on the tick the simulation first times
+// its slots, at the object's origin, once (OnlyOnce); a repeating slot 3 ticks on starts one every 3 ticks at its bone
+// turned with the object; new timings (a damage state change) destroy what runs and time the new state's slots; a stop
+// destroys them and nothing starts again; a hidden (contained) object's systems start stopped; a last damage of a type
+// the module does not play for skips a due slot (and re-times it).
+BOOST_AUTO_TEST_CASE(legacy_parity_bone_fx_particle_systems_follow_the_simulations_timings)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<generalszh::gameplay::BoneFx>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("FlameThrowerTrail01");
+	effects.particles.Define("StructureToppleSmokeTrail");
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<PresentationRandom>();
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	DefinitionLooks looks;
+	generalszh::content::BoneFxTable table;
+	table[0][0] = {"NULL", "FlameThrowerTrail01", {}, {}, {}, true};
+	table[0][1] = {"NULL", "FlameThrowerTrail01", {}, {}, {}, true};
+	table[0][2] = {"Fire02", "StructureToppleSmokeTrail", {Fixed::FromInt(10), {}, Fixed::FromInt(3)}, Fixed::FromInt(3), Fixed::FromInt(3), false};
+	looks.boneParticles = table;
+	looks.boneParticleTypes = ~(std::uint64_t{1} << 5);
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	ecs::SystemRegistry systems;
+	BoneParticleSystem bones;
+	systems.Register(bones);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(entity);
+	world.Add<engine::gameplay::Transform>(entity);
+	world.Get<engine::gameplay::Transform>(entity)->position = {Fixed::FromInt(50), Fixed::FromInt(60), {}};
+	world.Get<engine::gameplay::Transform>(entity)->facing = Engine::Math::TurnAngle{0x40000000u}; // a quarter turn
+	world.Add<engine::gameplay::Health>(entity);
+	world.Add<generalszh::gameplay::BoneFx>(entity);
+	auto &fx = *world.Get<generalszh::gameplay::BoneFx>(entity);
+	fx.timings = 1; // its first update timed its slots
+	fx.active = 1;
+	std::uint64_t tick = 10;
+	const auto step = [&] { scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); };
+	const auto emission = [&] { return world.Side<BoneFxEmission>().Get(entity); };
+	step(); // tick 11: both NULL slots start at its origin; the Fire02 slot is due on tick 14
+	BOOST_TEST_REQUIRE(emission() != nullptr);
+	BOOST_TEST(emission()->systems.size() == 2u);
+	BOOST_TEST(emission()->systems[0].local[0] == 0.0f);
+	BOOST_TEST(emission()->next[0] == BoneFxEmission::Off);
+	BOOST_TEST(emission()->next[2] == 14);
+	step();
+	step();
+	BOOST_TEST(emission()->systems.size() == 2u);
+	step(); // tick 14
+	BOOST_TEST(emission()->systems.size() == 3u);
+	BOOST_TEST(emission()->systems[2].local[0] == 10.0f);
+	BOOST_TEST(emission()->next[2] == 17);
+	for (int n = 0; n < 3; ++n)
+		step(); // tick 17: another
+	BOOST_TEST(emission()->systems.size() == 4u);
+	// A last damage of a type it does not play for: the due slot is skipped and re-timed.
+	world.Get<engine::gameplay::Health>(entity)->lastDamageType = 5;
+	for (int n = 0; n < 3; ++n)
+		step(); // tick 20
+	BOOST_TEST(emission()->systems.size() == 4u);
+	BOOST_TEST(emission()->next[2] == 23);
+	world.Get<engine::gameplay::Health>(entity)->lastDamageType = 0;
+	// A new damage state (no slots there): what runs is destroyed.
+	const std::uint64_t first = emission()->systems[0].id;
+	fx.state = 1;
+	fx.timings = 2;
+	step();
+	BOOST_TEST(emission()->systems.empty());
+	particles.Step(); // (destroyed systems leave with the particle world's next step)
+	BOOST_TEST(!particles.Alive(first));
+	BOOST_TEST(emission()->next[2] == BoneFxEmission::Off);
+	// Back to pristine, hidden: its systems start stopped.
+	world.Add<engine::gameplay::OffMap>(entity);
+	auto &moved = *world.Get<generalszh::gameplay::BoneFx>(entity); // (another archetype now)
+	moved.state = 0;
+	moved.timings = 3;
+	step();
+	BOOST_TEST_REQUIRE(emission()->systems.size() == 2u);
+	BOOST_TEST(particles.Alive(emission()->systems[0].id));
+	BOOST_TEST(!particles.Running(emission()->systems[0].id));
+	// stopAllBoneFX: they go and nothing starts again.
+	moved.stops = 1;
+	step();
+	BOOST_TEST(emission()->systems.empty());
+	for (int n = 0; n < 10; ++n)
+		step();
+	BOOST_TEST(emission()->systems.empty());
+}
+
 BOOST_AUTO_TEST_CASE(the_hosts_presentation_schedules_compose_without_conflicts)
 {
 	// The simulation's world, as the session registers it, with presentation's side tables.
@@ -1693,41 +2103,17 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_schedules_compose_without_conflicts)
 	WheelRollSystem wheels;
 	MotionEmitterSystem emitters;
 	ObjectPresentationSystem objects;
-	EffectAttachmentSystem attachments;
 	DamageEffectSystem damage;
 	FireFxPlacementSystem fire;
 	FxPlaybackSystem fx;
-	ExhaustSampleSystem exhaustSample;
 	HitFxSystem hitFx;
 	MissileIgnitionSystem ignitions;
-	HarvestPresentationSystem harvest;
-	CratePresentationSystem crates;
-	CashPresentationSystem cash;
 	PromotionPresentationSystem promotions;
-	ChassisSystem chassis;
-	ExhaustSystem exhausts;
-	LaserSystem lasers;
 	DynamicLightSystem lights;
-	TrackLayingSystem trackLaying;
-	TrackFadeSystem trackFade;
-	TreeBreezeSystem treeBreeze;
-	TreeBendSystem treeBend;
 	DebrisAnimationSystem debris;
-	TreeContactSystem treeContacts;
-	DisabledSoundSystem disabledSounds;
-	EmpSparkSystem empSparks;
-	AutoDepositPresentationSystem autoDepositTexts;
-	AbilityFeedbackSystem abilityFeedback;
-	UplinkStatusSystem uplinkStatus;
-	AttachedParticleClearSystem particleClears;
-	RegisterPresentationTick(tick, motion, pose, pings, exhaustSample, hitFx, ignitions, harvest, crates, promotions, chassis, trackLaying, treeContacts, cash,
-		disabledSounds, empSparks, autoDepositTexts, abilityFeedback, uplinkStatus, particleClears);
-	MountedDrawSystem mountedDraw;
+	RegisterPresentationTick(tick);
 	TintStatusSystem tintStatus;
-	ObjectIconSystem objectIcons;
-	UplinkEffectSystem uplinkEffects;
-	RiderTintSystem riderTint;
-	RegisterPresentationFrame(frame, treads, wheels, emitters, objects, attachments, damage, fire, fx, exhausts, lasers, lights, trackFade, treeBreeze, treeBend, debris, mountedDraw, tintStatus, objectIcons, uplinkEffects, riderTint);
+	RegisterPresentationFrame(frame);
 	tick.Finalize(world.Components());
 	frame.Finalize(world.Components());
 	// Building the schedules checks every conflict is ordered.
@@ -1762,6 +2148,8 @@ BOOST_AUTO_TEST_CASE(damage_states_start_their_effects_on_bones_and_stop_them_as
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	DefinitionLooks tank;
 	DamageEffect smoke{DamageEffect::Kind::Particles, "Smoke", {"Smoke", true, {}}};
@@ -1784,6 +2172,7 @@ BOOST_AUTO_TEST_CASE(damage_states_start_their_effects_on_bones_and_stop_them_as
 	world.EmplaceResource<SoundRequests>();
 	world.EmplaceResource<ShakeRequests>();
 	world.EmplaceResource<LightPulses>();
+	world.EmplaceResource<Tracers>();
 	world.EmplaceResource<DynamicLights>();
 	world.EmplaceResource<ScorchMarks>();
 	world.EmplaceResource<TrackSettings>();
@@ -1861,6 +2250,8 @@ BOOST_AUTO_TEST_CASE(a_detectors_scan_pings_louder_and_brighter_when_it_finds_so
 	auto &pings = world.EmplaceResource<engine::gameplay::DetectorPings>();
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	ecs::SystemRegistry systems;
 	DetectorPingSystem ping;
@@ -2012,6 +2403,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_hits_play_their_damage_fx_throttled_by_type)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	world.EmplaceResource<FxRequests>();
 	auto &hits = world.EmplaceResource<engine::gameplay::Hits>();
@@ -2081,6 +2474,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_plays_its_ignition_fx_once_when_it_
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	world.EmplaceResource<FxRequests>();
 	catalog.byDefinition.resize(1);
@@ -2130,6 +2525,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_delivery_floats_its_cash_and_fades)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	catalog.playerColors = {{1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}};
 	catalog.byDefinition.resize(1);
@@ -2191,6 +2588,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_crate_pickups_sound_and_float_their_cash)
 	world.EmplaceResource<engine::gameplay::Relationships>(8u);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	catalog.playerColors = {{1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}};
 	catalog.crateSalvageSound = "SalvageUpgrade";
@@ -2533,6 +2932,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_what_the_shroud_hides)
 	relationships.Set(1, 0, engine::gameplay::Relationship::Enemies);
 	world.EmplaceResource<engine::gameplay::Detections>();
 	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
 	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
 	world.EmplaceResource<MotionLooks>();
 	DefinitionLooks looks;
@@ -2763,6 +3164,31 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_overlord_riders_tint_follows_its_carrier)
 	BOOST_TEST(tints.Get(gun)->current[0] < 0.0f);
 	BOOST_TEST(tints.Get(lone) == nullptr);
 	BOOST_TEST(tints.Get(onOther)->current[0] == 0.0f);
+}
+
+// Legacy parity (GeneralsMD Drawable.cpp, Drawable::handleWeaponFireFX; Weapon.cpp fireWeaponTemplate's reAngle/reDir):
+// a shot kicks its firer's acceleration pitch and roll rates by its WeaponRecoil turned about from the way it fired,
+// relative to its facing: firing dead ahead pitches it back by the whole recoil (the Marauder's 10 degrees), firing to
+// its left rolls it; no recoil, nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shot_rocks_its_firer_back)
+{
+	const float recoil = 10.0f * 3.14159265358979f / 180.0f;
+	ChassisState ahead;
+	Recoil(ahead, recoil, 0.0f, 0.0f);
+	BOOST_TEST(std::fabs(ahead.accelPitchRate + recoil) < 1e-6f);
+	BOOST_TEST(std::fabs(ahead.accelRollRate) < 1e-6f);
+	ChassisState left;
+	Recoil(left, recoil, 1.57079632679f, 0.0f);
+	BOOST_TEST(std::fabs(left.accelPitchRate) < 1e-6f);
+	BOOST_TEST(std::fabs(left.accelRollRate + recoil) < 1e-6f);
+	// Facing the way it fires: the same as dead ahead.
+	ChassisState turned;
+	Recoil(turned, recoil, 1.0f, 1.0f);
+	BOOST_TEST(std::fabs(turned.accelPitchRate + recoil) < 1e-6f);
+	ChassisState none;
+	Recoil(none, 0.0f, 0.3f, 0.0f);
+	BOOST_TEST(none.accelPitchRate == 0.0f);
+	BOOST_TEST(none.accelRollRate == 0.0f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

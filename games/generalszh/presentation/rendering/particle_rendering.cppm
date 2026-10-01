@@ -21,6 +21,7 @@ struct BeamSegment
 	std::string_view texture;
 	float uvScale{1.0f};
 	float uvOffset{0.0f};
+	bool additive{true}; // false: blended by its alpha (a rope's lines)
 };
 
 class ParticleRendering

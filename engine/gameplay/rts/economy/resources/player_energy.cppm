@@ -10,7 +10,9 @@ import engine.ecs.system.system;
 // and consumes, and the supply ratio as the original reports it (production
 // over consumption; with nothing consumed, the production itself, so a player
 // with no power at all has a ratio of 0). Scripts read the last tally between
-// ticks, so it is checkpointed too.
+// ticks, so it is checkpointed too. A player's power sabotaged (Energy::setPowerSabotagedTillFrame) reads as none
+// before its tick (getProduction, getEnergySupplyRatio, hasSufficientPower) and holds its brown-out through that tick
+// (Player::update lifts it on the first frame after).
 export namespace engine::gameplay
 {
 struct EnergyShare
@@ -45,12 +47,45 @@ public:
 			m_consumption[player] -= amount;
 	}
 
-	std::int64_t Production(std::uint32_t player) const noexcept { return player < m_production.size() ? m_production[player] : 0; }
+	// Energy::setPowerSabotagedTillFrame.
+	void Sabotage(std::uint32_t player, std::uint64_t until)
+	{
+		if (player >= m_sabotagedUntil.size())
+			m_sabotagedUntil.resize(player + 1, 0);
+		m_sabotagedUntil[player] = until;
+	}
+	// The tick's view of sabotage (before the tally is read): whether production reads as none (now < until), and
+	// whether its brown-out still holds (until reached: Player::update clears it, and the brown-out follows the power,
+	// on the frame after).
+	void Refresh(std::uint64_t now)
+	{
+		m_sabotaged.assign(m_sabotagedUntil.size(), 0);
+		m_held.assign(m_sabotagedUntil.size(), 0);
+		for (std::size_t player = 0; player < m_sabotagedUntil.size(); ++player)
+		{
+			std::uint64_t &until = m_sabotagedUntil[player];
+			if (until != 0 && now > until)
+				until = 0;
+			m_sabotaged[player] = now < until ? 1 : 0;
+			m_held[player] = until != 0 ? 1 : 0;
+		}
+	}
+	std::uint64_t SabotagedUntil(std::uint32_t player) const noexcept { return player < m_sabotagedUntil.size() ? m_sabotagedUntil[player] : 0; }
+	bool Sabotaged(std::uint32_t player) const noexcept { return player < m_sabotaged.size() && m_sabotaged[player] != 0; }
+
+	std::int64_t Production(std::uint32_t player) const noexcept
+	{
+		return Sabotaged(player) ? 0 : player < m_production.size() ? m_production[player] : 0;
+	}
 	std::int64_t Consumption(std::uint32_t player) const noexcept { return player < m_consumption.size() ? m_consumption[player] : 0; }
-	bool Sufficient(std::uint32_t player) const noexcept { return Production(player) >= Consumption(player); }
+	bool Sufficient(std::uint32_t player) const noexcept { return !Sabotaged(player) && Production(player) >= Consumption(player); }
+	// Player::onPowerBrownOutChange's state: short of power, or sabotaged until a tick not yet past.
+	bool BrownOut(std::uint32_t player) const noexcept { return !Sufficient(player) || (player < m_held.size() && m_held[player] != 0); }
 
 	Engine::Math::Fixed SupplyRatio(std::uint32_t player) const noexcept
 	{
+		if (Sabotaged(player))
+			return Engine::Math::Fixed{};
 		const std::int64_t consumed = Consumption(player);
 		if (consumed == 0)
 			return Engine::Math::Fixed::FromInt(Production(player));
@@ -64,6 +99,13 @@ public:
 		{
 			writer.I64(m_production[player]);
 			writer.I64(m_consumption[player]);
+		}
+		writer.U32(static_cast<std::uint32_t>(m_sabotagedUntil.size()));
+		for (std::size_t player = 0; player < m_sabotagedUntil.size(); ++player)
+		{
+			writer.U64(m_sabotagedUntil[player]);
+			writer.U8(m_sabotaged[player]);
+			writer.U8(m_held[player]);
 		}
 	}
 	bool Load(engine::core::serialization::ByteReader &reader)
@@ -80,14 +122,35 @@ public:
 			production[player] = *made;
 			consumption[player] = *used;
 		}
+		const auto sabotaged = reader.U32();
+		if (!sabotaged || *sabotaged > 4096)
+			return false;
+		std::vector<std::uint64_t> until(*sabotaged);
+		std::vector<std::uint8_t> reads(*sabotaged), held(*sabotaged);
+		for (std::uint32_t player = 0; player < *sabotaged; ++player)
+		{
+			const auto tick = reader.U64();
+			const auto none = reader.U8(), hold = reader.U8();
+			if (!tick || !none || !hold)
+				return false;
+			until[player] = *tick;
+			reads[player] = *none;
+			held[player] = *hold;
+		}
 		m_production = std::move(production);
 		m_consumption = std::move(consumption);
+		m_sabotagedUntil = std::move(until);
+		m_sabotaged = std::move(reads);
+		m_held = std::move(held);
 		return true;
 	}
 
 private:
 	std::vector<std::int64_t> m_production;
 	std::vector<std::int64_t> m_consumption;
+	std::vector<std::uint64_t> m_sabotagedUntil;
+	std::vector<std::uint8_t> m_sabotaged;
+	std::vector<std::uint8_t> m_held;
 };
 
 // How short power slows production (the original's LowEnergyPenaltyModifier,

@@ -57,7 +57,8 @@ struct PhysicsSystem
 			const Disabled *off = disabled.empty() ? nullptr : &disabled[row];
 			// Its locomotor holds it while its AI runs.
 			// (Pushed by a shock wave, physics has it until it rests.)
-			if (body.Has(physics_flag::Locomotive) && !body.Has(physics_flag::Pushed) && (off == nullptr || RunsWhileDisabled(*off, disabled_type::Held)))
+			if (body.Has(physics_flag::Locomotive) && !body.Has(physics_flag::Pushed) && !body.Has(physics_flag::PhysicsDriven) &&
+				(off == nullptr || RunsWhileDisabled(*off, disabled_type::Held)))
 			{
 				// Held (a rider hanging from its chute), its forces still clear each frame (PhysicsBehavior::update:
 				// m_accel.zero() whether or not it is HELD): a push given it as it was put in is spent, not kept.
@@ -73,6 +74,12 @@ struct PhysicsSystem
 			if ((step.landed || step.resting) && body.Has(physics_flag::Pushed))
 			{
 				body.Set(physics_flag::Pushed, false);
+				body.velocity = {};
+			}
+			// Down (on the ground): its locomotor has it again.
+			if ((step.landed || step.resting) && body.Has(physics_flag::PhysicsDriven))
+			{
+				body.Set(physics_flag::PhysicsDriven, false);
 				body.velocity = {};
 			}
 			// PhysicsBehavior::doBounceSound: each landing, its bounce sound where it landed.

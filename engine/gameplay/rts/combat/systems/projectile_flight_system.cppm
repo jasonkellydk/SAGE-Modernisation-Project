@@ -1,4 +1,5 @@
 export module engine.gameplay.rts.combat.systems.projectile_flight_system;
+import engine.gameplay.common.health.components.health;
 import std;
 
 export import engine.ecs.system.system;
@@ -24,7 +25,7 @@ export namespace engine::gameplay
 {
 struct ProjectileFlightSystem
 {
-	using Query = ecs::Query<ecs::Write<ProjectileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>, ecs::Optional<DefinitionRef>>;
+	using Query = ecs::Query<ecs::Write<ProjectileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>, ecs::Optional<DefinitionRef>, ecs::Optional<Health>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<GroundHeight>, ecs::Read<WeaponCatalog>, ecs::Read<Relationships>,
 		ecs::Write<Detonations>, ecs::Write<GarrisonHits>>;
 
@@ -48,7 +49,15 @@ struct ProjectileFlightSystem
 		auto flights = chunk.Get<ProjectileFlight>();
 		auto transforms = chunk.Get<Transform>();
 		auto attitudes = chunk.Get<Attitude>();
+		const auto bodies = chunk.Get<Health>();
 		const auto entities = chunk.Entities();
+		// Gone off: DetonateCallsKill with a body keeps it for the impact to kill (its die modules run); else it is taken away.
+		const auto spent = [&](std::size_t row, const ProjectileFlight &flight) {
+			if (flight.arc.callsKill != 0 && !bodies.empty())
+				context.Commands().Remove<ProjectileFlight>(entities[row]);
+			else
+				context.Commands().Destroy(entities[row]);
+		};
 		for (std::size_t row = 0; row < flights.size(); ++row)
 		{
 			ProjectileFlight &flight = flights[row];
@@ -60,7 +69,7 @@ struct ProjectileFlightSystem
 				landed.aim = transforms[row].position;
 				landed.carrier = entities[row];
 				detonated.push_back(landed);
-				context.Commands().Destroy(entities[row]);
+				spent(row, flight);
 				continue;
 			}
 			// FlightPathAdjustDistPerSecond: the end moves toward where the victim is now, then the path is recalculated.
@@ -115,7 +124,10 @@ struct ProjectileFlightSystem
 						definitions.empty() ? 0xFFFFFFFFu : definitions[row].index});
 				else
 					detonated.push_back(landed);
-				context.Commands().Destroy(entities[row]);
+				if (flight.arc.garrisonHitKill > 0 && (other->classes & target_class::Structure) != 0)
+					context.Commands().Destroy(entities[row]);
+				else
+					spent(row, flight);
 			}
 		}
 	}

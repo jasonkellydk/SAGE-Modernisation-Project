@@ -8,6 +8,7 @@ import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.containment.algorithms.garrisons;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.team_member;
 import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.containment.components.cargo_size;
 import engine.gameplay.rts.death.components.dying;
@@ -15,7 +16,9 @@ import engine.ecs.query.query;
 
 // TransportContain::update's first pass (createPayload), as the tick starts: a transport not yet carrying its
 // InitialPayload makes that many of it on its player's default team and puts each inside as it fits (isValidContainerFor
-// with room: addToContain, without its load sounds); one that does not fit stays outside where it was made. A transport already gone or dying makes none (the TheSuperHackers fix: not for a destroyed object).
+// with room: addToContain, without its load sounds); one that does not fit stays outside where it was made. An
+// OverlordContain's PayloadTemplateName (OverlordContain::onObjectCreated -> createPayload: an Avenger's laser turret) is
+// made the same way on the carrier's own team, before anything else acts on the carrier. A transport already gone or dying makes none (the TheSuperHackers fix: not for a destroyed object).
 export namespace generalszh::gameplay
 {
 inline void CreateInitialPayloads(GameWorld &game)
@@ -36,7 +39,9 @@ inline void CreateInitialPayloads(GameWorld &game)
 		if (!world.IsAlive(transport) || world.Has<gp::Dying>(transport) || world.Get<gp::Transport>(transport) == nullptr)
 			continue;
 		const auto *owner = world.Get<gp::Owner>(transport);
-		const auto team = owner != nullptr ? game.roster.DefaultTeam(owner->player) : std::nullopt;
+		const auto *member = world.Get<gp::TeamMember>(transport);
+		const auto team = payload.ownTeam != 0 ? (member != nullptr ? std::optional<std::uint32_t>(member->team) : std::nullopt)
+			: owner != nullptr ? game.roster.DefaultTeam(owner->player) : std::nullopt;
 		if (!team)
 			continue;
 		const gp::Transform at = *world.Get<gp::Transform>(transport);
@@ -46,6 +51,13 @@ inline void CreateInitialPayloads(GameWorld &game)
 			const ecs::Entity rider = SpawnObject(game, name, at.position.XY(), at.facing, *team, {});
 			if (!world.IsAlive(rider))
 				continue;
+			// OverlordContain::createPayload: isValidContainerFor then addToContain (a portable structure mounts on top);
+			// refused, it stays where it was made.
+			if (payload.ownTeam != 0)
+			{
+				ContainInSource(game, transport, rider);
+				continue;
+			}
 			const auto *size = world.Get<gp::CargoSize>(rider);
 			const std::uint32_t slots = size != nullptr ? size->slots : 0u;
 			const gp::Transport *room = world.Get<gp::Transport>(transport);

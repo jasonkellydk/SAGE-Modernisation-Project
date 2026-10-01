@@ -27,6 +27,9 @@ import engine.gameplay.rts.upgrades.resources.player_upgrades;
 import engine.gameplay.rts.harvesting.components.resource_store;
 import engine.gameplay.rts.docking.components.dock;
 import engine.gameplay.rts.docking.components.docking;
+import engine.gameplay.rts.docking.components.dock_look;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
 import engine.ecs.query.query;
 import engine.gameplay.rts.match.systems.victory_system;
 import games.generalszh.gameplay.ai.resources.ai_players;
@@ -49,6 +52,11 @@ import engine.gameplay.rts.vision.systems.vision_system;
 import engine.gameplay.rts.construction.components.builder;
 import games.generalszh.session.script_bridge;
 import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import games.generalszh.gameplay.world.resources.map_scenery;
+import games.generalszh.gameplay.construction.algorithms.building;
+import games.generalszh.gameplay.scripts.algorithms.value_groups;
+import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.rts.vision.resources.shroud_map;
 
 // Skirmish and LAN games' starts, apart from the shell map's tests (one module
 // set per translation unit keeps within the compiler's source-location limit).
@@ -202,6 +210,85 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_starts_each_player_at_its_spot)
 	BOOST_TEST_MESSAGE("dozer route: " << (route ? int(route->count) : -1) << " points, next " << (route ? int(route->next) : -1) << ", complete "
 		<< (route ? route->complete : false));
 	BOOST_TEST((Engine::Math::Distance(game.TransformOf(dozer)->position.XY(), to) < Engine::Math::Fixed::FromInt(10)));
+}
+
+// GameLogic.cpp populateRandomSideAndColor and startNewGame's side dictionaries: a chosen colour is kept; each random
+// one is drawn again until no slot has it (GameInfo::isColorTaken), slot by slot, so no two players share a colour;
+// each side gets its MultiplayerColor's day and night RGB as playerColor / playerNightColor (Player::initFromDict ORs
+// 0xff000000). The same seed resolves the same colours; without Multiplayer.ini's colours none are set (as before).
+// The match made from them runs alike on 1 and 4 workers and restores from a checkpoint exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_resolves_random_house_colours_without_sharing)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto &colors = shell.game.multiplayer.colors;
+	BOOST_TEST_REQUIRE(colors.size() == 8u);
+	session::setup::GameSetup setup;
+	setup.seed = 4321;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].color = 2;
+	setup.slots[0].startPos = 0;
+	for (std::size_t slot = 1; slot < 4; ++slot)
+		setup.slots[slot].SetState(session::setup::SlotState::HardAI);
+	const auto colorOf = [](const session::setup::SkirmishLevel &level, std::string_view player, std::string_view key) {
+		for (const auto &side : level.level.scenario.participants)
+			if (side.properties.Get<std::string>("playerName").value_or("") == player)
+				return side.properties.Get<std::int64_t>(key);
+		return std::optional<std::int64_t>{};
+	};
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, nullptr, &colors);
+	BOOST_TEST_REQUIRE(skirmish.players.size() == 4u);
+	std::set<int> used;
+	for (const auto &player : skirmish.players)
+	{
+		BOOST_TEST_MESSAGE(player.name << " colour " << player.color);
+		BOOST_TEST(player.color >= 0);
+		BOOST_TEST(player.color < 8);
+		used.insert(player.color);
+		const auto &house = colors[static_cast<std::size_t>(player.color)];
+		const auto day = 0xFF000000ll | (std::int64_t{house.day.r} << 16) | (std::int64_t{house.day.g} << 8) | house.day.b;
+		const auto night = 0xFF000000ll | (std::int64_t{house.night.r} << 16) | (std::int64_t{house.night.g} << 8) | house.night.b;
+		BOOST_TEST((colorOf(skirmish, player.name, "playerColor") == day));
+		BOOST_TEST((colorOf(skirmish, player.name, "playerNightColor") == night));
+	}
+	BOOST_TEST(skirmish.players[0].color == 2);
+	BOOST_TEST(used.size() == 4u);
+	const auto again = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, nullptr, &colors);
+	for (std::size_t index = 0; index < 4; ++index)
+	{
+		BOOST_TEST(again.players[index].color == skirmish.players[index].color);
+		BOOST_TEST(again.players[index].playerTemplate == skirmish.players[index].playerTemplate);
+	}
+	// Colours come from their own draws: the sides and spots are those of the same setup without colours.
+	const auto plain = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	for (std::size_t index = 0; index < 4; ++index)
+	{
+		BOOST_TEST(plain.players[index].playerTemplate == skirmish.players[index].playerTemplate);
+		BOOST_TEST(plain.players[index].startPosition == skirmish.players[index].startPosition);
+		BOOST_TEST(!colorOf(plain, plain.players[index].name, "playerColor").has_value());
+	}
+
+	session::SessionOptions options{77, 1, {}, {"player0"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	session::SessionOptions wide = options;
+	wide.workers = 4;
+	session::Session game4(skirmish.level, shell.game, wide);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game.Tick();
+		game4.Tick();
+	}
+	BOOST_TEST(game.StateHash() == game4.StateHash());
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
 }
 
 // The supply economy on real data (SupplyTruckAIUpdate, SupplyWarehouseDockUpdate, SupplyCenterDockUpdate): a China
@@ -408,7 +495,9 @@ BOOST_AUTO_TEST_CASE(supply_rounds_are_deterministic_and_checkpoint_exactly)
 // WorkerAIUpdate carries supplies as a supply truck does (MaxBoxes 1, SupplyWarehouseActionDelay 150 ms and
 // SupplyCenterActionDelay 150 ms: 5 frames each): a GLA worker told to harvest brings one box to its supply stash at
 // ValuePerSupplyBox (75); once its player has Upgrade_GLAWorkerShoes, each delivery brings its UpgradedSupplyBoost (8)
-// more (getUpgradedSupplyBoostValue: 8 x 1 box / 1).
+// more (getUpgradedSupplyBoostValue: 8 x 1 box / 1). DockUpdate::update on the supply dock (KINDOF_SUPPLY_SOURCE): the
+// worker (DOZER and HARVESTER) shows no MOVING while DOCKING_BEGINNING there, its pick-up instead of its walk; at its
+// stash (no supply source) it walks in as it moves.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
 {
 	Install &shell = Data();
@@ -462,12 +551,27 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
 	const auto &money = world.Resource<engine::gameplay::PlayerMoney>();
 	std::int64_t before = money.Balance(gla);
 	int ticks = 0;
+	namespace mc = generalszh::content::model_condition;
+	int beginningAtDock = 0, movingWhileBeginningAtDock = 0, movingWhileBeginningAtStash = 0;
 	while (money.Balance(gla) == before && ticks < 3000)
 	{
 		game.Tick();
 		++ticks;
+		const auto &look = *world.Get<engine::gameplay::Appearance>(worker);
+		if (!look.Test(mc::DockingBeginning))
+			continue;
+		if (world.Get<engine::gameplay::Harvester>(worker)->boxes == 0) // on its way in to pick up
+		{
+			++beginningAtDock;
+			movingWhileBeginningAtDock += look.Test(mc::Moving) ? 1 : 0;
+		}
+		else // carrying its box in to the stash
+			movingWhileBeginningAtStash += look.Test(mc::Moving) ? 1 : 0;
 	}
 	BOOST_TEST(money.Balance(gla) - before == 75);
+	BOOST_TEST(beginningAtDock > 0);
+	BOOST_TEST(movingWhileBeginningAtDock == 0);
+	BOOST_TEST(movingWhileBeginningAtStash > 0);
 	world.Resource<engine::gameplay::PlayerUpgrades>().Grant(gla, *shell.game.upgrades.Find("Upgrade_GLAWorkerShoes"));
 	before = money.Balance(gla);
 	while (money.Balance(gla) == before && ticks < 6000)
@@ -480,6 +584,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
 
 // ChinookAIUpdate is a SupplyTruckAIUpdate that flies: told to harvest, a supply Chinook brings its full load to its
 // supply centre at ValuePerSupplyBox (75) each, and its UpgradedSupplyBoost more once its player has Supply Lines.
+// The supply centre itself shows the docking (DockUpdate onEnterReached / onDockReached / onExitReached on `me`): DOCKING
+// and DOCKING_BEGINNING as the Chinook reaches its entry, DOCKING and DOCKING_ACTIVE (its "arm box" animation) at its
+// action point, then DOCKING_ENDING alone once it is out, kept after.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_chinook_ferries_supplies)
 {
 	Install &shell = Data();
@@ -521,7 +628,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_chinook_ferries_supplies)
 			start = marker.position.XY();
 	using Engine::Math::Fixed;
 	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
-	game.Place("AmericaSupplyCenter", at(0, -180), {}, team);
+	const ecs::Entity center = game.Place("AmericaSupplyCenter", at(0, -180), {}, team);
 	game.Place("SupplyDock", at(-200, -180), {}, team);
 	const ecs::Entity worker = game.Place("AmericaVehicleChinook", at(-100, -120), {}, team);
 	auto *harvester = world.Get<engine::gameplay::Harvester>(worker);
@@ -534,13 +641,31 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_chinook_ferries_supplies)
 	const auto &money = world.Resource<engine::gameplay::PlayerMoney>();
 	std::int64_t before = money.Balance(usa);
 	int ticks = 0;
+	namespace dl = engine::gameplay::dock_look;
+	BOOST_TEST_REQUIRE(world.Get<engine::gameplay::DockLook>(center) != nullptr);
+	std::vector<std::uint8_t> shown{world.Get<engine::gameplay::DockLook>(center)->flags};
+	bool activeLook = false;
+	const auto watch = [&] {
+		const std::uint8_t now = world.Get<engine::gameplay::DockLook>(center)->flags;
+		if (now != shown.back())
+			shown.push_back(now);
+		activeLook = activeLook || world.Get<engine::gameplay::Appearance>(center)->Test(generalszh::content::model_condition::DockingActive);
+	};
 	while (money.Balance(usa) == before && ticks < 3000)
 	{
 		game.Tick();
+		watch();
 		++ticks;
 	}
 	BOOST_TEST_MESSAGE("first delivery after " << ticks << " ticks");
 	BOOST_TEST(money.Balance(usa) - before == full);
+	for (int tick = 0; tick < 300 && shown.back() != dl::Ending; ++tick)
+	{
+		game.Tick();
+		watch();
+	}
+	BOOST_TEST((shown == std::vector<std::uint8_t>{0, dl::Docking | dl::Beginning, dl::Docking | dl::Active, dl::Ending}));
+	BOOST_TEST(activeLook);
 	world.Resource<engine::gameplay::PlayerUpgrades>().Grant(usa, *shell.game.upgrades.Find("Upgrade_AmericaSupplyLines"));
 	before = money.Balance(usa);
 	while (money.Balance(usa) == before && ticks < 6000)
@@ -1766,10 +1891,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_starting_objects_clear_their_own_shroud)
 			++lookers;
 			const auto &at = transforms[row].position;
 			BOOST_TEST((shroud.StatusAt(owner, at.x, at.y) == engine::gameplay::CellShroud::Clear));
-			BOOST_TEST((shroud.StatusAt(owner == us ? them : us, at.x, at.y) == engine::gameplay::CellShroud::Shrouded));
+			// GameLogic::startNewGame: a seat's player sees the whole map fogged at once (revealMapForPlayer; Multiplayer.ini
+			// UseShroud = No): the other's base is fog to it, not black.
+			BOOST_TEST((shroud.StatusAt(owner == us ? them : us, at.x, at.y) == engine::gameplay::CellShroud::Fogged));
 		}
 	});
 	BOOST_TEST(lookers >= 4u); // a command centre and a dozer (or worker) each
+	// Nobody looks at the map's corner: fogged for both seats (explored), not shrouded.
+	BOOST_TEST((shroud.Status(us, 0, 0) == engine::gameplay::CellShroud::Fogged));
+	BOOST_TEST((shroud.Status(them, 0, 0) == engine::gameplay::CellShroud::Fogged));
 	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
 	BOOST_TEST_REQUIRE(restored != nullptr);
 	BOOST_TEST(restored->StateHash() == game.StateHash());
@@ -1816,6 +1946,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_script_shroud_actions)
 	using engine::gameplay::CellShroud;
 	session::ScriptBridge bridge(game.Game());
 	using MapShroud = generalszh::scripting::PlayerScriptHost::MapShroud;
+	// A skirmish starts with the map fogged for its seats (startNewGame's revealMapForPlayer); the script shrouds it
+	// first (doShroudMapEntire), then reveals it (doRevealMapEntire).
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
+	bridge.ShroudEntireMap(std::nullopt, MapShroud::ShroudAll);
 	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Shrouded));
 	bridge.ShroudEntireMap(std::nullopt, MapShroud::RevealAll);
 	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
@@ -2015,6 +2149,276 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_surrender_hands_everything_to_an_ally_else_
 	for (const ecs::Entity entity : seconds)
 		BOOST_TEST((!world.IsAlive(entity) || world.Has<engine::gameplay::Dying>(entity)));
 	BOOST_TEST(money.Balance(second) == secondMoney + firstMoney); // killPlayer takes no money
+}
+
+// The kill-all-enemies cheat (MSG_META_DEMO_KILL_ALL_ENEMIES, a debug build's) on a skirmish against an easy AI:
+// everything of the AI dies on the tick it is applied, and at that tick's end VictoryConditions::update looks at what
+// stands. America's command centre leaves nothing: the AI is defeated, the human's is the single alliance left and has
+// won. GLA's leaves a hole that counts for victory (KINDOF_MP_COUNT_FOR_VICTORY, as legacy_parity_a_gla_structure_
+// leaves_a_hole_that_rebuilds_it): the match goes on until the cheat kills the hole too.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_kill_all_enemies_cheat_ends_a_skirmish_once_nothing_counted_stands)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	// The number of cheats it takes until the match is over (0: not over after three).
+	const auto killsToWin = [&](std::string_view enemy) {
+		session::setup::GameSetup setup;
+		setup.seed = 7;
+		setup.startingCash = 10000;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Human");
+		setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+		setup.slots[1].playerTemplate = templateOf(enemy);
+		setup.slots[1].startPos = 1;
+		const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 2);
+		session::SessionOptions options{7, 1, {}, {"player0"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		session::Session game(skirmish.level, shell.game, options);
+		const std::uint32_t human = *game.Teams().FindPlayer("player0");
+		const std::uint32_t computer = *game.Teams().FindPlayer("player1");
+		for (int tick = 0; tick < 60; ++tick)
+			game.Tick();
+		const auto &outcome = game.World().Resource<engine::gameplay::MatchOutcome>();
+		BOOST_TEST_REQUIRE(outcome.enabled);
+		BOOST_TEST(!outcome.singleAllianceRemaining);
+		auto kill = commands::Encode(commands::KillAllEnemies{});
+		kill.player = 0;
+		for (int kills = 1; kills <= 3; ++kills)
+		{
+			game.Tick(std::span(&kill, 1));
+			if (outcome.singleAllianceRemaining)
+			{
+				BOOST_TEST(outcome.Eliminated(computer));
+				BOOST_TEST(!outcome.Eliminated(human));
+				BOOST_TEST(outcome.HasWon(human));
+				BOOST_TEST(outcome.endTick == game.CurrentTick());
+				return kills;
+			}
+			BOOST_TEST(!outcome.Eliminated(computer));
+			for (int tick = 0; tick < 5; ++tick)
+				game.Tick();
+		}
+		return 0;
+	};
+	BOOST_TEST(killsToWin("FactionAmerica") == 1);
+	BOOST_TEST(killsToWin("FactionGLA") == 2);
+}
+
+// Legacy parity (GameLogic.cpp GameLogic::startNewGame and createOptimizedTree, W3DTerrainVisual::addProp,
+// BuildAssistant::clearRemovableForConstruction): an OPTIMIZED_TREE is never a logic object (the client's tree buffer
+// keeps it), nor a PROP; fluff (CLEARED_BY_BUILD with no FenceWidth) only while fluff is forced to props; shrubbery
+// is not placed at all while trees are off. Twilight Flame places 320 dogwoods (TreeDogwood1/3/4/8): none is in the
+// game. A structure placed (buildObjectNow) tells the client its footprint to clear the scenery under it.
+BOOST_AUTO_TEST_CASE(legacy_parity_map_trees_and_props_are_the_clients_alone)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	using gameplay::MapObjectRole;
+	const auto role = [&](std::string_view name, gameplay::MapSceneryRules rules) {
+		const auto *object = shell.game.objects.Find(name);
+		BOOST_TEST_REQUIRE(object != nullptr);
+		return gameplay::MapObjectRoleOf(*object, rules);
+	};
+	const gameplay::MapSceneryRules high{true, false}, low{true, true}, noTrees{false, false};
+	BOOST_TEST((role("TreeDogwood8", high) == MapObjectRole::Tree));
+	BOOST_TEST((role("TreeDogwood8", noTrees) == MapObjectRole::Skipped));
+	BOOST_TEST((role("DesertShrub09", high) == MapObjectRole::Prop));
+	BOOST_TEST((role("GenericTree", noTrees) == MapObjectRole::Skipped));
+	BOOST_TEST((role("GenericTree", high) == MapObjectRole::Object));
+	BOOST_TEST((role("StreetLamp", high) == MapObjectRole::Object));
+	BOOST_TEST((role("StreetLamp", low) == MapObjectRole::Prop));
+	BOOST_TEST((role("ChainLinkFence01", low) == MapObjectRole::Object));
+	BOOST_TEST((role("AmericaCommandCenter", low) == MapObjectRole::Object));
+
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::size_t trees = 0;
+	for (const auto &placement : read->level.placements)
+		if (const auto *object = shell.game.objects.Find(placement.type); object != nullptr && gameplay::MapObjectRoleOf(*object, high) == MapObjectRole::Tree)
+			++trees;
+	BOOST_TEST(trees == 320u);
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	std::size_t placedTrees = 0;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && shell.game.objects.Find(game.DefinitionName(ref->index)) != nullptr &&
+			shell.game.objects.Find(game.DefinitionName(ref->index))->Is("OPTIMIZED_TREE"))
+			++placedTrees;
+	});
+	BOOST_TEST(placedTrees == 0u);
+	BOOST_TEST(game.World().Resource<gameplay::MapSceneryRules>().useTrees);
+	BOOST_TEST(!game.World().Resource<gameplay::MapSceneryRules>().forceFluffToProp);
+
+	// A power plant placed by a dozer: its footprint is the client's to clear.
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {},
+		*game.Teams().FindTeam(skirmish.players[0].team));
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const Engine::Math::FixedVector2 at{Engine::Math::Fixed::FromInt(340), Engine::Math::Fixed::FromInt(300)};
+	gameplay::BeginConstruction(game.Game(), dozer, "AmericaPowerPlant", at, Engine::Math::TurnAngle{});
+	const auto &clearings = game.World().Resource<gameplay::SceneryClearings>().list;
+	BOOST_TEST_REQUIRE(clearings.size() == 1u);
+	BOOST_TEST((clearings[0].at == at));
+	const auto *plant = shell.game.objects.Find("AmericaPowerPlant");
+	BOOST_TEST((clearings[0].footprint.major == plant->geometry.majorRadius));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Resource<gameplay::SceneryClearings>().list.size() == 1u);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+	// The same game on four workers ends in the same state.
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const ecs::Entity fourDozer = four.Place("AmericaVehicleDozer", {Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {},
+		*four.Teams().FindTeam(skirmish.players[0].team));
+	gameplay::BeginConstruction(four.Game(), fourDozer, "AmericaPowerPlant", at, Engine::Math::TurnAngle{});
+	for (int tick = 0; tick < 30; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ScriptActions.cpp doSkirmishAttackNearestGroupWithValue; PartitionManager.cpp getNearestGroupWithValue,
+// cellValueProc, iterateCellsBreadthFirst, doValueAffect / hLineAddValue; Object.cpp addValue): on Twilight Flame the
+// human's Crusader team is told to attack the nearest enemy group worth more than 1000. The GLA's command centre is
+// worth its BuildCost at its own cell (a share of 1) and less further out; the walk from the team's centre stops at
+// the first cell above 1000, whose corner the Crusader attack-moves to. A value of 0 (the original's "greater" flag
+// off: below 0 asked) or a LESS_THAN comparison orders nothing. One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_attacks_the_nearest_group_worth_more_than_a_value)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session game(skirmish.level, shell.game, options);
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const std::string teamName = skirmish.players[0].team;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	const FixedVector2 spot{start.x + Fixed::FromInt(80), start.y};
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", spot, {}, *game.Teams().FindTeam(teamName));
+	four.Place("AmericaTankCrusader", spot, {}, *four.Teams().FindTeam(teamName));
+	game.Tick();
+	four.Tick();
+	(void)america;
+
+	// The GLA's values: its command centre's cell holds at least its cost.
+	const auto &shroud = game.World().Resource<engine::gameplay::ShroudMap>();
+	const auto values = gameplay::CellCashValues(game.Game(), std::uint64_t{1} << gla);
+	ecs::Entity center;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && game.DefinitionName(ref->index) == "GLACommandCenter")
+			center = object.entity;
+	});
+	BOOST_TEST_REQUIRE((center != ecs::Entity{}));
+	const auto ccCell = shroud.CellOf(game.TransformOf(center)->position.x, game.TransformOf(center)->position.y);
+	const std::int64_t cost = shell.game.objects.Find("GLACommandCenter")->buildCost;
+	BOOST_TEST(values[static_cast<std::size_t>(ccCell[1] * shroud.CellsX() + ccCell[0])] >= cost);
+
+	// Nothing for a value of 0 or a LESS_THAN.
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 4, 0);
+	BOOST_TEST(!game.World().Has<engine::gameplay::AttackMove>(tank));
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 0, 1000);
+	BOOST_TEST(!game.World().Has<engine::gameplay::AttackMove>(tank));
+
+	const auto place = gameplay::NearestCellWithValue(game.Game(), game.Teams().TeamAt(*game.Teams().FindTeam(teamName)).owner, spot, 1000);
+	BOOST_TEST_REQUIRE(place.has_value());
+	const auto placeCell = shroud.CellOf(place->x, place->y);
+	BOOST_TEST(values[static_cast<std::size_t>(placeCell[1] * shroud.CellsX() + placeCell[0])] > 1000);
+	BOOST_TEST((place->x == shroud.CellSize() * Fixed::FromInt(placeCell[0])));
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 4, 1000);
+	gameplay::SkirmishAttackNearestGroupWithValue(four.Game(), teamName, 4, 1000);
+	BOOST_TEST_REQUIRE(game.World().Has<engine::gameplay::AttackMove>(tank));
+	BOOST_TEST((game.World().Get<engine::gameplay::AttackMove>(tank)->destination == *place));
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

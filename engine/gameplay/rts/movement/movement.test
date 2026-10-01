@@ -245,9 +245,11 @@ Run Simulate(std::size_t workers, std::size_t units, int ticks, bool exact = fal
 	world.RegisterComponent<Locomotion>();
 	world.RegisterComponent<MoveOrder>();
 	world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 	world.RegisterComponent<WanderAnchor>();
 	world.RegisterComponent<DefinitionRef>();
 	world.RegisterComponent<Descent>();
+	world.RegisterComponent<FloorLift>();
 	world.RegisterComponent<OffMap>();
 	world.FinalizeComponents();
 	std::vector<ecs::Entity> entities;
@@ -396,6 +398,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_produced_unit_follows_its_exit_path)
 	world.RegisterComponent<MovePath>();
 	world.RegisterComponent<MoveOrder>();
 	world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
 	world.RegisterComponent<WanderAnchor>();
 	world.FinalizeComponents();
 	const Engine::Math::FixedVector2 rally{Fixed::FromInt(10), Fixed{}}, home{Fixed::FromInt(500), Fixed::FromInt(500)};

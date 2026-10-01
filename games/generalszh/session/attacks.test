@@ -11,11 +11,17 @@
 #include <string>
 #include <vector>
 
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import engine.gameplay.rts.stealth.components.stealth_rider;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import engine.gameplay.rts.combat.components.aggression;
 import games.generalszh.session.session;
 import games.generalszh.commands.game_commands;
 import games.generalszh.gameplay.combat.components.cleanup_hazard;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.common.spatial.resources.spatial_index;
+import engine.gameplay.common.identity.resources.relationships;
 import engine.gameplay.rts.stealth.components.undetected_defector;
 import engine.gameplay.common.identity.components.team_member;
 import games.generalszh.gameplay.powers.components.spy_vision;
@@ -25,6 +31,7 @@ import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.common.identity.components.definition_ref;
 import games.generalszh.content.objects.model_conditions;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.gameplay.orders.algorithms.command_buttons;
 import games.generalszh.gameplay.powers.algorithms.special_power_launch;
 import games.generalszh.content.powers.special_powers;
 import games.generalszh.content.install.install_mount;
@@ -38,6 +45,12 @@ import engine.gameplay.rts.combat.components.countermeasures;
 import engine.gameplay.common.identity.components.producer;
 import engine.gameplay.common.lifetime.components.lifetime;
 import engine.gameplay.common.weapons.components.weapon_slots;
+import engine.gameplay.rts.combat.components.projectile;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.rts.stealth.components.stealth_detector;
+import engine.gameplay.rts.mines.components.minefield;
+import games.generalszh.gameplay.effects.resources.effect_cues;
 import games.generalszh.gameplay.combat.components.cooldown_creation;
 import engine.gameplay.rts.combat.components.deploy;
 import games.generalszh.gameplay.powers.components.launcher_door;
@@ -47,11 +60,16 @@ import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import engine.gameplay.common.identity.components.owner;
 import games.generalszh.gameplay.orders.algorithms.command_application;
 import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.healing.components.healing;
 import engine.gameplay.common.physics.components.physics_body;
 import Engine.Core.Math.FixedPresentation;
 import engine.gameplay.rts.combat.components.neutron_flight;
 import engine.gameplay.rts.death.components.dying;
 import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.effects.components.radius_decal;
+import games.generalszh.gameplay.effects.resources.radius_decal_looks;
+import engine.gameplay.rts.delivery.components.delivery;
+import engine.gameplay.rts.combat.algorithms.attack_goal;
 import engine.gameplay.rts.combat.resources.garrison_kills;
 import games.generalszh.content.containment.transport_content;
 import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
@@ -552,6 +570,366 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_weapon_button_fires_its_slot_at_the_sp
 	BOOST_TEST(world.Get<gp::AttackTarget>(tank)->atPosition == 1);
 }
 
+// Object::doCommandButton / doCommandButtonAtObject / doCommandButtonAtPosition from a script (CMD_FROM_SCRIPT), their
+// FIRE_WEAPON, ATTACK_MOVE and SPECIAL_POWER branches: a bomb truck's Command_BombTruckDetonateNow (FIRE_WEAPON, PRIMARY,
+// no target) locks its primary slot for now and attacks its own spot, no shot limit; a Dragon tank's
+// Command_ChinaDragonTankFireWall (SECONDARY, NEED_TARGET_POS) at a spot locks its secondary and attacks the spot, and
+// with no position does nothing; an ECM tank's Command_ChinaTankECMDisableVehicle (NEED_TARGET_ENEMY_OBJECT) attacks an
+// enemy vehicle but not an ally's; Command_AttackMove at a spot attack-moves there.
+BOOST_AUTO_TEST_CASE(legacy_parity_script_command_buttons_fire_weapons_and_attack_move)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	const auto china = *game.Teams().FindTeam("teamPlyrChina");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	auto &world = game.World();
+	const auto &buttons = shell.game.commands;
+	const auto *detonate = buttons.Button("Command_BombTruckDetonateNow");
+	const auto *fireWall = buttons.Button("Command_ChinaDragonTankFireWall");
+	const auto *ecm = buttons.Button("Command_ChinaTankECMDisableVehicle");
+	const auto *attackMove = buttons.Button("Command_AttackMove");
+	BOOST_TEST_REQUIRE((detonate != nullptr && fireWall != nullptr && ecm != nullptr && attackMove != nullptr));
+	const ecs::Entity truck = game.Place("GLAVehicleBombTruck", centre, {}, gla);
+	gameplay::DoCommandButton(game.Game(), truck, *detonate);
+	// (One weapon and no slots to choose from: its lock is its only weapon.)
+	if (const auto *slots = world.Get<gp::WeaponSlots>(truck))
+	{
+		BOOST_TEST(slots->locked == 0);
+		BOOST_TEST(slots->temporary == 1);
+	}
+	const auto &blast = *world.Get<gp::AttackTarget>(truck);
+	BOOST_TEST(blast.atPosition == 1);
+	BOOST_TEST(blast.shotsLeft == 0u);
+	BOOST_TEST((blast.position.XY() == centre));
+	const ecs::Entity dragon = game.Place("ChinaTankDragon", centre + FixedVector2{Fixed::FromInt(200), Fixed{}}, {}, china);
+	gameplay::DoCommandButton(game.Game(), dragon, *fireWall);
+	BOOST_TEST(world.Get<gp::AttackTarget>(dragon)->atPosition == 0);
+	const FixedVector2 spot = centre + FixedVector2{Fixed::FromInt(220), Fixed::FromInt(20)};
+	gameplay::DoCommandButtonAtPosition(game.Game(), dragon, *fireWall, spot);
+	BOOST_TEST(world.Get<gp::WeaponSlots>(dragon)->locked == 1);
+	BOOST_TEST(world.Get<gp::AttackTarget>(dragon)->atPosition == 1);
+	BOOST_TEST((world.Get<gp::AttackTarget>(dragon)->position.XY() == spot));
+	const ecs::Entity jammer = game.Place("ChinaTankECM", centre + FixedVector2{Fixed{}, Fixed::FromInt(200)}, {}, china);
+	const ecs::Entity ally = game.Place("ChinaTankBattleMaster", centre + FixedVector2{Fixed::FromInt(40), Fixed::FromInt(200)}, {}, china);
+	const ecs::Entity enemy = game.Place("GLATankScorpion", centre + FixedVector2{Fixed::FromInt(80), Fixed::FromInt(200)}, {}, gla);
+	gameplay::DoCommandButtonAtObject(game.Game(), jammer, *ecm, ally);
+	BOOST_TEST((world.Get<gp::AttackTarget>(jammer)->target == ecs::Entity{}));
+	gameplay::DoCommandButtonAtObject(game.Game(), jammer, *ecm, enemy);
+	BOOST_TEST((world.Get<gp::AttackTarget>(jammer)->target == enemy));
+	if (const auto *slots = world.Get<gp::WeaponSlots>(jammer))
+		BOOST_TEST(slots->locked == 0);
+	const FixedVector2 onward = centre + FixedVector2{Fixed::FromInt(-300), Fixed{}};
+	gameplay::DoCommandButtonAtPosition(game.Game(), ally, *attackMove, onward);
+	BOOST_TEST((world.Get<gp::MoveOrder>(ally)->mode != gp::MoveMode::Idle));
+	BOOST_TEST((world.Get<gp::MoveOrder>(ally)->destination == onward));
+}
+
+// DumbProjectileBehavior::detonate with DetonateCallsKill (ScorpionTankShell): the shell, gone off, is killed
+// (DEATH_DETONATED) so its die modules run: with Upgrade_GLAToxinShells its FireWeaponWhenDeadBehavior fires
+// ToxinShellWeapon where it went off, landing the next tick, once per shell (its FireOCL lays the poison field); without the
+// upgrade nothing follows. One and four workers agree; a checkpoint taken mid-fight plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scorpions_toxin_shells_die_and_spill)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](bool upgraded, std::size_t workers, bool restore) {
+		session::Session game(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game.Tick();
+		auto &world = game.World();
+		const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+		const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+		const std::uint32_t player = game.Teams().TeamAt(gla).owner;
+		if (upgraded)
+			world.Resource<gp::PlayerUpgrades>().Grant(player, *shell.game.upgrades.Find("Upgrade_GLAToxinShells"));
+		const auto [low, high] = game.Game().ground.Extent();
+		(void)high;
+		const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+		const ecs::Entity tank = game.Place("GLATankScorpion", at, {}, gla);
+		const ecs::Entity target = game.Place("AmericaTankCrusader", at + FixedVector2{Fixed::FromInt(120), Fixed{}}, {}, america);
+		auto &health = *world.Get<gp::Health>(target);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+		const std::uint32_t toxin = game.Game().templates.Weapon("ToxinShellWeapon");
+		BOOST_TEST_REQUIRE(toxin != gp::WeaponCatalog::None);
+		gameplay::OrderAttack(game.Game(), tank, target);
+		std::vector<std::uint64_t> detonations, spills;
+		std::vector<ecs::Entity> shells;
+		std::unique_ptr<session::Session> restored;
+		for (int tick = 0; tick < 240; ++tick)
+		{
+			game.Tick();
+			if (restored)
+				restored->Tick();
+			world.Resource<gp::Detonations>().ForEach([&](const gp::Shot &shot) {
+				if (shot.source == tank)
+				{
+					detonations.push_back(game.CurrentTick());
+					shells.push_back(shot.carrier);
+				}
+			});
+			for (const gp::Impact &impact : world.Resource<gp::ShotQueue>().Impacts())
+				if (impact.weapon == toxin)
+					spills.push_back(game.CurrentTick());
+			if (restore && tick == 100)
+				restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, workers, {}}, game.Checkpoint());
+		}
+		BOOST_TEST_REQUIRE(detonations.size() >= 2u);
+		for (const ecs::Entity carrier : shells)
+			BOOST_TEST(!world.IsAlive(carrier)); // killed (DestroyDie), not lingering
+		if (upgraded)
+		{
+			BOOST_TEST_REQUIRE(spills.size() == detonations.size());
+			for (std::size_t index = 0; index < spills.size(); ++index)
+				BOOST_TEST(spills[index] == detonations[index] + 1); // FireWeaponWhenDeadBehavior: its weapon lands the next tick
+		}
+		else
+			BOOST_TEST(spills.empty());
+		if (restored)
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+		return game.StateHash();
+	};
+	run(false, 1, false);
+	const auto one = run(true, 1, true);
+	const auto four = run(true, 4, false);
+	BOOST_TEST((one == four));
+}
+
+// Legacy parity (StealthUpdate::disguiseAsObject / update's disguise transition / RevealDistanceFromTarget's
+// markAsDetected; SpecialAbilityUpdate for SpecialAbilityDisguiseAsVehicle; GLAVehicleBombTruck: DisguiseTransitionTime
+// 2000 = 60 frames, DisguiseRevealTransitionTime 1000 = 30, RevealDistanceFromTarget 100): the bomb truck takes an
+// American Humvee's disguise (tick D, when the ability goes off): its look becomes the Humvee's on the 30th frame of the
+// transition (D + 30: factor 1 - 30/60 reaches one half) and the transition ends on the 60th (D + 60). Disguised, an
+// American Crusader beside it does not see an enemy in it. Sent to attack that Crusader, the frame it is within 100 of it
+// (R) the disguise goes (an idle American within its vision range told to look for a target that frame) and its reveal
+// transition starts: its own look back on the 15th frame (R + 15), then off,
+// stealth and detection gone (R + 30). One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bomb_truck_disguises_as_an_enemy_and_is_revealed_close_up)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game.Tick();
+		auto &world = game.World();
+		const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+		const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+		const auto [low, high] = game.Game().ground.Extent();
+		(void)high;
+		const FixedVector2 at = low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(700)};
+		const ecs::Entity truck = game.Place("GLAVehicleBombTruck", at, {}, gla);
+		const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at + FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, america);
+		world.Get<gp::Armament>(humvee)->weapon = gp::WeaponCatalog::None;
+		game.Tick();
+		gameplay::FireSpecialPowerAtObject(game.Game(), truck, "SpecialAbilityDisguiseAsVehicle", humvee, true);
+		const auto stealth = [&] { return *world.Get<gp::Stealth>(truck); };
+		std::uint64_t took = 0, looked = 0, settled = 0;
+		for (int tick = 0; tick < 600 && settled == 0; ++tick)
+		{
+			game.Tick();
+			const gp::Stealth now = stealth();
+			if (took == 0 && now.IsDisguised())
+				took = game.CurrentTick();
+			if (took != 0 && looked == 0 && now.Has(gp::stealth_flag::Disguised))
+				looked = game.CurrentTick();
+			if (looked != 0 && now.transitionLeft == 0)
+				settled = game.CurrentTick();
+		}
+		BOOST_TEST_REQUIRE(took != 0u);
+		BOOST_TEST(looked == took + 30);
+		BOOST_TEST(settled == took + 60);
+		BOOST_TEST(stealth().Has(gp::stealth_flag::Stealthed));
+		// Seen by the Americans as one of theirs: never their enemy to target.
+		const ecs::Entity crusader = game.Place("AmericaTankCrusader", at + FixedVector2{Fixed::FromInt(250), Fixed{}}, {}, america);
+		for (int tick = 0; tick < 90; ++tick)
+		{
+			game.Tick();
+			BOOST_TEST((world.Get<gp::AttackTarget>(crusader)->target != truck));
+		}
+		world.Get<gp::Armament>(crusader)->weapon = gp::WeaponCatalog::None;
+		gameplay::OrderAttack(game.Game(), truck, crusader);
+		std::uint64_t revealed = 0, back = 0, off = 0;
+		for (int tick = 0; tick < 900 && off == 0; ++tick)
+		{
+			game.Tick();
+			if (!world.IsAlive(truck))
+				break;
+			const gp::Stealth now = stealth();
+			if (revealed == 0 && !now.IsDisguised())
+			{
+				revealed = game.CurrentTick();
+				const FixedVector2 gap = world.Get<gp::Transform>(truck)->position.XY() - world.Get<gp::Transform>(crusader)->position.XY();
+				BOOST_TEST((Engine::Math::Length(gap) <= Fixed::FromInt(100)));
+				// OrderIdleEnemiesToAttackMeUponReveal: the idle Humvee within its vision looks for a target that very frame.
+				BOOST_TEST(world.Get<gp::Aggression>(humvee)->nextScan == revealed);
+			}
+			if (revealed != 0 && back == 0 && !now.Has(gp::stealth_flag::Disguised))
+				back = game.CurrentTick();
+			if (revealed != 0 && off == 0 && now.Has(gp::stealth_flag::Off))
+			{
+				off = game.CurrentTick();
+				BOOST_TEST(!now.Has(gp::stealth_flag::Stealthed));
+				BOOST_TEST(!now.Has(gp::stealth_flag::Detected));
+			}
+		}
+		BOOST_TEST_REQUIRE(revealed != 0u);
+		BOOST_TEST(back == revealed + 15);
+		BOOST_TEST(off == revealed + 30);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (StealthUpdate.cpp: the constructor's m_stealthAllowedFrame = frame + its own StealthDelay;
+// StealthUpdate::update / calcStealthOwner / allowedToStealth with UseRiderStealth; GLAVehicleCombatBike's StealthUpdate
+// UseRiderStealth Yes, no StealthDelay of its own): a Combat Bike stealths only by its first rider's rules. With a GLA
+// Worker aboard (no StealthUpdate, so no OBJECT_STATUS_CAN_STEALTH) it never stealths; with Jarmen Kell aboard
+// (InnateStealth, StealthDelay 2000) it stealths on its first update after he gets on (the tick after boarding): the
+// bike's own allowed frame (its creation frame, having no delay of its own) is already due, and his delay only restarts
+// it on a frame the bike is not allowed to stealth. Both are placed where no enemy is within 400, so nothing attacks,
+// damages or detects them. One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_combat_bike_stealths_only_by_its_riders_rules)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game.Tick();
+		auto &world = game.World();
+		const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+		const std::uint32_t glaPlayer = game.Teams().TeamAt(gla).owner;
+		const auto [low, high] = game.Game().ground.Extent();
+		// The spot farthest from every enemy of the GLA (clear of their bodies by at least 400): the shell map's battle
+		// leaves no stretch without its allies.
+		const std::int64_t wide = (high.x - low.x).Floor(), deep = (high.y - low.y).Floor();
+		std::int64_t clearest = 0;
+		FixedVector2 at{};
+		for (std::int64_t x = 100; x + 100 < wide; x += 50)
+			for (std::int64_t y = 100; y + 100 < deep; y += 50)
+			{
+				const FixedVector2 spot = low + FixedVector2{Fixed::FromInt(x), Fixed::FromInt(y)};
+				std::int64_t clear = wide + deep;
+				for (const gp::SpatialEntry &entry : world.Resource<gp::SpatialIndex>().Entries())
+					if (world.Resource<gp::Relationships>().Between(gla, glaPlayer, entry.team, entry.player) == gp::Relationship::Enemies)
+						clear = (std::min)(clear, (Engine::Math::Length(entry.position.XY() - spot) - entry.radius).Floor());
+				if (clear > clearest)
+				{
+					clearest = clear;
+					at = spot;
+				}
+			}
+		BOOST_TEST_REQUIRE(clearest >= 400);
+		const ecs::Entity plain = game.Place("GLAVehicleCombatBike", at, {}, gla);
+		const ecs::Entity worker = game.Place("GLAInfantryWorker", at, {}, gla);
+		gameplay::PutInside(game.Game(), plain, worker);
+		const ecs::Entity hero = game.Place("GLAVehicleCombatBike", at + FixedVector2{Fixed::FromInt(80), Fixed{}}, {}, gla);
+		const ecs::Entity jarmen = game.Place("GLAInfantryJarmenKell", at + FixedVector2{Fixed::FromInt(80), Fixed{}}, {}, gla);
+		gameplay::PutInside(game.Game(), hero, jarmen);
+		const std::uint64_t boarded = game.CurrentTick();
+		std::uint64_t hidden = 0;
+		int withWorker = 0;
+		for (int tick = 0; tick < 150; ++tick)
+		{
+			game.Tick();
+			if (!world.Resource<gp::CargoManifest>().Aboard(plain).empty())
+			{
+				++withWorker;
+				BOOST_TEST(!world.Get<gp::Stealth>(plain)->Has(gp::stealth_flag::Stealthed));
+			}
+			if (hidden == 0 && world.Get<gp::Stealth>(hero)->Has(gp::stealth_flag::Stealthed))
+				hidden = game.CurrentTick();
+		}
+		BOOST_TEST(withWorker == 150); // longer than any stealth delay the bike's own rules would have
+		BOOST_TEST(hidden == boarded + 1);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (AutoHealBehavior: the constructor sleeps forever unless StartsActive; upgradeImplementation wakes it;
+// update heals itself HealingAmount while hurt, then sleeps HealingDelay; pulseHealObject -> attemptHealing): a hurt GLA
+// Scorpion (AutoHealBehavior HealingAmount 2, HealingDelay 1000 = 30 frames, TriggeredBy Upgrade_GLAJunkRepair) never
+// heals before its player has Junk Repair. The frame the upgrade reaches it, it wakes. It heals 2 on its next update and
+// 2 more every 30 frames while hurt. One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_junk_repair_wakes_a_gla_vehicles_self_repair)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game.Tick();
+		auto &world = game.World();
+		const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+		const std::uint32_t player = game.Teams().TeamAt(gla).owner;
+		const auto [low, high] = game.Game().ground.Extent();
+		(void)high;
+		// The shell map's battleship shells this corner once the battle moves near it; only the Scorpion's own repair is
+		// under test, so the battleship leaves first.
+		std::vector<ecs::Entity> battleships;
+		game.Visible().ForEach([&](const gp::VisibleObject &object) {
+			if (game.DefinitionName(object.definition) == "AmericaVehicleBattleShip")
+				battleships.push_back(object.entity);
+		});
+		BOOST_TEST_REQUIRE(!battleships.empty());
+		generalszh::gameplay::RetireNow(game.Game(), battleships);
+		const ecs::Entity scorpion = game.Place("GLATankScorpion", low + FixedVector2{Fixed::FromInt(150), Fixed::FromInt(150)}, {}, gla);
+		const auto *self = world.Get<gp::SelfHealing>(scorpion);
+		BOOST_TEST_REQUIRE(self != nullptr);
+		// Its own Junk Repair heal (HealingAmount 2) and the veterancy heal every object inherits (DefaultThing's
+		// ModuleTag_DefaultAutoHealBehavior: HealingAmount 10, Upgrade_Veterancy_ELITE / _HEROIC): two modules, both dormant.
+		BOOST_TEST_REQUIRE(self->count == 2u);
+		BOOST_TEST(self->programs[0].dormant == 1u);
+		BOOST_TEST(self->programs[1].dormant == 1u);
+		const std::uint32_t junk = self->programs[0].amount == Fixed::FromInt(2) ? 0u : 1u;
+		BOOST_TEST((self->programs[junk].amount == Fixed::FromInt(2)));
+		BOOST_TEST((self->programs[1u - junk].amount == Fixed::FromInt(10)));
+		world.Get<gp::Health>(scorpion)->current -= Fixed::FromInt(50);
+		const Fixed hurt = world.Get<gp::Health>(scorpion)->current;
+		for (int tick = 0; tick < 90; ++tick)
+			game.Tick();
+		BOOST_TEST((world.Get<gp::Health>(scorpion)->current == hurt));
+		world.Resource<gp::PlayerUpgrades>().Grant(player, *shell.game.upgrades.Find("Upgrade_GLAJunkRepair"));
+		std::uint64_t woke = 0;
+		std::vector<std::uint64_t> heals;
+		Fixed last = hurt;
+		for (int tick = 0; tick < 100; ++tick)
+		{
+			game.Tick();
+			if (woke == 0 && world.Get<gp::SelfHealing>(scorpion)->programs[junk].dormant == 0)
+				woke = game.CurrentTick();
+			const Fixed now = world.Get<gp::Health>(scorpion)->current;
+			if (now != last)
+			{
+				BOOST_TEST((now == last + Fixed::FromInt(2)));
+				heals.push_back(game.CurrentTick());
+				last = now;
+			}
+		}
+		BOOST_TEST_REQUIRE(woke != 0u);
+		BOOST_TEST_REQUIRE(heals.size() == 4u);
+		BOOST_TEST(heals[0] == woke + 1);
+		BOOST_TEST(heals[1] == heals[0] + 30);
+		BOOST_TEST(heals[2] == heals[1] + 30);
+		BOOST_TEST(heals[3] == heals[2] + 30);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
 // CountermeasuresBehavior on real data: a Raptor-style jet is made with its flares all loaded (VolleySize times
 // NumberOfVolleys), read as its module says, its flare object known, and off (isUpgradeActive false) until its player
 // has the upgrade its UpgradeMux triggers on (Upgrade_AmericaCountermeasures), on from the tick after.
@@ -831,6 +1209,238 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_scud_storm_fires_its_nine_missiles_at_the_s
 	BOOST_TEST(world.Get<gp::AttackTarget>(storm)->atPosition == 0);
 }
 
+// Weapon::privateFireWeapon's ScatterTarget pattern and Weapon::rebuildScatterTargets (reloadWithBonus): the shipped
+// ScudStormWeapon (ClipSize 9, ScatterTargetScalar 120, nine ScatterTarget lines, ScatterRadius 0) fired at a spot sends
+// each of its nine missiles at a different entry of the pattern, 120 times its offset from the spot, on the ground there
+// and at no victim; its clip reloaded, a second storm uses the whole pattern again. The same on 1 and 4 workers, and a
+// checkpoint taken mid-storm plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scud_storm_lays_its_missiles_on_its_scatter_pattern)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game->Game().ground.Extent();
+	(void)high;
+	const auto power = *shell.game.powers.Template("SuperweaponScudStorm");
+	const FixedVector2 spot = low + FixedVector2{Fixed::FromInt(900), Fixed::FromInt(300)};
+	ecs::Entity storm;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		storm = g->Place("GLAScudStorm", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, gla);
+		g->World().Get<gp::SpecialPowerTimers>(storm)->Find(power)->availableOn = g->CurrentTick();
+		g->Tick();
+	}
+	const auto decimal = [](std::string_view text) { return *Fixed::ParseDecimal(text); };
+	const std::vector<FixedVector2> pattern{{decimal("0"), decimal("0.133")}, {decimal("0.133"), decimal("-0.2")},
+		{decimal("-0.067"), decimal("0.667")}, {decimal("0.3"), decimal("0.3")}, {decimal("0.767"), decimal("0")},
+		{decimal("0.5"), decimal("-0.567")}, {decimal("-0.333"), decimal("-0.8")}, {decimal("-0.6"), decimal("-0.1333")},
+		{decimal("-0.567"), decimal("0.433")}};
+	std::unique_ptr<session::Session> restored;
+	const auto storming = [&](bool checkpoint) {
+		for (session::Session *g : {game.get(), four.get(), restored.get()})
+		{
+			if (g == nullptr)
+				continue;
+			g->World().Get<gp::SpecialPowerTimers>(storm)->Find(power)->availableOn = g->CurrentTick();
+			gameplay::FireSpecialPower(g->Game(), storm, "SuperweaponScudStorm", spot, true);
+		}
+		std::vector<gp::Shot> shots;
+		for (int tick = 0; tick < 30 * 30 && shots.size() < 9; ++tick)
+		{
+			game->Tick();
+			four->Tick();
+			if (restored)
+				restored->Tick();
+			game->World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+				if (shot.source == storm)
+					shots.push_back(shot);
+			});
+			if (checkpoint && !restored && shots.size() == 4)
+				restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game->Checkpoint());
+		}
+		return shots;
+	};
+	for (int storms = 0; storms < 2; ++storms)
+	{
+		const std::vector<gp::Shot> shots = storming(storms == 0);
+		BOOST_TEST_REQUIRE(shots.size() == 9u);
+		std::set<std::size_t> used;
+		for (const gp::Shot &shot : shots)
+		{
+			BOOST_TEST((shot.target == ecs::Entity{}));
+			BOOST_TEST((shot.aim.z == game->Game().ground.At(shot.aim.XY())));
+			const FixedVector2 offset = shot.aim.XY() - spot;
+			for (std::size_t entry = 0; entry < pattern.size(); ++entry)
+				if (offset == pattern[entry] * Fixed::FromInt(120))
+					used.insert(entry);
+		}
+		BOOST_TEST(used.size() == 9u);
+		// Not in the table's order (a random pick each shot).
+		BOOST_TEST((shots[0].aim.XY() - spot != pattern[0] * Fixed::FromInt(120) || shots[1].aim.XY() - spot != pattern[1] * Fixed::FromInt(120)));
+		// The clip reloads (ClipReloadTime 10000) before the next storm.
+		for (int tick = 0; tick < 12 * 30; ++tick)
+		{
+			game->Tick();
+			four->Tick();
+			if (restored)
+				restored->Tick();
+		}
+	}
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// Legacy parity (GeneralsMD ObjectCreationList.cpp, AttackNugget::create with RadiusDecalUpdate::createRadiusDecal /
+// killWhenNoLongerAttacking / update; DeliverPayloadAIUpdate::deliverPayload and HeadOffMapState::onEnter's
+// killDeliveryDecal; NeutronMissileUpdate::projectileFireAtObjectOrPosition and detonate / onDie; RadiusDecal.cpp,
+// RadiusDecalTemplate::createRadiusDecal): the superweapons' target decals.
+//   The Scud Storm (SUPERWEAPON_ScudStorm's Attack: DeliveryDecalRadius 200, SCCScudStorm_GLA): laid on the spot as it
+//     is fired, for its player, and kept exactly while it attacks (9 shots), gone the tick its attack ends; the same
+//     with four workers and after a checkpoint taken mid-storm.
+//   The Daisy Cutter's B-52 (SUPERWEAPON_DaisyCutter's DeliverPayload: 170, SCCFuelAirBomb_USA): on its target from
+//     when it is made until the tick its run heads off the map.
+//   The neutron missile (NeutronMissileUpdate: 210, SCCNuclearMissile_China): on its target from when it is made until
+//     the tick it dies.
+BOOST_AUTO_TEST_CASE(legacy_parity_superweapons_lay_their_target_decals_until_done)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto look = [&](const gameplay::RadiusDecal &decal) -> const content::RadiusDecalLook * {
+		return world.Resource<gameplay::RadiusDecalLooks>().At(decal.look);
+	};
+	const auto [low, high] = game->Game().ground.Extent();
+	(void)high;
+
+	// The Scud Storm.
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	const auto storm = game->Place("GLAScudStorm", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, gla);
+	four->Place("GLAScudStorm", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, gla);
+	const auto scud = *shell.game.powers.Template("SuperweaponScudStorm");
+	const FixedVector2 spot = low + FixedVector2{Fixed::FromInt(900), Fixed::FromInt(300)};
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		g->World().Get<gp::SpecialPowerTimers>(storm)->Find(scud)->availableOn = g->CurrentTick();
+		g->Tick();
+		gameplay::FireSpecialPower(g->Game(), storm, "SuperweaponScudStorm", spot, true);
+	}
+	const gameplay::RadiusDecal *decal = world.Get<gameplay::RadiusDecal>(storm);
+	BOOST_TEST_REQUIRE(decal != nullptr);
+	BOOST_TEST_REQUIRE(look(*decal) != nullptr);
+	BOOST_TEST(look(*decal)->texture == "SCCScudStorm_GLA");
+	BOOST_TEST((decal->radius == Fixed::FromInt(200)));
+	BOOST_TEST((decal->at.XY() == spot));
+	BOOST_TEST(decal->player == game->Teams().TeamAt(gla).owner);
+	BOOST_TEST((decal->until == gameplay::RadiusDecalUntil::NoLongerAttacking));
+	std::unique_ptr<session::Session> restored;
+	std::size_t shots = 0;
+	int ended = -1;
+	for (int tick = 0; tick < 30 * 30 && ended < 0; ++tick)
+	{
+		for (session::Session *g : {game.get(), four.get(), restored.get()})
+			if (g != nullptr)
+				g->Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { shots += shot.source == storm ? 1 : 0; });
+		const bool attacking = gp::Attacking(*world.Get<gp::AttackTarget>(storm));
+		BOOST_TEST((world.Get<gameplay::RadiusDecal>(storm)->look != gameplay::RadiusDecal::None) == attacking);
+		for (session::Session *g : {four.get(), restored.get()})
+			if (g != nullptr)
+				BOOST_TEST(g->World().Get<gameplay::RadiusDecal>(storm)->look == world.Get<gameplay::RadiusDecal>(storm)->look);
+		if (!restored && shots == 4)
+			restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game->Checkpoint());
+		if (!attacking)
+			ended = tick;
+	}
+	BOOST_TEST(ended >= 0);
+	BOOST_TEST(shots == 9u);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+
+	// The Daisy Cutter.
+	const auto america = *game->Teams().FindTeam("teamPlyrAmerica");
+	const auto center = game->Place("AmericaCommandCenter", low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(900)}, {}, america);
+	const auto daisy = *shell.game.powers.Template("SuperweaponDaisyCutter");
+	world.Get<gp::SpecialPowerTimers>(center)->Find(daisy)->availableOn = game->CurrentTick();
+	game->Tick();
+	const FixedVector2 target = low + FixedVector2{Fixed::FromInt(700), Fixed::FromInt(900)};
+	gameplay::FireSpecialPower(game->Game(), center, "SuperweaponDaisyCutter", target, true);
+	ecs::Entity bomber;
+	{
+		ecs::Query<ecs::Read<gp::Delivery>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				bomber = entity;
+		});
+	}
+	BOOST_TEST_REQUIRE((bomber != ecs::Entity{}));
+	decal = world.Get<gameplay::RadiusDecal>(bomber);
+	BOOST_TEST_REQUIRE(decal != nullptr);
+	BOOST_TEST_REQUIRE(look(*decal) != nullptr);
+	BOOST_TEST(look(*decal)->texture == "SCCFuelAirBomb_USA");
+	BOOST_TEST((decal->radius == Fixed::FromInt(170)));
+	BOOST_TEST((decal->at.XY() == target));
+	bool offMap = false;
+	for (int tick = 0; tick < 30 * 60 && !offMap && world.IsAlive(bomber); ++tick)
+	{
+		game->Tick();
+		const gp::DeliveryPhase phase = world.Get<gp::Delivery>(bomber)->phase;
+		offMap = phase == gp::DeliveryPhase::HeadOffMap || phase == gp::DeliveryPhase::CleanUp;
+		BOOST_TEST((world.Get<gameplay::RadiusDecal>(bomber)->look == gameplay::RadiusDecal::None) == offMap);
+	}
+	BOOST_TEST(offMap);
+
+	// The neutron missile.
+	const auto china = *game->Teams().FindTeam("teamPlyrChina");
+	game->Place("ChinaPowerPlant", low + FixedVector2{Fixed::FromInt(150), Fixed::FromInt(400)}, {}, china);
+	const ecs::Entity silo = game->Place("ChinaNuclearMissileLauncher", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(500)}, {}, china);
+	const auto nuke = *shell.game.powers.Template("SuperweaponNeutronMissile");
+	world.Get<gp::SpecialPowerTimers>(silo)->Find(nuke)->availableOn = game->CurrentTick();
+	game->Tick();
+	const FixedVector2 aim = low + FixedVector2{Fixed::FromInt(900), Fixed::FromInt(700)};
+	gameplay::FireSpecialPower(game->Game(), silo, "SuperweaponNeutronMissile", aim, true);
+	ecs::Entity missile;
+	for (int tick = 0; tick < 5 && missile == ecs::Entity{}; ++tick)
+	{
+		game->Tick();
+		ecs::Query<ecs::Read<gp::NeutronFlight>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				missile = entity;
+		});
+	}
+	BOOST_TEST_REQUIRE((missile != ecs::Entity{}));
+	decal = world.Get<gameplay::RadiusDecal>(missile);
+	BOOST_TEST_REQUIRE(decal != nullptr);
+	BOOST_TEST_REQUIRE(look(*decal) != nullptr);
+	BOOST_TEST(look(*decal)->texture == "SCCNuclearMissile_China");
+	BOOST_TEST((decal->radius == Fixed::FromInt(210)));
+	BOOST_TEST((decal->at.XY() == aim));
+	bool dead = false;
+	for (int tick = 0; tick < 30 * 60 && !dead && world.IsAlive(missile); ++tick)
+	{
+		game->Tick();
+		dead = world.Has<gp::Dying>(missile);
+		BOOST_TEST((world.Get<gameplay::RadiusDecal>(missile)->look == gameplay::RadiusDecal::None) == dead);
+	}
+	BOOST_TEST(dead);
+}
+
 // OCLSpecialPower SuperweaponNeutronMissile -> SUPERWEAPON_NeutronMissile's FireWeaponNugget (NeutronMissileWeapon,
 // createAndFireTempWeapon) -> its NeutronMissile object (NeutronMissileUpdate: SpecialSpeedTime 1500 = 45 ticks,
 // SpecialSpeedHeight 160, SpecialAccelFactor 1, DistanceToTravelBeforeTurning 300, RelativeSpeed 2, ForwardDamping 0.1,
@@ -1012,6 +1622,40 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_particle_cannon_beam_is_driven_by_clicks)
 	for (int tick = 0; tick < 29; ++tick)
 		game.Tick();
 	BOOST_TEST((Engine::Math::Abs(beam().x - before - Fixed::FromInt(40)) <= Fixed::FromRatio(1, 100)));
+}
+
+// Legacy parity (SpecialPowerModule::initiateIntentToDoSpecialPower with doesSpecialPowerUpdatePassScienceTest): the
+// Airforce General's command centre has three SpectreGunshipDeploymentUpdate modules for the same power, one per level
+// (RequiredScience SCIENCE_SpectreGunship3 / 2 / 1, in that module order). With levels 1 and 2 known its player gets
+// the first module whose science it has: AirF_AmericaJetSpectreGunship2.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_comes_at_its_players_level)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity center = game.Place("AirF_AmericaCommandCenter", low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(300)}, {}, america);
+	const auto power = *shell.game.powers.Template("AirF_SuperweaponSpectreGunship");
+	BOOST_TEST_REQUIRE(world.Get<gp::SpecialPowerTimers>(center)->Find(power) != nullptr);
+	world.Get<gp::SpecialPowerTimers>(center)->Find(power)->availableOn = game.CurrentTick();
+	game.Tick();
+	const std::uint32_t player = world.Get<gp::Owner>(center)->player;
+	for (const char *science : {"SCIENCE_SpectreGunship1", "SCIENCE_SpectreGunship2"})
+		gameplay::GrantScience(game.Game(), player, *shell.game.Science(science));
+	gameplay::FireSpecialPower(game.Game(), center, "AirF_SuperweaponSpectreGunship", low + FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}, false);
+	std::vector<std::string> ships;
+	ecs::Query<ecs::Read<gameplay::SpectreGunship>, ecs::Read<gp::DefinitionRef>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		for (const auto &ref : chunk.template Get<gp::DefinitionRef>())
+			ships.emplace_back(game.DefinitionName(ref.index));
+	});
+	BOOST_TEST_REQUIRE(ships.size() == 1u);
+	BOOST_TEST(ships[0] == "AirF_AmericaJetSpectreGunship2");
 }
 
 // SpectreGunshipDeploymentUpdate + SpectreGunshipUpdate (AmericaCommandCenter; AmericaJetSpectreGunship: GunshipOrbitRadius
@@ -1573,12 +2217,735 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_microwave_tank_kills_those_inside_one_a_sho
 	BOOST_TEST((world.Get<gp::Health>(chalet)->current == health));
 }
 
+// LeechRangeWeapon (Weapon::preFireWeapon / privateFireWeapon set m_leechWeaponRangeActive; AIAttackState's
+// outOfWeaponRangeObject skips the range test while it is on; WeaponTemplate::fireWeaponTemplate skips its own; onExit
+// clears it): Colonel Burton's ColonelBurtonKnifeWeapon (AttackRange 3, PreAttackDelay 833 = 25 frames, PER_ATTACK)
+// locked for a knife attack on a rebel beside him: the rebel carried 60 away once the wind-up began, Burton neither
+// follows nor stops but stabs on the wind-up's last frame all the same; a new attack starts without the reach. The
+// same on 1 and 4 workers, and a checkpoint taken mid wind-up plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_burtons_knife_reaches_a_victim_that_steps_away_mid_stab)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto america = *game->Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game->Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	ecs::Entity burton, rebel;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		burton = g->Place("AmericaInfantryColonelBurton", at, {}, america);
+		rebel = g->Place("GLAInfantryRebel", at + FixedVector2{Fixed::FromInt(4), Fixed{}}, {}, gla);
+		auto &w = g->World();
+		BOOST_TEST_REQUIRE(gp::LockSlotTemporarily(*w.Get<gp::WeaponSlots>(burton), *w.Get<gp::Armament>(burton), 1));
+		gameplay::OrderAttack(g->Game(), burton, rebel);
+	}
+	const auto stabs = [&](session::Session &g) {
+		std::vector<gp::Shot> shots;
+		g.World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == burton)
+				shots.push_back(shot);
+		});
+		return shots;
+	};
+	std::uint64_t windUp = 0;
+	for (int tick = 0; tick < 30 && windUp == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		BOOST_TEST(stabs(*game).empty());
+		windUp = world.Get<gp::Armament>(burton)->preAttackUntil;
+	}
+	BOOST_TEST_REQUIRE(windUp != 0u);
+	const std::uint64_t began = game->CurrentTick();
+	BOOST_TEST(windUp == began + 24);
+	BOOST_TEST(world.Get<gp::AttackTarget>(burton)->leech == 2u);
+	const FixedVector2 stood = world.Get<gp::Transform>(burton)->position.XY();
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		auto &transform = *g->World().Get<gp::Transform>(rebel);
+		transform.position.x += Fixed::FromInt(60);
+		transform.position.z = g->Game().ground.At(transform.position.XY());
+	}
+	std::unique_ptr<session::Session> restored;
+	std::optional<gp::Shot> stab;
+	std::uint64_t stabbed = 0;
+	for (int tick = 0; tick < 40 && !stab; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		if (restored)
+			restored->Tick();
+		if (const auto shots = stabs(*game); !shots.empty())
+		{
+			stab = shots.front();
+			stabbed = game->CurrentTick();
+		}
+		if (!restored && game->CurrentTick() == began + 10)
+			restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game->Checkpoint());
+	}
+	BOOST_TEST_REQUIRE(stab.has_value());
+	BOOST_TEST(stabbed == windUp);
+	BOOST_TEST((stab->target == rebel));
+	BOOST_TEST((world.Get<gp::Transform>(burton)->position.XY() == stood));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+	// A new attack: no reach until it strikes again.
+	gameplay::OrderAttack(game->Game(), burton, rebel);
+	BOOST_TEST(world.Get<gp::AttackTarget>(burton)->leech == 0u);
+}
+
+// DumbProjectileBehavior::projectileFireAtObjectOrPosition (ScaleWeaponSpeed): the shipped InfernoCannonGun
+// (WeaponSpeed 250, MinWeaponSpeed 75, MinimumAttackRange 50, AttackRange 300) lobs its shell at a speed scaled with the
+// 2D range from where it leaves the barrel to its aim: (range - 50) / 250 of the way from 75 to 250 a second; its flight
+// the arc's length over that speed, rounded up (calcFlightPath). A near target's shell flies slower than a far one's.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_inferno_cannon_scales_its_shell_speed_with_range)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto china = *game.Teams().FindTeam("teamPlyrChina");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(300)};
+	const ecs::Entity cannon = game.Place("ChinaVehicleInfernoCannon", at, {}, china);
+	const gp::WeaponDefinition &weapon = game.Game().templates.weapons.At(world.Get<gp::Armament>(cannon)->weapon);
+	BOOST_TEST_REQUIRE(weapon.scaleWeaponSpeed);
+	const Fixed perTick = Fixed::FromInt(game.Game().step.TicksPerSecond());
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(weapon.minWeaponSpeed - Fixed::FromInt(75) / perTick)) < 0.001);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(weapon.speed - Fixed::FromInt(250) / perTick)) < 0.001);
+	const auto shellAt = [&](std::int64_t distance) {
+		const ecs::Entity target = game.Place("GLAVehicleTechnical", at + FixedVector2{Fixed::FromInt(distance), Fixed{}}, {}, gla);
+		auto &health = *world.Get<gp::Health>(target);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		gameplay::OrderAttack(game.Game(), cannon, target);
+		std::optional<gp::ProjectileFlight> found;
+		for (int tick = 0; tick < 300 && !found; ++tick)
+		{
+			game.Tick();
+			ecs::Query<ecs::Read<gp::ProjectileFlight>> flights(world);
+			flights.ForEachChunk([&](auto chunk) {
+				for (const gp::ProjectileFlight &flight : chunk.template Get<gp::ProjectileFlight>())
+					if (flight.shot.source == cannon && flight.shot.target == target)
+						found = flight;
+			});
+		}
+		world.Destroy(target);
+		return found;
+	};
+	const auto near = shellAt(100), far = shellAt(280);
+	BOOST_TEST_REQUIRE(near.has_value());
+	BOOST_TEST_REQUIRE(far.has_value());
+	for (const gp::ProjectileFlight &flight : {*near, *far})
+	{
+		const Fixed range = Engine::Math::Length(flight.shot.aim.XY() - flight.shot.origin.XY());
+		const Fixed speed = (range - weapon.minimumRange) / (weapon.attackRange - weapon.minimumRange) * (weapon.speed - weapon.minWeaponSpeed) + weapon.minWeaponSpeed;
+		BOOST_TEST(flight.segments == gp::ArcSegments(flight.points, speed));
+		BOOST_TEST(flight.segments > gp::ArcSegments(flight.points, weapon.speed));
+	}
+	// Per unit of arc, the near shell is the slower.
+	BOOST_TEST((gp::ArcLength(near->points) / Fixed::FromInt(near->segments) < gp::ArcLength(far->points) / Fixed::FromInt(far->segments)));
+}
+
+// WeaponTemplate::estimateWeaponDamage through WeaponSet::getAbleToAttackSpecificObject (mood targeting's
+// PartitionFilterPossibleToAttack, AIAttackState's cannotPossiblyAttackObject): the shipped USAPathfinderSniperRifle
+// (DamageType SNIPER) is reckoned to do nothing to a tank (TankArmor: SNIPER 0%), so an idle Pathfinder never picks the
+// Battle Master beside it, and ordered at it the attack is over at once; a rebel as near it picks and shoots. The same
+// on 1 and 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pathfinder_never_picks_a_tank_its_rifle_cannot_hurt)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto america = *game->Teams().FindTeam("teamPlyrAmerica");
+	const auto china = *game->Teams().FindTeam("teamPlyrChina");
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game->Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	ecs::Entity sniper, tank;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		sniper = g->Place("AmericaInfantryPathfinder", at, {}, america);
+		tank = g->Place("ChinaTankBattleMaster", at + FixedVector2{Fixed::FromInt(120), Fixed{}}, {}, china);
+		// (It keeps out of it: nothing to shoot back with.)
+		g->World().Get<gp::Armament>(tank)->weapon = gp::WeaponCatalog::None;
+	}
+	const auto shots = [&](session::Session &g) {
+		std::size_t count = 0;
+		g.World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { count += shot.source == sniper ? 1u : 0u; });
+		return count;
+	};
+	std::size_t fired = 0;
+	for (int tick = 0; tick < 150; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		fired += shots(*game);
+		BOOST_TEST((world.Get<gp::AttackTarget>(sniper)->target != tank));
+	}
+	BOOST_TEST(fired == 0u);
+	for (session::Session *g : {game.get(), four.get()})
+		gameplay::OrderAttack(g->Game(), sniper, tank);
+	game->Tick();
+	four->Tick();
+	BOOST_TEST((world.Get<gp::AttackTarget>(sniper)->target == ecs::Entity{}));
+	BOOST_TEST(shots(*game) == 0u);
+	for (session::Session *g : {game.get(), four.get()})
+		g->Place("GLAInfantryRebel", at + FixedVector2{Fixed{}, Fixed::FromInt(120)}, {}, gla);
+	for (int tick = 0; tick < 150 && fired == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		fired += shots(*game);
+	}
+	BOOST_TEST(fired > 0u);
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// WeaponSet::chooseBestWeaponForTarget's AutoChooseSources: Colonel Burton's set (PRIMARY
+// ColonelBurtonSniperRifleWeapon, SECONDARY ColonelBurtonKnifeWeapon with AutoChooseSources NONE) never picks the knife
+// of itself, however much more it would do (10000 to the rifle's 40): every shot at a rebel beside him, a player's
+// order or his own AI's, is the rifle's; the knife only when locked (the knife button, setWeaponLock).
+BOOST_AUTO_TEST_CASE(legacy_parity_burton_never_picks_his_knife_of_himself)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity burton = game.Place("AmericaInfantryColonelBurton", at, {}, america);
+	const ecs::Entity rebel = game.Place("GLAInfantryRebel", at + FixedVector2{Fixed::FromInt(4), Fixed{}}, {}, gla);
+	auto &health = *world.Get<gp::Health>(rebel);
+	health.maximum = health.current = Fixed::FromInt(100000);
+	world.Get<gp::Armament>(rebel)->weapon = gp::WeaponCatalog::None;
+	BOOST_TEST_REQUIRE(world.Get<gp::WeaponSlots>(burton)->slots[1].sources == 0u);
+	for (const auto source : {gp::CommandSource::Player, gp::CommandSource::Ai})
+	{
+		gameplay::OrderAttack(game.Game(), burton, rebel, 0, source);
+		std::vector<gp::Shot> shots;
+		for (int tick = 0; tick < 120 && shots.size() < 3; ++tick)
+		{
+			game.Tick();
+			world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+				if (shot.source == burton)
+					shots.push_back(shot);
+			});
+		}
+		BOOST_TEST_REQUIRE(shots.size() >= 3u);
+		for (const gp::Shot &shot : shots)
+			BOOST_TEST(shot.slot == 0u);
+	}
+	BOOST_TEST_REQUIRE(gp::LockSlotTemporarily(*world.Get<gp::WeaponSlots>(burton), *world.Get<gp::Armament>(burton), 1));
+	gameplay::OrderAttack(game.Game(), burton, rebel);
+	std::optional<gp::Shot> stab;
+	for (int tick = 0; tick < 120 && !stab; ++tick)
+	{
+		game.Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == burton)
+				stab = shot;
+		});
+	}
+	BOOST_TEST_REQUIRE(stab.has_value());
+	BOOST_TEST(stab->slot == 1u);
+}
+
+// WeaponSet::chooseBestWeaponForTarget's PreferredAgainst and estimateWeaponDamage: the shipped Comanche (PRIMARY
+// Comanche20mmCannonWeapon PreferredAgainst INFANTRY, SECONDARY ComancheAntiTankMissileWeapon PreferredAgainst VEHICLE
+// STRUCTURE, which isKindOfMulti needs both of) fires its cannon at a rebel (preferred, whatever the missiles would do)
+// and its missiles at a Battle Master (the most damage its armor lets through: 50 JET_MISSILES against 6
+// COMANCHE_VULCAN); at a spot on the ground, its PRIMARY.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_picks_its_cannon_for_infantry_and_missiles_for_tanks)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto china = *game.Teams().FindTeam("teamPlyrChina");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(300), Fixed::FromInt(600)};
+	const ecs::Entity comanche = game.Place("AmericaVehicleComanche", at, {}, america);
+	const auto *slots = world.Get<gp::WeaponSlots>(comanche);
+	BOOST_TEST_REQUIRE(slots != nullptr);
+	BOOST_TEST(slots->slots[0].preferred == gp::target_class::Infantry);
+	BOOST_TEST(slots->slots[1].preferred == (gp::target_class::Vehicle | gp::target_class::Structure));
+	const auto firstShot = [&](ecs::Entity target) {
+		auto &health = *world.Get<gp::Health>(target);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+		gameplay::OrderAttack(game.Game(), comanche, target);
+		std::optional<gp::Shot> first;
+		for (int tick = 0; tick < 300 && !first; ++tick)
+		{
+			game.Tick();
+			world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+				if (shot.source == comanche && !first)
+					first = shot;
+			});
+		}
+		world.Destroy(target);
+		game.Tick();
+		return first;
+	};
+	const auto atRebel = firstShot(game.Place("GLAInfantryRebel", at + FixedVector2{Fixed::FromInt(120), Fixed{}}, {}, gla));
+	const auto atTank = firstShot(game.Place("ChinaTankBattleMaster", at + FixedVector2{Fixed{}, Fixed::FromInt(120)}, {}, china));
+	BOOST_TEST_REQUIRE(atRebel.has_value());
+	BOOST_TEST_REQUIRE(atTank.has_value());
+	BOOST_TEST(atRebel->slot == 0u);
+	BOOST_TEST(atTank->slot == 1u);
+	// At a spot: the PRIMARY.
+	gameplay::OrderAttackPosition(game.Game(), comanche, Engine::Math::FixedVector3{at.x - Fixed::FromInt(120), at.y, game.Game().ground.At(at)}, 0);
+	std::optional<gp::Shot> atSpot;
+	for (int tick = 0; tick < 300 && !atSpot; ++tick)
+	{
+		game.Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == comanche && !atSpot)
+				atSpot = shot;
+		});
+	}
+	BOOST_TEST_REQUIRE(atSpot.has_value());
+	BOOST_TEST(atSpot->slot == 0u);
+}
+
+// WeaponTemplateSet ShareWeaponReloadTime (Weapon::privateFireWeapon and reloadWithBonus with
+// Object::isReloadTimeShared): the shipped Patriot Battery (PRIMARY PatriotMissileWeapon against the ground, TERTIARY
+// PatriotMissileWeaponAir against aircraft, each ClipSize 4, ClipReloadTime 2000; ShareWeaponReloadTime Yes) empties
+// its ground clip into a tank; a Comanche turning up the tick after must wait out that same reload, though the air
+// weapon's own clip is full: its first missile goes exactly the reload after the fourth. Between shots the same: every
+// weapon waits the delay. The same on 1 and 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_patriot_battery_shares_its_reload_between_its_weapons)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto america = *game->Teams().FindTeam("teamPlyrAmerica");
+	const auto china = *game->Teams().FindTeam("teamPlyrChina");
+	const auto [low, high] = game->Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(600)};
+	ecs::Entity patriot, tank;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		g->Place("AmericaPowerPlant", at + FixedVector2{Fixed::FromInt(-120), Fixed{}}, {}, america);
+		patriot = g->Place("AmericaPatriotBattery", at, {}, america);
+		tank = g->Place("ChinaTankBattleMaster", at + FixedVector2{Fixed::FromInt(150), Fixed{}}, {}, china);
+		auto &health = *g->World().Get<gp::Health>(tank);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		g->World().Get<gp::Armament>(tank)->weapon = gp::WeaponCatalog::None;
+	}
+	const auto *set = world.Get<gp::WeaponSlots>(patriot);
+	BOOST_TEST_REQUIRE(set != nullptr);
+	BOOST_TEST(set->sharedReload == 1u);
+	const gp::WeaponDefinition &ground = game->Game().templates.weapons.At(set->slots[0].weapon);
+	const auto fired = [&](session::Session &g) {
+		std::vector<gp::Shot> shots;
+		g.World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == patriot)
+				shots.push_back(shot);
+		});
+		return shots;
+	};
+	std::vector<gp::Shot> atTank;
+	for (int tick = 0; tick < 300 && atTank.size() < 4; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		for (const gp::Shot &shot : fired(*game))
+			atTank.push_back(shot);
+	}
+	BOOST_TEST_REQUIRE(atTank.size() == 4u);
+	for (const gp::Shot &shot : atTank)
+		BOOST_TEST(shot.slot == 0u);
+	// Between shots, the air weapon waits the ground weapon's delay too.
+	const std::uint64_t fourth = atTank.back().fireTick;
+	BOOST_TEST(world.Get<gp::WeaponSlots>(patriot)->slots[2].readyTick == fourth + ground.clipReload);
+	BOOST_TEST(world.Get<gp::WeaponSlots>(patriot)->slots[2].reloading);
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		g->World().Destroy(tank);
+		const ecs::Entity comanche = g->Place("AmericaVehicleComanche", at + FixedVector2{Fixed::FromInt(200), Fixed{}}, {}, china);
+		auto &transform = *g->World().Get<gp::Transform>(comanche);
+		transform.position.z = g->Game().ground.At(transform.position.XY()) + Fixed::FromInt(100);
+		auto &health = *g->World().Get<gp::Health>(comanche);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		g->World().Get<gp::Armament>(comanche)->weapon = gp::WeaponCatalog::None;
+		gameplay::OrderAttack(g->Game(), patriot, comanche);
+	}
+	std::optional<gp::Shot> atAir;
+	for (int tick = 0; tick < 300 && !atAir; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		for (const gp::Shot &shot : fired(*game))
+			atAir = shot;
+	}
+	BOOST_TEST_REQUIRE(atAir.has_value());
+	BOOST_TEST(atAir->slot == 2u);
+	BOOST_TEST(atAir->fireTick == fourth + ground.clipReload);
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// Weapon::fireWeaponTemplate's getFireFX(sourceObj->getVeterancyLevel()) and the projectile's
+// getProjectileExhaust(level) (VeterancyFireFX, VeterancyProjectileExhaust): a heroic GLA Marauder's shots carry its
+// veterancy, which picks its MarauderTankGun's HEROIC WeaponFX_HeroicGenericTankGunNoTracer rather than the
+// WeaponFX_GenericTankGunNoTracer a regular one fires.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_heroic_tank_fires_its_heroic_fire_fx)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const auto fireAt = [&](std::uint8_t level) {
+		const ecs::Entity tank = game.Place("GLATankMarauder", at, {}, gla);
+		world.Get<gp::Experience>(tank)->level = level;
+		const ecs::Entity target = game.Place("AmericaTankCrusader", at + FixedVector2{Fixed::FromInt(100), Fixed{}}, {}, america);
+		auto &health = *world.Get<gp::Health>(target);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+		gameplay::OrderAttack(game.Game(), tank, target);
+		std::optional<gp::Shot> fired;
+		for (int tick = 0; tick < 200 && !fired; ++tick)
+		{
+			game.Tick();
+			world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+				if (shot.source == tank)
+					fired = shot;
+			});
+		}
+		world.Destroy(tank);
+		world.Destroy(target);
+		game.Tick();
+		return fired;
+	};
+	const auto regular = fireAt(0), heroic = fireAt(3);
+	BOOST_TEST_REQUIRE(regular.has_value());
+	BOOST_TEST_REQUIRE(heroic.has_value());
+	BOOST_TEST(regular->veterancy == 0u);
+	BOOST_TEST(heroic->veterancy == 3u);
+	const auto *regularGun = game.Game().templates.WeaponContentAt(regular->weapon);
+	const auto *heroicGun = game.Game().templates.WeaponContentAt(heroic->weapon);
+	BOOST_TEST_REQUIRE((regularGun != nullptr && heroicGun != nullptr));
+	BOOST_TEST(regularGun->FireFX(regular->veterancy) == "WeaponFX_GenericTankGunNoTracer");
+	BOOST_TEST(heroicGun->FireFX(heroic->veterancy) == "WeaponFX_HeroicGenericTankGunNoTracer");
+}
+
+// MissileAIUpdate::detonate with MissileCallsOnDie: the shipped BuggyRocketWeapon (MissileCallsOnDie Yes) kills its
+// RocketBuggyMissile once it has gone off (DAMAGE_UNRESISTABLE, DEATH_DETONATED), so its die modules run: with the GLA
+// holding RocketBuggyToxinUpgrade, its FireWeaponWhenDeadBehavior's ToxinShellWeapon goes off where it blew up, once
+// for each rocket; the rocket is gone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_toxin_buggys_rockets_die_and_spill_their_toxin)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(gla).owner;
+	world.Resource<gp::PlayerUpgrades>().Grant(player, *shell.game.upgrades.Find("RocketBuggyToxinUpgrade"));
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity buggy = game.Place("GLAVehicleRocketBuggy", at, {}, gla);
+	const ecs::Entity target = game.Place("AmericaTankCrusader", at + FixedVector2{Fixed::FromInt(150), Fixed{}}, {}, america);
+	auto &health = *world.Get<gp::Health>(target);
+	health.maximum = health.current = Fixed::FromInt(100000);
+	world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+	const std::uint32_t toxin = game.Game().templates.Weapon("ToxinShellWeapon");
+	BOOST_TEST_REQUIRE(toxin != gp::WeaponCatalog::None);
+	gameplay::OrderAttack(game.Game(), buggy, target);
+	std::vector<std::uint64_t> detonations, spills;
+	std::vector<ecs::Entity> rockets;
+	for (int tick = 0; tick < 300 && spills.size() < 3; ++tick)
+	{
+		game.Tick();
+		world.Resource<gp::MissileDetonations>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == buggy)
+			{
+				detonations.push_back(game.CurrentTick());
+				rockets.push_back(shot.carrier);
+			}
+		});
+		for (const gp::Impact &impact : world.Resource<gp::ShotQueue>().Impacts())
+			if (impact.weapon == toxin)
+				spills.push_back(game.CurrentTick());
+	}
+	BOOST_TEST_MESSAGE("detonations " << detonations.size() << " spills " << spills.size());
+	BOOST_TEST_REQUIRE(spills.size() >= 3u);
+	BOOST_TEST_REQUIRE(detonations.size() >= spills.size());
+	for (std::size_t index = 0; index < spills.size(); ++index)
+		BOOST_TEST(spills[index] == detonations[index] + 1); // FireWeaponWhenDeadBehavior: its weapon lands the next tick
+	// Its KILL_SELF state over (KillSelfDelay), it is taken away.
+	for (int tick = 0; tick < 30; ++tick)
+		game.Tick();
+	for (const ecs::Entity rocket : rockets)
+		BOOST_TEST(!world.IsAlive(rocket));
+}
+
+// Weapon::isWithinTargetPitch, WeaponSet::isAnyWithinTargetPitch / chooseBestWeaponForTarget and AIAttackState's
+// cannotPossiblyAttackObject: the shipped CrusaderTankGun (MinTargetPitch -15, MaxTargetPitch 15) may not target a victim
+// more than 10 above or below it all of which lies outside those pitches from the tank's centre (half its GeometryHeight
+// 10 up; GeometryInfo::calcPitches: to the victim's top and bottom). On a real cliff of the shell map: ordered at a
+// worker up there, the tank's attack ends at once (no shot); idle, it never picks that worker; a worker as far off on
+// level ground it attacks and shoots. The same on 1 and 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tank_may_not_target_a_victim_beyond_its_gun_pitch)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto &ground = game->Game().ground;
+	const auto [low, high] = ground.Extent();
+	// The steepest rise on the map: from a level spot to one well over 25 degrees up, with level ground as far the other way.
+	struct Spot
+	{
+		FixedVector2 foot, top, level;
+		Fixed slope;
+	};
+	std::optional<Spot> best;
+	const Fixed margin = Fixed::FromInt(200);
+	const std::array<FixedVector2, 8> ways{FixedVector2{Fixed::One(), Fixed{}}, {-Fixed::One(), Fixed{}}, {Fixed{}, Fixed::One()}, {Fixed{}, -Fixed::One()},
+		{Fixed::FromRatio(7, 10), Fixed::FromRatio(7, 10)}, {Fixed::FromRatio(-7, 10), Fixed::FromRatio(7, 10)}, {Fixed::FromRatio(7, 10), Fixed::FromRatio(-7, 10)},
+		{Fixed::FromRatio(-7, 10), Fixed::FromRatio(-7, 10)}};
+	for (Fixed x = low.x + margin; x < high.x - margin; x += Fixed::FromInt(10))
+		for (Fixed y = low.y + margin; y < high.y - margin; y += Fixed::FromInt(10))
+		{
+			const FixedVector2 foot{x, y};
+			const Fixed base = ground.At(foot);
+			for (const FixedVector2 &way : ways)
+				for (const std::int64_t reach : {60, 80, 100})
+				{
+					const FixedVector2 top = foot + way * Fixed::FromInt(reach), level = foot - way * Fixed::FromInt(reach);
+					const Fixed rise = ground.At(top) - base - Fixed::FromInt(5);
+					const Fixed flat = ground.At(level) - base;
+					if (flat > Fixed::FromInt(3) || flat < Fixed::FromInt(-3))
+						continue;
+					const Fixed slope = rise / Fixed::FromInt(reach);
+					if (!best || slope > best->slope)
+						best = Spot{foot, top, level, slope};
+				}
+		}
+	BOOST_TEST_REQUIRE(best.has_value());
+	BOOST_TEST_MESSAGE("steepest " << Engine::Math::ToFloat(best->slope));
+	// tan 25 degrees: clear of the 15 degree limit whatever the worker's own height.
+	BOOST_TEST_REQUIRE((best->slope > Fixed::FromRatio(466, 1000)));
+	const auto america = *game->Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	ecs::Entity tank, above, level;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		tank = g->Place("AmericaTankCrusader", best->foot, {}, america);
+		above = g->Place("GLAInfantryWorker", best->top, {}, gla);
+		for (const ecs::Entity worker : {above})
+		{
+			auto &health = *g->World().Get<gp::Health>(worker);
+			health.maximum = health.current = Fixed::FromInt(100000);
+		}
+	}
+	const auto shotsAt = [&](session::Session &g) {
+		std::size_t count = 0;
+		g.World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { count += shot.source == tank ? 1u : 0u; });
+		return count;
+	};
+	// Idle, it never picks the worker up the cliff.
+	std::size_t fired = 0;
+	for (int tick = 0; tick < 90; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		fired += shotsAt(*game);
+		BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target != above));
+	}
+	BOOST_TEST(fired == 0u);
+	// Ordered at it, the attack is over at once.
+	for (session::Session *g : {game.get(), four.get()})
+		gameplay::OrderAttack(g->Game(), tank, above);
+	game->Tick();
+	four->Tick();
+	BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target == ecs::Entity{}));
+	fired = shotsAt(*game);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		fired += shotsAt(*game);
+	}
+	BOOST_TEST(fired == 0u);
+	// One as far off on level ground it attacks.
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		level = g->Place("GLAInfantryWorker", best->level, {}, gla);
+		auto &health = *g->World().Get<gp::Health>(level);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		gameplay::OrderAttack(g->Game(), tank, level);
+	}
+	for (int tick = 0; tick < 120 && fired == 0; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		fired += shotsAt(*game);
+	}
+	BOOST_TEST(fired > 0u);
+	BOOST_TEST((world.Get<gp::AttackTarget>(tank)->target == level));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// WeaponTemplate::fireWeaponTemplate's scatter on the shipped BattleMasterTankGun (ScatterRadiusVsInfantry 10, no
+// ScatterRadius; its shell a projectile): at infantry each shell flies at a spot up to 10 from the soldier, any way round
+// (GameLogicRandomValueReal twice), on the ground there, not after the soldier (projectileLaunchAtObjectOrPosition with
+// no victim); at a vehicle it is not scattered and flies at the vehicle. The same on 1 and 4 workers, and a checkpoint
+// taken between shots plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_tank_shells_scatter_at_infantry_but_not_at_vehicles)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		return game;
+	};
+	auto game = build(1), four = build(4);
+	auto &world = game->World();
+	const auto china = *game->Teams().FindTeam("teamPlyrChina");
+	const auto gla = *game->Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game->Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	ecs::Entity tank, soldier, truck;
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		tank = g->Place("ChinaTankBattleMaster", centre, {}, china);
+		soldier = g->Place("GLAInfantryRebel", centre + FixedVector2{Fixed::FromInt(100), Fixed{}}, {}, gla);
+		// (Tough enough to take several shells: which shell kills it is not what is looked at.)
+		auto &health = *g->World().Get<gp::Health>(soldier);
+		health.maximum = health.current = Fixed::FromInt(100000);
+		gameplay::OrderAttack(g->Game(), tank, soldier);
+	}
+	const auto shotsOf = [&](session::Session &g) {
+		std::vector<gp::Shot> shots;
+		g.World().Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) {
+			if (shot.source == tank)
+				shots.push_back(shot);
+		});
+		return shots;
+	};
+	std::vector<gp::Shot> atSoldier;
+	std::unique_ptr<session::Session> restored;
+	for (int tick = 0; tick < 400 && atSoldier.size() < 5; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		if (restored)
+			restored->Tick();
+		for (const gp::Shot &shot : shotsOf(*game))
+		{
+			atSoldier.push_back(shot);
+			if (!restored)
+				restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game->Checkpoint());
+		}
+	}
+	for (const gp::Shot &shot : atSoldier)
+		BOOST_TEST_MESSAGE("shot on " << shot.fireTick << " target " << shot.target.index << " (soldier " << soldier.index << ", truck " << truck.index << ") aim " << Engine::Math::ToFloat(shot.aim.x - centre.x) << "," << Engine::Math::ToFloat(shot.aim.y - centre.y) << " weapon " << shot.weapon);
+	BOOST_TEST_MESSAGE("soldier alive " << world.IsAlive(soldier) << ", truck alive " << world.IsAlive(truck));
+	BOOST_TEST_REQUIRE(atSoldier.size() >= 2u);
+	std::size_t apart = 0;
+	for (const gp::Shot &shot : atSoldier)
+	{
+		BOOST_TEST((shot.target == ecs::Entity{})); // at the spot, not after the soldier
+		const FixedVector2 from = centre + FixedVector2{Fixed::FromInt(100), Fixed{}};
+		BOOST_TEST((Engine::Math::DistanceSquared(shot.aim.XY(), from) <= Fixed::FromInt(100)));
+		BOOST_TEST((shot.aim.z == game->Game().ground.At(shot.aim.XY())));
+		apart += Engine::Math::DistanceSquared(shot.aim.XY(), from) > Fixed::FromRatio(1, 4) ? 1u : 0u;
+	}
+	BOOST_TEST(apart > 0u);
+	BOOST_TEST((atSoldier[0].aim.XY() != atSoldier[1].aim.XY()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+	// At a vehicle: no scatter, after the vehicle.
+	for (session::Session *g : {game.get(), four.get()})
+	{
+		truck = g->Place("GLAVehicleTechnical", centre + FixedVector2{Fixed{}, Fixed::FromInt(100)}, {}, gla);
+		gameplay::OrderAttack(g->Game(), tank, truck);
+	}
+	std::optional<gp::Shot> atTruck;
+	for (int tick = 0; tick < 400 && !atTruck; ++tick)
+	{
+		game->Tick();
+		four->Tick();
+		for (const gp::Shot &shot : shotsOf(*game))
+			if (shot.target == truck)
+				atTruck = shot;
+	}
+	BOOST_TEST_REQUIRE(atTruck.has_value());
+	BOOST_TEST((atTruck->aim.XY() == world.Get<gp::Transform>(truck)->position.XY()));
+	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
 // FiringTracker::shotFired / speedUp / coolDown / update and Weapon::onWeaponBonusChange: a China Gattling Tank's
 // GattlingTankGun (DelayBetweenShots 400 = 12 frames, ContinuousFireOne 2, ContinuousFireTwo 6, ContinuousFireCoast
 // 1000 = 30 frames, CONTINUOUS_FIRE_MEAN 200% and _FAST 300% rate of fire) on a GLA Command Center: its third shot in a
 // row speeds it up (MEAN: the wait re-timed at once, 6 frames), its seventh again (FAST: 4 frames), each showing its
 // CONTINUOUS_FIRE model condition; stopped, one frame past the coast from its next possible shot it spins down (SLOW)
-// and a second later stops.
+// and a second later stops. The tank is the human player's (UncloakedGLA): stopped and idle, its mood scan passes over
+// the Command Center (PartitionFilterRejectBuildings); a computer player's tank would take it up again at once
+// (m_acquireEnemies) and never spin down.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_gattling_tank_spins_up_and_down)
 {
 	ShellContent &shell = Content();
@@ -1586,8 +2953,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_gattling_tank_spins_up_and_down)
 		return;
 	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
 	game.Tick();
-	const auto china = *game.Teams().FindTeam("teamPlyrChina");
-	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const std::uint32_t human = *game.Teams().FindPlayer("UncloakedGLA");
+	const auto china = *game.Game().roster.DefaultTeam(human);
+	std::uint32_t gla = china;
+	for (const char *name : {"teamPlyrGLA", "teamPlyrChina", "teamPlyrAmerica"})
+		if (const auto team = game.Teams().FindTeam(name);
+			team && gla == china &&
+			game.World().Resource<gp::Relationships>().Between(human, game.Teams().TeamAt(*team).owner) == gp::Relationship::Enemies)
+			gla = *team;
+	BOOST_TEST_REQUIRE(gla != china);
 	const auto [low, high] = game.Game().ground.Extent();
 	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
 	auto &world = game.World();

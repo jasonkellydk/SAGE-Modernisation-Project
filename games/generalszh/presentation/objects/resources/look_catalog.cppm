@@ -1,8 +1,11 @@
 export module games.generalszh.presentation.objects.resources.look_catalog;
 import std;
+export import games.generalszh.content.global.radius_decal;
 
 export import games.generalszh.content.objects.model_states;
+export import games.generalszh.content.objects.model_draw;
 export import games.generalszh.content.combat.damage_fx_content;
+export import games.generalszh.content.effects.bone_fx_content;
 export import games.generalszh.presentation.objects.algorithms.chassis_motion;
 export import games.generalszh.presentation.effects.damage_effects;
 export import games.generalszh.presentation.effects.uplink_looks;
@@ -40,13 +43,18 @@ struct TreeMotion
 struct DefinitionLooks
 {
 	content::ModelStates states;
+	// DynamicShroudClearingRangeUpdate's GridDecalTemplate (its grid's pieces; none: no texture).
+	content::RadiusDecalLook gridDecal;
 	std::vector<std::uint32_t> stateLooks; // look of each state (one when it has none): its first animation's
 	std::vector<std::uint32_t> stateVariants; // how many animations each state picks among (its looks follow its first)
-	// Its other model draw modules, drawn with it (a bike's rider).
+	// Its other model draw modules, drawn with it (a bike's rider, a structure's construction scaffold): each in its
+	// own model states (W3DModelDraw per module), a look per state's animation as its own draw's.
 	struct ExtraDraw
 	{
 		content::ModelStates states;
 		std::vector<std::uint32_t> stateLooks;
+		std::vector<std::uint32_t> stateVariants;
+		bool policeLights{false};
 	};
 	std::vector<ExtraDraw> extraDraws;
 	// Its own draw's looks (every state's, one after another) and its part override sets (SubObjectsUpgrade: (name,
@@ -60,6 +68,45 @@ struct DefinitionLooks
 		std::uint32_t firstLook{0};
 	};
 	std::vector<PartVariant> partVariants;
+	// W3DSupplyDraw: its SupplyBonePrefix, how many bones of that numbered family its model has (-1: not known yet), and
+	// by how many of them it shows (fewer than all), the first of its own looks copied showing only those (NoLook: not
+	// made yet).
+	static constexpr std::uint32_t NoLook = 0xFFFFFFFFu;
+	std::string supplyBonePrefix;
+	// AnimatedParticleSysBoneClientUpdate or W3DModelDraw's ParticlesAttachedToAnimatedBones: its bones' particle
+	// systems follow its animation.
+	bool animatedParticleBones{false};
+	// BeaconClientUpdate: a beacon, its radar pulse at most every `beaconPulseEvery` ticks (RadarPulseFrequency),
+	// lasting `beaconPulseFor` (RadarPulseDuration).
+	bool beacon{false};
+	std::uint64_t beaconPulseEvery{30};
+	std::uint64_t beaconPulseFor{15};
+	// W3DScienceModelDraw: drawn only for a viewer with its RequiredScience (a known science: its index), or one no longer
+	// playing; an unknown science: never drawn.
+	bool needsScience{false};
+	std::uint32_t requiredScience{0xFFFFFFFFu};
+	std::int32_t supplyBones{-1};
+	std::vector<std::uint32_t> supplyLooks;
+	// updateDrawModuleSupplyStatus: how many of its supply bones show with `current` of `maximum` (ceil in floats, as the
+	// original: m_totalBones * (current / (float)max)).
+	std::uint32_t SupplyShown(std::uint32_t current, std::uint32_t maximum) const noexcept
+	{
+		if (supplyBones <= 0)
+			return 0;
+		if (maximum == 0)
+			return static_cast<std::uint32_t>(supplyBones);
+		const float share = static_cast<float>(current) / static_cast<float>(maximum);
+		const auto shown = static_cast<std::int64_t>(std::ceil(static_cast<float>(supplyBones) * share));
+		return static_cast<std::uint32_t>(std::clamp<std::int64_t>(shown, 0, supplyBones));
+	}
+	// The look it shows for `look` (one of its own) with `shown` of its supply bones (all: as it is).
+	std::uint32_t WithSupply(std::uint32_t look, std::uint32_t shown) const noexcept
+	{
+		if (supplyBones <= 0 || shown >= static_cast<std::uint32_t>(supplyBones) || shown >= supplyLooks.size() || supplyLooks[shown] == NoLook ||
+			look < ownLookFirst || look >= ownLookFirst + ownLookCount)
+			return look;
+		return look - ownLookFirst + supplyLooks[shown];
+	}
 	// The look an object taken on `applied` shows for `look` (one of its own: that look's copy; others as they are).
 	std::uint32_t WithParts(std::uint32_t look, std::span<const std::uint8_t> applied) const noexcept
 	{
@@ -74,6 +121,7 @@ struct DefinitionLooks
 	bool sways{false};   // FloatUpdate: rocks like a buoy on the water
 	bool treeSway{false}; // SwayClientUpdate: sways in the breeze
 	bool bufferTree{false}; // W3DTreeDraw: a map tree, bent by the tree buffer's breeze
+	content::RestingModel resting; // its default draw's model (a definition without condition states draws it)
 	// W3DOverlordAircraftDraw / W3DOverlordTankDraw / W3DOverlordTruckDraw: its mounted rider is drawn with its tint.
 	bool ridersTakeTint{false};
 	TreeMotion treeMotion;    // its falling and bending, when a map tree
@@ -87,7 +135,10 @@ struct DefinitionLooks
 	// PartitionData::attachToObject: IMMOBILE and not drawn by W3DDefaultDraw, it leaves a ghost object: fogged, it still
 	// shows where it is neutral to the viewer or was seen before (not a mine).
 	bool ghost{false};
-	bool castsShadow{false}; // W3DShadowManager::addShadow: its Shadow is exactly SHADOW_DECAL, SHADOW_VOLUME or SHADOW_PROJECTION // W3DPoliceCarDraw: its light bar's clip runs at a quarter frame per 1/30 s
+	bool castsShadow{false};
+	// Its Shadow: 1 SHADOW_DECAL, 2 SHADOW_VOLUME, 4 SHADOW_PROJECTION (the managers EA's W3DShadowManager::addShadow
+	// hands it to draw it only while UseShadowVolumes, resp. UseShadowDecals, is on); 0 a tree buffer's own.
+	std::uint8_t shadowKind{0}; // W3DShadowManager::addShadow: its Shadow is exactly SHADOW_DECAL, SHADOW_VOLUME or SHADOW_PROJECTION // W3DPoliceCarDraw: its light bar's clip runs at a quarter frame per 1/30 s
 	bool ignoredInGui{false}; // KINDOF_IGNORED_IN_GUI: no promotion feedback
 	bool infantry{false};     // KINDOF_INFANTRY: a sinking body casts no shadow (SlowDeathBehavior::beginSlowDeath)
 	// W3DDependencyModelDraw AttachToBoneInContainer: mounted on a carrier, it is drawn on this bone of the carrier's model.
@@ -110,6 +161,12 @@ struct DefinitionLooks
 	bool drone{false};        // KINDOF_DRONE
 	bool hugeVehicle{false};  // KINDOF_HUGE_VEHICLE
 	bool noHealIcon{false};   // KINDOF_NO_HEAL_ICON
+	// A firestorm's particle systems (FirestormDynamicGeometryInfoUpdate ParticleSystem1-16) and ParticleOffsetZ.
+	std::vector<std::string> firestormSystems;
+	float firestormOffsetZ{0.0f};
+	// BoneFXUpdate's particle systems by damage state and slot, and DamageParticleTypes (none: no BoneFXUpdate).
+	std::optional<content::BoneFxTable> boneParticles;
+	std::uint64_t boneParticleTypes{~std::uint64_t{0}};
 	std::string garrisonHitFx; // a projectile's DumbProjectileBehavior GarrisonHitKillFX (on the building it cleared)
 	std::optional<content::UplinkLook> uplink; // a Particle Cannon uplink's client effects (ParticleUplinkCannonUpdate)
 	float constructionHeight{0.0f};
@@ -140,6 +197,7 @@ struct DefinitionLooks
 	std::string afterburnerSound; // UnitSpecificSounds Afterburner (JetAIUpdate's, while its afterburners burn)
 	std::string lowFuelVoice;     // UnitSpecificSounds VoiceLowFuel (circling a dead airfield)
 	std::string rapidFireVoice;   // UnitSpecificSounds VoiceRapidFire (FiringTracker::speedUp to CONTINUOUS_FIRE_FAST)
+	std::string trainRunningSound; // a locomotive's RailroadBehavior RunningSound
 	std::string stealthOff; // SoundStealthOff
 	std::array<std::string, 3> promotedSounds; // SoundPromotedVeteran, SoundPromotedElite, SoundPromotedHero
 	std::string turretLoop;   // TurretMoveLoop (UnitSpecificSounds), while its turret turns
@@ -245,6 +303,8 @@ struct LookCatalog
 	std::string crateSalvageSound; // MiscAudio CrateSalvage
 	std::string crateMoneySound;   // MiscAudio CrateMoney
 	std::string crateFreeUnitSound; // MiscAudio CrateFreeUnit
+	std::string crateHealSound;     // MiscAudio CrateHeal
+	std::string crateShroudSound;   // MiscAudio CrateShroud
 	std::string unitPromotedSound; // MiscAudio UnitPromoted
 	std::string buildingDisabledSound; // MiscAudio BuildingDisabled
 	std::string vehicleDisabledSound;  // MiscAudio VehicleDisabled
@@ -269,6 +329,12 @@ struct LookCatalog
 	{
 		return definition < byDefinition.size() && known[definition] != 0 ? &byDefinition[definition] : nullptr;
 	}
+
+	// Looks of a model alone, not any definition's (the move hint: InGameUI's MoveHintName render object): LookEntry::model
+	// is BareModel, its model and animation the look's lookModels / lookAnimations.
+	static constexpr std::uint32_t BareModel = 0xFFFFFFFFu;
+	static constexpr std::uint32_t NoLook = 0xFFFFFFFFu;
+	std::uint32_t moveHintLook{NoLook};
 
 	// A model shown instead of a definition's, playing an animation (0 none) in a mode.
 	static constexpr std::uint64_t ModelKey(std::uint32_t model, std::uint32_t animation = 0, std::uint8_t mode = 0) noexcept

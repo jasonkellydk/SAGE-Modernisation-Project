@@ -413,6 +413,31 @@ BOOST_AUTO_TEST_CASE(legacy_parity_radar_is_forced_and_hidden)
 	BOOST_TEST(!commands[3].flag);
 }
 
+// ScriptActions::doSetBorderShroud (DISABLE_BORDER_SHROUD: FALSE, ENABLE_BORDER_SHROUD: TRUE): the border's shroud
+// cleared, then shrouded again, in that order.
+BOOST_AUTO_TEST_CASE(legacy_parity_border_shroud_actions_clear_and_restore_the_border)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	start.actions = {Call("DISABLE_BORDER_SHROUD"), Call("ENABLE_BORDER_SHROUD")};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 2u);
+	BOOST_TEST((commands[0].kind == Kind::BorderShroudDisabled));
+	BOOST_TEST((commands[1].kind == Kind::BorderShroudEnabled));
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
 // ScriptActions::doMoviePlayFullScreen / doMoviePlayRadar: each asks for its movie (the latter flagged: InGameUI's movie,
 // which plays in the same full-screen slot).
 BOOST_AUTO_TEST_CASE(legacy_parity_movie_actions_ask_for_their_movie)
@@ -462,6 +487,132 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_quick_victory_asks_the_client_to_end_the_ga
 	BOOST_TEST_REQUIRE(commands.size() == 1u);
 	BOOST_TEST((commands[0].kind == generalszh::scripting::ClientScriptCommand::Kind::QuickVictory));
 	BOOST_TEST(runtime.UnknownActions().empty()); // the debug actions do nothing (no debugger DLL)
+}
+
+// legacy_parity: ScriptActions::doC3CameraShake (CAMERA_ADD_SHAKER_AT: waypoint, amplitude, seconds, radius),
+// doC3CameraEnableSlaveMode / doC3CameraDisableSlaveMode, doCameraMotionBlur(zoom in, saturate), doCameraMotionBlurJump
+// (waypoint, saturate; none: nothing), CAMERA_MOTION_BLUR_FOLLOW / END_FOLLOW, doModCameraMoveToSelection,
+// SET_VISUAL_SPEED_MULTIPLIER (View::setTimeMultiplier); doCameraSetAudibleDistance ("No-op"), OVERSIZE_TERRAIN and
+// RESIZE_VIEW_GUARDBAND (nothing for the port's renderer to change) are known and queue nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_camera_shaker_slave_blur_selection_and_speed_actions_queue_their_commands)
+{
+	using Engine::Math::Fixed;
+	level::Level map;
+	level::Marker marker;
+	marker.id = 1;
+	marker.name = "Quake";
+	marker.position = {Fixed::FromInt(120), Fixed::FromInt(80), {}};
+	map.markers.push_back(marker);
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall shaker = Call("CAMERA_ADD_SHAKER_AT", "Quake");
+	shaker.parameters[1].number = Fixed::FromInt(3);
+	shaker.parameters[2].number = Fixed::FromRatio(3, 2);
+	level::ScriptParameter radius;
+	radius.number = Fixed::FromInt(200);
+	shaker.parameters.push_back(radius);
+	level::ScriptCall slave = Call("CAMERA_ENABLE_SLAVE_MODE", "Heli");
+	slave.parameters[1].text = "CAMERA01";
+	level::ScriptCall blur = Call("CAMERA_MOTION_BLUR", {}, 1, 1);
+	level::ScriptCall jump = Call("CAMERA_MOTION_BLUR_JUMP", "Quake", 0, 0);
+	level::ScriptCall nowhere = Call("CAMERA_MOTION_BLUR_JUMP", "Nowhere");
+	level::ScriptCall follow = Call("CAMERA_MOTION_BLUR_FOLLOW", {}, 20);
+	level::ScriptCall speed = Call("SET_VISUAL_SPEED_MULTIPLIER", {}, 4);
+	level::ScriptCall audible = Call("CAMERA_SET_AUDIBLE_DISTANCE", {}, 0, 500);
+	level::ScriptCall oversize = Call("OVERSIZE_TERRAIN", {}, 3);
+	level::ScriptCall guardband = Call("RESIZE_VIEW_GUARDBAND", {}, 0, 50);
+	start.actions = {shaker, Call("CAMERA_ADD_SHAKER_AT", "Nowhere"), slave, Call("CAMERA_DISABLE_SLAVE_MODE"), blur, jump, nowhere, follow,
+		Call("CAMERA_MOTION_BLUR_END_FOLLOW"), Call("MOVE_CAMERA_TO_SELECTION"), speed, audible, oversize, guardband};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::CameraScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddCameraVocabulary(vocabulary, map, {&commands, {}});
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(runtime.UnknownActions().empty());
+	using Kind = generalszh::scripting::CameraScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 9u);
+	BOOST_TEST((commands[0].kind == Kind::ShakerAt));
+	BOOST_TEST_REQUIRE(commands[0].points.size() == 1u);
+	BOOST_TEST(commands[0].points[0].x.Raw() == Fixed::FromInt(120).Raw());
+	BOOST_TEST(commands[0].values[0].Raw() == Fixed::FromInt(3).Raw());
+	BOOST_TEST(commands[0].values[1].Raw() == Fixed::FromRatio(3, 2).Raw());
+	BOOST_TEST(commands[0].values[2].Raw() == Fixed::FromInt(200).Raw());
+	BOOST_TEST((commands[1].kind == Kind::Slave && commands[1].unit == "Heli" && commands[1].bone == "CAMERA01"));
+	BOOST_TEST((commands[2].kind == Kind::SlaveOff));
+	BOOST_TEST((commands[3].kind == Kind::MotionBlur && commands[3].flag && commands[3].count == 1));
+	BOOST_TEST((commands[4].kind == Kind::MotionBlurJump && commands[4].count == 0));
+	BOOST_TEST(commands[4].points.front().y.Raw() == Fixed::FromInt(80).Raw());
+	BOOST_TEST((commands[5].kind == Kind::MotionBlurFollow && commands[5].count == 20));
+	BOOST_TEST((commands[6].kind == Kind::MotionBlurEndFollow));
+	BOOST_TEST((commands[7].kind == Kind::MoveToSelection));
+	BOOST_TEST((commands[8].kind == Kind::TimeMultiplier && commands[8].count == 4));
+}
+
+// legacy_parity: ScriptActions::doCameoFlash (CAMEO_FLASH: button, seconds), doDisplayText, doDisplayCinematicText
+// (label, font, seconds), doInGamePopupMessage (label, x, y, width, pause), doSkyBox, doWeather,
+// doSetInfantryLightingOverride (the scale, -1 on RESET), pauseAudio / resumeAudio(AudioAffect_Sound) and
+// doRadarRefresh each queue their client command; SOUND_AMBIENT_PAUSE / RESUME (MilesAudioManager::pauseAmbient is
+// empty) are known and queue nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_interface_sky_weather_lighting_sound_and_radar_actions_queue_their_client_commands)
+{
+	using Engine::Math::Fixed;
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall cameo = Call("CAMEO_FLASH", "Command_ConstructAmericaPowerPlant", 3);
+	cameo.parameters[1].integer = 3;
+	level::ScriptCall cinematic = Call("DISPLAY_CINEMATIC_TEXT", "SCRIPT:Title", 0, 7);
+	cinematic.parameters[1].text = "Arial - Size:18 [Bold]";
+	level::ScriptCall popup = Call("INGAME_POPUP_MESSAGE", "SCRIPT:Hint");
+	popup.parameters[1].integer = 25;
+	popup.parameters[2].integer = 60;
+	for (const std::int64_t value : {300, 1})
+	{
+		level::ScriptParameter parameter;
+		parameter.integer = value;
+		popup.parameters.push_back(parameter);
+	}
+	level::ScriptCall lighting = Call("SET_INFANTRY_LIGHTING_OVERRIDE");
+	lighting.parameters[0].number = Fixed::FromRatio(3, 2);
+	start.actions = {cameo, Call("DISPLAY_TEXT", "SCRIPT:Hello"), cinematic, popup, Call("DRAW_SKYBOX_BEGIN"), Call("DRAW_SKYBOX_END"),
+		Call("SHOW_WEATHER", {}, 0), lighting, Call("RESET_INFANTRY_LIGHTING_OVERRIDE"), Call("SUSPEND_BACKGROUND_SOUNDS"),
+		Call("RESUME_BACKGROUND_SOUNDS"), Call("SOUND_AMBIENT_PAUSE"), Call("SOUND_AMBIENT_RESUME"), Call("REFRESH_RADAR"),
+		Call("OPTIONS_SET_OCCLUSION_MODE", {}, 0)};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(runtime.UnknownActions().empty());
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 13u);
+	BOOST_TEST((commands[0].kind == Kind::CameoFlash && commands[0].text == "Command_ConstructAmericaPowerPlant" && commands[0].percent == 3));
+	BOOST_TEST((commands[1].kind == Kind::DisplayText && commands[1].text == "SCRIPT:Hello"));
+	BOOST_TEST((commands[2].kind == Kind::CinematicText && commands[2].text == "SCRIPT:Title" && commands[2].subject == "Arial - Size:18 [Bold]"));
+	BOOST_TEST(commands[2].percent == 7);
+	BOOST_TEST((commands[3].kind == Kind::PopupMessage && commands[3].text == "SCRIPT:Hint" && commands[3].flag));
+	BOOST_TEST(commands[3].numbers[0].Raw() == Fixed::FromInt(25).Raw());
+	BOOST_TEST(commands[3].numbers[1].Raw() == Fixed::FromInt(60).Raw());
+	BOOST_TEST(commands[3].numbers[2].Raw() == Fixed::FromInt(300).Raw());
+	BOOST_TEST((commands[4].kind == Kind::SkyBox && commands[4].flag));
+	BOOST_TEST((commands[5].kind == Kind::SkyBox && !commands[5].flag));
+	BOOST_TEST((commands[6].kind == Kind::Weather && !commands[6].flag));
+	BOOST_TEST((commands[7].kind == Kind::InfantryLighting && commands[7].numbers[0].Raw() == Fixed::FromRatio(3, 2).Raw()));
+	BOOST_TEST((commands[8].kind == Kind::InfantryLighting && commands[8].numbers[0].Raw() == Fixed::FromInt(-1).Raw()));
+	BOOST_TEST((commands[9].kind == Kind::FlatSoundsPaused && commands[9].flag));
+	BOOST_TEST((commands[10].kind == Kind::FlatSoundsPaused && !commands[10].flag));
+	BOOST_TEST((commands[11].kind == Kind::RadarRefresh));
+	BOOST_TEST((commands[12].kind == Kind::OcclusionMode && !commands[12].flag));
 }
 
 BOOST_AUTO_TEST_CASE(shell_map_scripts_run_and_the_remaining_vocabulary_is_listed)

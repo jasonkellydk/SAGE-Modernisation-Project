@@ -64,7 +64,7 @@ struct SpatialIndexSystem
 			else
 				classes |= target_class::Ground;
 			out.push_back({entities[row], position, targetables[row].radius, owners[row].player, classes, shrouds.empty() ? ~std::uint64_t{0} : shrouds[row].clear,
-				teams.empty() ? 0xFFFFFFFFu : teams[row].team});
+				teams.empty() ? 0xFFFFFFFFu : teams[row].team, targetables[row].disguiseTeam, targetables[row].disguisePlayer});
 		}
 	}
 
@@ -72,10 +72,7 @@ struct SpatialIndexSystem
 	{
 		SpatialIndex &index = context.Write<SpatialIndex>();
 		SpatialGather &gather = context.Write<SpatialGather>();
-		std::vector<SpatialEntry> entries;
-		entries.reserve(gather.Size());
-		gather.AppendTo(entries);
-		index.Rebuild(std::move(entries));
+		index.RebuildWith([&](std::vector<SpatialEntry> &entries) { gather.AppendTo(entries); });
 	}
 };
 }
@@ -86,6 +83,8 @@ template<>
 struct SystemTraits<engine::gameplay::SpatialIndexSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.spatial_index";
+	// Its rows are independent: large chunks are shared out in pieces of 32 rows.
+	static constexpr std::size_t PieceRows = 32;
 	static constexpr SystemPhase Phase = SystemPhase::PreSimulation;
 	using Before = SystemTypeList<>;
 	using After = SystemTypeList<>;

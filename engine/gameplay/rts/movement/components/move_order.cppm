@@ -59,6 +59,18 @@ inline std::int64_t PointWanderCells(Engine::Math::Fixed radius, std::int64_t ce
 	return (radius / Engine::Math::Fixed::FromInt(cellSize) + Engine::Math::Fixed::FromRatio(1, 2)).Floor();
 }
 
+// How a move to a point claims its goal (AIInternalMoveToState's m_adjustDestinations; AIFollowPathState's legs):
+//   Adjust: the goal is moved off cells others claim (Pathfinder::adjustDestination) and claimed (updateGoal);
+//   Keep: the goal as ordered, the route's end claimed once planned (a factory's lone exit point: adjustment off at
+//     its start, on for the path it gets);
+//   None: a leg on the way; its claim is let go once its route is planned (removeGoal).
+enum class GoalClaim : std::uint8_t
+{
+	Adjust,
+	Keep,
+	None,
+};
+
 struct MoveOrder
 {
 	Engine::Math::FixedVector2 destination;
@@ -67,12 +79,15 @@ struct MoveOrder
 	// Held where it is for now (AIUpdateInterface::setLocomotorGoalNone while busy: packing or unpacking), its order
 	// kept for after: it brakes to a stop. Whoever holds it sets this each tick.
 	std::uint8_t held{0};
-	std::uint8_t reserved[2]{}; // no padding: checkpoints hold its bytes
+	GoalClaim claim{GoalClaim::Adjust};
+	std::uint8_t reserved[1]{}; // no padding: checkpoints hold its bytes
 };
 
-inline MoveOrder MoveToPoint(Engine::Math::FixedVector2 destination) noexcept
+inline MoveOrder MoveToPoint(Engine::Math::FixedVector2 destination, GoalClaim claim = GoalClaim::Adjust) noexcept
 {
-	return {destination, 0xFFFFFFFFu, MoveMode::Point};
+	MoveOrder order{destination, 0xFFFFFFFFu, MoveMode::Point};
+	order.claim = claim;
+	return order;
 }
 
 inline MoveOrder MoveStraightTo(Engine::Math::FixedVector2 destination) noexcept
@@ -93,14 +108,14 @@ template<>
 struct ComponentTraits<engine::gameplay::MoveOrder>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.move_order";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::MoveOrder &value, StateHasher &hasher) noexcept
 	{
 		hasher.AppendU64(static_cast<std::uint64_t>(value.destination.x.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.destination.y.Raw()));
 		hasher.AppendU64(value.waypoint);
-		hasher.AppendU64(static_cast<std::uint64_t>(value.mode));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.mode) | static_cast<std::uint64_t>(value.claim) << 8);
 	}
 };
 }

@@ -22,6 +22,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_challenge_asks_the_difficulty_first)
 	ShellModel model;
 	MainMenuViewModel menu(model);
 	menu.singlePlayer.Execute();
+	menu.TransitionsFinished(); // (each press's transition plays out before the next: MainMenuUpdate)
 	menu.challenge.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Difficulty));
 	BOOST_TEST((menu.highlightedSide.Get() == Side::None));
@@ -30,7 +31,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_challenge_asks_the_difficulty_first)
 	BOOST_TEST((model.requestedScreen.Get() == Screen::ChallengeMenu));
 	BOOST_TEST((model.campaignDifficulty.Get() == Difficulty::Hard));
 	model.Pop();
+	menu.Entered();
 	menu.back.Execute();
+	menu.TransitionsFinished();
 	menu.chooseAmerica.Execute();
 	menu.easy.Execute();
 	BOOST_TEST((model.requestedScreen.Get() == Screen::Campaign));
@@ -42,6 +45,7 @@ BOOST_AUTO_TEST_CASE(campaign_flow_selects_side_then_difficulty)
 	MainMenuViewModel menu(model);
 	menu.singlePlayer.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	menu.TransitionsFinished();
 	menu.chooseGla.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Difficulty));
 	BOOST_TEST((menu.highlightedSide.Get() == Side::Gla));
@@ -49,6 +53,7 @@ BOOST_AUTO_TEST_CASE(campaign_flow_selects_side_then_difficulty)
 	menu.back.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
 	BOOST_TEST((menu.highlightedSide.Get() == Side::None));
+	menu.TransitionsFinished();
 	menu.chooseAmerica.Execute();
 	menu.hard.Execute();
 	BOOST_TEST((model.campaignDifficulty.Get() == Difficulty::Hard));
@@ -60,12 +65,58 @@ BOOST_AUTO_TEST_CASE(back_returns_to_main_and_buttons_request_screens)
 	ShellModel model;
 	MainMenuViewModel menu(model);
 	menu.multiplayer.Execute();
+	menu.TransitionsFinished();
 	menu.back.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	menu.TransitionsFinished();
 	menu.back.Execute();
 	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
 	menu.options.Execute();
 	BOOST_TEST(model.optionsOpen.Get());
+	menu.exit.Execute();
+	BOOST_TEST(model.quitRequested.Get());
+}
+
+// Legacy parity (MainMenu.cpp MainMenuSystem GBM_SELECTED / GBM_MOUSE_ENTERING, MainMenuUpdate): a button that starts
+// the menu's transitions takes no press while they play (dontAllowTransitions), so a second panel button pressed during
+// the single player panel's slide is ignored, and taken once MainMenuUpdate sees them finished; the faction art's hover
+// transitions start only while no such transition plays and no side was taken; exit is never held back by them.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_menu_transition_holds_the_other_menu_buttons_until_it_finishes)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	BOOST_TEST(menu.FactionHoverAllowed());
+	menu.singlePlayer.Execute();
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	BOOST_TEST(!menu.FactionHoverAllowed());
+	menu.multiplayer.Execute(); // during the slide: ignored
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	menu.TransitionsFinished();
+	BOOST_TEST(menu.FactionHoverAllowed()); // hovering a side now starts its art
+}
+
+// Legacy parity (MainMenu.cpp: skirmishID sets buttonPushed and campaignSelected): once skirmish was pressed the menu
+// takes no other press (it is leaving), exit included, until it is entered again (MainMenuInit); a side button taken
+// (campaignSelected) holds the other side buttons and the single player back until the difficulty panel's back.
+BOOST_AUTO_TEST_CASE(legacy_parity_leaving_the_menu_or_taking_a_side_holds_the_buttons)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	menu.singlePlayer.Execute();
+	menu.TransitionsFinished();
+	menu.chooseGla.Execute();
+	menu.TransitionsFinished();
+	menu.chooseAmerica.Execute(); // a side was taken: ignored
+	BOOST_TEST((model.campaignSide.Get() == Side::Gla));
+	menu.back.Execute(); // the difficulty panel's back frees the sides
+	menu.TransitionsFinished();
+	BOOST_TEST(menu.FactionHoverAllowed());
+	menu.skirmish.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::Skirmish));
+	menu.exit.Execute(); // buttonPushed: nothing more
+	BOOST_TEST(!model.quitRequested.Get());
+	model.Pop();
+	menu.Entered();
 	menu.exit.Execute();
 	BOOST_TEST(model.quitRequested.Get());
 }

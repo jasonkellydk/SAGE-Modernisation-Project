@@ -19,6 +19,7 @@ export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.rts.movement.systems.movement_system;
 export import engine.gameplay.rts.containment.components.garrison;
 export import engine.gameplay.rts.containment.resources.cargo_manifest;
+export import engine.gameplay.rts.stealth.systems.stealth_system;
 
 // Stealth detectors, in parallel per chunk: on its scan tick a live, enabled
 // detector (inside a garrison only if CanDetectWhileGarrisoned, inside any
@@ -107,7 +108,7 @@ struct StealthDetectorSystem
 						if (theirs == nullptr || theirs->player == player ||
 							relationships.Between(team, player, theirTeam != nullptr ? theirTeam->team : Relationships::NoTeam, theirs->player) == Relationship::Allies)
 							continue;
-						offers.push_back({rider, tick + detector.rate + 2, entities[row]});
+						offers.push_back({rider, tick + detector.rate + 2, entities[row], entry.position, theirs->player});
 					}
 					return;
 				}
@@ -115,7 +116,7 @@ struct StealthDetectorSystem
 					return;
 				if (relationships.Between(team, player, entry.team, entry.player) == Relationship::Allies)
 					return;
-				offers.push_back({entry.entity, until, entities[row]});
+				offers.push_back({entry.entity, until, entities[row], entry.position, entry.player});
 			});
 			pings.push_back({entities[row], offers.size() > before || foundInside ? 1u : 0u, 0});
 		}
@@ -130,7 +131,8 @@ struct StealthDetectorSystem
 struct GrantStealthSystem
 {
 	using Query = ecs::Query<ecs::Optional<TeamMember>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Write<GrantStealth>, ecs::OptionalWrite<Lifetime>, ecs::Exclude<OffMap>>;
-	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Write<GrantOffers>, ecs::Write<StealthGrants>>;
+	using Lookup = ecs::Lookup<ecs::Read<StealthRider>>;
+	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Write<GrantOffers>, ecs::Write<StealthGrants>, ecs::Read<CargoManifest>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<GrantOffers>().Reset(query.PreparedChunkCount()); }
 
@@ -145,6 +147,8 @@ struct GrantStealthSystem
 		auto grants = chunk.Get<GrantStealth>();
 		auto lifetimes = chunk.Get<Lifetime>();
 		const auto entities = chunk.Entities();
+		const auto lookup = context.Lookup<Lookup>();
+		const CargoManifest &manifest = context.Read<CargoManifest>();
 		for (std::size_t row = 0; row < grants.size(); ++row)
 		{
 			GrantStealth &grant = grants[row];
@@ -159,8 +163,13 @@ struct GrantStealthSystem
 			spatial.ForEachWithin(transforms[row].position.XY(), grant.radius, [&](const SpatialEntry &entry) {
 				if (entry.entity == entities[row] || (grant.classes != 0 && (entry.classes & grant.classes) == 0))
 					return;
-				if (relationships.Between(team, player, entry.team, entry.player) == Relationship::Allies)
-					offers.push_back(entry.entity);
+				if (relationships.Between(team, player, entry.team, entry.player) != Relationship::Allies)
+					return;
+				offers.push_back(entry.entity);
+				// receiveGrant passes on to a rider-change container's rider (the combat bike's: UseRiderStealth).
+				if (lookup.Get<StealthRider>(entry.entity) != nullptr)
+					if (const auto aboard = manifest.Aboard(entry.entity); !aboard.empty())
+						offers.push_back(aboard.front());
 			});
 			if (last)
 			{
@@ -174,40 +183,52 @@ struct GrantStealthSystem
 	void AfterChunks(Query &, ecs::SystemContext &context) const { context.Write<StealthGrants>().Gather(context.Write<GrantOffers>()); }
 };
 
-// The tick's reveals and grants, in parallel per chunk: detected stealthed
-// things show (and are no longer hidden in their target classes); granted
-// ones may stealth from now on.
+// The tick's reveals and grants, in parallel per chunk: granted ones (StealthUpdate::receiveGrant, on each grantor scan
+// that finds them; never a disguiser) may stealth from now on and are stealthed at once, their update woken; detected
+// ones are marked detected (markAsDetected(numFrames): a disguise dropped, never shortened, idle enemies woken by its
+// owner's OrderIdleEnemiesToAttackMeUponReveal) and show (no longer hidden in their target classes).
 struct StealthRevealSystem
 {
-	using Query = ecs::Query<ecs::Write<Stealth>, ecs::OptionalWrite<Targetable>>;
-	using Resources = ecs::Resources<ecs::Read<Detections>, ecs::Read<StealthGrants>>;
+	using Query = ecs::Query<ecs::Write<Stealth>, ecs::OptionalWrite<Targetable>, ecs::Optional<StealthRider>>;
+	using Resources = ecs::Resources<ecs::Read<Detections>, ecs::Read<StealthGrants>, ecs::Read<TemporaryStealthGrants>, ecs::Write<DetectionWakes>,
+		ecs::Read<TeamRoster>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<DetectionWakes>().Reset(query.PreparedChunkCount()); }
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
 		const Detections &detections = context.Read<Detections>();
 		const StealthGrants &grants = context.Read<StealthGrants>();
-		if (detections.Count() == 0 && grants.Count() == 0)
+		const TemporaryStealthGrants &temporary = context.Read<TemporaryStealthGrants>();
+		if (detections.Count() == 0 && grants.Count() == 0 && temporary.list.empty())
 			return;
 		const std::uint64_t tick = context.Tick();
 		auto stealths = chunk.Get<Stealth>();
 		auto targetables = chunk.Get<Targetable>();
+		const auto riders = chunk.Get<StealthRider>();
 		const auto entities = chunk.Entities();
+		auto &wakes = context.Write<DetectionWakes>().Slot(context);
+		const TeamRoster &roster = context.Read<TeamRoster>();
 		for (std::size_t row = 0; row < stealths.size(); ++row)
 		{
 			Stealth &stealth = stealths[row];
-			if (grants.Count() != 0 && grants.Contains(entities[row]) && !stealth.Has(stealth_flag::CanStealth))
-			{
-				stealth.Set(stealth_flag::CanStealth, true);
-				stealth.allowedAt = tick; // at once, as the original
-			}
-			const std::uint64_t until = detections.Count() != 0 ? detections.For(entities[row]) : 0;
-			if (until == 0)
+			if (grants.Count() != 0 && grants.Contains(entities[row]) && ReceiveGrant(stealth, tick, 0))
+				if (!targetables.empty())
+					stealth_detail::MarkClasses(stealth, targetables[row]);
+			if (const TemporaryStealthGrant *grant = temporary.list.empty() ? nullptr : temporary.Find(entities[row]);
+				grant != nullptr && ReceiveGrant(stealth, tick, grant->frames))
+				if (!targetables.empty())
+					stealth_detail::MarkClasses(stealth, targetables[row]);
+			const Detection *detection = detections.Count() != 0 ? detections.Find(entities[row]) : nullptr;
+			if (detection == nullptr)
 				continue;
-			if (until > stealth.detectedUntil)
-				stealth.detectedUntil = until;
+			const std::uint64_t until = detection->until;
+			const StealthRules rules = stealth_detail::RulesOf(stealth, riders.empty() ? nullptr : &riders[row]);
+			if (MarkAsDetected(stealth, rules, tick, until > tick ? until - tick : 0))
+				wakes.push_back({entities[row], detection->position, detection->player, stealth_detail::DefaultTeamOf(roster, detection->player)});
 			stealth.Set(stealth_flag::Detected, stealth.detectedUntil > tick);
-			if (!targetables.empty() && !stealth.Hidden())
-				targetables[row].classes &= ~target_class::Hidden;
+			if (!targetables.empty())
+				stealth_detail::MarkClasses(stealth, targetables[row]);
 		}
 	}
 };
@@ -231,6 +252,16 @@ struct SystemTraits<engine::gameplay::StealthRevealSystem>
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<>;
 	using After = SystemTypeList<engine::gameplay::StealthDetectorSystem, engine::gameplay::GrantStealthSystem>;
+};
+template<>
+struct SystemTraits<engine::gameplay::WakeIdleEnemiesSystem<engine::gameplay::DetectionWakes>>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.wake_idle_enemies_on_detection";
+	static constexpr bool Batch = true;
+	// After the tick's detections (the reveal pass is in the simulation phase): the woken look from the next tick on.
+	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
 };
 template<>
 struct SystemTraits<engine::gameplay::GrantStealthSystem>

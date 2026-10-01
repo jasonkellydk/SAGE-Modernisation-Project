@@ -22,6 +22,11 @@ import engine.gameplay.rts.navigation.resources.navigation_grid;
 import engine.gameplay.rts.navigation.algorithms.clearance;
 import engine.gameplay.rts.harvesting.resources.harvest_catalog;
 import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.vision.resources.shroud_map;
+import engine.gameplay.common.health.resources.armor_catalog;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.ecs.query.query;
+import games.generalszh.content.combat.combat_catalog;
 
 // Zero Hour's crates, between ticks with the session's random stream:
 //   CreateCrateDie::onDie: a dead object's CrateData makes its crate when the
@@ -38,7 +43,10 @@ import engine.gameplay.rts.upgrades.resources.player_upgrades;
 //   next armor set when it can, else the next weapon set (WeaponChance), else a
 //   level (LevelChance, trainable and below HEROIC), else money. A money crate
 //   (MoneyCrateCollide) gives its money and the boost of the first of its
-//   upgrades the player has (getUpgradedSupplyBoost).
+//   upgrades the player has (getUpgradedSupplyBoost). A heal crate
+//   (HealCrateCollide) heals everything the collector's player has completely
+//   (Player::healAllObjects); a shroud crate (ShroudCrateCollide) reveals the
+//   map to that player (revealMapForPlayer).
 export namespace generalszh::gameplay
 {
 namespace crate_rules_detail
@@ -65,6 +73,25 @@ inline bool HasAny(const content::KindOfMask &kinds, const content::KindOfMask &
 		if ((kinds[word] & mask[word]) != 0)
 			return true;
 	return false;
+}
+
+// Player::healAllObjects: every living object of the player's (its teams' members) healed completely
+// (Object::healCompletely: attemptHealing HUGE_DAMAGE_AMOUNT of HEALING, as its armor lets it; the dead stay dead).
+// Each one on its own, so the chunks' order does not matter.
+inline void HealAllObjects(GameWorld &game, std::uint32_t player)
+{
+	auto &world = game.world;
+	const auto &armors = world.Resource<gp::ArmorCatalog>();
+	const std::uint32_t healing = *content::DamageTypeIndex("HEALING");
+	const std::uint64_t tick = game.tick;
+	ecs::Query<ecs::Write<gp::Health>, ecs::Read<gp::Owner>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		auto healths = chunk.template Get<gp::Health>();
+		const auto owners = chunk.template Get<gp::Owner>();
+		for (std::size_t row = 0; row < healths.size(); ++row)
+			if (owners[row].player == player)
+				gp::Heal(healths[row], gp::AdjustDamage(armors.At(healths[row].armor), healing, gp::HugeDamage()), tick);
+	});
 }
 
 // UniformReal(0, 1) on the session's stream, as a share.
@@ -277,6 +304,18 @@ void PickUpCrates(GameWorld &game, const std::vector<CrateTouch> &touches, Crate
 				const auto spot = gp::FindPositionAround(from.position.XY(), Fixed{}, Fixed::FromInt(20), from.facing, open).value_or(from.position.XY());
 				SpawnObject(game, collide->unitName, spot, from.facing, team, "");
 			}
+		}
+		else if (collide->kind == content::CrateKind::Heal)
+		{
+			executed = true;
+			pickup.kind = CratePickup::Kind::Heal;
+			HealAllObjects(game, player);
+		}
+		else if (collide->kind == content::CrateKind::Shroud)
+		{
+			executed = true;
+			pickup.kind = CratePickup::Kind::Shroud;
+			world.Resource<gp::ShroudMap>().RevealAll(player);
 		}
 		if (!executed)
 			continue;

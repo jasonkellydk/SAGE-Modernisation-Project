@@ -42,6 +42,12 @@ struct FireSoundLoop
 	std::uint32_t reserved{0};
 };
 
+// A locomotive's RunningSound as playing (RailroadBehavior's m_runningSound; 0: none).
+struct TrainSoundLoop
+{
+	std::uint64_t handle{0};
+};
+
 // A Particle Cannon uplink's four sound loops as playing (0: none), and which start of each they play (UplinkEffects).
 struct UplinkSounds
 {
@@ -64,6 +70,14 @@ template<>
 struct ComponentTraits<generalszh::presentation::FireSoundLoop>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.fire_sound_loop";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::TrainSoundLoop>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.train_sound_loop";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;

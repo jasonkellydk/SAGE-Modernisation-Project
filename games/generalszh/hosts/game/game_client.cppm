@@ -1,4 +1,7 @@
 export module games.generalszh.hosts.game.game_client;
+export import games.generalszh.presentation.objects.resources.cloud_layer;
+export import games.generalszh.presentation.objects.resources.detail_settings;
+export import games.generalszh.presentation.scripted.resources.scripted_presentation;
 export import games.generalszh.shell.score.score_screen_view_model;
 export import engine.core.serialization.byte_stream;
 export import engine.audio.mixing.mixer;
@@ -14,8 +17,14 @@ import games.generalszh.presentation.rendering.object_rendering;
 import games.generalszh.presentation.rendering.particle_rendering;
 export import games.generalszh.presentation.effects.light_pulses;
 export import games.generalszh.presentation.effects.scorch_marks;
+export import games.generalszh.presentation.objects.resources.radius_cursor;
+export import games.generalszh.presentation.effects.tracers;
+export import games.generalszh.presentation.rendering.shroud_pixels;
 export import games.generalszh.presentation.objects.components.track_marks;
 export import games.generalszh.presentation.objects.algorithms.object_icon_layout;
+export import games.generalszh.presentation.hud.resources.in_game_overlay;
+export import games.generalszh.presentation.hud.resources.cinematic_text;
+export import games.generalszh.presentation.hud.resources.popup_message;
 import Graphics.Scene.Views.CameraState;
 
 // The client side of a running map (any map: the shell map is just one its
@@ -34,48 +43,25 @@ struct PlayerStart
 	std::string team;
 	int playerTemplate{0};
 	int startPosition{0};
+	int color{-1}; // its MultiplayerColor (a skirmish's; -1: none)
 };
 
 using presentation::ObjectAnimationMode;
 using presentation::ObjectInstance;
 using presentation::ObjectModel;
 
-// What the map's scripts set for the player's presentation: music, levels
-// (percent), speech, and display switches. Audio and the in-game UI read it.
-struct ClientSettings
+// What the map's scripts set for the player's presentation (presentation/scripted).
+using ClientSettings = presentation::ScriptedPresentation;
+
+// CAMERA_ENABLE_SLAVE_MODE: the unit the camera rides as drawn this frame (its look, where its animation is, its world
+// transform) and the bone of it the camera is (W3DView::getCameraTransform's getRenderObjectBoneTransform).
+struct SlavedCamera
 {
-	std::string musicTrack;
-	std::int64_t musicVolume{100};
-	std::int64_t soundVolume{100};
-	std::int64_t speechVolume{100};
-	std::vector<std::string> speechQueue;
-	std::vector<std::string> disabledSounds;
-	std::vector<std::pair<std::string, std::int64_t>> soundVolumeOverrides;
-	bool evaEnabled{true};
-	bool radarForced{false};
-	// VictoryConditions' m_localPlayerDefeated: the local player's defeat was seen (the radar forced on then, once).
-	bool localDefeatSeen{false};
-	bool radarHidden{false}; // RADAR_DISABLE: the local player's radar is hidden (Radar::hide)
-	bool borderShroudDisabled{false};
-	bool drawIconUi{true};
-	bool occlusion{true};
-	bool particleCap{true};
-	bool specialPowerDisplayDisabled{false};
-	// The end of the game as the local player's scripts declared it (VICTORY, DEFEAT, LOCALDEFEAT: which window shows),
-	// and whether that took the player's input away (doDisableInput: victory and defeat).
-	enum class MatchEnd : std::uint8_t { None, Victory, Defeat, LocalDefeat, QuickVictory };
-	MatchEnd matchEnd{MatchEnd::None};
-	std::uint64_t matchEndTick{0};
-	bool inputDisabled{false};
-	// CAMERA_LETTERBOX_BEGIN / END (doLetterBoxMode): the bars on (the control bar hidden) or off, and how many times it
-	// changed (the host times their fade on real time).
-	bool letterbox{false};
-	std::uint32_t letterboxChanges{0};
-	// CAMERA_BW_MODE_BEGIN / END: the view in black and white, faded over `blackWhiteFrames`.
-	bool blackWhite{false};
-	std::int64_t blackWhiteFrames{0};
-	// MOVIE_PLAY_FULLSCREEN / MOVIE_PLAY_RADAR: movies the scripts asked for, not yet played (the host takes them).
-	std::vector<std::string> movies;
+	std::uint32_t look{0};
+	float animationSeconds{0};
+	float animationStart{0};
+	std::array<float, 16> world{};
+	std::string bone;
 };
 
 // The player's pointer this frame (pixels; button bits: 1 left, 2 right).
@@ -90,103 +76,21 @@ struct PointerState
 	bool overInterface{false}; // over the in-game interface (the control bar): the world takes no clicks
 };
 
-// What the interaction draws over the world: the selection box being dragged, and each selected object's
-// health bar (pixels: its top-left corner and width; health as a share).
-struct SelectedMarker
-{
-	float x{0}, y{0}, width{0};
-	float health{1};
-	bool damaged{false}, reallyDamaged{false}, disabled{false};
-};
+// What the presentation draws over the world this frame (presentation/hud: in_game_overlay).
+using presentation::SelectedMarker;
+using presentation::OverlayText;
+using presentation::OverlayImage;
+using presentation::OverlayMessage;
+using presentation::OverlaySuperweapon;
+using presentation::OverlayCaption;
+using presentation::InGameOverlay;
 
-// A floating text as it shows this frame (InGameUI::drawFloatingText): centred on x, its top at y, colour and alpha.
-struct OverlayText
+// A replay to play back (RecorderClass::playbackFile): its recorded ticks and the seat it was recorded from (whose
+// player the viewer sees as: the header's local player).
+struct ReplayStart
 {
-	std::u16string text;
-	float x{0}, y{0};
-	std::array<float, 4> color{1, 1, 1, 1};
-};
-
-// A world animation's image this frame (InGameUI::updateAndDrawWorldAnimations): its mapped image, centred on
-// its screen point, its own size times `scale` (1.3 over the camera zoom), at `alpha`.
-struct OverlayImage
-{
-	std::string image;
-	float x{0}, y{0};
-	float scale{1};
-	float alpha{1};
-	// An object's icon instead (Drawable::drawIconUI): placed by object_icon_layout once its image's size is known,
-	// against its health region (`region`) or, for veterancy, its health box position (x, y) and width over the zoom.
-	enum class Placement : std::uint8_t
-	{
-		Centred,
-		Icon,
-		Veterancy,
-	};
-	Placement placement{Placement::Centred};
-	presentation::ObjectIcon icon{presentation::ObjectIcon::Disabled};
-	presentation::IconRegion region;
-	float iconScale{1};
-	float healthBoxWidth{0};
-	float zoom{1};
-};
-
-// The messages at the top of the screen (InGameUI::postDraw): oldest first, each line under the last from `messageAt`
-// (pixels), in its colour with a black drop at its alpha.
-struct OverlayMessage
-{
-	std::u16string text;
-	std::array<float, 4> color{1, 1, 1, 1};
-};
-
-// A superweapon countdown line (InGameUI's SuperweaponInfo as drawn): none shown is a skipped one (still being built);
-// its power's name (GUI:<name> labels it), m:ss, its colour this frame, and whether it is ready (the bold font).
-struct OverlaySuperweapon
-{
-	bool shown{false};
-	std::string power;
-	std::u16string time;
-	std::array<float, 4> color{1, 1, 1, 1};
-	bool ready{false};
-};
-
-// The military caption (InGameUI's military subtitle as drawn): its lines typed so far, its colour this frame, whether
-// the block after the last letter shows, and where it starts (on an 800x600 screen).
-struct OverlayCaption
-{
-	bool shown{false};
-	std::vector<std::u16string> lines;
-	std::array<float, 4> color{1, 1, 1, 1};
-	bool block{false};
-	std::array<float, 2> at{10, 380};
-};
-
-struct InGameOverlay
-{
-	bool boxActive{false};
-	std::vector<OverlayMessage> messages;
-	std::array<float, 2> messageAt{10, 10};
-	std::array<float, 4> box{};
-	std::vector<SelectedMarker> selected;
-	std::vector<OverlayText> texts;
-	std::vector<OverlayImage> images;
-	// The superweapon countdowns (none while a script hides them), from their position (a share of the screen).
-	std::vector<OverlaySuperweapon> superweapons;
-	std::array<float, 2> superweaponAt{0.9f, 0.01f};
-	OverlayCaption caption;
-	// The named timers (InGameUI's, as drawn): from `namedTimerAt` (a share of the screen) up, a line each; right-aligned
-	// there from the middle rightwards; the ready font for a countdown at 0:00; its colour.
-	struct NamedTimerLine
-	{
-		std::u16string text;
-		bool ready{false};
-		std::array<float, 4> color{1, 1, 1, 1};
-	};
-	std::vector<NamedTimerLine> namedTimers;
-	std::array<float, 2> namedTimerAt{0.7f, 0.7f};
-	// The screen fade (ScriptEngine's m_fade as W3DStatusCircle draws it): none, add, subtract, saturate, multiply; value.
-	std::uint8_t fade{0};
-	float fadeValue{0.0f};
+	engine::net::CommandRecording recording;
+	std::uint32_t seat{0};
 };
 
 class GameClient
@@ -212,7 +116,18 @@ public:
 	bool Start(const engine::level::Level &level, TerrainHeight terrainHeight, std::array<float, 2> playable, float aspectRatio,
 		std::uint64_t seed, std::vector<std::string> seats = {}, std::vector<PlayerStart> starts = {},
 		std::string cameraMarker = "InitialCameraPosition", std::optional<std::uint8_t> soloDifficulty = std::nullopt, bool challenge = false,
-		std::span<const std::byte> checkpoint = {}, std::optional<session::NetworkMatchOptions> network = std::nullopt, std::int32_t rankPoints = 0);
+		std::span<const std::byte> checkpoint = {}, std::optional<session::NetworkMatchOptions> network = std::nullopt, std::int32_t rankPoints = 0,
+		const ReplayStart *replay = nullptr, bool record = false, std::optional<session::ScenerySetup> scenery = std::nullopt);
+	// The match's recorded ticks so far (Start's `record`: RecorderClass::updateRecord); none when not recording.
+	const engine::net::CommandRecording *Recording() const;
+	// A replay's playback (Start's `replay`): whether every recorded tick has run, and the first tick its state hash
+	// differed from the recording's; none when not playing one back.
+	std::optional<session::ClientMatch::Playback> PlaybackState() const;
+	// The local player's shroud as W3DShroud draws it this frame (its cells' texels and the border's); none without a
+	// local player (the shell map, an observer: nothing is shrouded).
+	const presentation::ShroudCells *Shroud();
+	// InGameUI::message: a line of text among the in-game messages (the replay's CRC mismatch).
+	void ShowMessage(const std::u16string &text);
 	// The local player's skill points now (Player::getSkillPoints: what the campaign carries on); 0 with none.
 	std::int32_t LocalSkillPoints() const;
 	// The match's state now (a saved game's); empty with no match.
@@ -246,6 +161,9 @@ public:
 	// Starts waiting for the target of `button` (a control bar command button of `source`: InGameUI::setGUICommand).
 	// `shortcutType`: a general's powers shortcut's power type (its source then found anew each frame).
 	void BeginTargeting(ecs::Entity source, std::string_view button, std::string_view shortcutType = {});
+	// The PLACE_BEACON and DELETE_BEACON keys (CommandMap.ini: Ctrl+B, Del).
+	void PlaceBeaconKey();
+	void RemoveBeaconKey();
 
 	// One logic tick: the session, then the camera commands its scripts queued.
 	void Tick();
@@ -266,18 +184,33 @@ public:
 	void ApplyView(Graphics::CameraState &camera) const;
 	std::array<float, 3> Eye() const;
 	std::span<const ObjectInstance> Objects() const noexcept;
-	// The model a look (numbered in Objects()) draws, and the animation it plays.
-	ObjectModel ModelFor(std::uint32_t look) const;
-	// Learns the animation clips of looks not known yet (their frames and rate) as the renderer loads them.
-	void KnowClips(const std::function<std::optional<std::pair<float, float>>(std::uint32_t look)> &clipOf);
+	// The looks' models (the world's model library); none before a match.
+	presentation::ModelLibrary *Models() const noexcept;
+	// The load screen: waits for the models of the objects drawn so far.
+	void WaitForModels();
 
 	const ClientSettings &Settings() const noexcept;
+	// The camera's slave mode (CAMERA_ENABLE_SLAVE_MODE) as it stands this frame: none when off, or once its unit is
+	// gone (which ends it). SlaveView hands back the bone's world transform (row-major 3x4), which the view takes whole
+	// and whose place the camera's pivot moves to (View::setPosition2D).
+	std::optional<SlavedCamera> CameraSlave() const;
+	void SlaveView(const std::array<float, 12> &bone);
+	// The infantry light scale for the map's time of day (0 morning .. 3 night): a script's override, else GameData's.
+	float InfantryLightScale(std::uint32_t timeOfDay) const noexcept;
+	// The cinematic text over the letterbox this frame (DISPLAY_CINEMATIC_TEXT): none when nothing shows.
+	const presentation::CinematicText *CinematicText() const;
+	// The in-game popup message (INGAME_POPUP_MESSAGE): none when none shows. ClosePopup dismisses it (its OK button,
+	// Enter, Esc): true when it had paused the game.
+	const presentation::PopupMessage *Popup() const;
+	bool ClosePopup();
 	// The movies the scripts asked for since the last call (MOVIE_PLAY_FULLSCREEN / MOVIE_PLAY_RADAR), in order.
 	std::vector<std::string> TakeMovies();
 
 	std::string UnportedSummary() const;
 	// PlayerTemplate.ini in store order (a game setup names factions by index).
 	const content::PlayerTemplates &PlayerTemplates() const noexcept;
+	// Multiplayer.ini (a skirmish's house colours, what its load screen shows of random choices).
+	const content::MultiplayerSettings &MultiplayerSettings() const noexcept;
 	// The sound output in use ("XAudio2", "SDL3" or "none").
 	std::string_view AudioOutputName() const noexcept;
 	// Plays a front-end sound (a button's click), without a position.
@@ -291,8 +224,13 @@ public:
 	void RestoreMusic();
 	// The player's volumes (Options.ini, percent): music, 2D and 3D sounds, speech.
 	void SetUserVolumes(int music, int sound2D, int sound3D, int speech);
-	// The options' detail level (StaticGameLOD name): how long tracks last.
-	void SetDetailLevel(std::string_view level);
+	// The options' detail level (StaticGameLOD: presentation::detail_level) and the player's own detail for Custom
+	// (GameLODManager::init / applyStaticLODLevel).
+	void SetDetail(std::int32_t level, const presentation::CustomDetail &custom);
+	// The detail as applied (none before a game).
+	const presentation::DetailSettings *Detail() const;
+	// The cloud shadows over the terrain this frame (none before a game).
+	const presentation::CloudLayer *Clouds() const;
 	// The Retaliation option (GlobalData::m_clientRetaliationModeEnabled): the local player's simulation is told of it
 	// once a second while they differ (Player::update's MSG_ENABLE_RETALIATION_MODE).
 	void SetRetaliation(bool enabled) noexcept;
@@ -311,6 +249,12 @@ public:
 	std::vector<presentation::ShownLight> Lights() const;
 	// The scorch marks on the terrain (none before the world is up).
 	const presentation::ScorchMarks *Scorches() const;
+	// The radius cursor following the pointer (none: no match).
+	const presentation::RadiusCursor *CursorDecal() const;
+	// The objects' radius decals this frame (none: no match).
+	const presentation::RadiusDecalViews *RadiusDecals() const;
+	// The tracers flying this frame (none: no match).
+	const presentation::Tracers *TracerEffects() const;
 	float ParticleAlpha() const noexcept;
 	std::size_t EntityCount() const;
 	std::size_t WorkerCount() const;

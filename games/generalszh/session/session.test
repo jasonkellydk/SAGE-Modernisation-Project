@@ -16,9 +16,18 @@
 #include <vector>
 #include <string>
 
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.common.weapons.components.armament;
+import Engine.Core.Math.FixedPresentation;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.movement.components.move_goal;
+import engine.gameplay.rts.stealth.resources.detections;
+import engine.gameplay.rts.stealth.components.stealth_detector;
 import games.generalszh.gameplay.production.algorithms.team_building;
 import games.generalszh.content.objects.model_conditions;
 import games.generalszh.session.session;
+import engine.gameplay.common.health.components.health;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.combat.components.projectile;
 import engine.gameplay.rts.combat.components.missile;
@@ -149,6 +158,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_tank_shells_fly_their_arcs_on_the_shell_map)
 	// No MaxLifespan: DEFAULT_MAX_LIFESPAN, 10 s; the angry mob's rocks and molotovs TumbleRandomly, never facing their path.
 	BOOST_TEST(arc.maxLifespan == 300u);
 	BOOST_TEST(!arc.tumble);
+	BOOST_TEST(arc.orientToPath); // no OrientToFlightPath: DumbProjectileBehaviorModuleData's TRUE
 	BOOST_TEST_REQUIRE(arcs.contains("GLAAngryMobRockProjectileObject"));
 	BOOST_TEST(arcs.at("GLAAngryMobRockProjectileObject").tumble);
 	BOOST_TEST(!arcs.at("GLAAngryMobRockProjectileObject").orientToPath);
@@ -492,7 +502,16 @@ BOOST_AUTO_TEST_CASE(players_order_their_own_units_through_the_command_bus)
 	game.Tick(std::span(&order, 1));
 	for (int tick = 0; tick < 300; ++tick)
 		game.Tick();
-	BOOST_TEST((Engine::Math::Distance(game.TransformOf(launcher)->position.XY(), destination) < Engine::Math::Fixed::FromInt(10)));
+	// Pathfinder::adjustDestination (AIInternalMoveToState::onEnter): the ordered point's cell will not do, as the
+	// launcher's footprint there (the 3 x 3 cells about it) takes in a row the allied unit beside it has claimed; the
+	// spiral's first step (one cell east) takes it in too, its second (then one north) is free. The goal is that cell's
+	// centre, and the launcher stops there.
+	const auto *goal = game.World().Get<engine::gameplay::MoveGoal>(launcher);
+	BOOST_TEST_REQUIRE(goal != nullptr);
+	BOOST_TEST((goal->ordered == destination));
+	const Engine::Math::FixedVector2 adjusted{destination.x + Engine::Math::Fixed::FromInt(10), destination.y + Engine::Math::Fixed::FromInt(10)};
+	BOOST_TEST((goal->goal == adjusted));
+	BOOST_TEST((Engine::Math::Distance(game.TransformOf(launcher)->position.XY(), adjusted) < Engine::Math::Fixed::One()));
 }
 
 
@@ -614,7 +633,10 @@ BOOST_AUTO_TEST_CASE(the_shell_map_battle_dies_by_its_die_modules)
 	BOOST_TEST(mostMigs > 0); // built at the airfield (BUILD_TEAM)
 	BOOST_TEST_MESSAGE("topple: " << toppled << " things fell; " << milliseconds / (30 * 60) << " ms a tick (with the test's own reading)");
 	BOOST_TEST(stealthed.size() > 0u);
-	BOOST_TEST(detected.size() > 0u); // and detectors saw through some
+	// No detection is asserted: the only thing that hides here is Jarmen Kell, who stays put 294 from the nearest
+	// detector (range 200). The Combat Bikes stealth only by their riders' rules (StealthUpdate::calcStealthOwner with
+	// UseRiderStealth, pinned by legacy_parity_a_combat_bike_stealths_only_by_its_riders_rules in attacks.test), so
+	// none hides on its own to be seen through; detection itself is pinned by engine/gameplay/rts/stealth/stealth.test.
 	BOOST_TEST(burning.size() > 0u); // napalm fire fields set things alight
 	BOOST_TEST_MESSAGE("damage states seen (object-ticks): " << damagedSeen << " damaged, " << reallyDamagedSeen << " really damaged, " << rubbleSeen << " rubble");
 	BOOST_TEST(damagedSeen + reallyDamagedSeen > 0u);
@@ -665,8 +687,63 @@ BOOST_AUTO_TEST_CASE(profile_the_shell_map_ticks)
 	for (std::size_t index = 0; index < profile.size() && index < 15; ++index)
 		BOOST_TEST_MESSAGE("  " << static_cast<double>(profile[index].cpuNanos) / 1000.0 / ticks << " us  " << profile[index].name
 			<< (game.IsBatchSystem(profile[index].name) ? " (batch)" : ""));
+	// The wave plan: each wave's systems and their summed CPU (a wave of little work is a barrier to fold away).
+	std::size_t index = 0;
+	for (const auto &wave : game.WavePlan())
+	{
+		double cpu = 0;
+		std::string names;
+		for (const std::string_view name : wave)
+		{
+			for (const auto &entry : profile)
+				if (entry.name == name)
+					cpu += static_cast<double>(entry.cpuNanos) / 1000.0 / ticks;
+			names += " ";
+			names += name;
+		}
+		BOOST_TEST_MESSAGE("  wave " << index++ << " (" << cpu << " us):" << names);
+	}
 	BOOST_TEST(total > 0.0);
 }
 
+
+// Legacy parity (Object::kill: unresistable damage of the whole health with m_kill; ImmortalBody::internalChangeHealth
+// keeps a point; FireWeaponWhenDamagedBehavior::onDamage on the post-armor damage, DamageAmount 1): the shell map's
+// "Fire Spot" scripts kill the last bogus target (NAMED_KILL) as they make the next one; each killed target survives at
+// 1 health and fires BattleshipTargetDamagedWeapon where it stands: the battleship's shells land. The scripts kill on
+// ticks 121, 181, 226, 241, 301, 331 and 361 (the first spot's kill at 91 finds no target yet); the blasts land the tick
+// after (here the kill's damage is dealt with the next tick's damage; the original deals it on the spot, a tick sooner).
+// One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shell_maps_battleship_targets_explode_as_scripts_kill_them)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	session::Session four(shell.map->level, shell.game, session::SessionOptions{42, 4, {}});
+	const auto *blast = shell.game.weapons.Find("BattleshipTargetDamagedWeapon");
+	BOOST_TEST_REQUIRE(blast != nullptr);
+	std::vector<std::uint64_t> blasts;
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+		for (const auto &impact : game.Impacts())
+			if (game.WeaponContentOf(impact.weapon) == blast)
+				blasts.push_back(game.CurrentTick());
+	}
+	const std::vector<std::uint64_t> expected{122, 182, 227, 242, 302, 332, 362};
+	BOOST_TEST(blasts == expected, boost::test_tools::per_element());
+	const ecs::Entity target = game.Named("Target1");
+	BOOST_TEST_REQUIRE(game.World().IsAlive(target));
+	BOOST_TEST((game.World().Get<engine::gameplay::Health>(target)->current == Engine::Math::Fixed::One()));
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
 
 BOOST_AUTO_TEST_SUITE_END()

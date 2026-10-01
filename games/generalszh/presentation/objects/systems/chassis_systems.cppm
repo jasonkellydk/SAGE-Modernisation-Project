@@ -8,6 +8,7 @@ export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.physics.resources.physics_settings;
 export import engine.gameplay.rts.movement.components.locomotion;
 export import engine.gameplay.rts.death.components.dying;
+export import engine.gameplay.rts.combat.resources.shots;
 export import games.generalszh.presentation.objects.algorithms.chassis_motion;
 export import games.generalszh.presentation.objects.resources.presentation_resources;
 export import games.generalszh.presentation.objects.resources.look_catalog;
@@ -59,7 +60,8 @@ struct ChassisSystem
 		ecs::Optional<engine::gameplay::Dying>, ecs::Exclude<engine::gameplay::OffMap>>;
 	using SideTables = ecs::SideTables<ecs::Write<ChassisMotion>>;
 	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Read<TerrainHeightHandle>, ecs::Read<engine::gameplay::PhysicsSettings>,
-		ecs::Write<PresentationRandom>>;
+		ecs::Write<PresentationRandom>, ecs::Read<engine::gameplay::FiredShots>, ecs::Read<WeaponRecoils>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Transform>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
@@ -69,6 +71,22 @@ struct ChassisSystem
 		PresentationRandom &random = context.Write<PresentationRandom>();
 		auto &table = context.Side<SideTables, ChassisMotion>();
 		const auto height = [&](float x, float y) { return terrain.at ? terrain.at(x, y) : 0.0f; };
+		// Drawable::handleWeaponFireFX: the tick's shots rock their firers back from where they fired (WeaponRecoil,
+		// in the direction from the firer to its aim, relative to its facing, turned about).
+		const WeaponRecoils &recoils = context.Read<WeaponRecoils>();
+		const auto lookup = context.Lookup<Lookup>();
+		context.Read<engine::gameplay::FiredShots>().ForEach([&](const engine::gameplay::Shot &shot) {
+			const float amount = recoils.Of(shot.weapon);
+			if (amount == 0.0f || !lookup.IsAlive(shot.source))
+				return;
+			ChassisMotion *motion = table.Get(shot.source);
+			const auto *firer = lookup.Get<engine::gameplay::Transform>(shot.source);
+			if (motion == nullptr || firer == nullptr)
+				return;
+			const float facing = static_cast<float>(firer->facing.units) * 6.283185307179586f / 4294967296.0f;
+			Recoil(motion->state, amount,
+				std::atan2(Engine::Math::ToFloat(shot.aim.y - firer->position.y), Engine::Math::ToFloat(shot.aim.x - firer->position.x)), facing);
+		});
 		query.ForEachChunk([&](auto chunk) {
 			const auto transforms = chunk.template Get<engine::gameplay::Transform>();
 			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();

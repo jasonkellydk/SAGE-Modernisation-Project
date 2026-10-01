@@ -104,6 +104,83 @@ inline bool DeckPassable(const NavigationGrid &grid, const ClearancePlane &plane
 
 namespace clearance_detail
 {
+// The ground's zones from a table of its usable cells (row-major, `zones` already all 0): each row's usable cells form
+// runs; a run joins the runs of the row above it overlaps (four ways: sharing a column), by union-find. The flood fill
+// numbers each zone when its first cell in index order is met, so numbering the components in the order their first
+// run comes (rows top to bottom, runs left to right) gives the same numbers.
+inline void LabelRuns(const std::vector<std::uint8_t> &open, std::size_t width, std::size_t height, std::vector<std::uint32_t> &zones)
+{
+	struct Run
+	{
+		std::uint32_t start, end; // cell index range in its row, end exclusive
+		std::uint32_t parent;
+	};
+	std::vector<Run> runs;
+	const auto find = [&](std::uint32_t run) {
+		while (runs[run].parent != run)
+		{
+			runs[run].parent = runs[runs[run].parent].parent;
+			run = runs[run].parent;
+		}
+		return run;
+	};
+	std::size_t previousFirst = 0, previousEnd = 0; // the row above's runs
+	for (std::size_t y = 0; y < height; ++y)
+	{
+		const std::size_t rowStart = y * width;
+		const std::uint8_t *const row = open.data() + rowStart;
+		const std::size_t first = runs.size();
+		// Eight cells a step over whole stretches (all closed, or all open), cell by cell at a run's edges.
+		const auto word = [&](std::size_t x) {
+			std::uint64_t value;
+			std::memcpy(&value, row + x, sizeof(value));
+			return value;
+		};
+		constexpr std::uint64_t AllOpen = 0x0101010101010101ull;
+		for (std::size_t x = 0; x < width;)
+		{
+			while (x + 8 <= width && word(x) == 0)
+				x += 8;
+			while (x < width && row[x] == 0)
+				++x;
+			if (x >= width)
+				break;
+			const std::size_t begin = x;
+			while (x + 8 <= width && word(x) == AllOpen)
+				x += 8;
+			while (x < width && row[x] != 0)
+				++x;
+			const auto id = static_cast<std::uint32_t>(runs.size());
+			runs.push_back({static_cast<std::uint32_t>(rowStart + begin), static_cast<std::uint32_t>(rowStart + x), id});
+		}
+		// Join the runs sharing a column with the row above (both lists run left to right).
+		std::size_t above = previousFirst;
+		for (std::size_t run = first; run < runs.size(); ++run)
+		{
+			const std::size_t begin = runs[run].start - rowStart, end = runs[run].end - rowStart;
+			while (above < previousEnd && runs[above].end - (rowStart - width) <= begin)
+				++above;
+			for (std::size_t other = above; other < previousEnd && runs[other].start - (rowStart - width) < end; ++other)
+			{
+				const std::uint32_t a = find(static_cast<std::uint32_t>(run)), b = find(static_cast<std::uint32_t>(other));
+				if (a != b)
+					runs[std::max(a, b)].parent = std::min(a, b);
+			}
+		}
+		previousFirst = first;
+		previousEnd = runs.size();
+	}
+	std::vector<std::uint32_t> label(runs.size(), 0);
+	std::uint32_t zone = 0;
+	for (std::size_t run = 0; run < runs.size(); ++run)
+	{
+		std::uint32_t &number = label[find(static_cast<std::uint32_t>(run))];
+		if (number == 0)
+			number = ++zone;
+		std::fill(zones.begin() + runs[run].start, zones.begin() + runs[run].end, number);
+	}
+}
+
 // Every cell the routes know (the ground's, then each deck's: NavigationGrid::CellCount) flood-filled where `usable`,
 // four ways within a layer and across a deck's links to the ground, numbered from 1 in index order (0: not usable).
 template<typename Usable>
@@ -112,6 +189,15 @@ void FloodZones(const NavigationGrid &grid, std::vector<std::uint32_t> &zones, U
 	const std::int32_t width = grid.Width(), height = grid.Height();
 	const std::size_t groundCells = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
 	zones.assign(grid.CellCount(), 0);
+	// Without decks (the usual map): the same zones, labelled by runs over a table of the usable cells (LabelRuns).
+	if (grid.Decks().empty())
+	{
+		std::vector<std::uint8_t> open(groundCells);
+		for (std::size_t index = 0; index < groundCells; ++index)
+			open[index] = usable(index) ? 1 : 0;
+		LabelRuns(open, static_cast<std::size_t>(width), static_cast<std::size_t>(height), zones);
+		return;
+	}
 	std::vector<std::size_t> offsets;
 	for (std::uint8_t layer = 1; layer <= grid.Decks().size(); ++layer)
 		offsets.push_back(grid.DeckOffset(layer));
@@ -187,9 +273,31 @@ inline void BuildZones(const NavigationGrid &grid, ClearancePlane &plane)
 		return layer <= plane.deckRoom.size() && local < plane.deckRoom[layer - 1].size() && plane.deckRoom[layer - 1][local] != 0 &&
 			deck.type[local] == PathfindCellType::Clear;
 	};
-	const auto groundType = [&](std::size_t index) {
-		return grid.Type(static_cast<std::int32_t>(index % static_cast<std::size_t>(width)), static_cast<std::int32_t>(index / static_cast<std::size_t>(width)));
-	};
+	// Row-major, as Index: the ground's types in index order.
+	const std::span<const PathfindCellType> types = grid.Types();
+	const auto groundType = [&](std::size_t index) { return types[index]; };
+	// Without decks: both zone maps' usable cells in one pass (the tests below, cell by cell, into buffers kept with
+	// the plane), then labelled by runs.
+	if (grid.Decks().empty() && groundCells == types.size() && grid.CellCount() == groundCells)
+	{
+		std::vector<std::uint8_t> &open = plane.zoneOpen, &terrain = plane.terrainOpen;
+		open.resize(groundCells);
+		terrain.resize(groundCells);
+		const std::uint8_t *const room = plane.room.data();
+		for (std::size_t index = 0; index < groundCells; ++index)
+		{
+			const PathfindCellType type = types[index];
+			const bool usable = room[index] != 0 && type != PathfindCellType::BridgeImpassable;
+			open[index] = usable ? 1 : 0;
+			terrain[index] = usable || type == PathfindCellType::Obstacle ? 1 : 0;
+		}
+		plane.zones.assign(groundCells, 0);
+		plane.terrainZones.assign(groundCells, 0);
+		clearance_detail::LabelRuns(open, static_cast<std::size_t>(width), static_cast<std::size_t>(grid.Height()), plane.zones);
+		clearance_detail::LabelRuns(terrain, static_cast<std::size_t>(width), static_cast<std::size_t>(grid.Height()), plane.terrainZones);
+		plane.zonesStale = false;
+		return;
+	}
 	clearance_detail::FloodZones(grid, plane.zones, [&](std::size_t index) {
 		if (index >= groundCells)
 			return deckUsable(index);

@@ -1,4 +1,5 @@
 export module engine.gameplay.common.spatial.resources.ground_height;
+export import engine.core.serialization.byte_stream;
 import std;
 
 export import engine.level.model.level;
@@ -17,6 +18,7 @@ struct WaterArea
 	Engine::Math::Fixed height;
 	Engine::Math::FixedVector2 low;
 	Engine::Math::FixedVector2 high;
+	std::string name; // its polygon's (a script changes its height by it)
 
 	bool Contains(Engine::Math::FixedVector2 point) const noexcept
 	{
@@ -55,11 +57,11 @@ public:
 	std::uint32_t ActiveBoundary() const noexcept { return m_activeBoundary; }
 	void SetActiveBoundary(std::uint32_t index) noexcept { m_activeBoundary = index; }
 
-	void AddWater(std::vector<Engine::Math::FixedVector2> outline, Engine::Math::Fixed height)
+	void AddWater(std::vector<Engine::Math::FixedVector2> outline, Engine::Math::Fixed height, std::string name = {})
 	{
 		if (outline.empty())
 			return;
-		WaterArea area{std::move(outline), height, {}, {}};
+		WaterArea area{std::move(outline), height, {}, {}, std::move(name)};
 		area.low = area.outline.front();
 		area.high = area.outline.front();
 		for (const auto &point : area.outline)
@@ -92,6 +94,48 @@ public:
 	}
 
 	const std::vector<WaterArea> &WaterAreas() const noexcept { return m_water; }
+
+	// TerrainLogic::getWaterHandleByName: the water area of that name.
+	std::optional<std::size_t> WaterNamed(std::string_view name) const noexcept
+	{
+		for (std::size_t index = 0; index < m_water.size(); ++index)
+			if (m_water[index].name == name)
+				return index;
+		return std::nullopt;
+	}
+	// setWaterHeight on a polygon's water: its points' height (whole units, toward zero, as the polygon's integer points).
+	void SetWaterHeight(std::size_t index, Engine::Math::Fixed height) noexcept
+	{
+		if (index < m_water.size())
+			m_water[index].height = Engine::Math::Fixed::FromInt(height >= Engine::Math::Fixed{} ? height.Floor() : -(Engine::Math::Fixed{} - height).Floor());
+	}
+	// TerrainLogic::isUnderwater: in water whose surface is above the ground there.
+	bool Underwater(Engine::Math::FixedVector2 position) const noexcept
+	{
+		Engine::Math::Fixed water;
+		return Water(position, water) && At(position) < water;
+	}
+	// The water areas' heights (a checkpoint's: what scripts made of them).
+	void SaveWater(engine::core::serialization::ByteWriter &writer) const
+	{
+		writer.U32(static_cast<std::uint32_t>(m_water.size()));
+		for (const WaterArea &area : m_water)
+			writer.I64(area.height.Raw());
+	}
+	bool LoadWater(engine::core::serialization::ByteReader &reader)
+	{
+		const auto count = reader.U32();
+		if (!count || *count != m_water.size())
+			return false;
+		for (WaterArea &area : m_water)
+		{
+			const auto raw = reader.I64();
+			if (!raw)
+				return false;
+			area.height = Engine::Math::Fixed::FromRaw(*raw);
+		}
+		return true;
+	}
 
 	Engine::Math::Fixed At(Engine::Math::FixedVector2 position) const noexcept
 	{

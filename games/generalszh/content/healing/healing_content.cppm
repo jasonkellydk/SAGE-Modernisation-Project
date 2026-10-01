@@ -5,15 +5,17 @@ export import engine.gameplay.common.healing.components.healing;
 export import engine.gameplay.common.spatial.components.targetable;
 export import games.generalszh.content.objects.object_definition;
 
-// How an object heals, from its AutoHealBehavior module: itself (no radius),
-// others in a radius, or all of its player's (AffectsWholePlayer); KindOf
-// and ForbiddenKindOf become target classes. Only modules that start active
-// count: upgrade-triggered ones (junk repair) wait for upgrades.
+// How an object heals, from its AutoHealBehavior modules (each its own
+// program, in module order): itself (no radius), others in a radius, or all
+// of its player's (AffectsWholePlayer); KindOf and ForbiddenKindOf become
+// target classes. Modules that do not start active (upgrade-triggered: GLA
+// Junk Repair, the veterancy heal every object inherits from DefaultThing)
+// are dormant until their upgrade.
 export namespace generalszh::content
 {
 struct ObjectHealing
 {
-	std::optional<engine::gameplay::SelfHealing> self;
+	engine::gameplay::SelfHealing self; // no programs: does not heal itself
 	engine::gameplay::AreaHealing area; // no programs: not a healer
 };
 
@@ -42,6 +44,18 @@ std::uint32_t Classes(const engine::config::Node *node)
 }
 }
 
+// Whether an AutoHealBehavior module heals others (a Radius, or AffectsWholePlayer) rather than only itself.
+inline bool AutoHealsOthers(const engine::config::Node &block)
+{
+	const auto *radiusNode = block.Find("Radius");
+	std::string radiusText = radiusNode != nullptr ? std::string(radiusNode->Value()) : std::string{};
+	if (!radiusText.empty() && (radiusText.back() == 'f' || radiusText.back() == 'F'))
+		radiusText.pop_back(); // "100.0f"
+	const auto *whole = block.Find("AffectsWholePlayer");
+	return engine::config::values::ParseFixed(radiusText).value_or(Engine::Math::Fixed{}) > Engine::Math::Fixed{} ||
+		(whole != nullptr && engine::config::values::ParseBool(whole->Value()).value_or(false));
+}
+
 ObjectHealing ReadObjectHealing(const ObjectDefinition &object, const engine::time::FixedStep &step)
 {
 	using namespace healing_detail;
@@ -52,8 +66,7 @@ ObjectHealing ReadObjectHealing(const ObjectDefinition &object, const engine::ti
 			continue;
 		const engine::config::Node &block = *module.block;
 		const auto *starts = block.Find("StartsActive");
-		if (starts == nullptr || !engine::config::values::ParseBool(starts->Value()).value_or(false))
-			continue;
+		const bool dormant = starts == nullptr || !engine::config::values::ParseBool(starts->Value()).value_or(false);
 		engine::config::Diagnostics diagnostics;
 		engine::config::BindContext bind{diagnostics, step};
 		const auto ticks = [&](std::string_view key) -> std::uint64_t {
@@ -76,7 +89,9 @@ ObjectHealing ReadObjectHealing(const ObjectDefinition &object, const engine::ti
 		const bool wholePlayer = flag("AffectsWholePlayer");
 		if (radius <= Engine::Math::Fixed{} && !wholePlayer)
 		{
-			healing.self = engine::gameplay::SelfHealing{amount, delay, ticks("StartHealingDelay"), 0};
+			engine::gameplay::SelfHealProgram self{amount, delay, ticks("StartHealingDelay"), 0};
+			self.dormant = dormant ? 1 : 0;
+			healing.self.Add(self);
 			continue;
 		}
 		engine::gameplay::AreaHealProgram area;
@@ -87,7 +102,8 @@ ObjectHealing ReadObjectHealing(const ObjectDefinition &object, const engine::ti
 		area.classes = kinds != 0 ? kinds : 0xFFFFFFFFu;
 		area.forbiddenClasses = Classes(block.Find("ForbiddenKindOf"));
 		area.flags = (flag("SkipSelfForHealing") ? engine::gameplay::area_healing::SkipSelf : 0u) |
-			(flag("SingleBurst") ? engine::gameplay::area_healing::SingleBurst : 0u) | (wholePlayer ? engine::gameplay::area_healing::WholePlayer : 0u);
+			(flag("SingleBurst") ? engine::gameplay::area_healing::SingleBurst : 0u) | (wholePlayer ? engine::gameplay::area_healing::WholePlayer : 0u) |
+			(dormant ? engine::gameplay::area_healing::Dormant : 0u);
 		healing.area.Add(area);
 	}
 	return healing;

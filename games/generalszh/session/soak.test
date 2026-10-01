@@ -1,0 +1,154 @@
+#include <boost/test/unit_test.hpp>
+#include <chrono>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+
+// A diagnostic soak (not in the suite): four hard computer players on Tournament Continent.
+using namespace generalszh;
+
+BOOST_AUTO_TEST_SUITE(soak)
+
+BOOST_AUTO_TEST_CASE(four_hard_computer_players)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install) || std::getenv("SOAK_TICKS") == nullptr)
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	content::MountInstall(files, install);
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
+	const auto scb = files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE((scb.has_value() && map.has_value()));
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < game.playerTemplates.templates.size(); ++index)
+			if (game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 11;
+	setup.startingCash = 10000;
+	const char *factions[] = {"FactionAmerica", "FactionChina", "FactionGLA", "FactionAmericaAirForceGeneral"};
+	for (int slot = 0; slot < 4; ++slot)
+	{
+		setup.slots[slot].SetState(session::setup::SlotState::HardAI);
+		setup.slots[slot].playerTemplate = templateOf(factions[slot]);
+		setup.slots[slot].startPos = slot;
+	}
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, game.playerTemplates, 4, &*file);
+	const int ticks = std::getenv("SOAK_TICKS") != nullptr ? std::atoi(std::getenv("SOAK_TICKS")) : 9000;
+	const int workers = std::getenv("SOAK_WORKERS") != nullptr ? std::atoi(std::getenv("SOAK_WORKERS")) : 1;
+	session::SessionOptions options{11, static_cast<std::size_t>(workers), {}, {}};
+	options.scriptTrace = std::getenv("SOAK_TRACE") != nullptr;
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session session(skirmish.level, game, options);
+	double windowMax = 0.0, windowTotal = 0.0, overallMax = 0.0, profiled = 0.0;
+	const int profileFrom = ticks - 900;
+	// SOAK_SPIKES=<ms>: every tick over that many milliseconds is broken down (its parts, its costliest systems).
+	const double spikeMs = std::getenv("SOAK_SPIKES") != nullptr ? std::atof(std::getenv("SOAK_SPIKES")) : 0.0;
+	if (spikeMs > 0.0)
+		session.EnableProfiling(true);
+	for (int tick = 1; tick <= ticks; ++tick)
+	{
+		if (tick == profileFrom)
+			session.EnableProfiling(true);
+		const auto partsBefore = spikeMs > 0.0 ? session.TickNanos() : decltype(session.TickNanos()){};
+		const auto systemsBefore = spikeMs > 0.0 ? session.Profile() : decltype(session.Profile()){};
+		const auto begin = std::chrono::steady_clock::now();
+		session.Tick();
+		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+		if (spikeMs > 0.0 && ms > spikeMs && tick != profileFrom)
+		{
+			const char *names[] = {"commands", "scripts", "team states", "systems", "aftermath", "AI players", "generic scripts", "tending"};
+			std::string line = "spike tick " + std::to_string(tick) + " " + std::to_string(ms) + " ms:";
+			const auto partsAfter = session.TickNanos();
+			for (std::size_t part = 0; part < partsAfter.size(); ++part)
+				if (partsAfter[part] - partsBefore[part] > 100000)
+					line += std::string(" ") + names[part] + " " + std::to_string((partsAfter[part] - partsBefore[part]) / 1000) + "us";
+			const auto systemsAfter = session.Profile();
+			for (std::size_t system = 0; system < systemsAfter.size() && system < systemsBefore.size(); ++system)
+				if (systemsAfter[system].cpuNanos - systemsBefore[system].cpuNanos > 100000)
+					line += " [" + std::string(systemsAfter[system].name) + " " + std::to_string((systemsAfter[system].cpuNanos - systemsBefore[system].cpuNanos) / 1000) + "us]";
+			BOOST_TEST_MESSAGE(line);
+		}
+		windowMax = std::max(windowMax, ms);
+		overallMax = std::max(overallMax, ms);
+		windowTotal += ms;
+		if (tick >= profileFrom)
+			profiled += ms;
+		if (tick % 900 == 0)
+		{
+			BOOST_TEST_MESSAGE("tick " << tick << " entities " << session.EntityCount() << " avg " << windowTotal / 900.0 << " ms max " << windowMax << " ms");
+			windowMax = windowTotal = 0.0;
+		}
+	}
+	auto timings = session.Profile();
+	std::sort(timings.begin(), timings.end(), [](const auto &a, const auto &b) { return a.cpuNanos > b.cpuNanos; });
+	const char *parts[] = {"commands", "scripts", "team states", "systems", "aftermath", "AI players", "generic scripts", "tending"};
+	const auto nanos = session.TickNanos();
+	for (std::size_t part = 0; part < nanos.size(); ++part)
+		BOOST_TEST_MESSAGE("  part " << parts[part] << " " << nanos[part] / 1e6 << " ms");
+	auto calls = session.ScriptProfile();
+	std::sort(calls.begin(), calls.end(), [](const auto &a, const auto &b) { return a.nanos > b.nanos; });
+	for (std::size_t index = 0; index < calls.size() && index < 20; ++index)
+		BOOST_TEST_MESSAGE("  script " << calls[index].name << " " << calls[index].nanos / 1e6 << " ms (" << calls[index].calls << ")");
+	BOOST_TEST_MESSAGE("profiled " << profiled << " ms over 900 ticks; scheduler waves " << session.WaveNanos() / 1e6 << " ms");
+	for (std::size_t index = 0; index < timings.size() && index < 25; ++index)
+		BOOST_TEST_MESSAGE("  " << timings[index].name << " " << timings[index].cpuNanos / 1e6 << " ms (" << timings[index].runs << "; hooks "
+			<< timings[index].hookNanos / 1e6 << " ms)");
+	const auto overhead = session.SchedulerOverhead();
+	BOOST_TEST_MESSAGE("waves: prepare " << overhead.prepareNanos / 1e6 << " ms, setup " << overhead.setupNanos / 1e6 << " ms, hooks " << overhead.hookNanos / 1e6 << " ms, jobs (wall) " << overhead.jobNanos / 1e6
+		<< " ms, commits " << overhead.commitNanos / 1e6 << " ms; " << overhead.jobs << " jobs in " << overhead.waves << " non-empty waves, "
+		<< overhead.commits << " commits");
+	{
+		const auto plan = session.WavePlan();
+		const auto &wall = session.WaveWallNanos();
+		std::vector<std::size_t> order(wall.size());
+		for (std::size_t index = 0; index < order.size(); ++index)
+			order[index] = index;
+		std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) { return wall[a] > wall[b]; });
+		// SOAK_WAVES=<n>: the n costliest waves (15 unless set).
+		const std::size_t shown = std::getenv("SOAK_WAVES") != nullptr ? static_cast<std::size_t>(std::atoi(std::getenv("SOAK_WAVES"))) : 15;
+		for (std::size_t rank = 0; rank < order.size() && rank < shown; ++rank)
+		{
+			std::string names;
+			for (const auto name : plan[order[rank]])
+				names += std::string(name) + " ";
+			BOOST_TEST_MESSAGE("  wave " << order[rank] << " " << wall[order[rank]] / 1e6 << " ms (longest job " << session.WaveLongestJobNanos()[order[rank]] / 1e6
+				<< " ms, " << session.WaveJobCounts()[order[rank]] << " jobs): " << names);
+		}
+	}
+	{
+		std::size_t chunks = 0, nonEmpty = 0, archetypesInUse = 0;
+		for (const ecs::Archetype *archetype : session.World().GetArchetypes())
+		{
+			archetypesInUse += archetype->EntityCount() != 0 ? 1u : 0u;
+			for (const auto &chunk : archetype->Chunks())
+			{
+				++chunks;
+				nonEmpty += chunk->Size() != 0 ? 1u : 0u;
+			}
+		}
+		BOOST_TEST_MESSAGE("archetypes " << session.World().ArchetypeCount() << " (" << archetypesInUse << " in use), chunks " << chunks << " (" << nonEmpty << " in use)");
+	}
+	BOOST_TEST_MESSAGE("max tick " << overallMax << " ms; unported: " << session.UnportedSummary());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

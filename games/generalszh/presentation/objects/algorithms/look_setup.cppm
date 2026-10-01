@@ -1,4 +1,7 @@
 export module games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.components.beacon_look;
+import engine.gameplay.rts.harvesting.components.resource_store;
+import games.generalszh.content.railroad.railroad_content;
 import std;
 import games.generalszh.presentation.objects.components.tree_bend;
 import games.generalszh.presentation.objects.components.object_icons;
@@ -35,6 +38,7 @@ void RegisterObjectPresentation(ecs::World &world)
 {
 	world.RegisterComponent<TickPose>();
 	world.RegisterComponent<ShownLook>();
+	world.RegisterComponent<ExtraShownLooks>();
 	world.RegisterComponent<TreeSway>();
 	world.RegisterComponent<HeatVision>();
 	world.RegisterComponent<DisableHeard>();
@@ -50,7 +54,9 @@ void RegisterObjectPresentation(ecs::World &world)
 	world.RegisterComponent<BarrelRecoil>();
 	world.RegisterComponent<ConditionEmission>();
 	world.RegisterComponent<CrashTrailEmission>();
+	world.RegisterComponent<FirestormEmission>();
 	world.RegisterComponent<FxEmission>();
+	world.RegisterComponent<BoneFxEmission>();
 	world.RegisterComponent<DamageEmission>();
 	world.RegisterComponent<ExhaustState>();
 	world.RegisterComponent<HitFxThrottle>();
@@ -58,6 +64,8 @@ void RegisterObjectPresentation(ecs::World &world)
 	world.RegisterComponent<TrackMarks>();
 	world.RegisterComponent<TreeBend>();
 	world.RegisterComponent<UplinkEffects>();
+	world.RegisterComponent<BeaconLook>();
+	world.RegisterComponent<BeaconCaption>();
 }
 
 DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint32_t definition, LookCatalog &catalog)
@@ -70,9 +78,50 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 		!looks.states.Empty() && !looks.states.states.front().recoilBone.empty()};
 	looks.scale = Engine::Math::ToFloat(object.scale);
 	looks.castsShadow = object.shadow == 1u || object.shadow == 2u || object.shadow == 4u;
+	looks.shadowKind = looks.castsShadow ? object.shadow : std::uint8_t{0};
 	looks.constructionHeight = Engine::Math::ToFloat(object.geometry.shape == content::GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height);
 	looks.animatesWhileDisabled = object.Is("PRODUCED_AT_HELIPAD");
 	looks.ignoredInGui = object.Is("IGNORED_IN_GUI");
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.slot == content::ModuleSlot::Draw && module.type == "W3DScienceModelDraw")
+		{
+			looks.needsScience = true;
+			if (const auto *science = module.block->Find("RequiredScience"); science != nullptr && !science->values.empty())
+				looks.requiredScience = view.Content().Science(science->Value()).value_or(0xFFFFFFFFu);
+		}
+	for (const content::ModuleEntry &module : object.modules)
+	{
+		if (module.slot == content::ModuleSlot::ClientUpdate && module.type == "AnimatedParticleSysBoneClientUpdate")
+			looks.animatedParticleBones = true;
+		if (module.block != nullptr && module.slot == content::ModuleSlot::Draw && module.type.starts_with("W3D"))
+			if (const auto *flag = module.block->Find("ParticlesAttachedToAnimatedBones"); flag != nullptr && !flag->values.empty())
+				looks.animatedParticleBones = looks.animatedParticleBones || engine::config::values::ParseBool(flag->Value()).value_or(false);
+	}
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.slot == content::ModuleSlot::ClientUpdate && module.type == "BeaconClientUpdate")
+		{
+			// parseDurationUnsignedInt: milliseconds to frames, rounded up.
+			const auto frames = [&](std::string_view key, std::uint64_t fallback) {
+				const auto *node = module.block->Find(key);
+				const auto ms = node != nullptr && !node->values.empty() ? engine::config::values::ParseFixed(node->Value()) : std::nullopt;
+				if (!ms || *ms < Engine::Math::Fixed{})
+					return fallback;
+				const auto numerator = static_cast<std::uint64_t>(ms->Raw()) * 30u;
+				const std::uint64_t denominator = std::uint64_t{1000} << Engine::Math::Fixed::FractionBits;
+				return (numerator + denominator - 1) / denominator;
+			};
+			looks.beacon = true;
+			looks.beaconPulseEvery = frames("RadarPulseFrequency", 30);
+			looks.beaconPulseFor = frames("RadarPulseDuration", 15);
+		}
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.slot == content::ModuleSlot::Draw && module.type == "W3DSupplyDraw")
+			if (const auto *prefix = module.block->Find("SupplyBonePrefix"); prefix != nullptr && !prefix->values.empty())
+				looks.supplyBonePrefix = std::string(prefix->Value());
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.type == "DynamicShroudClearingRangeUpdate")
+			if (const auto *grid = module.block->Find("GridDecalTemplate"))
+				looks.gridDecal = content::ReadRadiusDecal(*grid, 30);
 	looks.infantry = object.Is("INFANTRY");
 	looks.shrubbery = object.Is("SHRUBBERY");
 	looks.boxFootprint = object.geometry.shape == content::GeometryShape::Box;
@@ -85,6 +134,20 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 		if (module.block != nullptr && module.type == "DumbProjectileBehavior")
 			if (const auto *fx = module.block->Find("GarrisonHitKillFX"); fx != nullptr && fx->Value() != "None")
 				looks.garrisonHitFx = std::string(fx->Value());
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.type == "FirestormDynamicGeometryInfoUpdate")
+		{
+			for (int system = 1; system <= 16; ++system)
+				if (const auto *node = module.block->Find("ParticleSystem" + std::to_string(system)); node != nullptr && node->Value() != "None")
+					looks.firestormSystems.push_back(std::string(node->Value()));
+			if (const auto *node = module.block->Find("ParticleOffsetZ"))
+				looks.firestormOffsetZ = Engine::Math::ToFloat(engine::config::values::ParseFixed(node->Value()).value_or(Engine::Math::Fixed{}));
+		}
+	if (const auto boneFx = view.Content().boneFx.find(object.name); boneFx != view.Content().boneFx.end())
+	{
+		looks.boneParticles = boneFx->second.particles;
+		looks.boneParticleTypes = boneFx->second.particleTypes;
+	}
 	looks.uplink = content::ReadUplinkLook(object, [&](std::string_view name) { return view.ObjectNamed(name); });
 	if (const auto pulse = content::ReadEmpPulse(object, engine::time::FixedStep{30}))
 	{
@@ -132,14 +195,18 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 			catalog.lookModels.push_back(model);
 		}
 	};
-	looks.bufferTree = content::DefaultModel(object).drawType == "W3DTreeDraw";
+	looks.resting = content::DefaultModel(object);
+	looks.bufferTree = looks.resting.drawType == "W3DTreeDraw";
 	{
 		const std::string &draw = content::DefaultModel(object).drawType;
 		looks.ridersTakeTint = draw == "W3DOverlordAircraftDraw" || draw == "W3DOverlordTankDraw" || draw == "W3DOverlordTruckDraw";
 	}
 	// A tree-buffer tree casts its shadow by its W3DTreeDraw's DoShadow (W3DTreeBuffer), not by the object's Shadow.
 	if (looks.bufferTree)
+	{
 		looks.castsShadow = content::ReadTreeDraw(object).value_or(content::TreeDrawMotion{}).doShadow;
+		looks.shadowKind = 0;
+	}
 	if (const auto tree = content::ReadTreeDraw(object))
 	{
 		TreeMotion &motion = looks.treeMotion;
@@ -178,9 +245,14 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 		const auto draw = static_cast<std::uint32_t>(looks.extraDraws.size() + 1);
 		for (std::uint32_t state = 0; state < extra.states.states.size(); ++state)
 		{
-			catalog.looks.push_back({definition, state, 0, draw});
-			catalog.lookModels.push_back(extra.states.states[state].model);
-			extra.stateLooks.push_back(static_cast<std::uint32_t>(catalog.looks.size() - 1));
+			const auto variants = std::max(static_cast<std::uint32_t>(extra.states.states[state].animations.size()), 1u);
+			extra.stateLooks.push_back(static_cast<std::uint32_t>(catalog.looks.size()));
+			extra.stateVariants.push_back(variants);
+			for (std::uint32_t variant = 0; variant < variants; ++variant)
+			{
+				catalog.looks.push_back({definition, state, 0, draw, variant});
+				catalog.lookModels.push_back(extra.states.states[state].model);
+			}
 		}
 		looks.extraDraws.push_back(std::move(extra));
 	}
@@ -209,6 +281,8 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.afterburnerSound = std::string(object.Sound("Afterburner"));
 	looks.lowFuelVoice = std::string(object.Sound("VoiceLowFuel"));
 	looks.rapidFireVoice = std::string(object.Sound("VoiceRapidFire"));
+	if (const auto railroad = content::ReadRailroad(object, engine::time::FixedStep{30}); railroad && railroad->locomotive)
+		looks.trainRunningSound = railroad->runningSound;
 	looks.mine = object.Is("MINE");
 	looks.ghost = object.Is("IMMOBILE") &&
 		std::none_of(object.modules.begin(), object.modules.end(), [](const content::ModuleEntry &module) { return module.type == "W3DDefaultDraw"; });
@@ -291,6 +365,55 @@ void KnowPartLooks(LookCatalog &catalog, ecs::World &world)
 	});
 }
 
+// W3DSupplyDraw::updateDrawModuleSupplyStatus for what stores supplies: once its model is loaded, how many supply bones
+// (SupplyBonePrefix01, 02, ... to the first gap) it has; then for each count shown in play not made before, a copy of
+// its own looks with those above it hidden (doHideShowSubObjs: all show at first; the ones past the count hide).
+void KnowSupplyLooks(LookCatalog &catalog, ecs::World &world, const BonePoses &bones)
+{
+	ecs::Query<ecs::Read<engine::gameplay::ResourceStore>, ecs::Read<engine::gameplay::DefinitionRef>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto stores = chunk.template Get<engine::gameplay::ResourceStore>();
+		const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+		for (std::size_t row = 0; row < stores.size(); ++row)
+		{
+			const std::uint32_t definition = definitions[row].index;
+			if (definition >= catalog.byDefinition.size() || catalog.known[definition] == 0)
+				continue;
+			DefinitionLooks &looks = catalog.byDefinition[definition];
+			if (looks.supplyBonePrefix.empty() || looks.ownLookCount == 0)
+				continue;
+			if (looks.supplyBones < 0)
+			{
+				const std::string &model = catalog.lookModels[looks.ownLookFirst];
+				if (!bones.pose || !bones.locate || !bones.pose(model, looks.supplyBonePrefix).ready)
+					continue;
+				looks.supplyBones = static_cast<std::int32_t>(bones.locate(model, looks.supplyBonePrefix, true).size());
+				looks.supplyLooks.assign(static_cast<std::size_t>(looks.supplyBones), DefinitionLooks::NoLook);
+			}
+			const std::uint32_t shown = looks.SupplyShown(stores[row].boxes, stores[row].startingBoxes);
+			if (shown >= static_cast<std::uint32_t>(looks.supplyBones) || looks.supplyLooks[shown] != DefinitionLooks::NoLook)
+				continue;
+			std::vector<std::pair<std::string, bool>> hidden;
+			for (std::int32_t index = static_cast<std::int32_t>(shown) + 1; index <= looks.supplyBones; ++index)
+			{
+				char number[4];
+				std::snprintf(number, sizeof number, "%02d", index);
+				hidden.emplace_back(looks.supplyBonePrefix + number, false);
+			}
+			const auto parts = static_cast<std::uint32_t>(catalog.partOverrides.size());
+			catalog.partOverrides.push_back(std::move(hidden));
+			looks.supplyLooks[shown] = static_cast<std::uint32_t>(catalog.looks.size());
+			for (std::uint32_t look = looks.ownLookFirst; look < looks.ownLookFirst + looks.ownLookCount; ++look)
+			{
+				LookEntry entry = catalog.looks[look];
+				entry.parts = parts;
+				catalog.looks.push_back(entry);
+				catalog.lookModels.push_back(catalog.lookModels[look]);
+			}
+		}
+	});
+}
+
 void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 {
 	namespace mc = content::model_condition;
@@ -314,6 +437,10 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 		catalog.crateMoneySound = found->second;
 	if (const auto found = misc.find("CrateFreeUnit"); found != misc.end())
 		catalog.crateFreeUnitSound = found->second;
+	if (const auto found = misc.find("CrateHeal"); found != misc.end())
+		catalog.crateHealSound = found->second;
+	if (const auto found = misc.find("CrateShroud"); found != misc.end())
+		catalog.crateShroudSound = found->second;
 	if (const auto found = misc.find("UnitPromoted"); found != misc.end())
 		catalog.unitPromotedSound = found->second;
 	if (const auto found = misc.find("BuildingDisabled"); found != misc.end())
@@ -331,6 +458,18 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 	if (const auto found = misc.find("DefectorTimerDingSound"); found != misc.end())
 		catalog.defectorDingSound = found->second;
 	const content::GameData &data = view.Content().gameData;
+	// W3DInGameUI::drawMoveHints: the MoveHintName model with its animation "<name>.<name>", played once.
+	if (catalog.moveHintLook == LookCatalog::NoLook && !data.moveHintName.empty())
+	{
+		LookEntry entry;
+		entry.model = LookCatalog::BareModel;
+		entry.mode = static_cast<std::uint8_t>(content::ModelAnimationMode::Once);
+		catalog.moveHintLook = static_cast<std::uint32_t>(catalog.looks.size());
+		catalog.looks.push_back(entry);
+		catalog.lookModels.push_back(data.moveHintName);
+		catalog.lookAnimations.resize(catalog.looks.size() - 1);
+		catalog.lookAnimations.push_back(data.moveHintName + "." + data.moveHintName);
+	}
 	catalog.selectionFlashHouseColor = data.selectionFlashHouseColor;
 	catalog.selectionFlashSaturation = Engine::Math::ToFloat(data.selectionFlashSaturationFactor);
 	catalog.levelGainAnimation = data.levelGainAnimation;
@@ -350,6 +489,8 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 		entry.mode = code;
 		catalog.looks.push_back(entry);
 		catalog.lookModels.emplace_back(view.ModelName(object.model));
+		// lookAnimations runs alongside looks (a definition's own looks leave theirs empty).
+		catalog.lookAnimations.resize(catalog.looks.size() - 1);
 		catalog.lookAnimations.emplace_back(animation != 0 ? view.ModelName(animation) : std::string_view{});
 		const auto key = std::pair{LookCatalog::ModelKey(object.model, animation, code), static_cast<std::uint32_t>(catalog.looks.size() - 1)};
 		catalog.modelLooks.insert(std::upper_bound(catalog.modelLooks.begin(), catalog.modelLooks.end(), key), key);

@@ -6,9 +6,10 @@ export import engine.ecs.system.system;
 export import engine.gameplay.common.healing.components.healing;
 export import engine.gameplay.common.health.systems.health_system;
 
-// Heals entities that heal themselves, in parallel per chunk: while hurt and
-// alive, `amount` every `delay` ticks, waiting `startDelay` after each hit
-// (nor while it waits: a structure's base regeneration while it is not standing whole).
+// Heals entities that heal themselves, in parallel per chunk: each of their
+// programs, while hurt and alive, `amount` every `delay` ticks, waiting
+// `startDelay` after each hit (nor while it waits: a structure's base
+// regeneration while it is not standing whole; nor while dormant).
 export namespace engine::gameplay
 {
 struct SelfHealingSystem
@@ -23,18 +24,23 @@ struct SelfHealingSystem
 		const auto disabledRows = chunk.Get<Disabled>();
 		for (std::size_t row = 0; row < healths.size(); ++row)
 		{
-			SelfHealing &self = healing[row];
-			if (self.waiting != 0)
-				continue;
-			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], self.runsWhileDisabled != 0 ? self.runsWhileDisabled : disabled_type::Held))
-				continue;
+			SelfHealing &healer = healing[row];
 			Health &health = healths[row];
-			if (IsDead(health) || health.current >= health.maximum || tick < self.nextTick)
-				continue;
-			if (self.startDelay > 0 && health.lastDamageTick != 0 && tick < health.lastDamageTick + self.startDelay)
-				continue;
-			Heal(health, self.amount, tick);
-			self.nextTick = tick + self.delay;
+			// Each module on its own (the original updates them apart): every program in turn.
+			for (std::uint32_t index = 0; index < healer.count; ++index)
+			{
+				SelfHealProgram &self = healer.programs[index];
+				if (self.dormant != 0 || (healer.waiting != 0 && self.onlyWhenStanding != 0))
+					continue;
+				if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], self.runsWhileDisabled != 0 ? self.runsWhileDisabled : disabled_type::Held))
+					continue;
+				if (IsDead(health) || health.current >= health.maximum || tick < self.nextTick)
+					continue;
+				if (self.startDelay > 0 && health.lastDamageTick != 0 && tick < health.lastDamageTick + self.startDelay)
+					continue;
+				Heal(health, self.amount, tick);
+				self.nextTick = tick + self.delay;
+			}
 		}
 	}
 };

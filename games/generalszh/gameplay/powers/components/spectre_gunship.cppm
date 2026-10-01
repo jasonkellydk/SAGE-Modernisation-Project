@@ -4,6 +4,7 @@ import std;
 export import engine.ecs.core.component_registry;
 export import engine.ecs.core.entity;
 export import Engine.Core.Math.FixedVector;
+export import games.generalszh.content.global.radius_decal;
 import engine.ecs.system.system;
 
 // The Spectre gunship's attack (the original's SpectreGunshipUpdate): on its way in from the map's edge, circling the
@@ -51,6 +52,9 @@ struct SpectreGunshipConfig
 	Engine::Math::Fixed randomOffset;
 	Engine::Math::Fixed reticleRadius;
 	Engine::Math::Fixed orbitRadius;
+	// AttackAreaDecal and TargetingReticleDecal (the presentation's, laid while it inserts and orbits).
+	content::RadiusDecalLook attackAreaDecal;
+	content::RadiusDecalLook reticleDecal;
 };
 
 // Per kind of building that calls one in (SpectreGunshipDeploymentUpdate): its power, the gunship (a definition name)
@@ -69,6 +73,9 @@ struct SpectreDeploymentConfig
 	std::uint32_t power{0xFFFFFFFFu};
 	std::string gunship;
 	GunshipEntry entry{GunshipEntry::EdgeFarthestFromTarget};
+	// RequiredScience (doesSpecialPowerUpdatePassScienceTest: the Airforce general's three command centre modules, one
+	// per gunship level); none: 0xFFFFFFFF.
+	std::uint32_t requiredScience{0xFFFFFFFFu};
 };
 
 // What the tick decided, carried out after it through the AI's orders (CMD_FROM_AI).

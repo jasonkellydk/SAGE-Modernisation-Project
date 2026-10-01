@@ -8,11 +8,15 @@ export import engine.time.simulation_time;
 import engine.config.binding.values;
 
 // An object that serves a master, from its SlavedUpdate module: GuardMaxRange,
-// GuardWanderRange, AttackRange, AttackWanderRange, ScoutRange, ScoutWanderRange, DistToTargetToGrantRangeBonus
-// (whole units). Repairing its master is not bound yet.
+// GuardWanderRange, AttackRange, AttackWanderRange, ScoutRange, ScoutWanderRange, DistToTargetToGrantRangeBonus,
+// RepairRange (whole units: parseInt, truncated), RepairMinAltitude, RepairMaxAltitude, RepairRatePerSecond (per tick:
+// / LOGICFRAMES_PER_SECOND), RepairWhenBelowHealth% (a whole percent), RepairMin/MaxReadyTime and RepairMin/MaxWeldTime
+// (ms, whole frames rounded up: parseDurationUnsignedInt), StayOnSameLayerAsMaster. Its welding sparks
+// (RepairWeldingSys at RepairWeldingFXBone) are the presentation's (ReadSlavedWelding).
 export namespace generalszh::content
 {
-inline std::optional<engine::gameplay::SlavedDefinition> ReadObjectSlaved(const ObjectDefinition &object)
+inline std::optional<engine::gameplay::SlavedDefinition> ReadObjectSlaved(const ObjectDefinition &object,
+	const engine::time::FixedStep &step = engine::time::FixedStep{30})
 {
 	for (const ModuleEntry &module : object.modules)
 	{
@@ -22,16 +26,67 @@ inline std::optional<engine::gameplay::SlavedDefinition> ReadObjectSlaved(const 
 			const auto *node = module.block->Find(key);
 			return node != nullptr ? engine::config::values::ParseFixed(node->Value()).value_or(Engine::Math::Fixed{}) : Engine::Math::Fixed{};
 		};
+		// INI::parseInt: a whole number (truncated).
+		const auto truncated = [&](std::string_view key) {
+			const Engine::Math::Fixed value = range(key);
+			return value >= Engine::Math::Fixed{} ? value.Floor() : -(Engine::Math::Fixed{} - value).Floor();
+		};
+		const auto whole = [&](std::string_view key) { return Engine::Math::Fixed::FromInt(truncated(key)); };
+		// INI::parseDurationUnsignedInt: ceil(ms * frames per ms).
+		const auto ticks = [&](std::string_view key) {
+			const Engine::Math::Fixed ms = range(key);
+			if (ms <= Engine::Math::Fixed{})
+				return std::uint32_t{0};
+			const auto numerator = static_cast<std::uint64_t>(ms.Raw()) * step.TicksPerSecond();
+			const std::uint64_t denominator = std::uint64_t{1000} << Engine::Math::Fixed::FractionBits;
+			return static_cast<std::uint32_t>((numerator + denominator - 1) / denominator);
+		};
 		engine::gameplay::SlavedDefinition slaved;
-		slaved.guardMaxRange = range("GuardMaxRange");
-		slaved.guardWanderRange = range("GuardWanderRange");
-		slaved.attackRange = range("AttackRange");
-		slaved.attackWanderRange = range("AttackWanderRange");
-		slaved.scoutRange = range("ScoutRange");
-		slaved.scoutWanderRange = range("ScoutWanderRange");
-		slaved.spottingRange = range("DistToTargetToGrantRangeBonus");
+		slaved.guardMaxRange = whole("GuardMaxRange");
+		slaved.guardWanderRange = whole("GuardWanderRange");
+		slaved.attackRange = whole("AttackRange");
+		slaved.attackWanderRange = whole("AttackWanderRange");
+		slaved.scoutRange = whole("ScoutRange");
+		slaved.scoutWanderRange = whole("ScoutWanderRange");
+		slaved.spottingRange = whole("DistToTargetToGrantRangeBonus");
 		slaved.spottingBonus = weapon_bonus::DroneSpotting; // SlavedUpdate grants WEAPONBONUSCONDITION_DRONE_SPOTTING
+		slaved.repairRange = whole("RepairRange");
+		slaved.repairMinAltitude = range("RepairMinAltitude");
+		slaved.repairMaxAltitude = range("RepairMaxAltitude");
+		slaved.repairPerTick = range("RepairRatePerSecond") / Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(step.TicksPerSecond()));
+		slaved.repairBelowPercent = static_cast<std::int32_t>(truncated("RepairWhenBelowHealth%"));
+		slaved.minReadyTicks = ticks("RepairMinReadyTime");
+		slaved.maxReadyTicks = ticks("RepairMaxReadyTime");
+		slaved.minWeldTicks = ticks("RepairMinWeldTime");
+		slaved.maxWeldTicks = ticks("RepairMaxWeldTime");
+		if (const auto *node = module.block->Find("StayOnSameLayerAsMaster"))
+			slaved.stayOnMasterLayer = engine::config::values::ParseBool(node->Value()).value_or(false) ? 1 : 0;
 		return slaved;
+	}
+	return std::nullopt;
+}
+
+// A repairing drone's sparks (SlavedUpdate's RepairWeldingSys, at its RepairWeldingFXBone): none when it has no system.
+struct SlavedWelding
+{
+	std::string system;
+	std::string bone;
+};
+
+inline std::optional<SlavedWelding> ReadSlavedWelding(const ObjectDefinition &object)
+{
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr || module.type != "SlavedUpdate")
+			continue;
+		SlavedWelding welding;
+		if (const auto *node = module.block->Find("RepairWeldingSys"))
+			welding.system = std::string(node->Value());
+		if (const auto *node = module.block->Find("RepairWeldingFXBone"))
+			welding.bone = std::string(node->Value());
+		if (welding.system.empty())
+			return std::nullopt;
+		return welding;
 	}
 	return std::nullopt;
 }

@@ -347,6 +347,14 @@ private:
             : pass == 2 ? RHIBlendMode::Multiply : RHIBlendMode::Disabled;
         description.sampler_count = 16;
         description.samplers[0] = description.samplers[1] = sampler;
+        // The cloud layer tiles over the map and is always filtered bilinearly (TerrainShader2Stage's cloud pass:
+        // D3DTADDRESS_WRAP, D3DTEXF_LINEAR).
+        auto cloud = sampler;
+        cloud.address.fill(RHISamplerAddress::Wrap);
+        cloud.Set_Filter(RHISamplerFilter::Linear);
+        description.samplers[2] = cloud;
+        // The light map likewise tiles (LightMapTerrainTextureClass: TEXTURE_ADDRESS_REPEAT, filtered).
+        description.samplers[3] = cloud;
         const auto handle = m_device->Create_Pipeline(description,
             {m_shaders.Bytecode(m_shader, ShaderStage::Vertex)},
             {m_shaders.Bytecode(m_shader, ShaderStage::Pixel)});

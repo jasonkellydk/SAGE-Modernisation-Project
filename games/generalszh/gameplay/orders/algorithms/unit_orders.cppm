@@ -1,4 +1,8 @@
 export module games.generalszh.gameplay.orders.algorithms.unit_orders;
+export import games.generalszh.gameplay.containment.components.assault_transport;
+import engine.gameplay.rts.docking.components.dock_look;
+import games.generalszh.gameplay.containment.components.railed_transport;
+import games.generalszh.gameplay.flight_deck.components.flight_deck;
 import engine.gameplay.rts.combat.components.attack_move;
 import games.generalszh.gameplay.containment.components.rider_change;
 import std;
@@ -12,6 +16,7 @@ import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.rts.construction.components.builder;
 
 export import games.generalszh.gameplay.world.resources.game_world;
+import games.generalszh.gameplay.mines.algorithms.mine_clearing;
 import games.generalszh.gameplay.hacking.algorithms.hack_orders;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.identity.components.owner;
@@ -68,7 +73,13 @@ void TakeOver(GameWorld &game, ecs::Entity unit, bool fromPlayer)
 	// A hacker hacking packs up first (HackInternetAIUpdate::aiDoCommand: the order waits).
 	InterruptHack(game, unit);
 	if (auto *docking = world.Get<gameplay::Docking>(unit))
+	{
+		// DockUpdate::cancelDock: the dock's active mover gone, its docking looks clear.
+		if (docking->granted)
+			if (auto *look = world.Get<gameplay::DockLook>(docking->dock))
+				look->flags = 0;
 		*docking = {};
+	}
 	if (auto *route = world.Get<gameplay::Route>(unit))
 		route->planned = false;
 	// A new order: the obstacle it was walking out of counts again.
@@ -109,15 +120,23 @@ inline void Commanded(GameWorld &game, ecs::Entity unit)
 	if (auto *activity = game.world.Get<gameplay::AiActivity>(unit))
 	{
 		activity->commanded = 1;
+		activity->fromPlayer = 0; // (a player's order marks it after: ApplyCommand)
 		activity->busy = 0;
 	}
+	// AssaultTransportAIUpdate::aiDoCommand: any order from outside starts it over (an attack-move or attack order then
+	// says which; OrderStop calls its members back first).
+	if (auto *assault = game.world.Get<AssaultTransport>(unit))
+		assault->Reset();
 }
 
 // An order from its own AI (CMD_FROM_AI): the last command source is its AI again.
 inline void AiCommanded(GameWorld &game, ecs::Entity unit)
 {
 	if (auto *activity = game.world.Get<gameplay::AiActivity>(unit))
+	{
 		activity->commanded = 0;
+		activity->fromPlayer = 0;
+	}
 }
 
 // AIUpdateInterface::aiIdle(CMD_FROM_AI): it stops moving and attacking, guarding and hunting end, and it is no longer
@@ -127,6 +146,8 @@ inline void AiIdle(GameWorld &game, ecs::Entity unit)
 	auto &world = game.world;
 	if (!world.IsAlive(unit))
 		return;
+	// HackInternetAIUpdate::aiDoCommand: a hacker hacking packs up first (the idle waits).
+	InterruptHack(game, unit);
 	if (auto *route = world.Get<gameplay::Route>(unit))
 		route->planned = false;
 	if (auto *order = world.Get<gameplay::MoveOrder>(unit))
@@ -149,8 +170,10 @@ inline void AiBusyOn(GameWorld &game, ecs::Entity unit)
 		activity->busy = 1;
 }
 
-// aiMoveToPosition: `commanded` from a player or a script (else CMD_FROM_AI: AiMove).
-void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool fromPlayer = false, bool commanded = true)
+// aiMoveToPosition: `commanded` from a player or a script (else CMD_FROM_AI: AiMove). Its goal adjusted and claimed
+// (AIMoveToState), unless the move is another state's (`claim`: aiEnter's AIEnterState claims nothing).
+void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool fromPlayer = false, bool commanded = true,
+	gameplay::GoalClaim claim = gameplay::GoalClaim::Adjust)
 {
 	auto &world = game.world;
 	if (!world.IsAlive(unit) || detail::Locked(game, unit))
@@ -163,7 +186,7 @@ void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool
 		return;
 	detail::TakeOver(game, unit, fromPlayer);
 	if (auto *order = world.Get<gameplay::MoveOrder>(unit))
-		*order = gameplay::MoveToPoint(destination);
+		*order = gameplay::MoveToPoint(destination, claim);
 	if (auto *attack = world.Get<gameplay::AttackTarget>(unit))
 		*attack = {};
 	detail::EndStance(game, unit);
@@ -174,9 +197,16 @@ void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool
 void OrderAttackMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination)
 {
 	auto &world = game.world;
+	if (DesignateFlightDeck(world, unit, DeckOrder::AttackMove, {}, destination, false))
+		return;
 	if (!world.IsAlive(unit) || world.Get<gameplay::MoveOrder>(unit) == nullptr || world.Get<gameplay::Aggression>(unit) == nullptr)
 		return;
 	OrderMove(game, unit, destination, true);
+	if (auto *assault = world.Get<AssaultTransport>(unit))
+	{
+		assault->attackMoveGoal = destination;
+		assault->isAttackMove = 1;
+	}
 	if (world.Get<gameplay::MoveOrder>(unit)->mode == gameplay::MoveMode::Idle)
 		return; // it could not take the move (locked, carried, immobile)
 	if (!world.Has<gameplay::AttackMove>(unit))
@@ -184,17 +214,61 @@ void OrderAttackMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination
 	*world.Get<gameplay::AttackMove>(unit) = gameplay::AttackMove{destination};
 }
 
-// A player's or script's attack order (the only ones that come here). A TransportAIUpdate carrier whose passengers may
-// fire passes it on to them (TransportAIUpdate::privateAttackObject: CMD_FROM_PLAYER or CMD_FROM_SCRIPT), in the order
-// they got in; a portable structure (an Overlord's or Helix's add-on) that is hacked, EMPed, subdued or paralyzed is
-// left out.
+// An attack order. A TransportAIUpdate carrier whose passengers may fire passes it on to them
+// (TransportAIUpdate::privateAttackObject), in the order they got in; a portable structure (an Overlord's or Helix's
+// add-on) that is hacked, EMPed, subdued or paralyzed is left out.
+void OrderAttack(GameWorld &game, ecs::Entity unit, ecs::Entity target, std::uint32_t maxShots = 0, gameplay::CommandSource source = gameplay::CommandSource::Player);
+
 // AIUpdateInterface::aiAttackPosition: attack the spot on the ground (its turrets too), at most `maxShots` shots (0: no
 // limit); `commanded` from a player or a script, else its own AI's.
 void OrderAttackPosition(GameWorld &game, ecs::Entity unit, Engine::Math::FixedVector3 position, std::uint32_t maxShots, bool commanded = true)
 {
 	auto &world = game.world;
+	if (DesignateFlightDeck(world, unit, DeckOrder::AttackPosition, {}, position.XY(), !commanded))
+		return;
 	if (!world.IsAlive(unit) || detail::Locked(game, unit))
 		return;
+	// TransportAIUpdate::privateAttackPosition: a transport letting its riders fire passes a direct order (a player's or a
+	// script's) on to each of them first (aiAttackPosition), a portable structure not while hacked, EMPed, subdued or
+	// paralyzed.
+	if (commanded)
+	{
+		const auto *transport = world.Get<gameplay::Transport>(unit);
+		const auto *kind = world.Get<gameplay::DefinitionRef>(unit);
+		if (transport != nullptr && transport->definition.passengersFire && kind != nullptr &&
+			std::ranges::any_of(game.templates.DefinitionAt(kind->index).modules, [](const content::ModuleEntry &module) { return module.type == "TransportAIUpdate"; }))
+		{
+			static constexpr std::size_t PortableStructure = content::KindOfBit("PORTABLE_STRUCTURE");
+			constexpr std::uint32_t Stopped = gameplay::disabled_type::Hacked | gameplay::disabled_type::Emp | gameplay::disabled_type::Subdued |
+				gameplay::disabled_type::Paralyzed;
+			const std::vector<ecs::Entity> riders(game.manifest.Aboard(unit).begin(), game.manifest.Aboard(unit).end());
+			for (const ecs::Entity passenger : riders)
+			{
+				const auto *passengerKind = world.Get<gameplay::DefinitionRef>(passenger);
+				const auto *off = world.Get<gameplay::Disabled>(passenger);
+				if (passengerKind != nullptr && content::HasKindOf(game.templates.DefinitionAt(passengerKind->index).kinds, PortableStructure) && off != nullptr &&
+					(off->mask & Stopped) != 0)
+					continue;
+				OrderAttackPosition(game, passenger, position, maxShots, true);
+			}
+		}
+	}
+	// privateAttackPosition: a weapon in hand with a ContinueAttackRange looks (seeing through stealth) for the closest it
+	// may attack within that range of the spot and attacks that instead; finding none, it fires one shot at the spot.
+	const gameplay::CommandSource source = commanded ? gameplay::CommandSource::Player : gameplay::CommandSource::Ai;
+	if (const auto *armament = world.Get<gameplay::Armament>(unit); armament != nullptr && armament->weapon != gameplay::WeaponCatalog::None)
+	{
+		const Engine::Math::Fixed range = game.templates.weapons.At(armament->weapon).continueAttackRange;
+		if (range > Engine::Math::Fixed{})
+		{
+			if (const ecs::Entity victim = mine_clearing_detail::Closest(game, unit, position.XY(), range, source, true, std::nullopt, {}); victim != ecs::Entity{})
+			{
+				OrderAttack(game, unit, victim, maxShots, source);
+				return;
+			}
+			maxShots = 1;
+		}
+	}
 	if (commanded)
 		Commanded(game, unit);
 	else
@@ -202,7 +276,8 @@ void OrderAttackPosition(GameWorld &game, ecs::Entity unit, Engine::Math::FixedV
 	auto *attack = world.Get<gameplay::AttackTarget>(unit);
 	if (attack == nullptr)
 		return;
-	*attack = gameplay::AttackTarget{.ordered = true, .atPosition = 1, .shotsLeft = maxShots, .position = position};
+	*attack = gameplay::AttackTarget{.ordered = true, .atPosition = 1, .source = commanded ? gameplay::CommandSource::Player : gameplay::CommandSource::Ai,
+		.shotsLeft = maxShots, .position = position};
 	detail::EndStance(game, unit);
 }
 
@@ -218,6 +293,7 @@ void ReloadAllAmmo(GameWorld &game, ecs::Entity unit)
 		armament->clip = weapons->At(armament->weapon).clipSize;
 		armament->readyTick = game.tick;
 		armament->reloading = false;
+		armament->scatterUsed = 0;
 	}
 	if (auto *set = world.Get<gameplay::WeaponSlots>(unit))
 		for (gameplay::WeaponSlot &slot : set->slots)
@@ -226,15 +302,26 @@ void ReloadAllAmmo(GameWorld &game, ecs::Entity unit)
 				slot.clip = weapons->At(slot.weapon).clipSize;
 				slot.readyTick = game.tick;
 				slot.reloading = false;
+				slot.scatterUsed = 0;
 			}
 }
 
-void OrderAttack(GameWorld &game, ecs::Entity unit, ecs::Entity target, std::uint32_t maxShots = 0)
+// AIUpdateInterface::aiAttackObject: attack `target`, at most `maxShots` shots (0: no limit), ordered from `source` (its
+// own AI's order leaves it uncommanded; the attack remembers the source for its choice of weapon).
+void OrderAttack(GameWorld &game, ecs::Entity unit, ecs::Entity target, std::uint32_t maxShots, gameplay::CommandSource source)
 {
 	auto &world = game.world;
+	// FlightDeckBehavior::aiDoCommand: a carrier's attack goes to its jets.
+	if (DesignateFlightDeck(world, unit, DeckOrder::Attack, target, {}, source == gameplay::CommandSource::Ai))
+		return;
 	if (!world.IsAlive(unit) || !world.IsAlive(target) || detail::Locked(game, unit))
 		return;
-	Commanded(game, unit);
+	if (source == gameplay::CommandSource::Ai)
+		AiCommanded(game, unit);
+	else
+		Commanded(game, unit);
+	if (auto *assault = world.Get<AssaultTransport>(unit))
+		assault->isAttackObject = 1;
 	const auto *transport = world.Get<gameplay::Transport>(unit);
 	const auto *kind = world.Get<gameplay::DefinitionRef>(unit);
 	if (transport != nullptr && transport->definition.passengersFire && kind != nullptr &&
@@ -251,21 +338,30 @@ void OrderAttack(GameWorld &game, ecs::Entity unit, ecs::Entity target, std::uin
 				(off->mask & Stopped) != 0)
 				continue;
 			if (auto *attack = world.Get<gameplay::AttackTarget>(passenger))
-				*attack = {target, true};
+				*attack = {.target = target, .ordered = true, .source = source};
 		}
 	}
 	if (auto *attack = world.Get<gameplay::AttackTarget>(unit))
-	{
-		*attack = {target, true};
-		attack->shotsLeft = maxShots;
-	}
+		*attack = {.target = target, .ordered = true, .source = source, .shotsLeft = maxShots};
 }
+
+void OrderBoard(GameWorld &game, ecs::Entity unit, ecs::Entity transport, bool commanded);
 
 void OrderStop(GameWorld &game, ecs::Entity unit, bool fromPlayer = false, bool commanded = true)
 {
 	auto &world = game.world;
+	if (DesignateFlightDeck(world, unit, DeckOrder::Idle, {}, {}, !commanded))
+		return;
 	if (!world.IsAlive(unit) || detail::Locked(game, unit))
 		return;
+	// AssaultTransportAIUpdate::aiDoCommand(AICMD_IDLE): its members outside called back in (retrieveMembers).
+	if (const auto *assault = commanded ? world.Get<AssaultTransport>(unit) : nullptr)
+		for (std::uint32_t index = 0; index < assault->count; ++index)
+		{
+			const ecs::Entity member = assault->members[index];
+			if (world.IsAlive(member) && !world.Has<gameplay::Passenger>(member) && !world.Has<gameplay::Boarding>(member))
+				OrderBoard(game, member, unit, false);
+		}
 	if (commanded)
 		Commanded(game, unit);
 	else
@@ -330,6 +426,27 @@ bool CanDockAt(const GameWorld &game, ecs::Entity unit, ecs::Entity dock)
 void OrderDock(GameWorld &game, ecs::Entity unit, ecs::Entity dock, bool fromPlayer = false)
 {
 	auto &world = game.world;
+	// ActionManager::canDockAt: a railed transport any VEHICLE or INFANTRY docks with (its dock machine, no delay between
+	// its business frames).
+	if (world.IsAlive(dock) && world.Has<RailedTransport>(dock) && world.Has<gameplay::Dock>(dock))
+	{
+		const auto *ref = world.IsAlive(unit) ? world.Get<gameplay::DefinitionRef>(unit) : nullptr;
+		if (ref == nullptr || !world.Has<gameplay::MoveOrder>(unit) || !detail::Mobile(game, unit) || world.Has<gameplay::Passenger>(unit) ||
+			detail::Locked(game, unit))
+			return;
+		const content::ObjectDefinition &kind = game.templates.DefinitionAt(ref->index);
+		if (!kind.Is("VEHICLE") && !kind.Is("INFANTRY"))
+			return;
+		Commanded(game, unit);
+		detail::TakeOver(game, unit, fromPlayer);
+		if (!world.Has<gameplay::Docking>(unit))
+			world.Add<gameplay::Docking>(unit);
+		gameplay::StartDocking(*world.Get<gameplay::Docking>(unit), dock, 0);
+		if (auto *attack = world.Get<gameplay::AttackTarget>(unit))
+			*attack = {};
+		detail::EndStance(game, unit);
+		return;
+	}
 	if (!CanDockAt(game, unit, dock) || !detail::Mobile(game, unit) || world.Has<gameplay::Passenger>(unit) || detail::Locked(game, unit))
 		return;
 	Commanded(game, unit);

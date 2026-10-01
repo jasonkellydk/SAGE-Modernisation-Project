@@ -479,7 +479,43 @@ public:
 	const std::vector<std::string> &Warnings() const noexcept { return m_warnings; }
 	std::size_t ScriptCount() const noexcept { return m_scripts.size(); }
 
+	// Diagnostics (off by default): where the scripts' time goes, by condition and action name and for the subject
+	// lists, in summed nanoseconds and calls.
+	struct CallTiming
+	{
+		std::string name;
+		std::uint64_t nanos{0};
+		std::uint64_t calls{0};
+	};
+	void EnableProfiling(bool enabled)
+	{
+		m_profiling = enabled;
+		m_timings.clear();
+	}
+	std::vector<CallTiming> Profile() const
+	{
+		std::vector<CallTiming> out;
+		for (const auto &[name, timing] : m_timings)
+			out.push_back({name, timing.first, timing.second});
+		return out;
+	}
+
 private:
+	template<typename Call>
+	auto Timed(std::string_view name, Call &&call)
+	{
+		if (!m_profiling)
+			return call();
+		const auto begin = std::chrono::steady_clock::now();
+		auto result = call();
+		auto &timing = m_timings[std::string(name)];
+		timing.first += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - begin).count());
+		++timing.second;
+		return result;
+	}
+	bool m_profiling{false};
+	std::map<std::string, std::pair<std::uint64_t, std::uint64_t>, std::less<>> m_timings;
+
 	struct CompiledCall
 	{
 		const level::ScriptCall *call;
@@ -562,7 +598,10 @@ private:
 		if (m_forcedSubject)
 			subjects.push_back(*m_forcedSubject);
 		else if (m_hooks.subjects)
-			m_hooks.subjects(*slot.script, slot.participant, subjects);
+			Timed("<subjects>", [&] {
+				m_hooks.subjects(*slot.script, slot.participant, subjects);
+				return true;
+			});
 		if (!subjects.empty())
 		{
 			// Evaluated per subject; a one-shot deactivates but the remaining
@@ -606,7 +645,7 @@ private:
 			for (const CompiledCall &call : clause)
 			{
 				ScriptCallContext context{*this, slot.participant, subject, *call.call, m_tick, &call.memo};
-				if (call.condition == nullptr || !(*call.condition)(context))
+				if (call.condition == nullptr || !Timed(call.call->name, [&] { return (*call.condition)(context); }))
 				{
 					all = false;
 					break;
@@ -627,7 +666,10 @@ private:
 			ScriptCallContext context{*this, slot.participant, subject, *call.call, m_tick, &call.memo};
 			if (m_hooks.actionRun && slot.script != nullptr)
 				m_hooks.actionRun(*slot.script, *call.call, m_tick);
-			(*call.action)(context);
+			Timed(call.call->name, [&] {
+				(*call.action)(context);
+				return true;
+			});
 		}
 	}
 

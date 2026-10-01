@@ -1,0 +1,193 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationCamera
+#include <boost/test/included/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.camera.algorithms.camera_shaking;
+import games.generalszh.presentation.camera.algorithms.motion_blur_steps;
+import games.generalszh.presentation.camera.algorithms.selection_focus;
+import games.generalszh.presentation.camera.algorithms.camera_slave;
+
+using namespace generalszh::presentation;
+
+namespace
+{
+// A random source that always gives its lowest value, so every uniform draw is its range's low end.
+struct LowestRandom
+{
+	using result_type = std::uint32_t;
+	static constexpr result_type(min)() { return 0; }
+	static constexpr result_type(max)() { return (std::numeric_limits<result_type>::max)(); }
+	result_type operator()() { return 0; }
+};
+}
+
+BOOST_AUTO_TEST_SUITE(camera_effects)
+
+// legacy_parity: CameraShakeSystemClass::Add_Camera_Shake / Timestep (W3DDevice CameraShakeSystem.cpp), stepped by
+// 1/30 of a second a frame as W3DView::getCameraTransform does at 30 frames a second: a shaker lives while its elapsed
+// time, summed in floats, is below its duration: one of 1 s is gone on the 30th step (1.0000004), one of 1.5 s on the
+// 46th (45 steps sum to 1.4999998), one of 0.5 s on the 15th; the others stay in their order.
+BOOST_AUTO_TEST_CASE(legacy_parity_shakers_expire_on_the_frame_their_summed_time_reaches_their_duration)
+{
+	CameraShakers shakers;
+	LowestRandom random;
+	AddCameraShake(shakers, {0, 0, 0}, 100.0f, 1.0f, 2.0f, random);
+	AddCameraShake(shakers, {0, 0, 0}, 100.0f, 1.5f, 2.0f, random);
+	AddCameraShake(shakers, {0, 0, 0}, 100.0f, 0.5f, 2.0f, random);
+	BOOST_TEST(shakers.intensities[0] == 2.0f * std::numbers::pi_v<float> / 180.0f); // power: degrees of amplitude
+	std::vector<std::size_t> alive;
+	for (int frame = 1; frame <= 50; ++frame)
+	{
+		StepCameraShakers(shakers, 1.0f / 30.0f);
+		alive.push_back(shakers.durations.size());
+		if (frame == 14 || frame == 15)
+			BOOST_TEST(shakers.durations.size() == (frame == 14 ? 3u : 2u));
+		if (frame == 29 || frame == 30)
+			BOOST_TEST(shakers.durations.size() == (frame == 29 ? 2u : 1u));
+		if (frame == 30)
+			BOOST_TEST(shakers.durations[0] == 1.5f);
+		if (frame == 45 || frame == 46)
+			BOOST_TEST(shakers.durations.size() == (frame == 45 ? 1u : 0u));
+	}
+	BOOST_TEST(!CameraShaking(shakers));
+}
+
+// legacy_parity: CameraShakerClass::Compute_Rotations: out of its radius a shaker adds nothing; within it, per axis
+// 7.5 / 15 / 5 degrees x power x (1 - distance / radius) x (1 - elapsed / duration) x sin(omega(t) t + phi), omega
+// sliding from its start toward one turn a second, and on each of the three axis passes a fudge of up to half that
+// intensity on every axis. With every random draw at its low end (omega 12.5 turns a second, phase 0, fudge -half), a
+// 2-degree shaker 50 units from the camera with radius 100, 3 frames in, gives exactly the original's sums.
+BOOST_AUTO_TEST_CASE(legacy_parity_shaker_rotations_follow_the_originals_sinusoids)
+{
+	CameraShakers shakers;
+	LowestRandom random;
+	AddCameraShake(shakers, {50, 0, 0}, 100.0f, 1.0f, 2.0f, random);
+	for (int frame = 0; frame < 3; ++frame)
+		StepCameraShakers(shakers, 1.0f / 30.0f);
+	const float elapsed = shakers.elapsed[0];
+	const float intensity = shakers.intensities[0] * (1.0f - 50.0f / 100.0f) * (1.0f - elapsed / 1.0f);
+	const std::array<float, 3> axes = camera_shaking::AxisRotation;
+	std::array<float, 3> expected{};
+	for (std::size_t axis = 0; axis < 3; ++axis)
+	{
+		const float omega = camera_shaking::MinOmega + (camera_shaking::EndOmega - camera_shaking::MinOmega) * elapsed;
+		expected[axis] += axes[axis] * intensity * std::sin(omega * elapsed + camera_shaking::MinPhi);
+		for (float &angle : expected)
+			angle += -intensity * 0.5f;
+	}
+	const std::array<float, 3> angles = ShakerAngles(shakers, {0, 0, 0}, random);
+	for (std::size_t axis = 0; axis < 3; ++axis)
+		BOOST_TEST(angles[axis] == expected[axis]);
+	// 101 units away: beyond its radius, nothing.
+	const std::array<float, 3> beyond = ShakerAngles(shakers, {151, 0, 0}, random);
+	BOOST_TEST(beyond[0] == 0.0f);
+	BOOST_TEST(beyond[1] == 0.0f);
+	BOOST_TEST(beyond[2] == 0.0f);
+}
+
+// legacy_parity: doCameraMotionBlurJump (setViewFilter(FT_VIEW_MOTION_BLUR_FILTER), setViewFilterMode(
+// FM_VIEW_MB_IN_AND_OUT_ALPHA), setViewFilterPos) and ScreenMotionBlurFilter::setup / postRender: the count rises 5 a
+// logic frame from the script's frame (tick 10), so on the 12th (tick 21) it reaches 60, turns and the camera looks at
+// the waypoint (lookAt); it falls to 0 on the 24th (tick 33), when the effect ends and the view's filter is the
+// default again. A second step in the same logic frame does nothing. W3DView::isCameraMovementFinished answers
+// finished while the zoom blur runs.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_blur_jump_moves_the_camera_at_its_peak_and_ends_on_the_originals_frames)
+{
+	ViewFilter filter;
+	StartMotionBlurJump(filter, {100, 200, 5}, false);
+	BOOST_TEST(filter.motionBlur);
+	BOOST_TEST((filter.mode == ViewFilterMode::InAndOutAlpha));
+	BOOST_TEST(MotionBlurZooming(filter));
+	std::optional<std::uint64_t> jumped, ended;
+	for (std::uint64_t tick = 10; tick < 60 && !ended; ++tick)
+	{
+		const MotionBlurStep step = StepMotionBlur(filter, tick);
+		const MotionBlurStep again = StepMotionBlur(filter, tick);
+		BOOST_TEST((!again.jumpTo && !again.ended));
+		if (step.jumpTo)
+		{
+			jumped = tick;
+			BOOST_TEST((*step.jumpTo)[0] == 100.0f);
+			BOOST_TEST((*step.jumpTo)[1] == 200.0f);
+			BOOST_TEST(filter.maxCount == 60);
+		}
+		if (step.ended)
+			ended = tick;
+	}
+	BOOST_TEST_REQUIRE(jumped.has_value());
+	BOOST_TEST(*jumped == 21u);
+	BOOST_TEST_REQUIRE(ended.has_value());
+	BOOST_TEST(*ended == 33u);
+	BOOST_TEST(!filter.motionBlur);
+	BOOST_TEST((filter.mode == ViewFilterMode::Default));
+	BOOST_TEST(!MotionBlurZooming(filter));
+}
+
+// legacy_parity: doCameraMotionBlur(zoom in / out, saturate): a zoom in rises from 0 and ends as it reaches 60 on its
+// 12th logic frame (no point to jump to); a zoom out starts at 60 falling (setup: m_maxCount = MAX_COUNT, decrement)
+// and ends below 1 on its 12th; neither moves the camera. A follow (pan) blur keeps its amount (0: DEFAULT_PAN_FACTOR
+// 30) and is not stepped by logic frames; its end keeps the count it had.
+BOOST_AUTO_TEST_CASE(legacy_parity_zoom_blurs_end_on_their_twelfth_frame)
+{
+	for (const bool zoomIn : {true, false})
+		for (const bool saturate : {false, true})
+		{
+			ViewFilter filter;
+			StartMotionBlur(filter, zoomIn, saturate);
+			BOOST_TEST(filter.additive == saturate);
+			BOOST_TEST(filter.maxCount == (zoomIn ? 0 : 60));
+			int endedOn = 0;
+			for (int frame = 1; frame <= 20 && endedOn == 0; ++frame)
+			{
+				const MotionBlurStep step = StepMotionBlur(filter, static_cast<std::uint64_t>(frame));
+				BOOST_TEST(!step.jumpTo.has_value());
+				if (step.ended)
+					endedOn = frame;
+			}
+			BOOST_TEST(endedOn == 12);
+		}
+	ViewFilter pan;
+	StartMotionBlurFollow(pan, 0);
+	BOOST_TEST((pan.mode == ViewFilterMode::PanAlpha));
+	BOOST_TEST(pan.panFactor == 30);
+	BOOST_TEST(!MotionBlurZooming(pan));
+	BOOST_TEST(!StepMotionBlur(pan, 1).ended);
+	pan.maxCount = 17;
+	EndMotionBlurFollow(pan);
+	BOOST_TEST((pan.mode == ViewFilterMode::EndPanAlpha));
+	BOOST_TEST(pan.maxCount == 17);
+	BOOST_TEST(pan.motionBlur);
+}
+
+// legacy_parity: ScriptActions::doModCameraMoveToSelection: the selected drawables' positions summed and divided by
+// their count (z first, as the original); with none selected there is nothing to move to.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_camera_moves_to_the_average_of_the_selection)
+{
+	BOOST_TEST(!SelectionCentre({}).has_value());
+	const std::vector<std::array<float, 3>> selected{{10.0f, 20.0f, 3.0f}, {30.0f, 40.0f, 6.0f}, {50.0f, 0.0f, 0.0f}};
+	const auto centre = SelectionCentre(selected);
+	BOOST_TEST_REQUIRE(centre.has_value());
+	BOOST_TEST((*centre)[0] == 30.0f);
+	BOOST_TEST((*centre)[1] == 20.0f);
+	BOOST_TEST((*centre)[2] == 3.0f);
+}
+
+// legacy_parity: W3DView::getCameraTransform in slave mode: the camera's transform is the bone's in the world
+// (getRenderObjectBoneTransform: the object's transform times the bone's in its model) and the view's position its x and
+// y (View::setPosition2D). An object at (100, 50, 10) turned a quarter about z, its bone 5 along the model's x and 2 up,
+// itself turned a quarter about x: the camera sits at (100, 55, 12), its x axis along the world's y, its y along z.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_slaved_camera_is_its_bone_in_the_world)
+{
+	const std::array<float, 16> world{0, -1, 0, 100, 1, 0, 0, 50, 0, 0, 1, 10, 0, 0, 0, 1};
+	const std::array<float, 12> bone{1, 0, 0, 5, 0, 0, -1, 0, 0, 1, 0, 2};
+	const std::array<float, 12> camera = BoneInWorld(world, bone);
+	const std::array<float, 12> expected{0, 0, 1, 100, 1, 0, 0, 55, 0, 1, 0, 12};
+	for (std::size_t index = 0; index < 12; ++index)
+		BOOST_TEST(camera[index] == expected[index]);
+	const std::array<float, 2> at = SlavePosition(camera);
+	BOOST_TEST(at[0] == 100.0f);
+	BOOST_TEST(at[1] == 55.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

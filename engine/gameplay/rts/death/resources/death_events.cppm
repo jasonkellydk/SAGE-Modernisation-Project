@@ -35,7 +35,7 @@ struct DeathEvent
 	Engine::Math::Fixed transferDamage;
 	Engine::Math::Fixed transferSubdual; // its subdual damage (getCurrentSubdualDamageAmount), passed on first
 	ecs::Entity transferSource;
-	// A notice: whom it credits (its DeathCredit; none: no one). A release: its producer (none: nothing made it).
+	// A notice: whom it credits (its DeathCredit; none: no one). A release or a weapon: its producer (none: nothing made it).
 	ecs::Entity credit;
 	// What it was (its definition; none: 0xFFFFFFFF) and whether it was still being built.
 	std::uint32_t definition{0xFFFFFFFFu};
@@ -52,6 +52,11 @@ struct DeathEvents
 
 // From slow deaths as they play out (per chunk, merged in chunk order).
 using DyingEvents = ecs::ChunkOutputs<DeathEvent>;
+
+// From toppling structures as they fall (per chunk, merged in chunk order).
+struct StructureToppleEvents : ecs::ChunkOutputs<DeathEvent>
+{
+};
 }
 
 export namespace ecs
@@ -65,5 +70,10 @@ template<>
 struct ResourceTraits<engine::gameplay::DyingEvents>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.dying_events";
+};
+template<>
+struct ResourceTraits<engine::gameplay::StructureToppleEvents>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.structure_topple_events";
 };
 }

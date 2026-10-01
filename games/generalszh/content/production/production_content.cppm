@@ -84,12 +84,16 @@ inline BuildLists BindResearchLists(const engine::config::Document &commandSets,
 struct ObjectProduction
 {
 	std::uint32_t capacity{9};
+	// DisabledTypesToProcess (DisabledMaskType::parseFromINI: the disabled types by name, a bit each in the original's
+	// order; default DISABLED_HELD).
+	std::uint32_t runsWhileDisabled{1u << 3};
 	std::vector<std::pair<std::string, std::uint32_t>> quantities; // built so many at once
 	// Where units come out and first head, in the factory's frame.
 	Engine::Math::FixedVector3 createPoint;
 	Engine::Math::FixedVector3 rallyPoint;
 	bool hasExit{false};
 	bool supplyExit{false}; // SupplyCenterProductionExitUpdate: its trucks go harvesting
+	std::uint32_t exitStealthTicks{0}; // SupplyCenterProductionExitUpdate GrantTemporaryStealth (parseDurationUnsignedInt)
 	// QueueProductionExitUpdate: one unit out at a time, ExitDelay (ms up to whole ticks) apart after InitialBurst.
 	bool queueExit{false};
 	std::uint64_t exitDelayTicks{0};
@@ -151,6 +155,17 @@ std::optional<ObjectProduction> ReadObjectProduction(const ObjectDefinition &obj
 		{
 			if (!production)
 				production.emplace();
+			if (const auto *types = block.Find("DisabledTypesToProcess"))
+			{
+				constexpr std::string_view names[] = {"DISABLED_DEFAULT", "DISABLED_HACKED", "DISABLED_EMP", "DISABLED_HELD", "DISABLED_PARALYZED",
+					"DISABLED_UNMANNED", "DISABLED_UNDERPOWERED", "DISABLED_FREEFALL", "DISABLED_AWESTRUCK", "DISABLED_BRAINWASHED", "DISABLED_SUBDUED",
+					"DISABLED_SCRIPT_DISABLED", "DISABLED_SCRIPT_UNDERPOWERED"};
+				production->runsWhileDisabled = 0;
+				for (const std::string_view name : types->values)
+					for (std::size_t bit = 0; bit < std::size(names); ++bit)
+						if (Same(name, names[bit]))
+							production->runsWhileDisabled |= 1u << bit;
+			}
 			if (const auto *entries = block.Find("MaxQueueEntries"))
 				production->capacity = static_cast<std::uint32_t>(std::clamp<std::int64_t>(engine::config::ReadInt(*entries, bind).value_or(9), 1, 9));
 			const auto ticks = [&](std::string_view key) -> std::uint64_t {
@@ -181,6 +196,9 @@ std::optional<ObjectProduction> ReadObjectProduction(const ObjectDefinition &obj
 			production->rallyPoint = engine::config::ReadVec3(*rally, bind).value_or(Engine::Math::FixedVector3{});
 		production->hasExit = true;
 		production->supplyExit = module.type == "SupplyCenterProductionExitUpdate";
+		if (production->supplyExit)
+			if (const auto *grant = module.block->Find("GrantTemporaryStealth"))
+				production->exitStealthTicks = static_cast<std::uint32_t>(engine::config::ReadDurationTicks(*grant, bind).value_or(0));
 		production->queueExit = module.type == "QueueProductionExitUpdate";
 		if (production->queueExit)
 		{

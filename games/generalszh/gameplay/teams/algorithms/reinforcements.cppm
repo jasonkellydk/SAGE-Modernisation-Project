@@ -1,4 +1,5 @@
 export module games.generalszh.gameplay.teams.algorithms.reinforcements;
+import games.generalszh.gameplay.effects.algorithms.radius_decals;
 import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
@@ -110,6 +111,8 @@ inline void DeliverViaModuleData(GameWorld &game, ecs::Entity carrier, const con
 		world.Add<gameplay::Delivery>(carrier);
 	*world.Get<gameplay::Delivery>(carrier) = delivery;
 	*world.Get<gameplay::MoveOrder>(carrier) = gameplay::MoveToPoint(destination);
+	// deliverPayload: its module's DeliveryDecal on the destination, until it heads off the map.
+	LayRadiusDecal(game, carrier, data.deliveryDecal, data.deliveryDecalRadius, {destination.x, destination.y, game.ground.At(destination)}, RadiusDecalUntil::HeadsOffMap);
 }
 
 // aiMoveToAndEvacuate / aiMoveToAndEvacuateAndExit (CMD_FROM_SCRIPT), not for what cannot move.

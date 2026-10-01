@@ -7,6 +7,7 @@
 #include <string>
 
 import games.generalszh.presentation.objects.systems.uplink_systems;
+import games.generalszh.presentation.objects.algorithms.draw_bones;
 import games.generalszh.presentation.objects.algorithms.look_setup;
 import games.generalszh.presentation.objects.algorithms.presentation_schedule;
 import games.generalszh.session.session;
@@ -265,6 +266,67 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_particle_cannon_uplink_shows_and_sounds_its
 	BOOST_TEST(!wants(FiringToPack));
 	BOOST_TEST(!wants(GroundAnnihilation));
 	BOOST_TEST(lasers.beams.empty());
+}
+
+// Drawable::getPristineBoneData / getCurrentClientBoneTransforms: a bone is looked for in each draw module in turn, the
+// object's own model first, then its other draws (the uplink's dish: ABSDILink_A1 with ExtraPublicBone FXConnector):
+// pristine, in the model its conditions pick at rest; current, as drawn now (the dish raised by its animation). A bone
+// the own model has is taken from it; a model still loading answers "not ready"; a draw not made is skipped.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bone_is_found_in_any_of_an_objects_draws)
+{
+	LookCatalog catalog;
+	catalog.lookModels = {"ABSDILink", "ABSDILink_A1", "ABSDILink_A1"};
+	DefinitionLooks looks;
+	DefinitionLooks::ExtraDraw dish;
+	dish.stateLooks = {1, 2};
+	looks.extraDraws.push_back(dish);
+	PresentedObject object;
+	object.look = 0;
+	ExtraShownLooks extras;
+	extras.made = 1;
+	extras.draws[0].state = 0; // its conditions pick the rest state (look 1)
+	extras.draws[0].look = 2;  // while a raising animation (look 2) shows
+	extras.draws[0].since = 1.0;
+	extras.draws[0].speed = 2.0f;
+	bool loading = false;
+	std::vector<std::string> asked;
+	BonePoses poses;
+	poses.pose = [&](std::string_view model, std::string_view bone) {
+		asked.push_back(std::string(model) + ":" + std::string(bone));
+		BoneLookup found{!loading, false};
+		if ((model == "ABSDILink" && bone == "FXNode01") || (model == "ABSDILink_A1" && bone == "FXConnector"))
+		{
+			found.found = true;
+			found.position = {1.0f, 2.0f, 3.0f};
+		}
+		return found;
+	};
+	poses.animated = [&](std::uint32_t look, float seconds, float, std::string_view bone) {
+		BoneLookup found{true, look == 2 && bone == "FXConnector"};
+		found.position = {0.0f, 0.0f, seconds * 10.0f}; // rising with its animation
+		return found;
+	};
+	const DrawBoneSearch search{poses, catalog, looks, object, &extras, 3.0};
+	const BoneLookup own = FindDrawBone(search, "FXNode01", false);
+	BOOST_TEST(own.found);
+	BOOST_TEST((asked == std::vector<std::string>{"ABSDILink:FXNode01"}));
+	asked.clear();
+	const BoneLookup pristine = FindDrawBone(search, "FXConnector", false);
+	BOOST_TEST(pristine.found);
+	BOOST_TEST(pristine.position[2] == 3.0f);
+	BOOST_TEST((asked == std::vector<std::string>{"ABSDILink:FXConnector", "ABSDILink_A1:FXConnector"}));
+	const BoneLookup current = FindDrawBone(search, "FXConnector", true);
+	BOOST_TEST(current.found);
+	BOOST_TEST(current.position[2] == 40.0f); // (3 - 1) s at twice the speed
+	BOOST_TEST(!FindDrawBone(search, "FXMissing", false).found);
+	extras.made = 0;
+	BOOST_TEST(!FindDrawBone(search, "FXConnector", false).found);
+	extras.made = 1;
+	loading = true;
+	BOOST_TEST(!FindDrawBone(search, "FXConnector", false).ready);
+	const DrawBoneSearch alone{poses, catalog, looks, object, nullptr, 3.0};
+	loading = false;
+	BOOST_TEST(!FindDrawBone(alone, "FXConnector", false).found);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

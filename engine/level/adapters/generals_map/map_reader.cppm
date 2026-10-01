@@ -448,6 +448,7 @@ inline void LinkMarkers(ChunkCursor data, Level &level, std::vector<std::string>
 			continue;
 		}
 		source->second->links.push_back(to);
+		level.markerLinks.push_back({from, to});
 	}
 }
 }

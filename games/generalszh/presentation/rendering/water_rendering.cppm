@@ -4,6 +4,7 @@ import std;
 import engine.level.model.level;
 import games.generalszh.content.loading.content_loader;
 import Graphics.RHI;
+export import games.generalszh.presentation.rendering.shroud_pixels;
 
 // The level's standing water and rivers on the water renderer: each water
 // polygon is a translucent surface with the time of day's scrolling water
@@ -30,9 +31,11 @@ public:
 	// Draws after the opaque scene (terrain and objects, flushed): samples the
 	// scene depth for the shoreline fade and blends over it. View and
 	// projection are the camera's row-major matrices; `timeSeconds` drives
-	// the texture scrolling and ripples.
+	// the texture scrolling and ripples. `softEdge`: the detail's ShowSoftWaterEdge (off: no shoreline fade, as
+	// BaseHeightMapRenderObjClass draws no shoreline blend without it).
 	void Draw(Graphics::Device &device, Graphics::CommandList &commands, const std::array<float, 16> &view,
-		const std::array<float, 16> &projection, const std::array<float, 3> &eye, float timeSeconds);
+		const std::array<float, 16> &projection, const std::array<float, 3> &eye, float timeSeconds, const ShroudBinding *shroud = nullptr,
+		bool softEdge = true);
 
 	std::size_t SurfaceCount() const noexcept;
 

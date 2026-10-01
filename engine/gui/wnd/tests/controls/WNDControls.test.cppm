@@ -168,6 +168,33 @@ BOOST_AUTO_TEST_CASE(overlay_state_buttons_draw_their_art_grey_while_disabled)
 	BOOST_TEST((plain.kind != DrawCommandKind::Image));
 }
 
+// W3DGameWinDefaultDraw (EA): a window with a video buffer (WinInstanceData::setVideoBuffer, the mission load screens'
+// movie) draws its own look first, then the video stretched over the whole window; without one, only its look.
+BOOST_AUTO_TEST_CASE(a_window_with_a_video_draws_it_over_its_own_look)
+{
+	std::array<WNDDrawState, 3> states{};
+	states[0].cells[0].image.texture = Assets::TextureAssetHandle{7, 1};
+	ImageRef video;
+	video.texture = Assets::TextureAssetHandle{9, 1};
+	ControlVisual visual;
+	visual.kind = ControlKind::User;
+	visual.rectangle = {0.0f, 0.0f, 800.0f, 600.0f};
+	visual.states = states.data();
+	visual.state = &states[0];
+	visual.image_style = true;
+	DrawList plain;
+	BOOST_REQUIRE(Render_Control(plain, visual));
+	visual.video = &video;
+	DrawList withVideo;
+	BOOST_REQUIRE(Render_Control(withVideo, visual));
+	BOOST_REQUIRE(withVideo.Size() == plain.Size() + 1u);
+	const DrawCommand last = withVideo.Commands()[withVideo.Size() - 1];
+	BOOST_TEST((last.kind == DrawCommandKind::Image));
+	BOOST_TEST(last.image.texture.Get_Index() == 9u);
+	BOOST_TEST(last.rectangle.right == 800.0f);
+	BOOST_TEST(last.rectangle.bottom == 600.0f);
+}
+
 // W3DGadgetPushButtonImageDraw: an enabled USE_OVERLAY_STATES button pointed at draws Cameo_hilited over its art,
 // pressed it draws Cameo_push; disabled, neither.
 BOOST_AUTO_TEST_CASE(overlay_state_buttons_show_hilite_and_push_overlays)

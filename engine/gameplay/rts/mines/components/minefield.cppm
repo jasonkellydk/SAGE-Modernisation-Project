@@ -26,10 +26,18 @@ struct MineDetonator
 	Engine::Math::FixedVector3 where;
 };
 
+// One immune to it (MinefieldBehavior's m_immunes: a mine-clearer that touched it while clearing), and the tick it last
+// touched it.
+struct MineImmune
+{
+	ecs::Entity who;
+	std::uint64_t touched{0};
+};
 struct Minefield
 {
 	static constexpr std::uint32_t NoWeapon = 0xFFFFFFFFu;
 	static constexpr std::size_t MaxDetonators = 8;
+	static constexpr std::size_t MaxImmune = 3; // MAX_IMMUNITY
 
 	std::uint32_t weapon{NoWeapon};
 	std::uint32_t total{1};
@@ -54,6 +62,7 @@ struct Minefield
 	Engine::Math::FixedVector3 scootVelocity;
 	Engine::Math::FixedVector3 scootAcceleration;
 	std::array<MineDetonator, MaxDetonators> detonators{};
+	std::array<MineImmune, MaxImmune> immunes{};
 };
 
 // The damage a draining mine does itself (DAMAGE_UNRESISTABLE, DEATH_NORMAL) over the second's ticks.
@@ -77,7 +86,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Minefield>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.minefield";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 

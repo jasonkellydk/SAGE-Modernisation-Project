@@ -12,6 +12,7 @@ export import engine.ecs.query.query;
 export import engine.ecs.query.query_cache;
 export import engine.ecs.system.system;
 export import engine.ecs.system.chunk_outputs;
+export import engine.ecs.system.job_pool;
 export import engine.ecs.scheduler.scheduler;
 export import engine.ecs.storage.archetype;
 export import engine.ecs.storage.chunk;

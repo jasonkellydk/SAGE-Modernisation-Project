@@ -128,6 +128,8 @@ public:
 
 	// Special powers.
 	virtual void NamedUseCommandButtonAtWaypoint(const std::string &name, const std::string &button, const std::string &waypoint) = 0;
+	// doNamedUseCommandButtonAbilityUsingWaypointPath: the button fired along the path from its waypoint closest to the unit.
+	virtual void NamedUseCommandButtonUsingWaypointPath(const std::string &name, const std::string &button, const std::string &path) = 0;
 	virtual void NamedFireSpecialPowerAtWaypoint(const std::string &name, const std::string &power, const std::string &waypoint) = 0;
 	virtual void NamedFireSpecialPowerAtNamed(const std::string &name, const std::string &power, const std::string &target) = 0;
 	// hide / showObjectSuperweaponDisplayByScript: the unit's countdowns on screen.
@@ -145,6 +147,10 @@ public:
 	virtual void TeamGuardSupplyCenter(const std::string &team, std::int64_t supplies) = 0;
 	virtual void NamedAttackNamed(const std::string &attacker, const std::string &target) = 0;
 	virtual void NamedSetHeld(const std::string &name, bool held) = 0;
+	// doNamedSetGarrisonEvacDisposition: a garrison's occupants out to its left (1), right (2) or from its centre.
+	virtual void NamedSetEvacDisposition(const std::string &name, std::int64_t disposition) = 0;
+	// SET_TRAIN_HELD (doNamedSetTrainHeld): the named train's RailroadBehavior::setHeld.
+	virtual void SetTrainHeld(const std::string &name, bool held) = 0;
 	virtual void NamedStop(const std::string &name) = 0;
 	// aiIdle(CMD_FROM_SCRIPT) on a unit with an AI (false: none).
 	virtual bool NamedIdle(const std::string &name) = 0;
@@ -225,6 +231,10 @@ public:
 	virtual void NamedUseCommandButton(const std::string &unit, const std::string &button, const std::optional<std::string> &target) = 0;
 	virtual void TeamUseCommandButtonOnNamed(const std::string &team, const std::string &button, const std::string &target, bool checked) = 0;
 	virtual void TeamUseCommandButtonOnNearest(const std::string &team, const std::string &button, int nearest, std::int64_t kind, const std::string &type) = 0;
+	// doSkirmishCommandButtonOnMostValuable: the team's button on the most expensive valid enemy within range of it.
+	virtual void TeamUseCommandButtonOnMostValuable(const std::string &team, const std::string &button, Engine::Math::Fixed range) = 0;
+	// doSkirmishAttackNearestGroupWithValue: the team attack-moves to the nearest place its enemies are worth more than the value.
+	virtual void TeamAttackNearestGroupWithValue(const std::string &team, std::int32_t comparison, std::int64_t value) = 0;
 	// Attack priority sets (ScriptEngine::setPriorityThing / setPriorityKind / setPriorityDefault; updateNamed / Team
 	// AttackPrioritySet): a set's priority for a type (or each type of a list) or every template of a kind (a KindOf
 	// index); its default; the set a unit or team picks its targets by.
@@ -438,6 +448,9 @@ inline void AddUnitVocabulary(engine::scripting::Vocabulary &vocabulary, UnitScr
 	// NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT(unit, button, waypoint); NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT(unit, power, waypoint)
 	vocabulary.AddAction("NAMED_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT",
 		[units](ScriptCallContext &c) { units->NamedUseCommandButtonAtWaypoint(Arg(units, c, 0), Arg(units, c, 1), Arg(units, c, 2)); });
+	// NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH(unit, button, waypoint path).
+	vocabulary.AddAction("NAMED_USE_COMMANDBUTTON_ABILITY_USING_WAYPOINT_PATH",
+		[units](ScriptCallContext &c) { units->NamedUseCommandButtonUsingWaypointPath(Arg(units, c, 0), Arg(units, c, 1), Arg(units, c, 2)); });
 	vocabulary.AddAction("NAMED_FIRE_SPECIAL_POWER_AT_WAYPOINT",
 		[units](ScriptCallContext &c) { units->NamedFireSpecialPowerAtWaypoint(Arg(units, c, 0), Arg(units, c, 1), Arg(units, c, 2)); });
 	// NAMED_FIRE_SPECIAL_POWER_AT_NAMED(unit, power, target): doNamedFireSpecialPowerAtNamed.
@@ -462,6 +475,9 @@ inline void AddUnitVocabulary(engine::scripting::Vocabulary &vocabulary, UnitScr
 	vocabulary.AddAction("NAMED_ATTACK_NAMED", [units](ScriptCallContext &c) { units->NamedAttackNamed(Arg(units, c, 0), Arg(units, c, 1)); });
 	// NAMED_SET_HELD(name, held)
 	vocabulary.AddAction("NAMED_SET_HELD", [units](ScriptCallContext &c) { units->NamedSetHeld(Arg(units, c, 0), Integer(c, 1) != 0); });
+	// NAMED_SET_EVAC_LEFT_OR_RIGHT(unit, disposition).
+	vocabulary.AddAction("NAMED_SET_EVAC_LEFT_OR_RIGHT", [units](ScriptCallContext &c) { units->NamedSetEvacDisposition(Arg(units, c, 0), Integer(c, 1)); });
+	vocabulary.AddAction("SET_TRAIN_HELD", [units](ScriptCallContext &c) { units->SetTrainHeld(Arg(units, c, 0), Integer(c, 1) != 0); });
 	// NAMED_STOP(unit); TEAM_STOP(team); TEAM_STOP_AND_DISBAND(team); MOVE_TEAM_TO(team, waypoint)
 	vocabulary.AddAction("NAMED_STOP", [units](ScriptCallContext &c) { units->NamedStop(Arg(units, c, 0)); });
 	vocabulary.AddAction("TEAM_STOP", [units](ScriptCallContext &c) { units->TeamStop(Arg(units, c, 0), false); });
@@ -671,6 +687,14 @@ inline void AddUnitVocabulary(engine::scripting::Vocabulary &vocabulary, UnitScr
 	nearest("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING", 3, false, false);
 	nearest("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS", 4, true, false);
 	nearest("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE", 5, false, true);
+	// SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT(team, button, range, all members): the last is not used.
+	vocabulary.AddAction("SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT", [units](ScriptCallContext &c) {
+		units->TeamUseCommandButtonOnMostValuable(Arg(units, c, 0), Arg(units, c, 1), parameters::Number(c, 2));
+	});
+	// SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE(team, comparison, value).
+	vocabulary.AddAction("SKIRMISH_ATTACK_NEAREST_GROUP_WITH_VALUE", [units](ScriptCallContext &c) {
+		units->TeamAttackNearestGroupWithValue(Arg(units, c, 0), static_cast<std::int32_t>(parameters::Integer(c, 1)), parameters::Integer(c, 2));
+	});
 	vocabulary.AddAction("TEAM_LOAD_TRANSPORTS", [units](ScriptCallContext &c) { units->TeamLoadTransports(Arg(units, c, 0)); });
 	vocabulary.AddAction("UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE",
 		[units](ScriptCallContext &c) { units->UnitMoveTowardsNearest(c.participant, Arg(units, c, 0), Arg(units, c, 1), Arg(units, c, 2)); });

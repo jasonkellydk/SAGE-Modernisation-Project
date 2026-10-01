@@ -38,6 +38,11 @@ struct InGameMessages
 	std::u16string rallySetText{u"Rally point set for %ls"};
 	std::u16string rallyNoPathText{u"No path to rally point"};
 	std::map<std::string, std::u16string, std::less<>> displayNames;
+	// Multiplayer beacons: one placed (GUI:BeaconPlaced, with its player's name), too many up (GUI:TooManyBeacons), none
+	// to place (GUI:BeaconPlacementFailed).
+	std::u16string beaconPlacedText{u"%ls has placed a beacon."};
+	std::u16string tooManyBeaconsText{u"Too many beacons"};
+	std::u16string beaconFailedText{u"Beacon placement failed"};
 };
 }
 

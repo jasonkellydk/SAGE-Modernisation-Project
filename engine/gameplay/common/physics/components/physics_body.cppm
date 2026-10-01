@@ -40,6 +40,9 @@ inline constexpr std::uint32_t InFreeFall = 1u << 10;
 // Pushed off its locomotor's path by a shock wave (Object::attemptDamage's applyShock): stepped by physics, its
 // locomotor idle, until it lands again (the original runs physics under every locomotor).
 inline constexpr std::uint32_t Pushed = 1u << 11;
+// Moved by physics alone while its AI runs (a rappeller let down a rope: AIRappelState holds its fall, PhysicsBehavior
+// moves it): its locomotor idle, until it lands.
+inline constexpr std::uint32_t PhysicsDriven = 1u << 12;
 }
 
 struct PhysicsBody
@@ -65,6 +68,9 @@ struct PhysicsBody
 	// PhysicsBehavior's ShockResistance (the share of a shock wave it shrugs off) and ShockMaxYaw / Pitch / Roll (the
 	// most a shock adds to each turn rate, turn units per tick; the original's defaults 0.05, 0.025 and 0.025 radians).
 	Engine::Math::Fixed shockResistance;
+	// PhysicsBehavior's CenterOfMassOffset: how far its centre of mass lies ahead of its middle (behind: negative). A
+	// pitch rate then only tips it until it points straight down (up), and objects let go aloft start pitching by it.
+	Engine::Math::Fixed centerOfMassOffset;
 	std::int32_t shockMaxYaw{static_cast<std::int32_t>(Engine::Math::TurnFromRadians(Engine::Math::Fixed::FromRatio(5, 100)).units)};
 	std::int32_t shockMaxPitch{static_cast<std::int32_t>(Engine::Math::TurnFromRadians(Engine::Math::Fixed::FromRatio(25, 1000)).units)};
 	std::int32_t shockMaxRoll{static_cast<std::int32_t>(Engine::Math::TurnFromRadians(Engine::Math::Fixed::FromRatio(25, 1000)).units)};
@@ -81,7 +87,7 @@ template<>
 struct ComponentTraits<engine::gameplay::PhysicsBody>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.physics_body";
-	static constexpr std::uint32_t Version = 4;
+	static constexpr std::uint32_t Version = 5;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }

@@ -1,4 +1,5 @@
 export module games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
+import engine.gameplay.common.health.components.pending_damage;
 import std;
 import engine.gameplay.common.identity.components.captured;
 
@@ -115,17 +116,29 @@ inline void KillPilot(GameWorld &game, ecs::Entity vehicle)
 
 // ActiveBody::attemptDamage's DAMAGE_KILLPILOT on a bike (a VEHICLE with a RiderChangeContain): moving, the bike is
 // killed; standing, its rider is put out at once (aiEvacuateInstantly: the bike scuttles, RiderChanges) and killed.
-inline void KillBikeRider(GameWorld &game, ecs::Entity bike)
+inline void KillBikeRider(GameWorld &game, ecs::Entity bike, ecs::Entity damager)
 {
 	using namespace unmanned_detail;
 	auto &world = game.world;
 	const content::ObjectDefinition *definition = DefinitionOf(game, bike);
 	if (definition == nullptr || !definition->Is("VEHICLE") || !world.Has<RiderChange>(bike) || EffectivelyDead(game, bike))
 		return;
-	auto &kills = world.Resource<gp::KillRequests>().entities;
+	// damager->scoreTheKill then Object::kill (DAMAGE_UNRESISTABLE, DEATH_NORMAL, its most health): unresistable damage of
+	// all its health from the damager, so the kill is scored to it.
+	const std::uint32_t unresistable = content::DamageTypeIndex("UNRESISTABLE").value_or(0);
+	const std::uint32_t normal = content::DeathTypeIndex("NORMAL").value_or(0);
+	const ecs::Entity credit = world.IsAlive(damager) ? damager : ecs::Entity{};
+	const auto kill = [&](ecs::Entity victim) {
+		const auto *health = world.Get<gp::Health>(victim);
+		if (health == nullptr)
+			return;
+		if (!world.Has<gp::PendingDamage>(victim))
+			world.Add<gp::PendingDamage>(victim);
+		*world.Get<gp::PendingDamage>(victim) = gp::PendingDamage{credit, world.Get<gp::Health>(victim)->maximum, unresistable, normal};
+	};
 	if (const auto *order = world.Get<gp::MoveOrder>(bike); order != nullptr && order->mode != gp::MoveMode::Idle)
 	{
-		kills.push_back(bike);
+		kill(bike);
 		return;
 	}
 	const auto aboard = game.manifest.Aboard(bike);
@@ -133,7 +146,7 @@ inline void KillBikeRider(GameWorld &game, ecs::Entity bike)
 		return;
 	const ecs::Entity rider = aboard.front();
 	TakeOutNow(game, bike, rider);
-	kills.push_back(rider);
+	kill(rider);
 }
 
 // The tick's pilot kills (KILL_PILOT hits, in the order dealt).
@@ -143,14 +156,15 @@ inline void ApplyPilotKills(GameWorld &game)
 	const auto killPilot = content::DamageTypeIndex("KILL_PILOT");
 	if (hits == nullptr || !killPilot)
 		return;
-	std::vector<ecs::Entity> struck;
+	std::vector<std::pair<ecs::Entity, ecs::Entity>> struck; // (vehicle, damager)
 	hits->ForEach([&](const engine::gameplay::Hit &hit) {
-		if (hit.handled && hit.damageType == *killPilot && std::ranges::find(struck, hit.target) == struck.end())
-			struck.push_back(hit.target);
+		if (hit.handled && hit.damageType == *killPilot &&
+			std::ranges::none_of(struck, [&](const auto &entry) { return entry.first == hit.target; }))
+			struck.emplace_back(hit.target, hit.source);
 	});
-	for (const ecs::Entity vehicle : struck)
+	for (const auto &[vehicle, damager] : struck)
 	{
-		KillBikeRider(game, vehicle);
+		KillBikeRider(game, vehicle, damager);
 		KillPilot(game, vehicle);
 	}
 }

@@ -20,6 +20,7 @@ export import engine.gameplay.rts.veterancy.components.experience;
 export import engine.gameplay.rts.economy.components.energy_source;
 export import games.generalszh.gameplay.powers.components.spy_vision;
 export import engine.gameplay.rts.combat.components.countermeasures;
+export import engine.gameplay.common.healing.components.healing;
 export import games.generalszh.gameplay.appearance.components.building_extensions;
 import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.rts.movement.components.locomotion;
@@ -47,6 +48,7 @@ export import engine.gameplay.common.appearance.components.part_overrides;
 //   CommandSetUpgrade     its command set is CommandSet, or CommandSetAlt once its player or it has TriggerAlt
 //   UnpauseSpecialPowerUpgrade its module for the power unpauses once (retail: never starts ready)
 //   SubObjectsUpgrade     unless it or its player has an upgrade it conflicts with: its parts shown and hidden (PartOverrides)
+//   AutoHealBehavior      its dormant self or area heal wakes (GLA Junk Repair)
 // Other modules' triggers still go once, and do nothing yet.
 export namespace generalszh::gameplay
 {
@@ -59,7 +61,7 @@ struct UpgradeEffectSystem
 		ecs::Read<engine::gameplay::Experience>, ecs::Read<engine::gameplay::EnergySource>, ecs::Read<engine::gameplay::Loadout>,
 		ecs::Read<RadarDish>, ecs::Read<SpyVision>, ecs::Read<engine::gameplay::Countermeasures>, ecs::Read<ControlRods>, ecs::Read<CommandSetOverride>, ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Upgradable>,
 		ecs::Read<engine::gameplay::SpecialPowerTimers>, ecs::Read<engine::gameplay::RadarProvider>, ecs::Read<engine::gameplay::Appearance>, ecs::Read<engine::gameplay::Locomotion>,
-		ecs::Read<engine::gameplay::PartOverrides>>;
+		ecs::Read<engine::gameplay::PartOverrides>, ecs::Read<engine::gameplay::SelfHealing>, ecs::Read<engine::gameplay::AreaHealing>>;
 	using Resources = ecs::Resources<ecs::Read<engine::gameplay::UpgradeReactions>, ecs::Read<UpgradeEffects>,
 		ecs::Read<engine::gameplay::WeaponCatalog>, ecs::Read<engine::gameplay::CargoManifest>, ecs::Write<UpgradeCreations>,
 		ecs::Read<engine::gameplay::PlayerUpgrades>>;
@@ -83,6 +85,8 @@ struct UpgradeEffectSystem
 		std::vector<std::pair<ecs::Entity, gp::Appearance>> looks;
 		std::vector<std::pair<ecs::Entity, gp::PartOverrides>> parts;
 		std::vector<std::pair<ecs::Entity, SpyVision>> spyVisions;
+		std::vector<std::pair<ecs::Entity, gp::AreaHealing>> areaHeals;
+		std::vector<std::pair<ecs::Entity, gp::SelfHealing>> selfHeals;
 		const auto pending = [&](auto &list, ecs::Entity entity, const auto *now) -> decltype(&list.front().second) {
 			for (auto &entry : list)
 				if (entry.first == entity)
@@ -284,6 +288,31 @@ struct UpgradeEffectSystem
 					commands.Set<gp::Countermeasures>(entity, changed);
 				}
 				break;
+			case content::UpgradeEffectKind::AutoHeal:
+				// AutoHealBehavior::upgradeImplementation: awake now, it heals (while hurt) from its next update.
+				if ((effect->parts & content::UpgradeEffectContent::SelfHeal) != 0)
+				{
+					const std::uint32_t index = effect->parts & ~content::UpgradeEffectContent::SelfHeal;
+					if (gp::SelfHealing *self = pending(selfHeals, entity, lookup.Get<gp::SelfHealing>(entity)); self != nullptr && index < self->count)
+					{
+						gp::SelfHealProgram &program = self->programs[index];
+						if (program.dormant != 0)
+						{
+							program.dormant = 0;
+							program.nextTick = context.Tick();
+						}
+					}
+				}
+				else if (gp::AreaHealing *area = pending(areaHeals, entity, lookup.Get<gp::AreaHealing>(entity)); area != nullptr && effect->parts < area->count)
+				{
+					gp::AreaHealProgram &program = area->programs[effect->parts];
+					if ((program.flags & gp::area_healing::Dormant) != 0)
+					{
+						program.flags &= ~gp::area_healing::Dormant;
+						program.nextTick = context.Tick();
+					}
+				}
+				break;
 			case content::UpgradeEffectKind::SpyVision:
 				// SpyVisionUpdate::upgradeImplementation (NeedsUpgrade): activateSpyVision(SelfPoweredDuration), once.
 				if (SpyVision *spy = pending(spyVisions, entity, lookup.Get<SpyVision>(entity)); spy != nullptr && effect->parts < spy->count)
@@ -350,6 +379,10 @@ struct UpgradeEffectSystem
 			commands.Set<gp::Experience>(entity, experience);
 		for (const auto &[entity, spy] : spyVisions)
 			commands.Set<SpyVision>(entity, spy);
+		for (const auto &[entity, area] : areaHeals)
+			commands.Set<gp::AreaHealing>(entity, area);
+		for (const auto &[entity, self] : selfHeals)
+			commands.Set<gp::SelfHealing>(entity, self);
 		for (const auto &[entity, loadout] : loadouts)
 			commands.Set<gp::Loadout>(entity, loadout);
 	}

@@ -1,0 +1,280 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.algorithms.look_models;
+import games.generalszh.presentation.objects.algorithms.model_state_changes;
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.presentation.models.model_library;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(construction_scaffold)
+
+// W3DModelDraw (Core/GameEngineDevice/.../W3DModelDraw.cpp: the constructor's setModelState(findBestInfo(emptyFlags)),
+// replaceModelConditionState -> setModelState's transitions, adjustAnimation's start frames) on the America power
+// plant's construction-zone draw module (FactionBuilding.ini, its second W3DModelDraw): made in its default state (no
+// model, TransitionKey DOWN_DEFAULT); placed (AWAITING_CONSTRUCTION) it first plays the DOWN_DEFAULT -> UP_DAY
+// transition once from its first frame (the scaffold rising: ABPwrPlant_A4, ONCE), then holds the construction state's
+// last frame (MANUAL, START_FRAME_LAST) while building; built (no construction conditions) it plays UP_DAY ->
+// DOWN_DEFAULT backwards at twice the speed from its last frame (ONCE_BACKWARDS, 2.0) and then shows no model. Unlike
+// the plant's own draw it is never sunk by the construction percent (no ADJUST_HEIGHT_BY_CONSTRUCTION_PERCENT).
+// (Every clip here lasts one second.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_construction_scaffold_rises_holds_and_folds)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const auto definition = game.DefinitionIndex("AmericaPowerPlant");
+	BOOST_TEST_REQUIRE(definition.has_value());
+	const DefinitionLooks &looks = catalog.byDefinition[*definition];
+	BOOST_TEST_REQUIRE(looks.states.states.size() > 0u);
+	const auto under = [&] {
+		gp::Appearance building;
+		building.Set(content::model_condition::AwaitingConstruction);
+		return building;
+	}();
+	// Its own draw: nothing while it waits for a builder (AWAITING_CONSTRUCTION alone: Model NONE), sunk while built.
+	const auto own = [&](const gp::Appearance &appearance) { return looks.states.states[content::SelectModelState(looks.states, appearance.flags)]; };
+	BOOST_TEST((own(under).model.empty() || own(under).model == "NONE" || own(under).model == "None"));
+	gp::Appearance working;
+	working.Set(content::model_condition::PartiallyConstructed);
+	working.Set(content::model_condition::ActivelyBeingConstructed);
+	BOOST_TEST(own(working).adjustHeightByConstruction);
+	BOOST_TEST(own(working).model == "ABPWRPLANT");
+	// The scaffold's draw module: the one whose construction state is ABPwrPlant_A4.
+	const DefinitionLooks::ExtraDraw *scaffold = nullptr;
+	for (const auto &extra : looks.extraDraws)
+		if (!extra.states.Empty() && extra.states.states[content::SelectModelState(extra.states, under.flags)].model == "ABPwrPlant_A4")
+			scaffold = &extra;
+	BOOST_TEST_REQUIRE(scaffold != nullptr);
+	LookClips clips;
+	clips.byLook.assign(catalog.looks.size(), LookClip{30.0f, 30.0f}); // every clip one second long
+	const auto animationOf = [&](std::uint32_t look) { return LookModelOf(catalog, nullptr, look).animation; };
+	const auto modelOf = [&](std::uint32_t look) { return catalog.lookModels[look]; };
+	const auto pick = [&](const gp::Appearance &appearance) {
+		return static_cast<std::uint32_t>(content::SelectModelState(scaffold->states, appearance.flags));
+	};
+
+	// Made: its default state, no model.
+	ShownLook shown;
+	double clock = 0.0;
+	const std::uint32_t initial = pick(gp::Appearance{});
+	ShowModelState(shown, *scaffold, clips, initial, clock, ModelStateRolls{7, 0}, false);
+	shown.state = initial;
+	BOOST_TEST(scaffold->states.states[initial].transitionKey == "down_default");
+	BOOST_TEST((modelOf(shown.look).empty() || modelOf(shown.look) == "None" || modelOf(shown.look) == "NONE"));
+
+	// Placed: the rise plays once from its first frame, the construction state waiting.
+	const std::uint32_t building = pick(under);
+	StepModelState(shown, *scaffold, clips, building, clock, ModelStateRolls{7, 1});
+	BOOST_TEST(shown.shown != building);
+	BOOST_TEST(shown.pending == building);
+	BOOST_TEST(animationOf(shown.look) == "ABPwrPlant_A4.ABPwrPlant_A4");
+	BOOST_TEST((scaffold->states.states[shown.shown].animationMode == content::ModelAnimationMode::Once));
+	BOOST_TEST(shown.start == 0.0f);
+	BOOST_TEST(shown.speed == 1.0f);
+	// Half way: still rising.
+	clock = 0.5;
+	StepModelState(shown, *scaffold, clips, building, clock, ModelStateRolls{7, 2});
+	BOOST_TEST(shown.pending == building);
+	// Risen: the construction state holds its last frame.
+	clock = 1.0;
+	StepModelState(shown, *scaffold, clips, building, clock, ModelStateRolls{7, 3});
+	BOOST_TEST(shown.shown == building);
+	BOOST_TEST(shown.pending == ShownLook::NoState);
+	BOOST_TEST((scaffold->states.states[building].animationMode == content::ModelAnimationMode::Manual));
+	BOOST_TEST(shown.start == 1.0f);
+	BOOST_TEST(!scaffold->states.states[building].adjustHeightByConstruction);
+	clock = 30.0;
+	StepModelState(shown, *scaffold, clips, building, clock, ModelStateRolls{7, 4});
+	BOOST_TEST(shown.shown == building);
+
+	// Built: the teardown plays backwards at twice the speed from its last frame, then no model.
+	StepModelState(shown, *scaffold, clips, initial, clock, ModelStateRolls{7, 5});
+	BOOST_TEST(shown.shown != initial);
+	BOOST_TEST(shown.pending == initial);
+	BOOST_TEST(animationOf(shown.look) == "ABPwrPlant_A4.ABPwrPlant_A4");
+	BOOST_TEST((scaffold->states.states[shown.shown].animationMode == content::ModelAnimationMode::OnceBackwards));
+	BOOST_TEST(shown.speed == 2.0f);
+	BOOST_TEST(shown.start == 0.0f); // from the last frame on, as the renderer plays a backwards clip
+	clock = 30.4;
+	StepModelState(shown, *scaffold, clips, initial, clock, ModelStateRolls{7, 6});
+	BOOST_TEST(shown.pending == initial);
+	clock = 30.5;
+	StepModelState(shown, *scaffold, clips, initial, clock, ModelStateRolls{7, 7});
+	BOOST_TEST(shown.shown == initial);
+}
+
+// W3DModelDraw on the shipped AmericaStrategyCenter's plan draw modules (FactionBuilding.ini ModuleTag_05 bombardment
+// ABStrategy_A1, _07 hold the line ABStrategy_A7, _08 search and destroy ABStrategy_A2, _09 the radar array ABStrategy_A3;
+// findBestInfo as SparseMatchFinder): with no plan each door sits closed (its clip ONCE_BACKWARDS from its first frame:
+// at rest on frame 0) and the radar array shows nothing; DOOR_3_OPENING plays search and destroy's door forwards once,
+// DOOR_3_WAITING_TO_CLOSE (active, at night too) shows no door and the array looping, DOOR_3_CLOSING plays the door
+// backwards from its last frame; the other plans' doors stay closed meanwhile. Hold the line active holds its clip's last
+// frame (ONCE from START_FRAME_LAST). The closed and opening looks draw the one clip in their own modes (apart in the
+// model library), so one never plays as the other.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_strategy_centre_shows_only_the_plan_it_has)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	const auto definition = game.DefinitionIndex("AmericaStrategyCenter"); // interned first: not on the shell map
+	BOOST_TEST_REQUIRE(definition.has_value());
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const DefinitionLooks &looks = catalog.byDefinition[*definition];
+	BOOST_TEST_REQUIRE(looks.extraDraws.size() == 8u);
+	const auto with = [](std::initializer_list<const char *> names) {
+		gp::Appearance appearance;
+		for (const char *name : names)
+			appearance.Set(content::ModelConditionBit(name));
+		return appearance;
+	};
+	const auto state = [&](std::size_t draw, const gp::Appearance &appearance) -> const content::ModelState & {
+		const auto &states = looks.extraDraws[draw].states;
+		return states.states[content::SelectModelState(states, appearance.flags)];
+	};
+	const auto none = [](const content::ModelState &shown) { return shown.model.empty() || shown.model == "NONE" || shown.model == "None"; };
+	// The plan draws by their closed models: draws 4 (bombardment's door), 6 (hold the line), 7 (search and destroy), 8 (array).
+	const std::size_t bombardment = 3, holdTheLine = 5, searchAndDestroy = 6, array = 7;
+	using Mode = content::ModelAnimationMode;
+	using Start = content::ModelState::StartFrame;
+	const gp::Appearance idle{};
+	BOOST_TEST(state(bombardment, idle).model == "ABStrategy_A1");
+	BOOST_TEST(state(holdTheLine, idle).model == "ABStrategy_A7");
+	BOOST_TEST(state(searchAndDestroy, idle).model == "ABStrategy_A2");
+	for (const std::size_t door : {bombardment, holdTheLine, searchAndDestroy})
+	{
+		BOOST_TEST((state(door, idle).animationMode == Mode::OnceBackwards));
+		BOOST_TEST((state(door, idle).startFrame == Start::First));
+	}
+	BOOST_TEST(none(state(array, idle)));
+	const auto opening = with({"DOOR_3_OPENING"});
+	BOOST_TEST(state(searchAndDestroy, opening).model == "ABStrategy_A2");
+	BOOST_TEST((state(searchAndDestroy, opening).animationMode == Mode::Once));
+	BOOST_TEST((state(holdTheLine, opening).animationMode == Mode::OnceBackwards));
+	BOOST_TEST(none(state(array, opening)));
+	for (const auto &active : {with({"DOOR_3_WAITING_TO_CLOSE"}), with({"NIGHT", "DOOR_3_WAITING_TO_CLOSE"})})
+	{
+		BOOST_TEST(none(state(searchAndDestroy, active)));
+		BOOST_TEST(state(array, active).model == "ABStrategy_A3");
+		BOOST_TEST((state(array, active).animationMode == Mode::Loop));
+		BOOST_TEST(state(holdTheLine, active).model == "ABStrategy_A7");
+		BOOST_TEST((state(holdTheLine, active).animationMode == Mode::OnceBackwards));
+	}
+	const auto closing = with({"DOOR_3_CLOSING"});
+	BOOST_TEST((state(searchAndDestroy, closing).animationMode == Mode::OnceBackwards));
+	BOOST_TEST((state(searchAndDestroy, closing).startFrame == Start::Last));
+	const auto holding = with({"DOOR_2_WAITING_TO_CLOSE"});
+	BOOST_TEST((state(holdTheLine, holding).animationMode == Mode::Once));
+	BOOST_TEST((state(holdTheLine, holding).startFrame == Start::Last));
+	BOOST_TEST((state(searchAndDestroy, holding).animationMode == Mode::OnceBackwards));
+	// The door's closed and opening looks: the one clip, kept apart by how it plays.
+	const auto &door = looks.extraDraws[searchAndDestroy];
+	const auto lookOf = [&](const gp::Appearance &appearance) {
+		return door.stateLooks[content::SelectModelState(door.states, appearance.flags)];
+	};
+	const ObjectModel closedLook = LookModelOf(catalog, nullptr, lookOf(idle));
+	const ObjectModel openingLook = LookModelOf(catalog, nullptr, lookOf(opening));
+	BOOST_TEST(closedLook.animation == openingLook.animation);
+	BOOST_TEST((closedLook.animationMode == ObjectAnimationMode::OnceBackwards));
+	BOOST_TEST((openingLook.animationMode == ObjectAnimationMode::Once));
+	BOOST_TEST(ModelKey(closedLook) != ModelKey(openingLook));
+}
+
+// Looks of a model alone: W3DDebrisDraw's pieces (a model shown instead of the definition's, each animation it plays a
+// look of its own) and W3DInGameUI's move hint (GameData MoveHintName "SCMoveHint", its animation
+// "SCMoveHint.SCMoveHint" played once). Each such look names its own model and animation, whatever looks came before it
+// (the definitions' looks keep no animation name of their own): the shell map's battle throws debris pieces that animate.
+BOOST_AUTO_TEST_CASE(legacy_parity_debris_and_move_hint_looks_keep_their_animations)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	LookCatalog catalog;
+	std::size_t animatedPieces = 0;
+	for (int tick = 0; tick < 1800 && animatedPieces == 0; ++tick)
+	{
+		game.Tick();
+		KnowLooks(catalog, game);
+		animatedPieces = 0;
+		for (std::uint32_t look = 0; look < catalog.looks.size(); ++look)
+			if (const LookEntry &entry = catalog.looks[look]; entry.model != 0 && entry.model != LookCatalog::BareModel && entry.animation != 0)
+				++animatedPieces;
+	}
+	BOOST_TEST_MESSAGE("animated debris looks: " << animatedPieces);
+	BOOST_TEST_REQUIRE(animatedPieces > 0u);
+	for (std::uint32_t look = 0; look < catalog.looks.size(); ++look)
+	{
+		const LookEntry &entry = catalog.looks[look];
+		if (entry.model == 0 || entry.model == LookCatalog::BareModel)
+			continue;
+		const ObjectModel shown = LookModelOf(catalog, nullptr, look);
+		BOOST_TEST(shown.model == game.ModelName(entry.model));
+		BOOST_TEST(shown.animation == (entry.animation != 0 ? std::string(game.ModelName(entry.animation)) : std::string{}));
+	}
+	BOOST_TEST_REQUIRE(catalog.moveHintLook != LookCatalog::NoLook);
+	const ObjectModel hint = LookModelOf(catalog, nullptr, catalog.moveHintLook);
+	BOOST_TEST(hint.model == "SCMoveHint");
+	BOOST_TEST(hint.animation == "SCMoveHint.SCMoveHint");
+	BOOST_TEST((hint.animationMode == ObjectAnimationMode::Once));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
