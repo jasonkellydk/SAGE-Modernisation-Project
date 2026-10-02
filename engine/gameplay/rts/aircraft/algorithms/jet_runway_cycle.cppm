@@ -290,6 +290,9 @@ inline bool StepRunwayJet(const RunwayJetContext &context, Jet &jet, Locomotion 
 		jet.leg = 0;
 	};
 	const auto within = [&](FixedVector2 point) {
+		// As AIInternalMoveToState, a kinematic wing's state consumes the same authored flight-leg completion as Steer.
+		if (motion.forced == 0 && motion.locomotor.appearance == LocomotorAppearance::Wings)
+			return TrackFlightLeg(transform, motion, point).left < motion.locomotor.closeEnough;
 		const Fixed reach = std::max(motion.locomotor.closeEnough * Fixed::FromInt(2), Fixed::FromInt(4));
 		return Engine::Math::DistanceSquared(transform.position.XY(), point) <= reach * reach;
 	};
@@ -728,7 +731,7 @@ inline bool StepRunwayJet(const RunwayJetContext &context, Jet &jet, Locomotion 
 		const bool landingSpeed = jet.state == JetState::Landing;
 		fly();
 		if (landingSpeed)
-			motion.locomotor.maxSpeed = motion.locomotor.minSpeed;
+			motion.speedCap = motion.locomotor.minSpeed;
 	}
 	return jet.state != JetState::Flying && jet.state != JetState::Returning && jet.state != JetState::AwaitLanding &&
 		jet.state != JetState::ReturnToDeadAirfield && jet.state != JetState::CirclingDeadAirfield;

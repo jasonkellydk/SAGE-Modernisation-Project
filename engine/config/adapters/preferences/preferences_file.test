@@ -26,3 +26,11 @@ BOOST_AUTO_TEST_CASE(legacy_parity_reads_key_value_lines_and_writes_them_sorted)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_CASE(preferences_read_only_enumeration_preserves_order_updates_and_unknown_keys) {
+    const auto preferences=Preferences::Parse("z = last\na = first\nz = replacement\nmovie path = localized description\n");
+    const auto entries=preferences.Entries();BOOST_REQUIRE_EQUAL(entries.size(),3);
+    BOOST_TEST(entries[0].first=="a");BOOST_TEST(entries[0].second=="first");
+    BOOST_TEST(entries[1].first=="movie path");BOOST_TEST(entries[1].second=="localized description");
+    BOOST_TEST(entries[2].first=="z");BOOST_TEST(entries[2].second=="replacement");
+}

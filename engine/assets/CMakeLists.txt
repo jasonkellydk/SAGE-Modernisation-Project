@@ -37,6 +37,7 @@ target_sources(generals_assets
             model/AnimationAsset.cppm
             texture/TextureAsset.cppm
             font/FontAsset.cppm
+            font/FontMetadata.cppm
             import/ModelImporter.cppm
             cache/ModelLoadTask.cppm
             cache/MaterialLoadTask.cppm
@@ -132,6 +133,7 @@ if(RTS_BUILD_ASSET_TESTS)
     add_assets_test(generals_assets_animation_test model/AnimationAsset.test.cppm)
     add_assets_test(generals_assets_texture_test texture/TextureAsset.test.cppm)
     add_assets_test(generals_assets_font_test font/FontAsset.test.cppm)
+    add_assets_test(generals_assets_font_metadata_test font/FontMetadata.test.cppm)
     add_assets_test(generals_assets_font_load_test cache/FontLoadTask.test.cppm)
     target_compile_definitions(generals_assets_font_load_test PRIVATE
         ASSETS_FONT_METRICS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/font/fixtures/metrics.ttf")

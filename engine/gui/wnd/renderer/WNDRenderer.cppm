@@ -8,6 +8,9 @@ export import Assets.Fonts;
 export import Assets.Textures;
 export import Graphics.Renderer2D;
 import Graphics.Text.GlyphAtlas;
+import engine.gui.text.font_face;
+import engine.gui.text.renderer;
+import engine.gui.images;
 
 namespace Engine::UI::WND
 {
@@ -209,258 +212,16 @@ export struct WindowTreeSource final
 	DescribeWindowCallback describe = nullptr;
 };
 
-export struct TextMetrics final
-{
-	const void *context = nullptr;
-	int (*spacing)(const void *context, std::uint16_t character) noexcept = nullptr;
-	int (*height)(const void *context) noexcept = nullptr;
-	int (*extra_overlap)(const void *context) noexcept = nullptr;
-};
+export using engine::gui::text::TextMetrics;
+export using engine::gui::text::TextLayoutOptions;
+export using engine::gui::text::TextPlacement;
+export using engine::gui::text::TextLine;
+export using engine::gui::text::TextLayout;
 
-export struct TextLayoutOptions final
-{
-	int wrapping_width = 0;
-	bool centered = false;
-	bool parse_hotkey = false;
-	std::uint16_t hotkey = 0;
-	bool hard_wrap = false;
-};
+export using engine::gui::text::FontGlyph;
+export using engine::gui::text::FontFace;
 
-export struct TextPlacement final
-{
-	std::uint16_t character = 0;
-	float x = 0.0f;
-	float y = 0.0f;
-	std::uint32_t line = 0;
-	bool hotkey = false;
-};
-
-export struct TextLine final
-{
-	std::uint32_t first = 0;
-	std::uint32_t count = 0;
-	float width = 0.0f;
-};
-
-export class TextLayout final
-{
-public:
-	explicit TextLayout(std::size_t placement_capacity = 8192, std::size_t line_capacity = 1024)
-		: m_placement_capacity(placement_capacity), m_line_capacity(line_capacity)
-	{
-		m_placements.reserve(placement_capacity);
-		m_lines.reserve(line_capacity);
-	}
-
-	bool Build(TextMetrics metrics, const std::uint16_t *text, TextLayoutOptions options) noexcept
-	{
-		m_placements.clear();
-		m_lines.clear();
-		m_width = 0.0f;
-		m_height = 0;
-		if (text == nullptr || metrics.context == nullptr || metrics.spacing == nullptr
-			|| metrics.height == nullptr || metrics.extra_overlap == nullptr)
-			return false;
-
-		const int line_height = std::max(1, metrics.height(metrics.context));
-		float cursor_x = 0.0f;
-		std::uint32_t line = 0;
-		std::uint32_t line_start = 0;
-		bool hotkey_seen = false;
-
-		for (std::size_t index = 0; text[index] != 0;) {
-			std::uint16_t character = text[index++];
-			if (character == static_cast<std::uint16_t>('\n')) {
-				if (!Finish_Line(cursor_x, line, line_start))
-					return false;
-				continue;
-			}
-
-			bool hotkey = false;
-			if (options.parse_hotkey && character == static_cast<std::uint16_t>('&')
-				&& text[index] != 0 && text[index] > static_cast<std::uint16_t>(' ')
-				&& text[index] != static_cast<std::uint16_t>('\n')) {
-				character = text[index++];
-				hotkey = !hotkey_seen && (options.hotkey == 0 || character == options.hotkey);
-				if (hotkey)
-					hotkey_seen = true;
-			}
-
-			const float spacing = static_cast<float>(metrics.spacing(metrics.context, character));
-			if (character == static_cast<std::uint16_t>(' ')) {
-				if (options.wrapping_width > 0) {
-					float word_width = spacing;
-					for (std::size_t word_index = index; text[word_index] != 0
-						&& text[word_index] > static_cast<std::uint16_t>(' '); ++word_index) {
-						if (options.parse_hotkey && text[word_index] == static_cast<std::uint16_t>('&')
-							&& text[word_index + 1] != 0
-							&& text[word_index + 1] > static_cast<std::uint16_t>(' ')
-							&& text[word_index + 1] != static_cast<std::uint16_t>('\n'))
-							++word_index;
-						if (text[word_index] != 0)
-							word_width += static_cast<float>(metrics.spacing(metrics.context, text[word_index]));
-					}
-					if (cursor_x > 0.0f && cursor_x + word_width >= static_cast<float>(options.wrapping_width)) {
-						if (!Finish_Line(cursor_x, line, line_start))
-							return false;
-						continue;
-					}
-				}
-				cursor_x += spacing;
-				continue;
-			}
-
-			if (options.hard_wrap && options.wrapping_width > 0 && cursor_x > 0.0f
-				&& cursor_x + spacing >= static_cast<float>(options.wrapping_width)) {
-				if (!Finish_Line(cursor_x, line, line_start))
-					return false;
-			}
-
-			if (m_placements.size() >= m_placement_capacity)
-				return false;
-			m_placements.push_back({character, cursor_x, static_cast<float>(line * line_height), line, hotkey});
-			cursor_x += spacing;
-			if (hotkey)
-				cursor_x += static_cast<float>(metrics.extra_overlap(metrics.context));
-		}
-
-		if (!Finish_Line(cursor_x, line, line_start))
-			return false;
-
-		for (const TextLine &current_line : m_lines)
-			m_width = std::max(m_width, current_line.width);
-		if (options.centered) {
-			for (TextPlacement &placement : m_placements)
-				placement.x += (m_width - m_lines[placement.line].width) * 0.5f;
-		}
-		m_height = static_cast<std::uint32_t>(m_lines.size()) * static_cast<std::uint32_t>(line_height);
-		return true;
-	}
-
-	std::span<const TextPlacement> Placements() const noexcept { return m_placements; }
-	std::span<const TextLine> Lines() const noexcept { return m_lines; }
-	float Width() const noexcept { return m_width; }
-	std::uint32_t Height() const noexcept { return m_height; }
-
-private:
-	bool Finish_Line(float &cursor_x, std::uint32_t &line, std::uint32_t &line_start) noexcept
-	{
-		if (m_lines.size() >= m_line_capacity || m_placements.size() > std::numeric_limits<std::uint32_t>::max())
-			return false;
-		m_lines.push_back({line_start, static_cast<std::uint32_t>(m_placements.size()) - line_start, cursor_x});
-		line_start = static_cast<std::uint32_t>(m_placements.size());
-		cursor_x = 0.0f;
-		++line;
-		return true;
-	}
-
-	std::size_t m_placement_capacity = 0;
-	std::size_t m_line_capacity = 0;
-	std::vector<TextPlacement> m_placements;
-	std::vector<TextLine> m_lines;
-	float m_width = 0.0f;
-	std::uint32_t m_height = 0;
-};
-
-export struct FontGlyph final
-{
-	std::uint16_t character = 0;
-	std::uint16_t width = 0;
-	std::int16_t spacing = 0;
-	Graphics::Rect2D uv{};
-	bool available = false;
-	std::uint32_t page = 0;
-};
-
-export class FontFace final
-{
-public:
-	FontFace() = default;
-	FontFace(const FontFace &) = delete;
-	FontFace &operator=(const FontFace &) = delete;
-
-    bool Build(const Assets::FontAsset &source)
-    {
-        if (source.Height()==0) return false;
-        m_height=source.Height();
-        m_extra_overlap=source.Extra_Overlap();
-        m_atlas.Clear(); m_resource_ids.clear(); m_glyphs.clear();
-        m_glyphs.reserve(source.Glyphs().size());
-        for (const auto& input : source.Glyphs()) {
-            FontGlyph glyph;
-            glyph.character=input.character; glyph.width=input.width; glyph.spacing=input.spacing;
-            if (input.width) {
-                const auto region=m_atlas.Add(input.width,source.Height(),input.alpha);
-                if (!region) return false;
-                const float size=static_cast<float>(m_atlas.Page_Size());
-                glyph.uv={region->x/size,region->y/size,(region->x+region->width)/size,(region->y+region->height)/size};
-                glyph.page=region->page;
-                glyph.available=true;
-            }
-            m_glyphs.push_back(glyph);
-        }
-        for (std::size_t page=0; page<m_atlas.Page_Count(); ++page) {
-            const auto id=Allocate_Resource_Id();
-            if (!id) return false;
-            m_resource_ids.push_back(id);
-        }
-        return true;
-    }
-
-	int Height() const noexcept { return m_height; }
-	int Extra_Overlap() const noexcept { return m_extra_overlap; }
-	int Get_Char_Spacing(std::uint16_t character) const noexcept
-	{
-		const FontGlyph *glyph = Find_Glyph(character);
-		return glyph != nullptr ? glyph->spacing : 0;
-	}
-	const FontGlyph *Get_Glyph(std::uint16_t character) const noexcept
-	{
-		const FontGlyph *glyph = Find_Glyph(character);
-		if (glyph == nullptr || !glyph->available)
-			return nullptr;
-		return glyph;
-	}
-
-    Graphics::Renderer2DTexture Ensure_Texture(Graphics::Renderer2D &renderer, std::uint32_t page=0) const
-    {
-        if (page>=m_resource_ids.size()) return {};
-        const auto size=m_atlas.Page_Size();
-        return renderer.Register_Texture({Graphics::TextureHandle(m_resource_ids[page],1),
-            size,size,size*4,1,std::as_bytes(m_atlas.Pixels(page))});
-    }
-
-private:
-	const FontGlyph *Find_Glyph(std::uint16_t character) const noexcept
-	{
-		const auto found = std::lower_bound(m_glyphs.begin(), m_glyphs.end(), character,
-			[](const FontGlyph &glyph, std::uint16_t value) { return glyph.character < value; });
-		return found != m_glyphs.end() && found->character == character ? &*found : nullptr;
-	}
-
-	static std::uint32_t Allocate_Resource_Id() noexcept
-	{
-		static std::uint32_t next_id = 0x20000000u;
-		if (next_id == 0x3fffffffu)
-			return 0;
-		return next_id++;
-	}
-
-	Graphics::GlyphAtlas m_atlas;
-	std::vector<FontGlyph> m_glyphs;
-	std::vector<std::uint32_t> m_resource_ids;
-	int m_height = 0;
-	int m_extra_overlap = 0;
-};
-
-export struct TextStyle final
-{
-	Graphics::Color2D color{};
-	Graphics::Color2D drop_color{};
-	Graphics::Color2D hotkey_color{};
-	int x_drop = 1;
-	int y_drop = 1;
-};
+export using engine::gui::text::TextStyle;
 
 export struct StaticTextContent final
 {
@@ -1049,18 +810,9 @@ export bool Add_Tiled_Image(
 	cursor = rectangle.left;
 	if (tile_width <= 0.0f || rectangle.right <= rectangle.left)
 		return true;
-	while (cursor < rectangle.right) {
-		const float width = std::min(tile_width, rectangle.right - cursor);
-		if (width < tile_width) {
-			const float uv_width = image.uv.right - image.uv.left;
-			image.uv.right = image.uv.left + uv_width * width / tile_width;
-		}
-		if (!draw_list.Add_Image(image, {
-				cursor, rectangle.top, cursor + width, rectangle.bottom}))
-			return false;
-		cursor += width;
-	}
-	return true;
+	return engine::gui::images::Tile_Image(rectangle,image.uv,{tile_width,rectangle.bottom-rectangle.top},
+		[&](const auto& patch) {cursor=patch.screen.left;auto piece=image;piece.uv=patch.uv;
+			if(!draw_list.Add_Image(piece,patch.screen)) return false;cursor=patch.screen.right;return true;});
 }
 
 export bool Add_Clipped_Image(
@@ -1416,18 +1168,9 @@ export bool Add_Vertical_Tiled_Image(
 	cursor = rectangle.top;
 	if (tile_height <= 0.0f || rectangle.bottom <= rectangle.top)
 		return true;
-	while (cursor < rectangle.bottom) {
-		const float height = std::min(tile_height, rectangle.bottom - cursor);
-		if (height < tile_height) {
-			const float uv_height = image.uv.bottom - image.uv.top;
-			image.uv.bottom = image.uv.top + uv_height * height / tile_height;
-		}
-		if (!draw_list.Add_Image(image, {
-				rectangle.left, cursor, rectangle.right, cursor + height}))
-			return false;
-		cursor += height;
-	}
-	return true;
+	return engine::gui::images::Tile_Image(rectangle,image.uv,{rectangle.right-rectangle.left,tile_height},
+		[&](const auto& patch) {cursor=patch.screen.top;auto piece=image;piece.uv=patch.uv;
+			if(!draw_list.Add_Image(piece,patch.screen)) return false;cursor=patch.screen.bottom;return true;});
 }
 
 export struct VerticalSliderImageVisual final
@@ -1816,96 +1559,7 @@ export bool Draw_Image(
 	Graphics::Renderer2DBlendMode blend = Graphics::Renderer2DBlendMode::Alpha,
 	bool grayscale = false);
 
-export class TextRenderer final
-{
-public:
-	TextRenderer()
-		: m_layout(8192, 1024)
-	{
-		m_glyphs.reserve(8192);
-	}
-
-	bool Measure(
-		const FontFace &font,
-		const std::uint16_t *text,
-		TextLayoutOptions options,
-		std::uint32_t &width,
-		std::uint32_t &height)
-	{
-		if (!Build_Layout(font, text, options))
-			return false;
-		width = static_cast<std::uint32_t>(m_layout.Width());
-		height = m_layout.Height();
-		return true;
-	}
-
-	bool Draw(
-		Graphics::Renderer2D &renderer,
-		const FontFace &font,
-		const FontFace *hotkey_font,
-		const std::uint16_t *text,
-		float x,
-		float y,
-		TextLayoutOptions options,
-		TextStyle style)
-	{
-		if (!Build_Layout(font, text, options))
-			return false;
-        if (!Draw_Glyphs(renderer,font,x+style.x_drop,y+style.y_drop,style.drop_color,false)
-            || !Draw_Glyphs(renderer,font,x,y,style.color,false)) return false;
-        if (!options.parse_hotkey) return true;
-        const FontFace& highlight=hotkey_font ? *hotkey_font : font;
-        return Draw_Glyphs(renderer,highlight,x+style.x_drop,y+style.y_drop,style.drop_color,true)
-            && Draw_Glyphs(renderer,highlight,x,y,style.hotkey_color,true);
-	}
-
-private:
-	static int Spacing(const void *context, std::uint16_t character) noexcept
-	{
-		return static_cast<const FontFace *>(context)->Get_Char_Spacing(character);
-	}
-	static int Height(const void *context) noexcept
-	{
-		return static_cast<const FontFace *>(context)->Height();
-	}
-	static int Overlap(const void *context) noexcept
-	{
-		return static_cast<const FontFace *>(context)->Extra_Overlap();
-	}
-
-	bool Build_Layout(const FontFace &font, const std::uint16_t *text, TextLayoutOptions options)
-	{
-		return m_layout.Build({&font, &Spacing, &Height, &Overlap}, text, options);
-	}
-
-    bool Draw_Glyphs(Graphics::Renderer2D& renderer,const FontFace& font,
-        float x,float y,Graphics::Color2D color,bool hotkey_only)
-    {
-        m_glyphs.clear();
-        std::uint32_t page=0;
-        const auto flush=[&]() {
-            if (m_glyphs.empty()) return true;
-            const auto texture=font.Ensure_Texture(renderer,page);
-            const bool drawn=texture.index.Is_Valid() && renderer.Add_Text_Glyphs(m_glyphs,texture);
-            m_glyphs.clear();
-            return drawn;
-        };
-        for (const auto& placement : m_layout.Placements()) {
-            if (placement.hotkey!=hotkey_only) continue;
-            const auto* glyph=font.Get_Glyph(placement.character);
-            // Spaces and other advance-only glyphs affect layout without ink.
-            if (!glyph) continue;
-            if (glyph->page!=page && !flush()) return false;
-            page=glyph->page;
-            m_glyphs.push_back({{x+placement.x,y+placement.y,x+placement.x+glyph->width,
-                y+placement.y+font.Height()},glyph->uv,color});
-        }
-        return flush();
-    }
-
-	TextLayout m_layout;
-	std::vector<Graphics::Renderer2DGlyph> m_glyphs;
-};
+export using engine::gui::text::TextRenderer;
 
 export TextRenderer &Get_Text_Renderer() noexcept;
 
@@ -2338,21 +1992,7 @@ export Graphics::Renderer2DTexture Resolve_Image_Texture(
 	if (cache == nullptr)
 		return {};
 
-	cache->Wait(asset_handle);
-	const Assets::TextureAsset *asset = cache->Try_Get_Texture(asset_handle);
-	if (asset == nullptr || !asset->Has_Pixels())
-		return {};
-
-	const Graphics::TextureHandle owner(
-		static_cast<Graphics::TextureHandle::Index>(0x40000000u | asset_handle.Get_Index()),
-		static_cast<Graphics::TextureHandle::Generation>(asset_handle.Get_Generation()));
-	return renderer.Register_Texture({
-		owner,
-		asset->Width(),
-		asset->Height(),
-		asset->Row_Pitch(),
-		1,
-		asset->Pixels()});
+	return engine::gui::images::Resolve_Texture(*cache,asset_handle,renderer);
 }
 
 export bool Draw_Image(

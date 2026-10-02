@@ -1,0 +1,108 @@
+#define BOOST_TEST_MODULE RenegadeMenu
+#include <boost/test/included/unit_test.hpp>
+#include <limits>
+import games.renegade.presentation.menu.main_menu;
+import games.renegade.presentation.menu.intro;
+import games.renegade.presentation.menu.navigation;
+import engine.config.adapters.preferences.preferences_file;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(dialog_focus_lifetime_restores_parents_and_discards_closed_children) {
+    MenuNavigation vm;vm.RememberFocus(11003);vm.For(11003).Execute();BOOST_CHECK(!vm.Focus());
+    vm.RememberFocus(11014);vm.For(11014).Execute();BOOST_CHECK(!vm.Focus());
+    vm.RememberFocus(1022);vm.back.Execute();BOOST_REQUIRE(vm.Focus());BOOST_TEST(*vm.Focus()==11014);
+    vm.For(11014).Execute();BOOST_CHECK(!vm.Focus()); // new child instance, not a cached resource
+    vm.back.Execute();BOOST_TEST(*vm.Focus()==11014);vm.back.Execute();BOOST_TEST(*vm.Focus()==11003);
+    vm.back.Execute();BOOST_CHECK(!vm.Focus());vm.RememberFocus(1000);vm.For(1179).Execute();
+    BOOST_TEST(*vm.Focus()==11003);BOOST_TEST(!vm.quitting.Get());
+}
+
+BOOST_AUTO_TEST_CASE(original_main_menu_transition_segments_and_sounds) {
+    MainMenuTransition t; t.Start(TransitionDirection::In);
+    // mainmenutransition.cpp IN_START_FRAME=27, IN_END_FRAME=65.
+    // One second at the authored 30 FPS leaves eight incoming frames.
+    BOOST_TEST(t.Frame()==27); BOOST_TEST(t.Sound()=="interface_mainmove.wav");
+    t.Advance(1,30); BOOST_TEST(t.Frame()==57); BOOST_TEST(!t.Done());
+    t.Advance(0.25f,30); BOOST_TEST(t.Frame()==64.5f); BOOST_TEST(!t.Done());
+    t.Advance(0.25f,30); BOOST_TEST(t.Frame()==65); BOOST_TEST(t.Done());
+    t.Advance(10,30); BOOST_TEST(t.Frame()==65); BOOST_TEST(t.Done()); BOOST_TEST(t.ModelVisible());
+    t.Start(TransitionDirection::Out); BOOST_TEST(t.Frame()==66); BOOST_TEST(t.Sound()=="interface_movezoom.wav");
+    t.Advance(-1,30); t.Advance(std::numeric_limits<float>::infinity(),30); BOOST_TEST(t.Frame()==66);
+    t.Advance(1,30); BOOST_TEST(t.Frame()==96); BOOST_TEST(t.ModelVisible());
+    t.Advance(1,30); BOOST_TEST(t.Frame()==99); BOOST_TEST(t.Done()); BOOST_TEST(!t.ModelVisible());
+    t.Start(TransitionDirection::In);BOOST_TEST(t.Frame()==27);BOOST_TEST(!t.Done());BOOST_TEST(t.ModelVisible());
+}
+BOOST_AUTO_TEST_CASE(menu_commands_bind_navigation_and_escape_quit_confirmation) {
+    MainMenuViewModel vm;
+    BOOST_TEST(vm.options.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Options);
+    BOOST_TEST(vm.cancel.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Main);
+    BOOST_TEST(vm.cancel.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Quit);
+    BOOST_TEST(vm.cancel.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Main);
+    BOOST_TEST(vm.lan.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Lan);
+    BOOST_TEST(!vm.internet.Execute()); BOOST_CHECK(vm.screen.Get()==MenuScreen::Lan);
+    BOOST_TEST(!vm.practice.Execute()); // Composition supplies actual match start.
+}
+BOOST_AUTO_TEST_CASE(original_startup_movies_play_in_order_and_skip_advances_one) {
+    IntroSequence sequence; BOOST_TEST(sequence.Playing());BOOST_TEST(sequence.Movie()=="EA_WW.BIK");
+    sequence.Complete();BOOST_TEST(sequence.Movie()=="R_Intro.BIK");
+    sequence.Complete();BOOST_TEST(!sequence.Playing());BOOST_TEST(sequence.Movie().empty());
+    sequence.Complete();BOOST_TEST(!sequence.Playing());
+    IntroSequence skipped(false);BOOST_TEST(!skipped.Playing());
+    BOOST_TEST(skipped.SkipAllowed());BOOST_TEST(!skipped.Skip());
+}
+BOOST_AUTO_TEST_CASE(first_renegade_intro_requires_completion_before_skip_permission) {
+    // movie.cpp Think returns before menu-toggle handling on first viewing.
+    IntroSequence first;
+    BOOST_TEST(first.CanSkip());BOOST_TEST(first.Skip());
+    BOOST_TEST(first.Movie()=="R_Intro.BIK");BOOST_TEST(!first.SkipAllowed());
+    BOOST_TEST(!first.CanSkip());BOOST_TEST(!first.Skip());
+    BOOST_TEST(first.Movie()=="R_Intro.BIK");
+    first.Complete();BOOST_TEST(first.SkipAllowed());BOOST_TEST(!first.Playing());
+    first.Complete();BOOST_TEST(first.SkipAllowed());
+    IntroSequence next(true,first.SkipAllowed());
+    BOOST_TEST(next.Skip());BOOST_TEST(next.Movie()=="R_Intro.BIK");
+    BOOST_TEST(next.CanSkip());BOOST_TEST(next.Skip());BOOST_TEST(!next.Playing());
+}
+BOOST_AUTO_TEST_CASE(intro_preferences_preserve_registry_boolean_rules_and_unrelated_settings) {
+    using engine::config::Preferences;
+    auto preferences=Preferences::Parse("music volume = 32\nIntroMovieSkipAllowed = -2\nSkipAllIntroMovies = 3\n");
+    const auto state=ReadIntroPreferences(preferences);
+    BOOST_TEST(state.skip_allowed);BOOST_TEST(state.skip_all);
+    WriteIntroPreferences(preferences,{true,false});
+    const auto restored=ReadIntroPreferences(Preferences::Parse(preferences.Write()));
+    BOOST_TEST(restored.skip_allowed);BOOST_TEST(!restored.skip_all);
+    BOOST_TEST(preferences.Number("music volume",0)==32);
+    const auto initial=ReadIntroPreferences(Preferences{});
+    BOOST_TEST(!initial.skip_allowed);BOOST_TEST(!initial.skip_all);
+    IntroSequence suppressed(!state.skip_all,state.skip_allowed);
+    BOOST_TEST(!suppressed.Playing());BOOST_TEST(suppressed.SkipAllowed());
+}
+BOOST_AUTO_TEST_CASE(retail_dialog_links_and_back_stack_require_quit_confirmation) {
+    MenuNavigation vm;
+    BOOST_TEST(vm.For(11003).Execute());BOOST_TEST(vm.dialog.Get()==135);
+    BOOST_TEST(vm.For(11014).Execute());BOOST_TEST(vm.dialog.Get()==169);
+    BOOST_TEST(vm.back.Execute());BOOST_TEST(vm.dialog.Get()==135);
+    BOOST_TEST(vm.back.Execute());BOOST_TEST(vm.dialog.Get()==128);
+    BOOST_TEST(vm.back.Execute());BOOST_TEST(vm.dialog.Get()==129);BOOST_TEST(!vm.quitting.Get());
+    BOOST_TEST(vm.For(1000).Execute());BOOST_TEST(vm.quitting.Get());
+    BOOST_TEST(!vm.For(11029).Execute()); // excluded internet service
+}
+BOOST_AUTO_TEST_CASE(quit_popup_initialization_occurs_once_per_open_and_cancel_restores_the_menu) {
+    MenuNavigation vm;unsigned openings{};
+    vm.dialog.Subscribe([&](auto resource) {if(IsPopupResource(resource)) ++openings;});
+    BOOST_TEST(openings==0u);BOOST_TEST(vm.back.Execute());BOOST_TEST(openings==1u);
+    vm.Open(129);BOOST_TEST(openings==1u);
+    BOOST_TEST(vm.For(1179).Execute());BOOST_TEST(vm.dialog.Get()==128);BOOST_TEST(!vm.quitting.Get());
+    BOOST_TEST(vm.For(11018).Execute());BOOST_TEST(openings==2u);
+    BOOST_TEST(vm.For(1000).Execute());BOOST_TEST(vm.quitting.Get());
+    BOOST_TEST(!IsPopupResource(145));BOOST_TEST(!IsPopupResource(169));
+}
+BOOST_AUTO_TEST_CASE(menu_close_feedback_is_shared_by_back_commands_and_excludes_quit_popup_lifecycle) {
+    MenuNavigation vm;unsigned notifications{};
+    vm.closed_menus.Subscribe([&](auto count) {if(count) ++notifications;});
+    vm.For(11003).Execute();vm.For(11014).Execute();BOOST_TEST(notifications==0u);
+    BOOST_TEST(vm.For(11034).Execute());BOOST_TEST(vm.dialog.Get()==135);BOOST_TEST(notifications==1u);
+    BOOST_TEST(vm.back.Execute());BOOST_TEST(vm.dialog.Get()==128);BOOST_TEST(notifications==2u);
+    BOOST_TEST(vm.back.Execute());BOOST_TEST(vm.dialog.Get()==129);BOOST_TEST(notifications==2u);
+    BOOST_TEST(vm.For(1179).Execute());BOOST_TEST(vm.dialog.Get()==128);BOOST_TEST(notifications==2u);
+    BOOST_TEST(vm.closed_menus.Get()==2u);
+}

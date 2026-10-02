@@ -1,0 +1,35 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.marquee;
+using namespace engine::gui::w3d;
+BOOST_AUTO_TEST_CASE(marquee_markup_preserves_source_line_defaults_tags_and_discarded_prefixes) {
+    const auto lines=ReadMarqueeLines(u"<BoLd><color=229,199,76>EVA\n\nplain\nold<boldish>new<unknown>\n",0xffffd528);
+    BOOST_REQUIRE(lines);BOOST_REQUIRE_EQUAL(lines->size(),4);
+    BOOST_TEST((*lines)[0].font==1u);BOOST_TEST((*lines)[0].color==0xffe5c74cu);BOOST_CHECK((*lines)[0].text==u"EVA");
+    BOOST_TEST((*lines)[1].font==0u);BOOST_TEST((*lines)[1].color==0xffffd528u);BOOST_TEST((*lines)[1].text.empty());
+    BOOST_CHECK((*lines)[2].text==u"plain");BOOST_TEST((*lines)[2].font==0u);
+    BOOST_CHECK((*lines)[3].text==u"new<unknown>");BOOST_TEST((*lines)[3].font==1u);
+    BOOST_REQUIRE(ReadMarqueeLines(u"",1));BOOST_TEST(ReadMarqueeLines(u"",1)->empty());
+    const auto nul=ReadMarqueeLines(std::u16string_view(u"a\0b",3),1);BOOST_REQUIRE(nul);BOOST_REQUIRE_EQUAL(nul->size(),1);
+    BOOST_CHECK((*nul)[0].text==u"a");
+}
+BOOST_AUTO_TEST_CASE(marquee_colors_follow_source_decimal_prefixes_and_unsigned_byte_conversion) {
+    const auto lines=ReadMarqueeLines(u"<color=-1,+256,257>a\n<color= 12junk,34>b\n<color=bad>c\n<bad>d\n<color=1,2,3e",7);
+    BOOST_REQUIRE(lines);BOOST_REQUIRE_EQUAL(lines->size(),5);
+    BOOST_TEST((*lines)[0].color==0xffff0001u);BOOST_TEST((*lines)[1].color==0xff0c2200u);
+    BOOST_TEST((*lines)[2].color==0xff000000u);BOOST_CHECK((*lines)[3].text==u"<bad>d");
+    BOOST_CHECK((*lines)[4].text==u"<color=1,2,3e");BOOST_TEST((*lines)[4].color==7u);
+    BOOST_CHECK(!ReadMarqueeLines(std::u16string(1048577,u'x'),1));
+}
+BOOST_AUTO_TEST_CASE(marquee_scroll_uses_font_height_rate_two_blank_pages_and_source_cycle_reset) {
+    MarqueeScrollModel model;
+    BOOST_REQUIRE(model.Configure(40,20,10,2,2));BOOST_TEST(model.Extent()==80);
+    BOOST_REQUIRE(model.Advance(.25f));BOOST_TEST(model.position.Get()==5);
+    BOOST_REQUIRE(model.Advance(3.7f));BOOST_CHECK_SMALL(model.position.Get()-79,0.00001f);
+    BOOST_REQUIRE(model.Advance(.1f));BOOST_TEST(model.position.Get()==0);BOOST_TEST(model.Cycles()==1u);
+    BOOST_REQUIRE(model.Advance(10));BOOST_TEST(model.position.Get()==0);BOOST_TEST(model.Cycles()==2u);
+    BOOST_TEST(!model.Advance(-1));BOOST_TEST(!model.Advance(std::numeric_limits<float>::infinity()));
+    BOOST_TEST(!model.Configure(-1,1,1,2,2));BOOST_TEST(model.Extent()==80);
+    BOOST_REQUIRE(model.Configure(20,10,4,0,2));BOOST_REQUIRE(model.Advance(100));BOOST_TEST(model.position.Get()==0);
+    BOOST_TEST(model.Cycles()==0u);BOOST_TEST(!model.Configure(1,16777216,1,2,2));
+}

@@ -1,0 +1,33 @@
+#define BOOST_TEST_MODULE VirtualAssetSource
+#include <boost/test/included/unit_test.hpp>
+#include <vector>
+#include <string>
+#include <memory>
+#include <cstddef>
+#include <optional>
+import engine.assets.adapters.filesystem.virtual_asset_source;
+import engine.filesystem.core.virtual_file_system;
+import Assets.Identity;
+namespace {
+class Source final:public engine::filesystem::FileSource {
+public:
+    std::string_view Name() const noexcept override { return "test"; }
+    std::vector<std::string> Paths() const override { return {"language/model.w3d","shared/model.w3d","empty.tga"}; }
+    std::optional<std::vector<std::byte>> Read(std::string_view name) const override {
+        if(name=="empty.tga") return std::vector<std::byte>{};
+        return std::vector<std::byte>{std::byte(name=="language/model.w3d" ? 1 : 2)};
+    }
+};
+}
+BOOST_AUTO_TEST_CASE(content_policy_controls_precedence_and_font_provider_without_io_duplication) {
+    engine::filesystem::VirtualFileSystem files;files.Mount(std::make_unique<Source>());
+    engine::assets::VirtualAssetSource source(files,[](const Assets::AssetIdentity&) {
+        return std::vector<std::string>{"missing","language/model.w3d","shared/model.w3d"};
+    },[](std::string_view) { return std::vector<std::byte>{std::byte{3}}; });
+    const auto bytes=source({Assets::AssetType::Model,"model"});BOOST_REQUIRE_EQUAL(bytes.size(),1u);
+    BOOST_TEST(std::to_integer<unsigned>(bytes[0])==1);
+    BOOST_TEST(std::to_integer<unsigned>(source({Assets::AssetType::Font,"font/face/8/0"})[0])==3);
+    engine::assets::VirtualAssetSource empty(files,[](const Assets::AssetIdentity&) {
+        return std::vector<std::string>{"empty.tga","shared/model.w3d"};
+    });BOOST_TEST(empty({Assets::AssetType::Texture,"empty"}).empty());
+}

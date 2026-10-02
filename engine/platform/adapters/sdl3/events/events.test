@@ -1,0 +1,124 @@
+#define BOOST_TEST_MODULE SDL3PlatformEvents
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.platform;
+import engine.platform.adapters.sdl3;
+import engine.platform.adapters.sdl3.keys;
+
+namespace {
+bool Receive(engine::platform::IEventService& events,engine::platform::PlatformEvent& out,
+    engine::platform::EventType type,engine::platform::WindowId window) {
+    // SDL may end the current pump batch before delivering an event posted
+    // after that batch started. Also ignore unrelated native window events.
+    for(unsigned frame=0;frame<8;++frame)
+        while(events.poll(out)) if(out.type==type && out.window==window) return true;
+    return false;
+}
+}
+
+BOOST_AUTO_TEST_CASE(sdl3_text_event_queue_owns_posted_strings_and_preserves_unicode_composition_offsets) {
+    engine::platform::sdl3::SDL3PlatformAdapter platform;engine::platform::WindowConfig config;config.hidden=true;config.size={64,64};
+    auto window=platform.windows().create(config);BOOST_REQUIRE(window);
+    engine::platform::PlatformEvent event;while(platform.events().poll(event)) {}
+    const std::string typed="\xc3\xa6\xf0\x9f\x98\x80";
+    event.window=window->id();event.type=engine::platform::EventType::text_input;std::memcpy(event.text,typed.c_str(),typed.size()+1);
+    BOOST_REQUIRE(platform.events().post(event));std::fill(std::begin(event.text),std::end(event.text),'x');
+    engine::platform::PlatformEvent output;BOOST_REQUIRE(Receive(platform.events(),output,engine::platform::EventType::text_input,window->id()));
+    BOOST_CHECK(std::string(output.text)==typed);BOOST_TEST(output.text_start==0);BOOST_TEST(output.text_length==0);
+    BOOST_TEST(!platform.events().post(event)); // a full unterminated legacy array is rejected
+    event={};event.window=window->id();event.type=engine::platform::EventType::text_editing;
+    std::memcpy(event.text,typed.c_str(),typed.size()+1);event.text_start=1;event.text_length=1;
+    BOOST_REQUIRE(platform.events().post(event));event.text[0]='z';
+    BOOST_REQUIRE(Receive(platform.events(),output,event.type,event.window));BOOST_CHECK(std::string(output.text)==typed);
+    BOOST_TEST(output.text_start==1);BOOST_TEST(output.text_length==1);
+    event.text[0]=0;event.text_start=event.text_length=-1;BOOST_REQUIRE(platform.events().post(event));
+    BOOST_REQUIRE(Receive(platform.events(),output,event.type,event.window));BOOST_TEST(output.text[0]==0);
+    BOOST_TEST(output.text_start==-1);BOOST_TEST(output.text_length==-1);
+}
+
+BOOST_AUTO_TEST_CASE(sdl3_platform_event_queue_roundtrips_keys_pointer_and_modifiers) {
+    engine::platform::sdl3::SDL3PlatformAdapter platform;
+    engine::platform::WindowConfig config;config.hidden=true;config.size={64,64};
+    auto window=platform.windows().create(config);BOOST_REQUIRE(window);
+    engine::platform::PlatformEvent input;
+    while(platform.events().poll(input)) {}
+    for(unsigned index=1;index<static_cast<unsigned>(engine::platform::KeyCode::count);++index) {
+        const auto key=static_cast<engine::platform::KeyCode>(index);
+        input={};input.type=engine::platform::EventType::key_down;input.window=window->id();input.key=key;
+        input.modifiers=engine::platform::modifier_shift|engine::platform::modifier_control;
+        BOOST_REQUIRE(platform.events().post(input));
+        engine::platform::PlatformEvent output;BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
+        BOOST_CHECK(output.key==input.key);BOOST_CHECK(output.type==input.type);BOOST_TEST(output.window==window->id());
+        BOOST_TEST(output.modifiers==input.modifiers);
+        const auto state=platform.input().keyboard_state();
+        BOOST_TEST(state.down(output.key)==state.down(static_cast<int>(engine::platform::sdl3::NativeScanCode(output.key))));
+        BOOST_CHECK(engine::platform::sdl3::PortableKey(engine::platform::sdl3::NativeScanCode(output.key))==output.key);
+        input.type=engine::platform::EventType::key_up;
+        BOOST_REQUIRE(platform.events().post(input));BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
+        BOOST_CHECK(output.key==input.key);BOOST_CHECK(output.type==input.type);
+    }
+    input={};input.window=window->id();input.type=engine::platform::EventType::mouse_button_down;input.code=1;input.position={12.5f,30.25f};
+    BOOST_REQUIRE(platform.events().post(input));engine::platform::PlatformEvent output;BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
+    BOOST_CHECK(output.type==input.type);BOOST_TEST(output.code==1);BOOST_TEST(output.position.x==12.5f);BOOST_TEST(output.position.y==30.25f);
+    BOOST_TEST(output.clicks==1u);input.clicks=2;BOOST_REQUIRE(platform.events().post(input));
+    BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));BOOST_TEST(output.clicks==2u);
+    input.type=engine::platform::EventType::mouse_button_up;BOOST_REQUIRE(platform.events().post(input));
+    BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));BOOST_TEST(output.clicks==2u);
+    input.type=engine::platform::EventType::window_resized;BOOST_TEST(!platform.events().post(input));
+    input.type=engine::platform::EventType::mouse_wheel;input.x=0.25f;input.y=-1.5f;input.flipped=true;
+    BOOST_REQUIRE(platform.events().post(input));BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
+    BOOST_TEST(output.x==0.25f);BOOST_TEST(output.y==-1.5f);BOOST_TEST(output.flipped);
+    input.flipped=false;input.y=3;BOOST_REQUIRE(platform.events().post(input));
+    BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));BOOST_TEST(!output.flipped);BOOST_TEST(output.y==3);
+    input.y=std::numeric_limits<float>::quiet_NaN();BOOST_TEST(!platform.events().post(input));
+    input.type=engine::platform::EventType::key_down;input.window=0xffffffff;BOOST_TEST(!platform.events().post(input));
+    input.window=window->id();input.key=engine::platform::KeyCode::unknown;BOOST_TEST(!platform.events().post(input));
+    input.key=engine::platform::KeyCode::count;BOOST_TEST(!platform.events().post(input));
+    input.key=static_cast<engine::platform::KeyCode>(255);BOOST_TEST(!platform.events().post(input));
+    if(const auto handle=window->native_handle()) { BOOST_CHECK(handle->system!=engine::platform::NativeWindowSystem::automatic);BOOST_CHECK(handle->window!=nullptr); }
+}
+
+BOOST_AUTO_TEST_CASE(portable_keyboard_state_keeps_native_queries_and_bounds_without_assuming_native_key_numbers) {
+    using namespace engine::platform;
+    std::array<bool,8> keys{};keys[4]=true;
+    std::array<int,static_cast<unsigned>(KeyCode::count)> indices{};
+    indices[static_cast<unsigned>(KeyCode::a)]=4;indices[static_cast<unsigned>(KeyCode::z)]=7;
+    KeyboardState state{keys.data(),int(keys.size()),true,indices};
+    BOOST_TEST(state.down(KeyCode::a));BOOST_TEST(state.down(4));BOOST_TEST(!state.down(KeyCode::z));
+    BOOST_TEST(!state.down(KeyCode::unknown));BOOST_TEST(!state.down(KeyCode::count));BOOST_TEST(!state.down(static_cast<KeyCode>(255)));
+    BOOST_TEST(!state.down(-1));BOOST_TEST(!state.down(8));BOOST_TEST(state.caps_lock);
+    state.key_indices={};BOOST_TEST(!state.down(KeyCode::a));BOOST_TEST(state.down(4));
+    state.keys=nullptr;BOOST_TEST(!state.down(4));
+}
+
+BOOST_AUTO_TEST_CASE(sdl3_preferences_reject_empty_names_and_path_syntax_before_creating_directories) {
+    engine::platform::sdl3::SDL3PlatformAdapter platform;
+    for(const std::string& name:std::array<std::string,7>{"",".","..","../escape","bad\\path","C:escape",std::string("bad\0name",8)}) {
+        BOOST_TEST(platform.application().preference_directory(name,"Renegade").empty());
+        BOOST_TEST(platform.application().preference_directory("Engine",name).empty());
+    }
+}
+BOOST_AUTO_TEST_CASE(sdl3_window_size_changes_publish_actual_drawable_extent) {
+    using namespace engine::platform;
+    sdl3::SDL3PlatformAdapter platform;
+    WindowConfig config;config.size={320,240};
+    BOOST_TEST(config.minimum_size.width==0);BOOST_TEST(config.minimum_size.height==0);
+    auto window=platform.windows().create(config);BOOST_REQUIRE(window);
+    PlatformEvent event;while(platform.events().poll(event)) {}
+    for(const auto size:std::array<Extent2D,2>{{{480,320},{320,240}}}) {
+        BOOST_REQUIRE(window->set_size(size));
+        bool observed=false;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        while(!observed && std::chrono::steady_clock::now()<deadline) {
+            while(platform.events().poll(event)) if(event.window==window->id() && event.type==EventType::window_resized) {
+                const auto pixels=window->drawable_size();
+                if(window->size().width!=size.width || window->size().height!=size.height) continue;
+                BOOST_TEST(event.size.width==pixels.width);BOOST_TEST(event.size.height==pixels.height);
+                BOOST_TEST(pixels.width>0);BOOST_TEST(pixels.height>0);observed=true;
+            }
+            std::this_thread::yield();
+        }
+        BOOST_REQUIRE_MESSAGE(observed,"Resize event missing for requested "<<size.width<<" x "<<size.height
+            <<"; current logical size "<<window->size().width<<" x "<<window->size().height);
+    }
+}

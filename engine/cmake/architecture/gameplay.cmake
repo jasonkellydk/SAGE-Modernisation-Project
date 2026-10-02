@@ -16,27 +16,28 @@ endif()
 
 set(domain_folders "components|systems|definitions|algorithms|resources")
 set(engine_domain "^engine/gameplay/(common|rts|fps)/[a-z0-9_]+/(${domain_folders})/[a-z0-9_]+[.]cppm$")
-set(game_domain "^games/generalszh/gameplay/[a-z0-9_]+/(${domain_folders})/[a-z0-9_]+[.]cppm$")
-set(composition_root "^games/generalszh/session/")
+set(game_domain "^games/(generalszh|renegade)/gameplay/[a-z0-9_]+/(${domain_folders})/[a-z0-9_]+[.]cppm$")
+set(composition_root "^games/(generalszh|renegade)/session/")
 
 file(GLOB_RECURSE sources RELATIVE "${SOURCE_ROOT}"
     "${SOURCE_ROOT}/engine/*.cppm"
-    "${SOURCE_ROOT}/games/generalszh/*.cppm")
+    "${SOURCE_ROOT}/games/generalszh/*.cppm"
+    "${SOURCE_ROOT}/games/renegade/*.cppm")
 list(SORT sources)
 set(failures "")
 foreach(path IN LISTS sources)
     file(READ "${SOURCE_ROOT}/${path}" text)
     string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" " " text "${text}")
     string(REGEX REPLACE "//[^\n]*" " " text "${text}")
-    if(path MATCHES "^engine/" AND text MATCHES "(^|[;\n])[ \t]*(export[ \t]+)?import[ \t]+(games[.]|generalszh[.])")
+    if(path MATCHES "^engine/" AND text MATCHES "(^|[;\n])[ \t]*(export[ \t]+)?import[ \t]+(games[.]|generalszh[.]|renegade[.])")
         string(APPEND failures "${path}: engine-game-import\n")
     endif()
-    if(NOT path MATCHES "^(engine/gameplay|games/generalszh)/")
+    if(NOT path MATCHES "^(engine/gameplay|games/(generalszh|renegade))/")
         continue()
     endif()
 
     set(in_gameplay FALSE)
-    if(path MATCHES "^(engine/gameplay|games/generalszh/gameplay)/")
+    if(path MATCHES "^(engine/gameplay|games/(generalszh|renegade)/gameplay)/")
         set(in_gameplay TRUE)
         if(NOT path MATCHES "${engine_domain}" AND NOT path MATCHES "${game_domain}")
             string(APPEND failures "${path}: domain-layout (expected <genre>/<domain>/{${domain_folders}}/<file>.cppm)\n")
@@ -68,7 +69,9 @@ file(GLOB_RECURSE presentation_sources RELATIVE "${SOURCE_ROOT}"
     "${SOURCE_ROOT}/games/generalszh/presentation/*.cppm"
     "${SOURCE_ROOT}/games/generalszh/presentation/*.cpp"
     "${SOURCE_ROOT}/games/generalszh/hosts/*.cppm"
-    "${SOURCE_ROOT}/games/generalszh/hosts/*.cpp")
+    "${SOURCE_ROOT}/games/generalszh/hosts/*.cpp"
+    "${SOURCE_ROOT}/games/renegade/presentation/*.cppm"
+    "${SOURCE_ROOT}/games/renegade/hosts/*.cppm")
 list(SORT presentation_sources)
 foreach(path IN LISTS presentation_sources)
     file(READ "${SOURCE_ROOT}/${path}" text)

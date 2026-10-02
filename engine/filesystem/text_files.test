@@ -1,0 +1,31 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.filesystem.core.text_files;
+
+BOOST_AUTO_TEST_CASE(user_text_files_replace_roundtrip_bound_reads_and_preserve_failed_targets) {
+    const auto directory=std::filesystem::temp_directory_path()/
+        ("engine-user-files-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directory(directory);
+    struct Cleanup {std::filesystem::path path;~Cleanup() {std::error_code ignored;std::filesystem::remove_all(path,ignored);}} cleanup{directory};
+    const auto path=directory/"settings"/"Options.ini";
+    const auto missing=engine::filesystem::ReadTextFile(path);
+    BOOST_CHECK(!missing);
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(path,"volume = 43\n"));
+    auto read=engine::filesystem::ReadTextFile(path);BOOST_REQUIRE(read);BOOST_TEST(*read=="volume = 43\n");
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(path,"volume = 70\nmuted = 1\n"));
+    read=engine::filesystem::ReadTextFile(path);BOOST_REQUIRE(read);BOOST_TEST(*read=="volume = 70\nmuted = 1\n");
+    const auto bounded=engine::filesystem::ReadTextFile(path,3);BOOST_CHECK(!bounded);
+    BOOST_CHECK(bounded.error()==std::errc::file_too_large);
+    // A directory cannot be replaced with a settings file. The existing child
+    // survives and the temporary sibling is removed after the failed rename.
+    const auto failure=engine::filesystem::WriteTextFile(path.parent_path(),"bad");BOOST_CHECK(!failure);
+    read=engine::filesystem::ReadTextFile(path);BOOST_REQUIRE(read);BOOST_TEST(*read=="volume = 70\nmuted = 1\n");
+    BOOST_TEST(std::distance(std::filesystem::directory_iterator(directory),std::filesystem::directory_iterator{})==1);
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(path,""));read=engine::filesystem::ReadTextFile(path);BOOST_REQUIRE(read);BOOST_TEST(read->empty());
+    BOOST_CHECK(!engine::filesystem::ReadTextFile(directory));
+    const auto exists=engine::filesystem::PathExists(path);BOOST_REQUIRE(exists);BOOST_TEST(*exists);
+    BOOST_TEST(!engine::filesystem::RemoveRegularFile(directory));
+    const auto removed=engine::filesystem::RemoveRegularFile(path);BOOST_REQUIRE(removed);BOOST_TEST(*removed);
+    const auto missing_again=engine::filesystem::RemoveRegularFile(path);BOOST_REQUIRE(missing_again);BOOST_TEST(!*missing_again);
+    const auto absent=engine::filesystem::PathExists(path);BOOST_REQUIRE(absent);BOOST_TEST(!*absent);
+}

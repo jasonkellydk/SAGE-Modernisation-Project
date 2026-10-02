@@ -1,0 +1,31 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <span>
+#include <cstddef>
+import games.renegade.presentation.menu.movie_audio;
+import Video.Decoder;
+
+BOOST_AUTO_TEST_SUITE(movie_audio)
+BOOST_AUTO_TEST_CASE(source_movie_audio_is_independent_of_all_gameplay_category_mutes_and_volumes) {
+    using namespace engine::audio;
+    constexpr std::array categories{Bus::Effects,Bus::Music,Bus::Speech,Bus::Cinematic};
+    // Every combination of source enabled flags, at low/full percent volume.
+    for(unsigned mask=0;mask<16;++mask) for(float volume:{0.0f,0.25f,1.0f}) {
+        Mixer mixer(48000);
+        for(unsigned i=0;i<categories.size();++i)
+            mixer.SetBusGain(categories[i],mask&(1u<<i) ? volume : 0);
+        mixer.SetBusGain(Bus::Interface,0);
+        mixer.SetBusGain(Bus::Ambient,0);
+        MovieSound movie(mixer,renegade::presentation::MovieAudioBus);
+        std::array<short,8> pcm{8192,-8192,16384,-16384,8192,-8192,16384,-16384};
+        Engine::Video::DecodedAudioChunk chunk{48000,2,Engine::Video::AudioSampleFormat::S16,0,std::as_bytes(std::span(pcm))};
+        BOOST_REQUIRE(movie.Submit(chunk));movie.Start();
+        std::array<float,8> output{};mixer.Mix(output);
+        BOOST_TEST(output[0]==0.25f);BOOST_TEST(output[1]==-0.25f);
+        BOOST_TEST(output[2]==0.5f);BOOST_TEST(output[3]==-0.5f);
+        BOOST_TEST(mixer.OutputStats().nonSilentFrames==4);
+        movie.Stop();mixer.Mix(output);
+        BOOST_TEST(output.back()==0); // Shared mixer applies its stop envelope.
+    }
+}
+BOOST_AUTO_TEST_SUITE_END()

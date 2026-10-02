@@ -15,6 +15,8 @@ enum class Bus : std::uint8_t
 	Speech,
 	Ambient,
 	Interface,
+	Cinematic,
+	Media, // Independently routed film or other media playback.
 	Count,
 };
 

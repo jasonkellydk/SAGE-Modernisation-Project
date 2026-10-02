@@ -1,5 +1,6 @@
 # The game executable: platform window, fixed-step loop, renderer, shell.
 add_executable(generalszh main.cpp asset_source.cpp game_client.cpp world_scene.cpp crash_report.cpp front_end.cpp)
+target_link_libraries(generalszh PRIVATE engine_audio_video)
 target_sources(generalszh PRIVATE FILE_SET CXX_MODULES FILES
 	asset_source.cppm
 	shell_menu.cppm

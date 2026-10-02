@@ -4,12 +4,17 @@ module;
 export module Graphics.Scene.Props.AssetBinding.Tests;
 import std;
 import Graphics.Scene.Props.AssetBinding;
+import Graphics.Scene.StaticDrawOrder;
+import Graphics.Resources.MipChain;
 import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Assets.Adapters.W3D;
 import Assets.Cache;
 import Assets.Identity;
 import Assets.Models;
+import Assets.Math;
+import Assets.Importers.Models;
+import Assets.Materials;
 import Video.Capture.ImageWriter;
 using namespace Graphics;
 
@@ -22,6 +27,180 @@ std::vector<std::byte> Read(const std::filesystem::path& path) {
     if(!input.read(reinterpret_cast<char*>(bytes.data()),size)) return {};
     return bytes;
 }
+class MappingAdapter final : public Assets::IModelAdapter {
+public:
+    bool Can_Import(const Assets::AssetIdentity&,std::span<const std::byte>) const noexcept override { return true; }
+    Assets::ModelImportResult Import(const Assets::AssetIdentity& identity,std::span<const std::byte>) const override {
+        auto model=std::make_unique<Assets::ModelAssetDesc>();model->name=identity.canonical_name;
+        model->bounds={{-1,-1,0.5f},{1,1,0.5f}};
+        for(const auto point:std::array<Assets::Vector3f,4>{{{-1,-1,0.5f},{1,-1,0.5f},{1,1,0.5f},{-1,1,0.5f}}}) {
+            Assets::ModelVertexDesc vertex;vertex.position=point;vertex.normal={0,0,1};vertex.texcoord={0.125f,0.125f};model->vertices.push_back(vertex);
+        }
+        model->indices={0,1,2,0,2,3};model->submeshes={{0,6,0,"quad"}};
+        Assets::ModelMaterialDesc material;material.name="paint";material.scope=Assets::MaterialScope::Model;material.primary_texture="paint.tga";material.ambient_color={1,1,1,1};
+        if(identity.canonical_name=="mapped.w3d") material.texture_mappings[0]=Assets::TextureEnvironmentMapping{Assets::TextureEnvironmentSource::Normal};
+        if(identity.canonical_name=="screen.w3d" || identity.canonical_name=="screen-always.w3d") {
+            model->submeshes[0].sort_level=1;
+            // Explicit factors take precedence even when the fallback mode differs.
+            material.render_mode=Assets::MaterialRenderMode::AlphaBlend;material.depth_write=false;
+            material.draw_state=Assets::MaterialDrawState{Assets::MaterialBlendFactor::One,
+                Assets::MaterialBlendFactor::InverseSourceColor,
+                identity.canonical_name=="screen-always.w3d" ? Assets::MaterialDepthComparison::Always : Assets::MaterialDepthComparison::LessEqual};
+        }
+        if(identity.canonical_name=="alpha.w3d") material.render_mode=Assets::MaterialRenderMode::AlphaBlend;
+        if(identity.canonical_name=="invalid-draw.w3d")
+            material.draw_state=Assets::MaterialDrawState{static_cast<Assets::MaterialBlendFactor>(255)};
+        model->materials.push_back(material);model->dependencies={{Assets::AssetType::Texture,"paint.tga"}};
+        return {std::move(model),{}};
+    }
+};
+}
+
+BOOST_AUTO_TEST_CASE(authored_screen_blending_preserves_rgb_equation_depth_and_legacy_fallback)
+{
+    // Independent RGB oracle: screen = source + background * (1-source).
+    // Deliberately fractional alpha distinguishes this from alpha blending.
+    std::vector<std::byte> texture(18+4);texture[2]=std::byte{2};texture[12]=texture[14]=std::byte{1};
+    texture[16]=std::byte{32};texture[17]=std::byte{0x28};
+    texture[18]=std::byte{192};texture[19]=std::byte{128};texture[20]=std::byte{64};texture[21]=std::byte{64};
+    Assets::AssetCache assets([&](const auto& identity) { return identity.type==Assets::AssetType::Texture ? texture : std::vector<std::byte>{std::byte{1}}; });
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(target.Is_Valid());BOOST_REQUIRE(depth.Is_Valid());
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    PropParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};parameters.scene_ambient={1,1,1,1};
+    const std::array<float,3> background{0.2f,0.4f,0.6f},source{64/255.0f,128/255.0f,192/255.0f};
+    const auto check=[&](const std::array<float,3>& expected) {
+        std::array<std::byte,8*8*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        for(unsigned channel=0;channel<3;++channel)
+            BOOST_CHECK_SMALL(static_cast<int>(std::to_integer<unsigned>(pixels[(4*8+4)*4+channel]))-
+                static_cast<int>(std::lround(expected[channel]*255)),3);
+    };
+    const auto load=[&](PropAssetBinding& binding,const char* name) {
+        const auto handle=assets.Request_Model(name);assets.Wait(handle);BOOST_REQUIRE_MESSAGE(assets.Try_Get_Model(handle),assets.Get_Error(handle));
+        std::string error;BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
+    };
+    PropAssetBinding screen,alpha,opaque,always;
+    load(screen,"screen.w3d");load(alpha,"alpha.w3d");load(opaque,"opaque.w3d");load(always,"screen-always.w3d");
+    BOOST_TEST(screen.Part_Sort_Level(0)==1);BOOST_TEST(opaque.Part_Sort_Level(0)==0);
+    BOOST_TEST(!screen.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(alpha.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(!opaque.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(!opaque.Part_Requires_Transparency_Sorting(opaque.Part_Count()));
+    BOOST_TEST(screen.Part_Sort_Level(screen.Part_Count())==0);
+    std::array<float,3> screenExpected{},alphaExpected{};
+    for(unsigned channel=0;channel<3;++channel) {
+        screenExpected[channel]=source[channel]+background[channel]*(1-source[channel]);
+        alphaExpected[channel]=source[channel]*(64/255.0f)+background[channel]*(1-64/255.0f);
+    }
+    for(const auto* binding:{&screen,&alpha,&opaque}) {
+        BOOST_REQUIRE(commands.Clear({background[0],background[1],background[2],1},1));
+        BOOST_REQUIRE(binding->Draw_Part(commands,0,parameters));
+        check(binding==&screen ? screenExpected : binding==&alpha ? alphaExpected : source);
+    }
+    // LEQUAL fails behind stored depth; explicit ALWAYS bypasses comparison.
+    BOOST_REQUIRE(commands.Clear({background[0],background[1],background[2],1},0.25f));
+    BOOST_REQUIRE(screen.Draw_Part(commands,0,parameters));check(background);
+    BOOST_REQUIRE(always.Draw_Part(commands,0,parameters));check(screenExpected);
+    // Screen passes at .5 but writes no depth: a later opaque quad at .75 passes.
+    BOOST_REQUIRE(commands.Clear({background[0],background[1],background[2],1},1));
+    BOOST_REQUIRE(screen.Draw_Part(commands,0,parameters));
+    auto behind=parameters;behind.world[11]=0.25f;
+    BOOST_REQUIRE(opaque.Draw_Part(commands,0,behind));check(source);
+    // Ordinary transparency is submitted first but drawn after the static
+    // background/effect bins. Geometry keeps its authored no-depthwrite state.
+    DirectionalShadowRenderer shadows;PropSubmission submission;
+    submission.Initialize(device,renderer,shadows);
+    BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+    auto in_front=parameters;in_front.world[11]=-0.1f;
+    BOOST_REQUIRE(alpha.Submit_Part(submission,0,in_front,PropDrawPhase::Transparent,{0,0,-1,0}));
+    const std::array<std::int32_t,3> levels{0,1,5};
+    std::vector<std::size_t> order;BOOST_REQUIRE(Build_Static_Draw_Order(levels,order));
+    const std::vector<std::size_t> expected_order{2,1};BOOST_CHECK(order==expected_order);
+    for(const auto index:order) BOOST_REQUIRE((index==2 ? opaque.Draw_Part(commands,0,behind) : screen.Draw_Part(commands,0,parameters)));
+    std::array<float,3> combined{},final{};
+    for(unsigned channel=0;channel<3;++channel) {
+        combined[channel]=source[channel]+source[channel]*(1-source[channel]);
+        final[channel]=source[channel]*(64/255.0f)+combined[channel]*(1-64/255.0f);
+    }
+    check(combined);BOOST_REQUIRE(submission.Flush_Transparent());check(final);submission.Shutdown();
+    const auto invalid=assets.Request_Model("invalid-draw.w3d");assets.Wait(invalid);
+    PropAssetBinding rejected;std::string error;
+    BOOST_TEST(!rejected.Load(device,renderer,assets,invalid,error));
+    BOOST_TEST(error=="invalid authored material draw state");
+    screen.Clear();alpha.Clear();opaque.Clear();always.Clear();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(typed_asset_binding_keeps_environment_mapping_across_material_changes)
+{
+    std::vector<std::byte> texture(18+8*8*4);texture[2]=std::byte{2};texture[12]=std::byte{8};texture[14]=std::byte{8};texture[16]=std::byte{32};texture[17]=std::byte{0x28};
+    for(unsigned y=0;y<8;++y) for(unsigned x=0;x<8;++x) {
+        const auto offset=18+(y*8+x)*4;const bool red=x<2 && y<2;
+        texture[offset]=std::byte(red ? 0 : 255);texture[offset+2]=std::byte(red ? 255 : 0);texture[offset+3]=std::byte{255};
+    }
+    Assets::AssetCache assets([&](const auto& identity) { return identity.type==Assets::AssetType::Texture ? texture : std::vector<std::byte>{std::byte{1}}; });
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    PropParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};parameters.scene_ambient={1,1,1,1};
+    for(const auto name:{"unmapped.w3d","mapped.w3d","unmapped.w3d","mapped.w3d"}) {
+        const auto handle=assets.Request_Model(name);assets.Wait(handle);BOOST_REQUIRE_MESSAGE(assets.Try_Get_Model(handle),assets.Get_Error(handle));
+        PropAssetBinding binding;std::string error;BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
+        BOOST_REQUIRE(commands.Clear({0,1,0,1},1));BOOST_REQUIRE(binding.Draw_Part(commands,0,parameters));
+        std::array<std::byte,8*8*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        const auto center=(4*8+4)*4;const bool mapped=std::string_view(name)=="mapped.w3d";
+        BOOST_TEST(std::to_integer<unsigned>(pixels[center+(mapped ? 2 : 0)])>250u);
+        BOOST_TEST(std::to_integer<unsigned>(pixels[center+(mapped ? 0 : 2)])<3u);
+    }
+    renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(explicit_model_texture_quality_replaces_owned_resources_without_changing_other_bindings)
+{
+    std::vector<std::byte> texture(18+8*8*4);texture[2]=std::byte{2};texture[12]=std::byte{8};texture[14]=std::byte{8};texture[16]=std::byte{32};texture[17]=std::byte{0x28};
+    for(unsigned y=0;y<8;++y) for(unsigned x=0;x<8;++x) {
+        const auto offset=18+(y*8+x)*4;const bool red=x<2 && y<2;
+        texture[offset]=std::byte(red ? 0 : 255);texture[offset+2]=std::byte(red ? 255 : 0);texture[offset+3]=std::byte{255};
+    }
+    Assets::AssetCache assets([&](const auto& identity) {return identity.type==Assets::AssetType::Texture ? texture : std::vector<std::byte>{std::byte{1}};});
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    const auto model=assets.Request_Model("unmapped.w3d");assets.Wait(model);
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    PropParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};parameters.scene_ambient={1,1,1,1};
+    PropAssetBinding original,reduced;std::string error;
+    BOOST_REQUIRE_MESSAGE(original.Load(device,renderer,assets,model,error),error);
+    const auto check=[&](PropAssetBinding& binding,unsigned red) {
+        BOOST_REQUIRE(commands.Clear({0,1,0,1},1));BOOST_REQUIRE(binding.Draw_Part(commands,0,parameters));
+        std::array<std::byte,8*8*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        const auto center=(4*8+4)*4;
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center]))-int(red),2);
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center+2]))-int(255-red),2);
+    };
+    // The 2x2 mip contains one 64-red pixel. At UV .125, wrap/linear sampling
+    // gives it .75*.75 coverage: 36 red. The final 1x1 mip is uniformly 16.
+    for(const auto [reduction,minimum,red]:std::array<std::array<unsigned,3>,4>{{{2,1,36},{999,1,16},{999,4,255},{0,1,255}}}) {
+        BOOST_REQUIRE_MESSAGE(reduced.Load(device,renderer,assets,model,error,{},{},reduction,minimum),error);
+        BOOST_TEST(reduced.Texture_Count()==1u);check(reduced,red);check(original,255);
+        BOOST_TEST(!reduced.Load(device,renderer,assets,{},error));check(reduced,red);
+    }
+    // Padded input, one-mip assets and malformed work use the same uploader.
+    std::array<std::byte,24> padded{};padded.fill(std::byte{255});
+    auto single=Create_Mipped_Texture(device,2,2,padded,12,1,999);BOOST_REQUIRE(single.Is_Valid());
+    std::array<std::byte,16> read{};BOOST_REQUIRE(device.Readback_Texture(single,read,8));BOOST_CHECK(read[0]==std::byte{255});
+    device.Destroy_Texture(single);
+    BOOST_TEST(!Create_Mipped_Texture(device,2,2,std::span(padded).first(19),12).Is_Valid());
+    BOOST_TEST(!Create_Mipped_Texture(device,(std::numeric_limits<unsigned>::max)(),1,padded,8).Is_Valid());
+    reduced.Clear();original.Clear();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
 }
 
 BOOST_AUTO_TEST_CASE(automatically_adapted_native_models_render_with_original_rigs)
@@ -355,4 +534,51 @@ BOOST_AUTO_TEST_CASE(converted_section_door_opens_through_native_rig_and_surface
     std::size_t retained_coverage=0;for(std::size_t i=0;i<captured.size();i+=4)if(std::to_integer<unsigned>(captured[i])>25)++retained_coverage;
     BOOST_TEST(retained_coverage==coverage[0]);
     submission.Shutdown();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(texture_replacements_quality_mapping_and_stencil_coexist)
+{
+    const auto texture=[](bool blue) {
+        std::vector<std::byte> pixels(18+4*4*4);pixels[2]=std::byte{2};
+        pixels[12]=pixels[14]=std::byte{4};pixels[16]=std::byte{32};pixels[17]=std::byte{0x28};
+        for(unsigned i=18;i<pixels.size();i+=4) {
+            pixels[i+(blue ? 0 : 2)]=std::byte{255};pixels[i+3]=std::byte{255};
+        }
+        return pixels;
+    };
+    Assets::AssetCache assets([&](const auto& identity) {
+        return identity.type==Assets::AssetType::Texture ? texture(identity.canonical_name=="replacement.tga") : std::vector<std::byte>{std::byte{1}};
+    });
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    const auto model=assets.Request_Model("unmapped.w3d");assets.Wait(model);
+    const auto original=assets.Request_Texture("paint.tga"),replacement=assets.Request_Texture("replacement.tga");
+    assets.Wait(original);assets.Wait(replacement);
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D24_UNorm_S8,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(target.Is_Valid());BOOST_REQUIRE(depth.Is_Valid());
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    PropParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};parameters.scene_ambient={1,1,1,1};
+    PropTextureMappingContext mapping;mapping.milliseconds=3456;
+    const std::array swaps{std::pair{original,replacement}};
+    PropAssetBinding changed,overridden;std::string error;
+    BOOST_REQUIRE_MESSAGE(changed.Load(device,renderer,assets,model,error,{},swaps,2,1),error);
+    BOOST_REQUIRE_MESSAGE(overridden.Load(device,renderer,assets,model,error,original,swaps,2,1),error);
+    changed.Clamp_Texture_Addressing();overridden.Clamp_Texture_Addressing();
+    RHIStencilDescription reject;reject.enabled=true;
+    reject.front.comparison=reject.back.comparison=RHIComparison::Never;
+    const auto check=[&](PropAssetBinding& binding,const RHIStencilDescription* stencil,unsigned red,unsigned blue) {
+        BOOST_REQUIRE(commands.Clear({0,1,0,1},1));
+        BOOST_REQUIRE(binding.Draw_Part(commands,0,parameters,nullptr,0,{},stencil,&mapping));
+        std::array<std::byte,8*8*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        const auto center=(4*8+4)*4;
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center]))-int(red),2);
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center+2]))-int(blue),2);
+    };
+    check(changed,&reject,0,0); // Stencil must reject despite the texture override.
+    check(changed,nullptr,0,255); // Per-prototype replacement still applies with reduced mips.
+    check(overridden,nullptr,255,0); // Whole-model override takes precedence.
+    check(changed,nullptr,0,255); // The other binding cannot mutate this one.
+    changed.Clear();overridden.Clear();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
 }

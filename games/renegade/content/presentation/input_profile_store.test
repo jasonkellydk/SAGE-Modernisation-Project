@@ -1,0 +1,123 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.presentation.input_profile_store;
+import engine.filesystem.core.text_files;
+using namespace renegade::content;
+namespace {
+struct ProfileDirectory {
+    std::filesystem::path root=std::filesystem::absolute(std::filesystem::temp_directory_path());
+    std::filesystem::path path=root/("renegade-input-profiles-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    ProfileDirectory(){std::filesystem::create_directory(path);}
+    ~ProfileDirectory(){if(path.parent_path()==root && path.filename().string().starts_with("renegade-input-profiles-")) {std::error_code ignored;std::filesystem::remove_all(path,ignored);}}
+};
+auto DefaultInputReader() {
+    return [](std::string_view filename)->std::optional<std::string> {
+        if(filename=="DEFAULT_INPUT.CFG") return "[Generic Key Mappings]\nMoveForward_Primary=W_Key\n[Misc Settings]\nMouseSensitivity=.5\n";
+        return {};
+    };
+}
+}
+BOOST_AUTO_TEST_CASE(input_profile_store_source_builtin_save_creates_custom_and_independent_restart_restores_current) {
+    ProfileDirectory fixture;InputProfileStore store(fixture.path,DefaultInputReader());BOOST_REQUIRE(store.Open(u"Default",u"Custom "));
+    auto input=store.Current();BOOST_REQUIRE(input);BOOST_TEST(input->Get("MoveForward").primary==unsigned(KeyCode::w));
+    BOOST_REQUIRE(input->Set("MoveForward",false,unsigned(KeyCode::k)));input->misc.sensitivity=.7f;
+    BOOST_REQUIRE(store.SaveCurrent(*input));BOOST_TEST(store.Catalog().profiles.size()==2u);BOOST_CHECK(store.Catalog().current=="input01.cfg");
+    BOOST_CHECK(store.Catalog().profiles[1].name==u"Custom Default");
+    InputProfileStore restarted(fixture.path,DefaultInputReader());BOOST_REQUIRE(restarted.Open(u"Ignored",u"Custom "));
+    BOOST_CHECK(restarted.Catalog()==store.Catalog());auto restored=restarted.Current();BOOST_REQUIRE(restored);
+    BOOST_TEST(restored->Get("MoveForward").primary==unsigned(KeyCode::k));BOOST_TEST(restored->misc.sensitivity==.7f);
+    BOOST_REQUIRE(restarted.Load("default_input.cfg"));BOOST_CHECK(restarted.Catalog().current=="DEFAULT_INPUT.CFG");
+    BOOST_REQUIRE(restarted.Save("input01.cfg",u"Renamed",*input));BOOST_CHECK(restarted.Catalog().profiles[1].name==u"Renamed");
+    const auto removed=restarted.Delete("INPUT01.CFG");BOOST_REQUIRE(removed);BOOST_TEST(*removed);
+    BOOST_CHECK(restarted.Catalog().current=="DEFAULT_INPUT.CFG");BOOST_REQUIRE(engine::filesystem::PathExists(fixture.path/"input01.cfg"));
+    BOOST_TEST(!*engine::filesystem::PathExists(fixture.path/"input01.cfg"));
+    auto builtin=restarted.Delete("DEFAULT_INPUT.CFG");BOOST_REQUIRE(builtin);BOOST_TEST(!*builtin);
+    InputProfileStore final(fixture.path,DefaultInputReader());BOOST_REQUIRE(final.Open(u"Default",u"Custom "));BOOST_CHECK(final.Catalog()==restarted.Catalog());
+}
+BOOST_AUTO_TEST_CASE(input_profile_store_adopts_earlier_port_edits_and_failed_catalog_write_does_not_publish_new_metadata) {
+    ProfileDirectory fixture;
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(fixture.path/"Input.cfg","[Generic Key Mappings]\nMoveForward_Primary=K_Key\n"));
+    InputProfileStore store(fixture.path,DefaultInputReader());BOOST_REQUIRE(store.Open(u"Default",u"Custom "));
+    BOOST_CHECK(store.Catalog().current=="Input.cfg");BOOST_REQUIRE(store.Current());BOOST_TEST(store.Current()->Get("MoveForward").primary==unsigned(KeyCode::k));
+    const auto before=store.Catalog();std::filesystem::create_directory(fixture.path/"profiles.dat");
+    BOOST_TEST(!store.Create(u"New",*store.Current()));BOOST_CHECK(store.Catalog()==before);
+    BOOST_REQUIRE(engine::filesystem::PathExists(fixture.path/"input01.cfg"));BOOST_TEST(*engine::filesystem::PathExists(fixture.path/"input01.cfg"));
+    // The complete file remains unreferenced after metadata failure and occupies
+    // its filename; retry must avoid overwriting it.
+    std::filesystem::remove(fixture.path/"profiles.dat");BOOST_REQUIRE(store.Create(u"Retry",*store.Current()));
+    BOOST_CHECK(store.Catalog().current=="input02.cfg");BOOST_CHECK(store.Catalog().profiles.back().name==u"Retry");
+    BOOST_TEST(!store.Load("../escape.cfg"));BOOST_TEST(!store.Create(u"",*store.Current()));
+}
+BOOST_AUTO_TEST_CASE(input_profile_store_delete_directory_target_preserves_current_and_persisted_catalog) {
+    ProfileDirectory fixture;InputProfileStore store(fixture.path,DefaultInputReader());BOOST_REQUIRE(store.Open(u"Default",u"Custom "));
+    const auto input=store.Current();BOOST_REQUIRE(input);BOOST_REQUIRE(store.SaveCurrent(*input));
+    const auto before=store.Catalog();
+    const auto catalog_bytes=engine::filesystem::ReadTextFile(fixture.path/"profiles.dat");BOOST_REQUIRE(catalog_bytes);
+    BOOST_REQUIRE(engine::filesystem::RemoveRegularFile(fixture.path/"input01.cfg"));
+    std::filesystem::create_directory(fixture.path/"input01.cfg");
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(fixture.path/"input01.cfg"/"keep","directory contents"));
+    const auto deleted=store.Delete("INPUT01.CFG");BOOST_CHECK(!deleted);BOOST_CHECK(store.Catalog()==before);
+    const auto persisted=engine::filesystem::ReadTextFile(fixture.path/"profiles.dat");BOOST_REQUIRE(persisted);BOOST_CHECK(*persisted==*catalog_bytes);
+    const auto child=engine::filesystem::ReadTextFile(fixture.path/"input01.cfg"/"keep");BOOST_REQUIRE(child);BOOST_TEST(*child=="directory contents");
+    InputProfileStore restarted(fixture.path,DefaultInputReader());BOOST_REQUIRE(restarted.Open(u"Default",u"Custom "));
+    BOOST_CHECK(restarted.Catalog()==before);
+}
+BOOST_AUTO_TEST_CASE(input_profile_store_delete_failed_metadata_commit_restores_exact_bytes_and_can_retry) {
+    ProfileDirectory fixture;
+    // Parsed configuration cannot reproduce the original comments, CRLFs and
+    // unknown settings. Recovery must retain this file byte for byte.
+    const std::string original="; retained user comment\r\n[Generic Key Mappings]\r\nMoveForward_Primary=K_Key\r\n[Future Settings]\r\nUnrecognized =  original spacing  \r\n";
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(fixture.path/"Input.cfg",original));
+    InputProfileStore store(fixture.path,DefaultInputReader());BOOST_REQUIRE(store.Open(u"Default",u"Custom "));
+    const auto before=store.Catalog();BOOST_CHECK(before.current=="Input.cfg");
+    std::filesystem::create_directory(fixture.path/"profiles.dat");
+    BOOST_REQUIRE(engine::filesystem::WriteTextFile(fixture.path/"profiles.dat"/"keep","metadata blocker"));
+    const auto deleted=store.Delete("input.cfg");BOOST_REQUIRE(!deleted);
+    BOOST_CHECK(deleted.error().find("original profile restored")!=std::string::npos);BOOST_CHECK(store.Catalog()==before);
+    const auto restored=engine::filesystem::ReadTextFile(fixture.path/"Input.cfg");BOOST_REQUIRE(restored);BOOST_CHECK(*restored==original);
+    const auto child=engine::filesystem::ReadTextFile(fixture.path/"profiles.dat"/"keep");BOOST_REQUIRE(child);BOOST_TEST(*child=="metadata blocker");
+    BOOST_REQUIRE(engine::filesystem::RemoveRegularFile(fixture.path/"profiles.dat"/"keep"));
+    std::filesystem::remove(fixture.path/"profiles.dat");
+    InputProfileStore restarted(fixture.path,DefaultInputReader());BOOST_REQUIRE(restarted.Open(u"Default",u"Custom "));
+    BOOST_CHECK(restarted.Catalog()==before);BOOST_REQUIRE(restarted.Current());BOOST_TEST(restarted.Current()->Get("MoveForward").primary==unsigned(KeyCode::k));
+    const auto retry=store.Delete("Input.cfg");BOOST_REQUIRE(retry);BOOST_TEST(*retry);
+    BOOST_CHECK(store.Catalog().current=="DEFAULT_INPUT.CFG");
+    const auto remaining=engine::filesystem::PathExists(fixture.path/"Input.cfg");BOOST_REQUIRE(remaining);BOOST_TEST(!*remaining);
+    InputProfileStore final(fixture.path,DefaultInputReader());BOOST_REQUIRE(final.Open(u"Default",u"Custom "));
+    BOOST_CHECK(final.Catalog()==store.Catalog());
+}
+BOOST_AUTO_TEST_CASE(input_profile_store_delete_legacy_mounted_custom_without_local_file_commits_default_selection) {
+    ProfileDirectory fixture;
+    // Independent original inputconfig*.cpp chunk layout: built-in Default,
+    // mounted custom Legacy, and current filename legacy.cfg.
+    constexpr unsigned char fixture_bytes[]{
+        0x05,0x11,0x18,0x07,0x6f,0,0,0x80,
+        0x07,0x11,0x18,0x07,0x34,0,0,0x80,
+        0x06,0x11,0x18,0x07,0x2c,0,0,0,
+        1,16,'D',0,'e',0,'f',0,'a',0,'u',0,'l',0,'t',0,0,0,
+        2,18,'D','E','F','A','U','L','T','_','I','N','P','U','T','.','C','F','G',0,
+        3,1,1,4,1,0,
+        0x07,0x11,0x18,0x07,0x2b,0,0,0x80,
+        0x06,0x11,0x18,0x07,0x23,0,0,0,
+        1,14,'L',0,'e',0,'g',0,'a',0,'c',0,'y',0,0,0,
+        2,11,'l','e','g','a','c','y','.','c','f','g',0,
+        3,1,0,4,1,1,
+        0x06,0x11,0x18,0x07,0x0d,0,0,0,
+        1,11,'l','e','g','a','c','y','.','c','f','g',0};
+    const std::string legacy_catalog(reinterpret_cast<const char*>(fixture_bytes),sizeof(fixture_bytes));
+    const std::string legacy_input="[Generic Key Mappings]\nMoveForward_Primary=K_Key\n";
+    const auto reader=[legacy_catalog,legacy_input,defaults=DefaultInputReader()](std::string_view name)->std::optional<std::string> {
+        if(name=="CONFIG.DAT") return legacy_catalog;
+        if(name=="legacy.cfg") return legacy_input;
+        return defaults(name);
+    };
+    InputProfileStore store(fixture.path,reader);BOOST_REQUIRE(store.Open(u"Default",u"Custom "));
+    BOOST_CHECK(store.Catalog().current=="legacy.cfg");BOOST_REQUIRE(store.Current());BOOST_TEST(store.Current()->Get("MoveForward").primary==unsigned(KeyCode::k));
+    const auto local=engine::filesystem::PathExists(fixture.path/"legacy.cfg");BOOST_REQUIRE(local);BOOST_TEST(!*local);
+    const auto deleted=store.Delete("LEGACY.CFG");BOOST_REQUIRE(deleted);BOOST_TEST(*deleted);
+    BOOST_TEST(store.Catalog().profiles.size()==1u);BOOST_CHECK(store.Catalog().current=="DEFAULT_INPUT.CFG");
+    BOOST_REQUIRE(reader("legacy.cfg"));BOOST_CHECK(*reader("legacy.cfg")==legacy_input);
+    InputProfileStore restarted(fixture.path,reader);BOOST_REQUIRE(restarted.Open(u"Default",u"Custom "));
+    BOOST_CHECK(restarted.Catalog()==store.Catalog());BOOST_REQUIRE(restarted.Current());BOOST_TEST(restarted.Current()->Get("MoveForward").primary==unsigned(KeyCode::w));
+    const auto absent=engine::filesystem::PathExists(fixture.path/"legacy.cfg");BOOST_REQUIRE(absent);BOOST_TEST(!*absent);
+}

@@ -794,20 +794,24 @@ struct TargetingSystem
 						const Engine::Math::FixedVector2 away = self - victimAt;
 						const Engine::Math::Fixed apart = Engine::Math::Length(away);
 						const Engine::Math::Fixed cell = Engine::Math::Fixed::FromInt(10);
-						if (held.minimumRange > cell && apart < held.minimumRange)
+						// Weapon::computeApproachTarget uses getMinimumAttackRange (already undersized), and
+						// getVectorTo(FROM_BOUNDINGSPHERE_2D): the gap between both bounding circles.
+						const Engine::Math::Fixed minimumRange = UndersizedMinimumRange(held.minimumRange);
+						const Engine::Math::Fixed gap = std::max(Engine::Math::Fixed{}, apart - current->radius - radius);
+						if (minimumRange > cell && gap < minimumRange)
 						{
 							Engine::Math::FixedVector2 direction = apart > Engine::Math::Fixed{} ? away / apart : Engine::Math::FixedVector2{Engine::Math::Fixed::One(), Engine::Math::Fixed{}};
 							// Airborne and too close: not a turn about (its way on the far side when it faces the victim's).
 							const std::int32_t turn = static_cast<std::int32_t>((transforms[row].facing - Engine::Math::Heading(Engine::Math::FixedVector2{} - direction)).units);
 							if (turn > -0x40000000 && turn < 0x40000000)
 								direction = Engine::Math::FixedVector2{} - direction;
-							const Engine::Math::Fixed spacing = (weapon.attackRange + held.minimumRange) / Engine::Math::Fixed::FromInt(2) + current->radius + radius;
+							const Engine::Math::Fixed spacing = (weapon.attackRange + minimumRange) / Engine::Math::Fixed::FromInt(2) + current->radius + radius;
 							approach = victimAt + direction * spacing;
 						}
 						else if (apart < Engine::Math::Fixed::FromRatio(1, 1000))
 							approach = self;
 						else
-							approach = victimAt + away * (weapon.attackRange * Engine::Math::Fixed::FromRatio(9, 10) / apart);
+							approach = victimAt + (away / apart) * (weapon.attackRange * Engine::Math::Fixed::FromRatio(9, 10));
 					}
 					const bool searching = searched != nullptr && !flying && !contact;
 					if (searched != nullptr)

@@ -40,6 +40,9 @@ engine_add_module_library(generalszh_presentation_frame
 	DEPENDS engine_ecs engine_gameplay_appearance)
 
 if(GENERALSZH_BUILD_GAME)
+	if(NOT TARGET engine_audio_video)
+		add_subdirectory("${generalszh_repo_root}/engine/audio/adapters/video" "${CMAKE_CURRENT_BINARY_DIR}/engine/audio/video")
+	endif()
 	# The in-game interface's views: the control bar layout bound to its view model.
 	engine_add_module_library(generalszh_hud_views
 		MODULES hud/control_bar_view.cppm hud/generals_powers_view.cppm hud/shortcut_bar_view.cppm hud/observer_panel_view.cppm hud/comm_views.cppm

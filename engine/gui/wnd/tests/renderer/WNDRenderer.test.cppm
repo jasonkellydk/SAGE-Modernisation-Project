@@ -15,6 +15,26 @@ import Graphics.Testing.VisualRegression;
 
 using namespace Engine::UI::WND;
 
+BOOST_AUTO_TEST_CASE(shared_image_tiling_preserves_wnd_partial_uvs_and_final_cursor)
+{
+    DrawList horizontal;ImageRef image;image.texture=Assets::TextureAssetHandle(7,1);image.uv={.1f,.2f,.5f,.8f};
+    float cursor{};
+    BOOST_REQUIRE(Add_Tiled_Image(horizontal,image,{2.5f,3.5f,27.5f,10.5f},10,cursor));
+    BOOST_REQUIRE_EQUAL(horizontal.Commands().size(),3);BOOST_TEST(cursor==27.5f);
+    const auto& last=horizontal.Commands()[2];
+    BOOST_CHECK(last.image.texture==image.texture);BOOST_TEST(last.rectangle.left==22.5f);BOOST_TEST(last.rectangle.right==27.5f);
+    BOOST_CHECK_SMALL(last.image.uv.right-.3f,.000001f);BOOST_TEST(last.image.uv.bottom==.8f);
+    DrawList vertical;
+    BOOST_REQUIRE(Add_Vertical_Tiled_Image(vertical,image,{2,3,9,28},10,cursor));
+    BOOST_REQUIRE_EQUAL(vertical.Commands().size(),3);BOOST_TEST(cursor==28);
+    BOOST_TEST(vertical.Commands()[2].rectangle.top==23);
+    BOOST_CHECK_SMALL(vertical.Commands()[2].image.uv.bottom-.5f,.000001f);
+    BOOST_TEST(vertical.Commands()[2].image.uv.right==.5f);
+    DrawList no_tiles;
+    BOOST_REQUIRE(Add_Tiled_Image(no_tiles,image,{2,3,9,28},0,cursor));BOOST_TEST(cursor==2);
+    BOOST_TEST(no_tiles.Commands().empty());
+}
+
 namespace
 {
 struct LayoutWindow

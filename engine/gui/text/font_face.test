@@ -1,0 +1,14 @@
+#define BOOST_TEST_MODULE SharedFontFace
+#include <boost/test/included/unit_test.hpp>
+#include <vector>
+#include <cstdint>
+import engine.gui.text.font_face;
+import Assets.Fonts;
+BOOST_AUTO_TEST_CASE(shared_font_atlas_keeps_advance_only_glyphs_and_multiple_pages) {
+    std::vector<Assets::FontGlyphAsset> glyphs{{32,0,17,{}},{65,600,601,std::vector<std::uint8_t>(600*600,255)},
+        {66,600,601,std::vector<std::uint8_t>(600*600,128)}};
+    const Assets::FontAsset source("Test",600,false,600,0,std::move(glyphs));engine::gui::text::FontFace face;
+    BOOST_REQUIRE(face.Build(source));BOOST_REQUIRE(face.Get_Glyph(65));BOOST_REQUIRE(face.Get_Glyph(66));
+    BOOST_TEST(face.Get_Glyph(65)->page!=face.Get_Glyph(66)->page);BOOST_TEST(face.Get_Char_Spacing(32)==17);
+    BOOST_CHECK(!face.Get_Glyph(32));BOOST_CHECK(!face.Get_Glyph(100));BOOST_TEST(face.Height()==600);
+}

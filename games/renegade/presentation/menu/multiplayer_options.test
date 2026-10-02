@@ -1,0 +1,37 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.multiplayer_options;
+import engine.config.adapters.preferences.preferences_file;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(multiplayer_player_names_preserves_source_registry_exact_one_default_and_apply_timing) {
+    // regbool.cpp normalizes its integer with Value==1; useroptions.cpp defaults true.
+    engine::config::Preferences preferences;MultiplayerOptions initial(preferences);
+    BOOST_TEST(initial.player_names.checked.Get());BOOST_TEST(initial.Applied());
+    for(const std::int64_t value:std::array<std::int64_t,7>{-2,-1,0,1,2,3,2147483647}) {
+        preferences.Set("ShowNamesOnSoldier",value);MultiplayerOptions model(preferences);
+        BOOST_TEST(model.player_names.checked.Get()==(value==1));
+    }
+    preferences=engine::config::Preferences::Parse("fixture value = retained\nShowNamesOnSoldier = 1\nAllowPages = 7\n");
+    MultiplayerOptions model(preferences);BOOST_REQUIRE(model.player_names.Toggle());
+    BOOST_TEST(!model.player_names.checked.Get());BOOST_TEST(model.Applied());
+    BOOST_TEST(preferences.Number("ShowNamesOnSoldier",-1)==1);
+    model.Open();BOOST_TEST(model.player_names.checked.Get());
+    model.player_names.Toggle();model.Apply(preferences);BOOST_TEST(!model.Applied());
+    BOOST_TEST(preferences.Number("ShowNamesOnSoldier",-1)==0);
+    BOOST_TEST(preferences.Number("AllowPages",-1)==7);
+    BOOST_CHECK(preferences.Find("fixture value")=="retained");
+    MultiplayerOptions restored(engine::config::Preferences::Parse(preferences.Write()));
+    BOOST_TEST(!restored.player_names.checked.Get());
+}
+BOOST_AUTO_TEST_CASE(multiplayer_local_checkbox_remains_available_when_obsolete_service_controls_are_disabled) {
+    MultiplayerOptions model(engine::config::Preferences{});
+    BOOST_REQUIRE(model.Check(1214));BOOST_TEST(model.Check(1214)->enabled.Get());
+    BOOST_TEST(!MultiplayerOptions::ServiceOnlyControl(1214));
+    for(unsigned id=1215;id<=1222;++id) {
+        BOOST_REQUIRE(model.Check(id));BOOST_TEST(MultiplayerOptions::ServiceOnlyControl(id));
+        BOOST_TEST(!model.Check(id)->enabled.Get());BOOST_TEST(!model.Check(id)->Toggle());
+        BOOST_TEST(!model.Check(id)->checked.Get());
+    }
+    BOOST_TEST(MultiplayerOptions::ServiceOnlyControl(1389));BOOST_TEST(model.Check(1389)==nullptr);
+    BOOST_TEST(model.Check(11034)==nullptr);BOOST_TEST(!MultiplayerOptions::ServiceOnlyControl(11034));
+}

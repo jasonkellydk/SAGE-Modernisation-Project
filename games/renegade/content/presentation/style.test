@@ -1,0 +1,129 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.presentation.style;
+namespace {
+std::string StyleFixture() {
+    std::string text="[Font File List]\nFile01=display.ttf\n[Font Names]\n";
+    for(const auto key:{"TITLE","LG_CONTROLS","CONTROLS","LISTS","TOOLTIPS","MENU","SM_MENU","HEADER","BIG_HEADER",
+        "CREDITS","CREDITS_BOLD","INGAME_TXT","INGAME_BIG_TXT","INGAME_SUBTITLE_TXT","INGAME_HEADER_TXT"})
+        text+="FONT_"+std::string(key)+"= Example Family, 9, 1\n";
+    return text+"[Audio]\nAUDIO_CLICK=click.wav,60\nAUDIO_MOUSEOVER=hover.wav,70\nAUDIO_BACK=back.wav,80\nAUDIO_POPUP=popup.wav,80\n";
+}
+}
+BOOST_AUTO_TEST_CASE(style_font_scaling_matches_source_minimum_bold_and_integer_point_size) {
+    const auto style=renegade::content::ReadMenuStyle(StyleFixture());BOOST_REQUIRE(style);
+    const auto full=style->Font(renegade::content::FontRole::Controls,600);
+    BOOST_TEST(full.points==9);BOOST_TEST(full.bold);BOOST_TEST(full.family=="Example Family");
+    const auto reduced=style->Font(renegade::content::FontRole::Controls,480);
+    BOOST_TEST(reduced.points==8);BOOST_TEST(!reduced.bold);
+    const auto enlarged=style->Font(renegade::content::FontRole::Controls,960);
+    BOOST_TEST(enlarged.points==14);BOOST_TEST(enlarged.bold);
+    BOOST_TEST(style->sounds[0].filename=="click.wav");BOOST_TEST(style->sounds[0].volume==60);
+    BOOST_TEST(style->font_files[0]=="display.ttf");
+}
+BOOST_AUTO_TEST_CASE(style_invalid_specs_are_rejected_without_platform_font_installation) {
+    BOOST_CHECK(!renegade::content::ReadMenuStyle("[Font Names]\nFONT_MENU=Test,32,0"));
+    auto text=StyleFixture();text.replace(text.find("display.ttf"),11,"../display.ttf");
+    BOOST_CHECK(!renegade::content::ReadMenuStyle(text));
+    text=StyleFixture();text.replace(text.find("9, 1"),4,"0, 1");BOOST_CHECK(!renegade::content::ReadMenuStyle(text));
+}
+BOOST_AUTO_TEST_CASE(dialog_text_prefixes_select_source_font_roles_without_hiding_headers) {
+    using namespace renegade::content;
+    const auto header=FormatControlText(u"%hIDS_AUDIO_DRIVER",FontRole::Controls);
+    BOOST_CHECK(header.text==u"IDS_AUDIO_DRIVER");BOOST_CHECK(header.font==FontRole::LargeControls);BOOST_CHECK(!header.title);
+    const auto title=FormatControlText(u"%tTitle",FontRole::Controls);
+    BOOST_CHECK(title.text==u"Title");BOOST_CHECK(title.font==FontRole::Title);BOOST_CHECK(title.title);
+    const auto small=FormatControlText(u"%sNote",FontRole::Controls);
+    BOOST_CHECK(small.text==u"Note");BOOST_CHECK(small.font==FontRole::Tooltips);
+    const auto plain=FormatControlText(u"%unknown",FontRole::Menu);
+    BOOST_CHECK(plain.text==u"%unknown");BOOST_CHECK(plain.font==FontRole::Menu);
+    BOOST_CHECK(FormatControlText(u"%",FontRole::Controls).text==u"%");
+}
+BOOST_AUTO_TEST_CASE(title_glow_retains_source_integer_radius_steps_and_colors) {
+    using Style=renegade::content::MenuGlowStyle;
+    BOOST_TEST(Style::rings==4);BOOST_TEST(Style::samples==7);BOOST_TEST(Style::initial_radius==2);
+    const auto title=Style::RadiusStep(5,5);BOOST_TEST(title[0]==1);BOOST_TEST(title[1]==1);
+    const auto anisotropic=Style::RadiusStep(160,60);BOOST_TEST(anisotropic[0]==40);BOOST_TEST(anisotropic[1]==15);
+    const auto fractional=Style::RadiusStep(7,3);BOOST_TEST(fractional[0]==1);BOOST_TEST(fractional[1]==0);
+    BOOST_TEST(Style::title_text==0xffffff24u);BOOST_TEST(Style::title_glow==0xff0e0000u);
+    BOOST_TEST(Style::text==0xffffd528u);BOOST_TEST(Style::text_shadow==0xc8000000u);
+}
+BOOST_AUTO_TEST_CASE(control_palette_retains_source_argb_and_scaled_slider_bar_policy) {
+    using Style=renegade::content::ControlStyle;
+    BOOST_TEST(Style::enabled.line==0xffffae28u);BOOST_TEST(Style::enabled.background==0x28ffae28u);
+    BOOST_TEST(Style::enabled.text==0xffffd528u);BOOST_TEST(Style::enabled.shadow==0xc8000000u);
+    BOOST_TEST(Style::disabled.line==0x80e6a023u);BOOST_TEST(Style::disabled.background==0x1effae28u);
+    BOOST_TEST(Style::disabled.text==0x8cffd528u);BOOST_TEST(Style::disabled.shadow==0x60000000u);
+    BOOST_TEST(Style::enabled.highlight==0xff464646u);BOOST_TEST(Style::slider_bar_height==8);
+}
+BOOST_AUTO_TEST_CASE(component_button_atlas_and_highlight_retain_source_pixels) {
+    using Style=renegade::content::ButtonStyle;
+    BOOST_TEST(Style::texture=="if_circle02.tga");
+    BOOST_CHECK((Style::texture_size==std::array<float,2>({256,256})));
+    BOOST_CHECK((Style::source_pixels==std::array<float,4>({96,51,217,84})));
+    BOOST_CHECK((Style::pressed_pixels==std::array<float,4>({117,4,220,41})));
+    BOOST_CHECK((Style::corner_size==std::array<float,2>({10,10})));
+    BOOST_CHECK((Style::tile_size==std::array<float,2>({10,10})));
+    BOOST_CHECK((Style::pressed_inset==std::array<float,2>({6,6})));
+    BOOST_CHECK((Style::pressed_far_edge==std::array<float,2>({1,1})));
+    BOOST_TEST(Style::glow_radius==8);BOOST_TEST(Style::glow==0xff100a00u);
+}
+BOOST_AUTO_TEST_CASE(popup_style_retains_source_title_padding_and_blackout_alpha) {
+    using Style=renegade::content::PopupStyle;
+    BOOST_CHECK((Style::title_padding==std::array<float,2>({10,8})));
+    BOOST_TEST(Style::blackout==0xec000000u);BOOST_TEST(Style::darken_background);
+}
+BOOST_AUTO_TEST_CASE(credits_style_retains_source_client_padding_rate_and_blank_pages) {
+    using Style=renegade::content::CreditsStyle;
+    BOOST_CHECK((Style::padding==std::array<float,2>({5,3.75f})));
+    BOOST_TEST(Style::rows_per_second==2);BOOST_TEST(Style::blank_pages==2u);
+}
+BOOST_AUTO_TEST_CASE(list_style_retains_source_header_row_spacing_and_focus_pulse_rate) {
+    using Style=renegade::content::ListStyle;
+    BOOST_TEST(Style::vertical_inset==1);BOOST_TEST(Style::header_rows==3);
+    BOOST_TEST(Style::row_spacing==4);BOOST_TEST(Style::pulse_rate==2);
+    BOOST_TEST(Style::FocusColor(0xffffae28,1)==0xfffead27u);
+    BOOST_TEST(Style::FocusColor(0xffffae28,0)==0xff7f5613u);
+    BOOST_TEST(Style::FocusColor(0xffffae28,0.25f)==0xff9e6c18u);
+}
+BOOST_AUTO_TEST_CASE(menu_backdrop_angles_match_original_angle_ratio_at_each_drawable_size) {
+    struct Fixture {unsigned width,height;float horizontal,vertical;};
+    // Independent radian values from MenuBackDropClass's 45-degree HFOV and
+    // its H/W multiplication of the angle (not the tangent of the angle).
+    constexpr std::array fixtures{
+        Fixture{800,600,0.7853981634f,0.5890486225f},
+        Fixture{1280,720,0.7853981634f,0.4417864669f},
+        Fixture{960,720,0.7853981634f,0.5890486225f}};
+    for(const auto& fixture:fixtures) {
+        const auto angles=renegade::content::MenuBackdropStyle::ViewAngles(fixture.width,fixture.height);BOOST_REQUIRE(angles);
+        BOOST_TEST(std::abs((*angles)[0]-fixture.horizontal)<0.000001f);
+        BOOST_TEST(std::abs((*angles)[1]-fixture.vertical)<0.000001f);
+    }
+    BOOST_CHECK(!renegade::content::MenuBackdropStyle::ViewAngles(0,600));
+    BOOST_CHECK(!renegade::content::MenuBackdropStyle::ViewAngles(800,0));
+    BOOST_CHECK(!renegade::content::MenuBackdropStyle::ViewAngles(0,0));
+}
+BOOST_AUTO_TEST_CASE(main_menu_projected_bounds_follow_source_bones_and_truncated_control_dimensions) {
+    struct Fixture {unsigned width,height;std::array<float,4> bounds;};
+    // IF_MMTF screen projection (0.25,-0.5), chat.rc control size (220,21).
+    // At H=720 the original pixel height is 50, not the untruncated 50.4.
+    constexpr std::array fixtures{
+        Fixture{800,600,{400,429,840,471}},
+        Fixture{1280,720,{640,515,1344,565}},
+        Fixture{960,720,{480,515,1008,565}}};
+    for(const auto& fixture:fixtures) {
+        const auto bounds=renegade::content::MainMenuEntryStyle::ProjectedBounds({0.25f,-0.5f},220,21,fixture.width,fixture.height);BOOST_REQUIRE(bounds);
+        for(unsigned edge=0;edge<4;++edge) BOOST_TEST(std::abs((*bounds)[edge]-fixture.bounds[edge])<0.001f);
+    }
+    // An odd integer pixel height retains its half-pixel vertical anchor.
+    const auto odd=renegade::content::MainMenuEntryStyle::ProjectedBounds({0.25f,-0.5f},220,19,1280,720);BOOST_REQUIRE(odd);
+    BOOST_TEST((*odd)[1]==517.5f);BOOST_TEST((*odd)[3]==562.5f);
+    // Moving menu bones are allowed outside the visible viewport.
+    const auto outside=renegade::content::MainMenuEntryStyle::ProjectedBounds({1.25f,1.5f},220,21,800,600);BOOST_REQUIRE(outside);
+    BOOST_TEST((*outside)[0]==800);BOOST_TEST((*outside)[1]==-171);
+    BOOST_TEST((*outside)[2]==1240);BOOST_TEST((*outside)[3]==-129);
+    BOOST_CHECK(!renegade::content::MainMenuEntryStyle::ProjectedBounds({0,0},220,21,0,600));
+    BOOST_CHECK(!renegade::content::MainMenuEntryStyle::ProjectedBounds({0,0},220,21,800,0));
+    BOOST_CHECK(!renegade::content::MainMenuEntryStyle::ProjectedBounds({0,0},220,-1,800,600));
+    BOOST_CHECK(!renegade::content::MainMenuEntryStyle::ProjectedBounds({std::numeric_limits<float>::quiet_NaN(),0},220,21,800,600));
+}

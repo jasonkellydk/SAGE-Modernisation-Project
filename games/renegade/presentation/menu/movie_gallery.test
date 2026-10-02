@@ -1,0 +1,32 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.movie_gallery;
+import engine.config.adapters.preferences.preferences_file;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(movie_gallery_exposes_only_default_intro_and_campaign_recorded_unlocks) {
+    auto preferences=engine::config::Preferences::Parse("unknown preference = retained\n");
+    auto movies=ReadGalleryMovies(preferences);BOOST_REQUIRE_EQUAL(movies.size(),1);
+    BOOST_TEST(movies[0].filename=="data/movies/r_intro.bik");BOOST_TEST(movies[0].description=="IDS_INTRO_MOVIE");
+    BOOST_REQUIRE(UnlockGalleryMovie(preferences,"DATA\\MOVIES\\R_L02.BIK","IDS_SECOND_BRIEFING"));
+    BOOST_REQUIRE(UnlockGalleryMovie(preferences,"data/movies/r_l01.bik","IDS_FIRST_BRIEFING"));
+    BOOST_REQUIRE(UnlockGalleryMovie(preferences,"data/movies/r_l02.bik","IDS_REVISED_BRIEFING"));
+    const auto restored=engine::config::Preferences::Parse(preferences.Write());movies=ReadGalleryMovies(restored);
+    BOOST_REQUIRE_EQUAL(movies.size(),3);BOOST_TEST(movies[1].filename=="data/movies/r_l01.bik");
+    BOOST_TEST(movies[2].description=="IDS_REVISED_BRIEFING");BOOST_TEST(*restored.Find("unknown preference")=="retained");
+    BOOST_TEST(!UnlockGalleryMovie(preferences,"data/movies/../outside.bik","IDS_BAD"));
+    BOOST_TEST(!UnlockGalleryMovie(preferences,"C:/outside.bik","IDS_BAD"));
+    BOOST_TEST(!UnlockGalleryMovie(preferences,"data/movies/test.bik","broken\npreference"));
+}
+BOOST_AUTO_TEST_CASE(movie_gallery_preserves_no_initial_selection_playback_guards_and_escape_return_lifetime) {
+    MovieGallery gallery;BOOST_REQUIRE(gallery.Open(ReadGalleryMovies(engine::config::Preferences{})));
+    BOOST_TEST(gallery.list.selected.Get()==-1);BOOST_TEST(!gallery.Begin());BOOST_TEST(!gallery.TakeRequest());
+    BOOST_TEST(!gallery.Escape());gallery.list.Select(0);BOOST_REQUIRE(gallery.Begin());BOOST_TEST(gallery.playing.Get());
+    const auto request=gallery.TakeRequest();BOOST_REQUIRE(request);BOOST_TEST(*request=="data/movies/r_intro.bik");
+    BOOST_TEST(!gallery.Begin());BOOST_TEST(!gallery.TakeRequest());BOOST_TEST(gallery.Escape());
+    BOOST_TEST(!gallery.playing.Get());BOOST_TEST(gallery.list.selected.Get()==0);BOOST_TEST(!gallery.Escape());
+    BOOST_REQUIRE(gallery.Begin());gallery.Complete();BOOST_TEST(!gallery.playing.Get());BOOST_TEST(!gallery.TakeRequest());
+    BOOST_REQUIRE(gallery.Open({}));BOOST_TEST(gallery.list.selected.Get()==-1);BOOST_TEST(!gallery.Begin());
+    BOOST_REQUIRE(gallery.Open(ReadGalleryMovies(engine::config::Preferences{})));gallery.list.Select(0);
+    BOOST_REQUIRE(gallery.Begin());BOOST_TEST(!gallery.Open(std::vector<GalleryMovie>(65537)));
+    BOOST_TEST(gallery.playing.Get());BOOST_TEST(gallery.Movies().size()==1u);BOOST_TEST(gallery.list.selected.Get()==0);
+}

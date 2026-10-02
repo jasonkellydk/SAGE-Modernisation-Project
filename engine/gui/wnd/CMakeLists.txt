@@ -77,7 +77,13 @@ target_sources(generals_ui_wnd
 )
 
 target_compile_features(generals_ui_wnd PUBLIC cxx_std_23)
-target_link_libraries(generals_ui_wnd PUBLIC generals_graphics generals_assets engine_gui_mvvm)
+if(NOT TARGET engine_gui_text)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../text" "${CMAKE_CURRENT_BINARY_DIR}/text")
+endif()
+if(NOT TARGET engine_gui_images)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../images" "${CMAKE_CURRENT_BINARY_DIR}/images")
+endif()
+target_link_libraries(generals_ui_wnd PUBLIC generals_graphics generals_assets engine_gui_mvvm engine_gui_text engine_gui_images)
 
 # The pointer over a layout (hit testing, button hover and clicks): headless, always tested.
 if(BUILD_TESTING)

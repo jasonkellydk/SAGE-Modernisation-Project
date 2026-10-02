@@ -43,5 +43,13 @@ float4 screen_filter_pixel(Output input) : SV_Target
     if (VertexAlpha>0.5) color.a=input.color.a;
     if (Operation==2) color*=Mask().Sample(MaskSampler(),input.maskUV);
     if (Operation==3) color.rgb=color.bgr;
+    if (Operation==4) {
+        // Byte values address texel centers; intermediate values interpolate.
+        // Each channel may have its own transfer curve. Preserve source alpha.
+        float3 coordinates=(saturate(color.rgb)*255.0+0.5)/256.0;
+        color.rgb=float3(Mask().Sample(MaskSampler(),float2(coordinates.r,0.5)).r,
+            Mask().Sample(MaskSampler(),float2(coordinates.g,0.5)).g,
+            Mask().Sample(MaskSampler(),float2(coordinates.b,0.5)).b);
+    }
     return color;
 }

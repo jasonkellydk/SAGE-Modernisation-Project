@@ -46,21 +46,29 @@ inline std::vector<std::byte> Box_Filter_Level(std::span<const std::byte> pixels
 }
 
 inline RHITextureHandle Create_Mipped_Texture(Device &device, std::uint32_t width, std::uint32_t height, std::span<const std::byte> pixels,
-	std::uint32_t rowPitch, std::uint32_t levels = 0)
+	std::uint32_t rowPitch, std::uint32_t levels = 0, std::uint32_t reduction = 0, std::uint32_t minimum_dimension = 1)
 {
-	if (width == 0 || height == 0 || rowPitch < width * 4 || pixels.size() < static_cast<std::size_t>(rowPitch) * (height - 1) + width * 4)
+	if (width == 0 || height == 0 || width > (std::numeric_limits<std::uint32_t>::max)()/4 ||
+		rowPitch < width * 4 || pixels.size() < static_cast<std::uint64_t>(rowPitch) * (height - 1) + width * 4)
 		return {};
 	const std::uint32_t full = Full_Mip_Count(width, height);
 	levels = levels == 0 ? full : std::min(levels, full);
-	RHITexture description{width, height, levels, RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
-	const RHITextureHandle texture = device.Create_Texture(description);
-	if (!texture.Is_Valid())
-		return {};
 	// Level 0 packed tightly, then each level from the one above.
 	std::vector<std::byte> level(static_cast<std::size_t>(width) * height * 4);
 	for (std::uint32_t row = 0; row < height; ++row)
 		std::memcpy(level.data() + static_cast<std::size_t>(row) * width * 4, pixels.data() + static_cast<std::size_t>(row) * rowPitch, width * 4);
 	std::uint32_t w = width, h = height;
+	// Quality is supplied by the resource owner. A one-level image retains its
+	// authored resolution; reducing a chain drops its leading levels without
+	// resampling already filtered levels or changing other owners' textures.
+	for(std::uint32_t skipped=0; skipped<reduction && levels>1 &&
+		w>std::max(minimum_dimension,1u) && h>std::max(minimum_dimension,1u);++skipped) {
+		std::uint32_t nw{},nh{};
+		level=Box_Filter_Level(level,w,h,nw,nh);w=nw;h=nh;--levels;
+	}
+	RHITexture description{w, h, levels, RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
+	const RHITextureHandle texture = device.Create_Texture(description);
+	if (!texture.Is_Valid()) return {};
 	for (std::uint32_t mip = 0; mip < levels; ++mip)
 	{
 		if (!device.Update_Texture(texture, {std::span<const std::byte>(level), w * 4, w * h * 4, mip, 0}))

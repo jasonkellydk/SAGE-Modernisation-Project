@@ -1,0 +1,22 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.presentation.credits;
+import games.renegade.content.install.install_mount;
+import engine.gui.w3d.marquee;
+BOOST_AUTO_TEST_CASE(credits_bytes_follow_original_unsigned_ansi_nul_and_carriage_return_rules) {
+    const std::array bytes{std::byte{'A'},std::byte{'\r'},std::byte{'\r'},std::byte{'\n'},std::byte{0xe9},std::byte{0},std::byte{'Z'}};
+    BOOST_CHECK(renegade::content::ReadCreditsText(bytes)==u"A\n\u00e9");
+    BOOST_TEST(renegade::content::ReadCreditsText({}).empty());
+}
+BOOST_AUTO_TEST_CASE(retail_credits_keep_all_source_rows_fonts_colors_and_blank_spacing) {
+    const auto* installation=std::getenv("RENEGADE_INSTALL_DIR");BOOST_REQUIRE(installation && *installation);
+    const auto mounted=renegade::content::MountInstall(installation);BOOST_REQUIRE(mounted);
+    const auto bytes=mounted->files->Read("credits.txt");BOOST_REQUIRE(bytes);BOOST_TEST(bytes->size()==14019u);
+    const auto text=renegade::content::ReadCreditsText(*bytes);BOOST_TEST(text.size()==13451u);
+    const auto lines=engine::gui::w3d::ReadMarqueeLines(text,0xffffd528);BOOST_REQUIRE(lines);
+    BOOST_TEST(lines->size()==568u);
+    BOOST_TEST(std::ranges::count_if(*lines,[](const auto& line){return line.text.empty();})==130);
+    BOOST_TEST(std::ranges::count_if(*lines,[](const auto& line){return line.font==1;})==30);
+    BOOST_CHECK(lines->front().text==u"EVA TRANSMISSION IN PROGRESS");BOOST_TEST(lines->front().color==0xffe5c74cu);
+    BOOST_CHECK(std::ranges::any_of(*lines,[](const auto& line){return line.text==u"Greg Hjelstrom   (3D Engine, Physics, Tools)";}));
+}

@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.input.profile_catalog;
+using namespace renegade::content;
+BOOST_AUTO_TEST_CASE(input_profile_catalog_imports_original_nested_chunks_and_case_insensitive_current_name) {
+    // Independent byte fixture from inputconfig*.cpp WRITE_MICRO_CHUNK layout.
+    constexpr unsigned char fixture[]{
+        0x05,0x11,0x18,0x07,0x3c,0,0,0x80,
+        0x07,0x11,0x18,0x07,0x34,0,0,0x80,
+        0x06,0x11,0x18,0x07,0x2c,0,0,0,
+        1,16,'D',0,'e',0,'f',0,'a',0,'u',0,'l',0,'t',0,0,0,
+        2,18,'D','E','F','A','U','L','T','_','I','N','P','U','T','.','C','F','G',0,
+        3,1,1,4,1,0,
+        0x06,0x11,0x18,0x07,0x14,0,0,0,
+        1,18,'d','e','f','a','u','l','t','_','i','n','p','u','t','.','c','f','g',0};
+    const auto bytes=std::as_bytes(std::span(fixture));const auto imported=ReadLegacyInputProfileCatalog(bytes);BOOST_REQUIRE(imported);
+    BOOST_REQUIRE_EQUAL(imported->profiles.size(),1);BOOST_CHECK(imported->profiles[0].name==u"Default");
+    BOOST_CHECK(imported->profiles[0].filename=="DEFAULT_INPUT.CFG");BOOST_TEST(imported->profiles[0].default_profile);BOOST_TEST(!imported->profiles[0].custom);
+    BOOST_REQUIRE(imported->Find(imported->current));BOOST_TEST(*imported->Find(imported->current)==0u);
+    for(const std::size_t cut:{1,7,9,20,40,67,69,95}) BOOST_TEST(!ReadLegacyInputProfileCatalog(bytes.first(cut)));
+    auto corrupt=std::vector<std::byte>(bytes.begin(),bytes.end());corrupt[25]=std::byte{255};
+    BOOST_TEST(!ReadLegacyInputProfileCatalog(corrupt));
+}
+BOOST_AUTO_TEST_CASE(input_profile_catalog_portable_format_keeps_long_unicode_names_and_rejects_invalid_or_truncated_files) {
+    InputProfileCatalog catalog{{{u"Default","DEFAULT_INPUT.CFG",true,false},{std::u16string(300,u'\u00e6')+u"\U0001f600","input01.cfg",false,true}},"INPUT01.CFG"};
+    const auto encoded=WriteInputProfileCatalog(catalog);BOOST_REQUIRE(encoded);
+    BOOST_TEST(std::to_integer<unsigned>((*encoded)[0])==0x52u);BOOST_TEST(std::to_integer<unsigned>((*encoded)[4])==1u);
+    const auto decoded=ReadInputProfileCatalog(*encoded);BOOST_REQUIRE(decoded);BOOST_CHECK(*decoded==catalog);
+    for(std::size_t cut=0;cut<encoded->size();++cut) BOOST_TEST(!ReadInputProfileCatalog(std::span(*encoded).first(cut)));
+    auto tail=*encoded;tail.push_back(std::byte{});BOOST_TEST(!ReadInputProfileCatalog(tail));
+    catalog.profiles[1].filename="../escape.cfg";BOOST_TEST(!WriteInputProfileCatalog(catalog));
+    catalog.profiles[1].filename="default_input.cfg";BOOST_TEST(!WriteInputProfileCatalog(catalog));
+    catalog.profiles[1].filename="input01.cfg";catalog.profiles[1].name=std::u16string(1,char16_t(0xd800));BOOST_TEST(!WriteInputProfileCatalog(catalog));
+}
+BOOST_AUTO_TEST_CASE(input_profile_source_default_fallback_and_first_unoccupied_filename_consider_catalog_and_filesystem) {
+    InputProfileCatalog catalog;catalog.EnsureDefault(u"Default settings");BOOST_REQUIRE_EQUAL(catalog.profiles.size(),1);
+    BOOST_CHECK(catalog.current=="DEFAULT_INPUT.CFG");catalog.current="missing.cfg";catalog.EnsureDefault(u"Ignored");BOOST_CHECK(catalog.current=="DEFAULT_INPUT.CFG");
+    catalog.profiles.push_back({u"Custom","input02.cfg",false,true});std::vector<std::string> queried;
+    const auto filename=UniqueInputProfileFilename(catalog,[&](auto name){queried.emplace_back(name);return name=="input01.cfg" || name=="input03.cfg";});
+    BOOST_REQUIRE(filename);BOOST_CHECK(*filename=="input04.cfg");BOOST_TEST(queried.size()==3u);
+    BOOST_CHECK(queried[0]=="input01.cfg");BOOST_CHECK(queried[1]=="input03.cfg");BOOST_CHECK(queried[2]=="input04.cfg");
+    catalog.profiles.erase(catalog.profiles.begin());catalog.current="input02.cfg";catalog.EnsureDefault(u"Default");
+    BOOST_TEST(catalog.profiles.size()==1u);BOOST_CHECK(!catalog.Default()); // Source only synthesizes a default for an empty dictionary.
+}

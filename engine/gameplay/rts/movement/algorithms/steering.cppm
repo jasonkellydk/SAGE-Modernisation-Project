@@ -22,9 +22,9 @@ inline Fixed TurnRadius(const Locomotion &motion) noexcept
 	return perTick > Fixed{} ? motion.speed / perTick : Fixed{};
 }
 
-// How close counts as reaching a goal: final goals use the locomotor's
-// close-enough distance (AIInternalMoveToState::update: getLocomotorDistanceToGoal < getCloseEnoughDist, wings
-// included); waypoints on the way are passed within a cell or two ticks of travel, wings within their turning circle.
+// Kinematic ground arrival and waypoints on the way: final goals use the close-enough distance or a tick of travel;
+// waypoints are passed within a cell or two ticks of travel, wings within their turning circle. Final Wings goals
+// instead use TrackFlightLeg and the authored close-enough limit, as AIInternalMoveToState.
 inline Fixed ArrivalDistance(const Locomotion &motion, bool final) noexcept
 {
 	const auto &locomotor = motion.locomotor;
@@ -32,6 +32,38 @@ inline Fixed ArrivalDistance(const Locomotion &motion, bool final) noexcept
 	if (!final && locomotor.appearance == LocomotorAppearance::Wings)
 		distance = std::max(distance, TurnRadius(motion));
 	return distance;
+}
+
+// AIUpdateInterface::getLocomotorDistanceToGoal for a flyer's leg (computeFlightDistToGoal over its path from where it
+// was when the goal was set to the goal: what is left along that line, 0 once past; for aircraft no more than the
+// straight distance). The leg starts afresh when the goal changes.
+struct FlightLeg
+{
+	Engine::Math::Fixed along; // computeFlightDistToGoal
+	Engine::Math::Fixed left;  // getLocomotorDistanceToGoal
+};
+
+inline FlightLeg TrackFlightLeg(const Transform &transform, Locomotion &motion, Engine::Math::FixedVector2 goal) noexcept
+{
+	using Engine::Math::Fixed;
+	if (motion.tracking == 0 || motion.flightGoal != goal)
+	{
+		motion.flightFrom = transform.position.XY();
+		motion.flightGoal = goal;
+		motion.tracking = 1;
+	}
+	const Engine::Math::FixedVector2 path = goal - motion.flightFrom;
+	const Fixed length = Engine::Math::Length(path);
+	const Engine::Math::FixedVector2 toGoal = goal - transform.position.XY();
+	FlightLeg leg;
+	if (length > Fixed{})
+	{
+		const Fixed dot = (toGoal.x * path.x + toGoal.y * path.y) / length;
+		leg.along = dot >= Fixed{} ? dot : Fixed{};
+	}
+	const Fixed straight = Engine::Math::Length(toGoal);
+	leg.left = leg.along > straight ? straight : leg.along;
+	return leg;
 }
 
 // Locomotor::getMaxTurnRate: its turn rate a tick, twice that when ultra-accurate (TURN_FACTOR: "monster turning ability").
@@ -94,6 +126,7 @@ inline std::int32_t TurnAbout(Transform &transform, Locomotion &motion, FixedVec
 inline void Coast(Transform &transform, Locomotion &motion, bool aloft = true) noexcept
 {
 	const auto &locomotor = motion.locomotor;
+	motion.tracking = 0; // no goal: the next is a new leg, as FlightMaintain
 	if (motion.maintaining == 0)
 	{
 		motion.maintainPos = transform.position.XY();
@@ -160,7 +193,10 @@ inline bool Steer(Transform &transform, Locomotion &motion, FixedVector2 goal, b
 	motion.maintaining = 0; // heading somewhere: the place it held is let go (MAINTAIN_POS_IS_VALID)
 	const FixedVector2 toGoal = goal - transform.position.XY();
 	const Fixed distance = Engine::Math::Length(toGoal);
-	if (distance <= ArrivalDistance(motion, final))
+	const bool reached = final && locomotor.appearance == LocomotorAppearance::Wings
+		? TrackFlightLeg(transform, motion, goal).left < locomotor.closeEnough
+		: distance <= ArrivalDistance(motion, final);
+	if (reached)
 	{
 		if (final && locomotor.appearance != LocomotorAppearance::Wings)
 			motion.speed = Approach(motion.speed, Fixed{}, locomotor.acceleration, locomotor.braking);
@@ -200,7 +236,7 @@ inline bool Steer(Transform &transform, Locomotion &motion, FixedVector2 goal, b
 
 	// Speed: as fast as allowed, but able to stop at a final goal and slowed
 	// by how far off the heading still is.
-	Fixed target = locomotor.maxSpeed;
+	Fixed target = std::min(locomotor.maxSpeed, motion.speedCap); // Locomotor::getMaxSpeedForCondition
 	if (final && locomotor.braking > Fixed{})
 		target = std::min(target, Engine::Math::Sqrt(locomotor.braking * distance * 2));
 	target = target * std::max(Fixed{}, Engine::Math::Cos(error));

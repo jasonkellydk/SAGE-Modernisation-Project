@@ -1,0 +1,39 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <span>
+import engine.gui.w3d.dialog_input;
+using namespace engine::gui::w3d;
+BOOST_AUTO_TEST_CASE(dialog_activation_defaults_in_resource_order_and_restores_only_eligible_focus) {
+    std::array<InputTarget,5> targets{{{10,{0,0,10,10},true,true,false},{11,{},false},{12,{},true,false},{13,{}},{14,{}}}};
+    DialogInputState state;state.pressed=14;state.hovered=14;
+    ActivateDialog(state,targets);BOOST_REQUIRE(state.focused);BOOST_TEST(*state.focused==13);
+    BOOST_CHECK(!state.pressed);BOOST_CHECK(!state.hovered);
+    ActivateDialog(state,targets,14);BOOST_TEST(*state.focused==14);
+    targets[4].enabled=false;ActivateDialog(state,targets,14);BOOST_TEST(*state.focused==13);
+    ActivateDialog(state,targets,999);BOOST_TEST(*state.focused==13);
+    targets[3].focusable=false;ActivateDialog(state,targets,13);BOOST_CHECK(!state.focused);
+    MoveFocus(state,targets);BOOST_CHECK(!state.focused);
+    targets[3].focusable=true;ActivateDialog(state,targets);
+    PointerPress(state,targets,1,1);BOOST_TEST(*state.focused==13);BOOST_TEST(*state.pressed==10);
+    ActivateDialog(state,{});BOOST_CHECK(!state.focused);
+}
+BOOST_AUTO_TEST_CASE(dialog_pointer_capture_requires_release_over_same_enabled_control) {
+    std::array<InputTarget,3> targets{{{1,{0,0,10,10}},{2,{10,0,20,10},false},{3,{20,0,30,10}}}};
+    DialogInputState state;
+    PointerPress(state,targets,1,1); BOOST_REQUIRE(state.focused); BOOST_TEST(*state.focused==1);
+    BOOST_CHECK(!PointerRelease(state,targets,25,1));
+    PointerPress(state,targets,1,1); BOOST_TEST(*PointerRelease(state,targets,1,1)==1);
+    BOOST_CHECK(!PointerRelease(state,targets,1,1));
+    PointerPress(state,targets,1,1); targets[0].enabled=false; BOOST_CHECK(!PointerRelease(state,targets,1,1));
+    BOOST_CHECK(!HitTest(targets,15,1)); BOOST_CHECK(!HitTest(targets,30,1));
+}
+BOOST_AUTO_TEST_CASE(dialog_keyboard_wraps_and_skips_disabled_or_hidden_controls) {
+    std::array<InputTarget,3> targets{{{1,{}},{2,{},false},{3,{}}}};DialogInputState state;
+    MoveFocus(state,targets); BOOST_TEST(*state.focused==1);
+    MoveFocus(state,targets); BOOST_TEST(*state.focused==3);
+    MoveFocus(state,targets); BOOST_TEST(*state.focused==1);
+    MoveFocus(state,targets,true); BOOST_TEST(*state.focused==3);
+    targets[2].visible=false; BOOST_CHECK(!ActivateFocused(state,targets));
+    MoveFocus(state,targets); BOOST_TEST(*state.focused==1);
+    targets[0].enabled=false;MoveFocus(state,targets);BOOST_CHECK(!state.focused);
+}

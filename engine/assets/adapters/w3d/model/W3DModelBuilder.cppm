@@ -93,6 +93,18 @@ void Apply_Shader_Settings(ModelMaterialDesc &material, const W3DShaderSettings 
 {
 	material.depth_write = shader.depth_mask != 0;
 	material.texturing = shader.texturing != 0;
+	// W3D source/destination wire values have different encodings. Preserve
+	// them independently of render-mode classification and depth writes.
+	constexpr std::array sources{MaterialBlendFactor::Zero, MaterialBlendFactor::One,
+		MaterialBlendFactor::SourceAlpha, MaterialBlendFactor::InverseSourceAlpha};
+	constexpr std::array destinations{MaterialBlendFactor::Zero, MaterialBlendFactor::One,
+		MaterialBlendFactor::SourceColor, MaterialBlendFactor::InverseSourceColor,
+		MaterialBlendFactor::SourceAlpha, MaterialBlendFactor::InverseSourceAlpha};
+	const auto invalid = static_cast<MaterialBlendFactor>(255);
+	material.draw_state = MaterialDrawState{
+		shader.source_blend < sources.size() ? sources[shader.source_blend] : invalid,
+		shader.destination_blend < destinations.size() ? destinations[shader.destination_blend] : invalid,
+		static_cast<MaterialDepthComparison>(shader.depth_compare)};
 	if (shader.alpha_test != 0) {
 		material.render_mode = MaterialRenderMode::AlphaTest;
 		return;
@@ -109,8 +121,7 @@ void Apply_Shader_Settings(ModelMaterialDesc &material, const W3DShaderSettings 
 		material.render_mode = MaterialRenderMode::AlphaBlend;
 		return;
 	}
-	if (!material.depth_write)
-		material.render_mode = MaterialRenderMode::AlphaBlend;
+	// Depth-write disable alone does not imply source-alpha blending.
 }
 
 // W3DMeshRenderObject::Load_W3D's is_alpha for a polygon's shader: it blends (DSTBLEND not ZERO or SRCBLEND not ONE)
@@ -293,6 +304,10 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 	if (description.submeshes.size() == submesh_base)
 		description.submeshes.push_back({index_base, legacy_index_count, material_base, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty(),
 			mesh.header.attributes});
+	// A flattened hierarchy retains each mesh's own static ordering bin.
+	// The root model's last-mesh value cannot represent mixed child bins.
+	for (std::size_t submesh_index = submesh_base; submesh_index < description.submeshes.size(); ++submesh_index)
+		description.submeshes[submesh_index].sort_level = mesh.header.sort_level;
 
 	for (std::size_t material_index = material_base; material_index < description.materials.size(); ++material_index) {
 		ModelMaterialDesc &material = description.materials[material_index];

@@ -74,6 +74,31 @@ void Drain(Mixer &mixer, SoundPlayer &player, int blocks = 50)
 
 BOOST_AUTO_TEST_SUITE(audio)
 
+BOOST_AUTO_TEST_CASE(output_statistics_measure_mixed_samples_after_master_and_bus_gains)
+{
+	Mixer mixer(1000);
+	BOOST_TEST(mixer.OutputStats().stereoFrames == 0);
+	Run(mixer, 3);
+	BOOST_TEST(mixer.OutputStats().stereoFrames == 3);
+	BOOST_TEST(mixer.OutputStats().nonSilentFrames == 0);
+	VoiceStart voice;
+	voice.buffer = Constant(0.25f, 4);
+	voice.bus = Bus::Media;
+	mixer.SetBusGain(Bus::Media, 0);
+	mixer.Play(voice);
+	Run(mixer, 4);
+	BOOST_TEST(mixer.OutputStats().nonSilentFrames == 0);
+	mixer.SetBusGain(Bus::Media, 1);
+	mixer.Play(voice);
+	Run(mixer, 4);
+	BOOST_TEST(mixer.OutputStats().nonSilentFrames == 4);
+	mixer.SetMasterGain(0);
+	mixer.Play(voice);
+	Run(mixer, 4);
+	BOOST_TEST(mixer.OutputStats().nonSilentFrames == 4);
+	BOOST_TEST(mixer.OutputStats().stereoFrames == 15);
+}
+
 BOOST_AUTO_TEST_CASE(world_sounds_fall_off_with_distance_and_pan_to_their_side)
 {
 	BOOST_TEST(DistanceGain(50.0f, 100.0f, 1000.0f) == 1.0f);
@@ -320,6 +345,28 @@ BOOST_AUTO_TEST_CASE(a_wave_files_length_comes_from_its_header)
 	BOOST_TEST(blocks->frames == 2034u);
 	std::vector<std::byte> junk(64, std::byte{7});
 	BOOST_TEST(!ReadWaveLength(junk).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(loop_changes_preserve_position_and_finish_the_current_cycle)
+{
+    Mixer mixer(1000);
+    auto buffer=std::make_shared<PcmBuffer>();buffer->sampleRate=1000;
+    buffer->samples={0.1f,0.1f,0.2f,0.2f,0.3f,0.3f};
+    VoiceStart start;start.buffer=buffer;
+    const auto id=mixer.Play(std::move(start));
+    auto output=Run(mixer,1);BOOST_TEST(output[0]==0.1f);
+    mixer.SetLooping(id,true);
+    output=Run(mixer,4);
+    BOOST_TEST(output[0]==0.2f);BOOST_TEST(output[2]==0.3f);
+    BOOST_TEST(output[4]==0.1f);BOOST_TEST(output[6]==0.2f);
+    mixer.SetLooping(id,false);
+    output=Run(mixer,4);
+    BOOST_TEST(output[0]==0.3f);BOOST_TEST(output[2]==0.0f);
+    BOOST_TEST(output[4]==0.0f);BOOST_TEST(output[6]==0.0f);
+    const auto ended=mixer.TakeFinished();BOOST_REQUIRE_EQUAL(ended.size(),1u);BOOST_TEST(ended[0]==id);
+    mixer.SetLooping(id,true);mixer.SetLooping(id+1,true);
+    output=Run(mixer,4);BOOST_TEST(mixer.ActiveVoices()==0u);BOOST_TEST(mixer.TakeFinished().empty());
+    BOOST_TEST(std::all_of(output.begin(),output.end(),[](float value) {return value==0;}));
 }
 
 // legacy_parity: AudioManager::addAudioEvent (GameAudio.cpp: "cull muted audio") and SoundManager::canPlayNow

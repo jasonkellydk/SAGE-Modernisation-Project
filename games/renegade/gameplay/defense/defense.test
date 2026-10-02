@@ -1,0 +1,151 @@
+#define BOOST_TEST_MODULE RenegadeDefense
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+import games.renegade.session;
+import engine.core.serialization.byte_stream;
+
+using namespace renegade;
+using engine::gameplay::Health;
+using engine::gameplay::Shield;
+namespace
+{
+ecs::Entity Spawn(Session &session, int hp = 100, int armor = 50)
+{
+	auto &world = session.World();
+	const auto entity = world.Create<Health, Shield, Defense>();
+	auto &health = *world.Get<Health>(entity);
+	health.current = Fixed::FromInt(hp); health.maximum = Fixed::FromInt(100);
+	auto &shield = *world.Get<Shield>(entity);
+	shield.current = Fixed::FromInt(armor); shield.maximum = Fixed::FromInt(50); shield.armor = 1;
+	return entity;
+}
+DamageRules Rules()
+{
+	DamageRules result;
+	result.responses[{0, 0}] = {Fixed::One(), {}};
+	result.responses[{1, 0}] = {Fixed::FromInt(2), Fixed::Half()};
+	result.responses[{2, 0}] = {Fixed::FromInt(3), {}};
+	return result;
+}
+// Independent numeric oracle transcribed from DefenseObjectClass::Do_Damage
+// at the pinned EA revision. Only its reservoir arithmetic is claimed here.
+std::array<double, 2> Original(double health, double shield, double damage, double healthScale,
+	double shieldScale, double absorption, bool alternate, bool canDie)
+{
+	if (alternate) shieldScale = 0;
+	if (damage * healthScale < 0 || damage * shieldScale < 0)
+	{
+		if (health < 100 && healthScale != 0) health -= std::clamp(damage * healthScale, health - 100, 0.0);
+		else shield -= std::clamp(damage * shieldScale, shield - 50, 0.0);
+	}
+	else
+	{
+		if (shield > 0 && !alternate)
+		{
+			double redirected = damage * absorption;
+			damage -= redirected;
+			redirected *= shieldScale;
+			double attempted = redirected;
+			if (redirected > shield) redirected = shield;
+			shield -= redirected;
+			if (shieldScale != 0) { redirected /= shieldScale; attempted /= shieldScale; }
+			damage += attempted - redirected;
+			shield = std::clamp(shield, 0.0, 50.0);
+		}
+		damage *= healthScale;
+		if (health < damage) damage = health;
+		health -= damage;
+		if (!canDie) health = (std::max)(health, 1.0);
+	}
+	return {std::clamp(health, 0.0, 100.0), shield};
+}
+}
+
+BOOST_AUTO_TEST_CASE(shield_exhaustion_returns_unscaled_excess_to_health)
+{
+	Session session; auto entity = Spawn(session);
+	session.World().Resource<DamageRules>() = Rules();
+	session.World().Resource<DamageRequests>().Push({entity, {}, Fixed::FromInt(80)});
+	session.Step();
+	BOOST_TEST(session.World().Get<Health>(entity)->current.Raw() == Fixed::FromInt(45).Raw());
+	BOOST_TEST(session.World().Get<Shield>(entity)->current.Raw() == 0);
+	BOOST_TEST(session.World().Resource<DefenseHits>().Size() == 1u);
+	session.Step(); // The queue was consumed; no repeated damage.
+	BOOST_TEST(session.World().Get<Health>(entity)->current.Raw() == Fixed::FromInt(45).Raw());
+}
+BOOST_AUTO_TEST_CASE(repair_fills_only_one_reservoir_per_hit)
+{
+	Session session; auto entity = Spawn(session, 90, 10);
+	session.World().Resource<DamageRules>() = Rules();
+	session.World().Resource<DamageRequests>().Push({entity, {}, Fixed::FromInt(-50)});
+	session.Step();
+	BOOST_TEST(session.World().Get<Health>(entity)->current.Raw() == Fixed::FromInt(100).Raw());
+	BOOST_TEST(session.World().Get<Shield>(entity)->current.Raw() == Fixed::FromInt(10).Raw());
+	session.World().Resource<DamageRequests>().Push({entity, {}, Fixed::FromInt(-50)});
+	session.Step();
+	BOOST_TEST(session.World().Get<Shield>(entity)->current.Raw() == Fixed::FromInt(50).Raw());
+}
+BOOST_AUTO_TEST_CASE(alternate_skin_friendly_fire_self_damage_and_cannot_die)
+{
+	Session session; auto entity = Spawn(session);
+	auto &world = session.World(); world.Resource<DamageRules>() = Rules();
+	DamageRequest hit{entity, {500, 1}, Fixed::FromInt(10)};
+	hit.teammate = true;
+	world.Resource<DamageRequests>().Push(hit); session.Step();
+	BOOST_TEST(world.Get<Health>(entity)->current.Raw() == Fixed::FromInt(100).Raw());
+	hit.source = entity; hit.alternateSkin = 2;
+	world.Resource<DamageRequests>().Push(hit); session.Step();
+	BOOST_TEST(world.Get<Health>(entity)->current.Raw() == Fixed::FromInt(70).Raw());
+	BOOST_TEST(world.Get<Shield>(entity)->current.Raw() == Fixed::FromInt(50).Raw());
+	world.Get<Defense>(entity)->canDie = 0;
+	hit.amount = Fixed::FromInt(200);
+	world.Resource<DamageRequests>().Push(hit); session.Step();
+	BOOST_TEST(world.Get<Health>(entity)->current.Raw() == Fixed::OneRaw);
+}
+BOOST_AUTO_TEST_CASE(reservoir_parity_against_original_numeric_oracle)
+{
+	for (int hp : {0, 1, 40, 99, 100}) for (int sp : {0, 1, 20, 50})
+	for (int amount : {-200, -10, 0, 10, 35, 200})
+	for (int hs : {-1, 0, 1, 2}) for (int ss : {-1, 0, 1, 2})
+	for (bool alternate : {false, true}) for (bool canDie : {false, true})
+	{
+		Health health; health.current = Fixed::FromInt(hp); health.maximum = Fixed::FromInt(100);
+		Shield shield{Fixed::FromInt(sp), Fixed::FromInt(50), 1};
+		Defense defense{0, canDie ? 1u : 0u};
+		DamageRules rules; rules.responses[{0, 0}] = {Fixed::FromInt(hs), {}};
+		rules.responses[{1, 0}] = {Fixed::FromInt(ss), Fixed::Half()};
+		DamageRequest hit{{0, 1}, {}, Fixed::FromInt(amount)};
+		if (alternate) hit.alternateSkin = 0;
+		ApplyDamage(health, shield, defense, hit, rules);
+		const auto original = Original(hp, sp, amount, hs, ss, 0.5, alternate, canDie);
+		BOOST_TEST(std::abs(static_cast<double>(health.current.Raw()) / Fixed::OneRaw - original[0]) < 0.0001);
+		BOOST_TEST(std::abs(static_cast<double>(shield.current.Raw()) / Fixed::OneRaw - original[1]) < 0.0001);
+	}
+}
+BOOST_AUTO_TEST_CASE(chunk_workers_and_checkpoint_preserve_results)
+{
+	const auto run = [](std::size_t workers) {
+		Session session(workers, 4); session.World().Resource<DamageRules>() = Rules();
+		std::vector<ecs::Entity> entities;
+		for (int i = 0; i < 256; ++i) entities.push_back(Spawn(session));
+		for (int tick = 0; tick < 10; ++tick)
+		{
+			for (auto entity : entities) session.World().Resource<DamageRequests>().Push({entity, {}, Fixed::FromInt(tick + 1)});
+			session.Step();
+		}
+		return session.World().StateHash();
+	};
+	BOOST_TEST(run(1) == run(4));
+	Session saved(2, 4); auto entity = Spawn(saved, 80, 20);
+	engine::core::serialization::ByteWriter writer; saved.World().SaveCheckpoint(writer);
+	Session loaded(3, 4); engine::core::serialization::ByteReader reader(writer.Bytes());
+	BOOST_REQUIRE(loaded.World().LoadCheckpoint(reader));
+	BOOST_TEST(loaded.World().StateHash() == saved.World().StateHash());
+	saved.World().Resource<DamageRules>() = Rules(); loaded.World().Resource<DamageRules>() = Rules();
+	for (auto *session : {&saved, &loaded}) { session->World().Resource<DamageRequests>().Push({entity, {}, Fixed::FromInt(30)}); session->Step(); }
+	BOOST_TEST(loaded.World().StateHash() == saved.World().StateHash());
+}

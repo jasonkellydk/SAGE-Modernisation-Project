@@ -3,6 +3,7 @@ module;
 export module engine.platform.adapters.sdl3.input;
 import std;
 import engine.platform;
+import engine.platform.adapters.sdl3.keys;
 
 export namespace engine::platform::sdl3
 {
@@ -13,7 +14,12 @@ public:
 	[[nodiscard]] KeyboardState keyboard_state() const noexcept override
 	{
 		int count = 0; const bool* keys = SDL_GetKeyboardState(&count);
-		return {keys, count, (SDL_GetModState() & SDL_KMOD_CAPS) != 0};
+		static constexpr auto indices=[] {
+			std::array<int,native_scan_codes.size()> values{};
+			for(unsigned i=0;i<values.size();++i) values[i]=static_cast<int>(native_scan_codes[i]);
+			return values;
+		}();
+		return {keys, count, (SDL_GetModState() & SDL_KMOD_CAPS) != 0, indices};
 	}
 	[[nodiscard]] MouseState mouse_state() const noexcept override
 	{

@@ -12,7 +12,7 @@ public:
 	[[nodiscard]] virtual Extent2D size() const noexcept = 0;
 	[[nodiscard]] virtual Extent2D drawable_size() const noexcept = 0;
 	[[nodiscard]] virtual Point2D position() const noexcept = 0;
-	[[nodiscard]] virtual std::optional<NativeWindowHandle> native_handle(NativeWindowSystem system) const noexcept = 0;
+	[[nodiscard]] virtual std::optional<NativeWindowHandle> native_handle(NativeWindowSystem system = NativeWindowSystem::automatic) const noexcept = 0;
 	[[nodiscard]] virtual bool is_minimized() const noexcept = 0;
 	[[nodiscard]] virtual bool has_focus() const noexcept = 0;
 	[[nodiscard]] virtual WindowMode mode() const noexcept = 0;

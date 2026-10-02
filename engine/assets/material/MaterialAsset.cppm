@@ -4,6 +4,7 @@ import std;
 import Assets.Handles;
 import Assets.Identity;
 import Assets.Math;
+export import Assets.Materials.TextureMapping;
 
 namespace Assets
 {
@@ -16,6 +17,33 @@ export enum class MaterialRenderMode : std::uint8_t
 	Additive,
 	Multiply
 };
+
+// Renderer-neutral authored draw state. Absent state retains RenderMode's
+// established defaults for importers which do not supply explicit factors.
+export enum class MaterialBlendFactor : std::uint8_t
+{
+	Zero, One, SourceColor, InverseSourceColor, SourceAlpha, InverseSourceAlpha
+};
+
+export enum class MaterialDepthComparison : std::uint8_t
+{
+	Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always
+};
+
+export struct MaterialDrawState final
+{
+	MaterialBlendFactor source = MaterialBlendFactor::One;
+	MaterialBlendFactor destination = MaterialBlendFactor::Zero;
+	MaterialDepthComparison depth_comparison = MaterialDepthComparison::LessEqual;
+	bool operator==(const MaterialDrawState &) const = default;
+};
+
+export bool Validate_Material_Draw_State(const MaterialDrawState &state) noexcept
+{
+	return state.source <= MaterialBlendFactor::InverseSourceAlpha &&
+		state.destination <= MaterialBlendFactor::InverseSourceAlpha &&
+		state.depth_comparison <= MaterialDepthComparison::Always;
+}
 
 export enum class MaterialScope : std::uint8_t
 {
@@ -123,6 +151,8 @@ export struct MaterialAssetDesc final
 	MaterialScope scope = MaterialScope::Shared;
 	MaterialSurfaceParameters surface{};
 	MaterialSurfaceTextureNames surface_textures{};
+	std::array<std::optional<TextureMappingDescription>,2> texture_mappings{};
+	std::optional<MaterialDrawState> draw_state;
 };
 
 export class MaterialAsset final
@@ -157,6 +187,8 @@ public:
 	bool Texturing() const noexcept;
 	const MaterialSurfaceParameters &Surface() const noexcept;
 	TextureAssetHandle Surface_Texture(MaterialTextureRole role) const noexcept;
+	const std::array<std::optional<TextureMappingDescription>,2>& Texture_Mappings() const noexcept;
+	const std::optional<MaterialDrawState> &Draw_State() const noexcept;
 
 private:
 	AssetIdentity m_identity;
@@ -176,6 +208,8 @@ private:
 	bool m_texturing = true;
 	MaterialSurfaceParameters m_surface{};
 	MaterialSurfaceTextureHandles m_surface_textures{};
+	std::array<std::optional<TextureMappingDescription>,2> m_texture_mappings{};
+	std::optional<MaterialDrawState> m_draw_state;
 };
 
 }
@@ -214,7 +248,9 @@ MaterialAsset::MaterialAsset(
 	  m_depth_write(description.depth_write),
 	  m_texturing(description.texturing),
 	  m_surface(description.surface),
-	  m_surface_textures(surface_textures)
+	  m_surface_textures(surface_textures),
+	  m_texture_mappings(std::move(description.texture_mappings)),
+	  m_draw_state(description.draw_state)
 {
 }
 
@@ -226,6 +262,16 @@ const AssetIdentity &MaterialAsset::Identity() const noexcept
 const std::string &MaterialAsset::Name() const noexcept
 {
 	return m_name;
+}
+
+const std::array<std::optional<TextureMappingDescription>,2>& MaterialAsset::Texture_Mappings() const noexcept
+{
+	return m_texture_mappings;
+}
+
+const std::optional<MaterialDrawState> &MaterialAsset::Draw_State() const noexcept
+{
+	return m_draw_state;
 }
 
 const TextureAssetHandle &MaterialAsset::Primary_Texture() const noexcept

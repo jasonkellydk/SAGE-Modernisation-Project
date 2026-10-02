@@ -1,0 +1,40 @@
+#include <boost/test/unit_test.hpp>
+#include <limits>
+import engine.gui.w3d.value_controls;
+using namespace engine::gui::w3d;
+
+BOOST_AUTO_TEST_CASE(w3d_slider_retains_source_thumb_bias_truncation_and_keyboard_bounds) {
+    SliderValueModel slider;slider.Range(-20,80);
+    int notifications=0;slider.position.Subscribe([&](int) { ++notifications; });
+    const HitRect rectangle{10,0,110,22}; // thumb width: (22 - 2) / 2 = 10
+    BOOST_REQUIRE(slider.Pointer(10,rectangle));BOOST_TEST(slider.position.Get()==-15);
+    BOOST_REQUIRE(slider.Pointer(60,rectangle));BOOST_TEST(slider.position.Get()==35);
+    BOOST_REQUIRE(slider.Pointer(109,rectangle));BOOST_TEST(slider.position.Get()==80);
+    BOOST_REQUIRE(slider.Pointer(-100,rectangle));BOOST_TEST(slider.position.Get()==-20);
+    const int before=notifications;BOOST_REQUIRE(slider.Key(RangeAction::Decrement));BOOST_TEST(notifications==before);
+    BOOST_REQUIRE(slider.Key(RangeAction::Increment));BOOST_TEST(slider.position.Get()==-19);
+    BOOST_REQUIRE(slider.Key(RangeAction::Maximum));BOOST_TEST(slider.position.Get()==80);
+    BOOST_REQUIRE(slider.Key(RangeAction::Minimum));BOOST_TEST(slider.position.Get()==-20);
+    slider.enabled.Set(false);BOOST_TEST(!slider.Pointer(50,rectangle));BOOST_TEST(!slider.Key(RangeAction::Maximum));
+    slider.enabled.Set(true);BOOST_TEST(!slider.Pointer(std::numeric_limits<float>::quiet_NaN(),rectangle));
+    BOOST_TEST(!slider.Pointer(50,{10,0,10,22}));
+    BOOST_CHECK_THROW(slider.Range(100,0),std::invalid_argument);
+}
+BOOST_AUTO_TEST_CASE(w3d_check_toggle_respects_disabled_state_and_notifies_bound_views) {
+    CheckValueModel check;bool view=false;const auto subscription=check.checked.Subscribe([&](bool value) { view=value; });
+    BOOST_REQUIRE(check.Toggle());BOOST_TEST(view);check.enabled.Set(false);BOOST_TEST(!check.Toggle());BOOST_TEST(view);
+    check.enabled.Set(true);BOOST_REQUIRE(check.Toggle());BOOST_TEST(!view);check.checked.Unsubscribe(subscription);
+}
+BOOST_AUTO_TEST_CASE(w3d_value_controls_consume_source_keys_before_focus_navigation) {
+    SliderValueModel slider;slider.Range(-20,80);slider.Set(30);
+    BOOST_REQUIRE(HandleValueKey(slider,ValueKey::Up));BOOST_TEST(slider.position.Get()==31);
+    BOOST_REQUIRE(HandleValueKey(slider,ValueKey::Down));BOOST_TEST(slider.position.Get()==30);
+    BOOST_REQUIRE(HandleValueKey(slider,ValueKey::End));BOOST_TEST(slider.position.Get()==80);
+    BOOST_REQUIRE(HandleValueKey(slider,ValueKey::Home));BOOST_TEST(slider.position.Get()==-20);
+    BOOST_TEST(!HandleValueKey(slider,ValueKey::Space));BOOST_TEST(!HandleValueKey(slider,ValueKey::Enter));
+    slider.enabled.Set(false);BOOST_TEST(!HandleValueKey(slider,ValueKey::Up));
+    CheckValueModel check;
+    BOOST_TEST(!HandleValueKey(check,ValueKey::Enter));BOOST_TEST(!check.checked.Get());
+    BOOST_REQUIRE(HandleValueKey(check,ValueKey::Space));BOOST_TEST(check.checked.Get());
+    BOOST_TEST(!HandleValueKey(check,ValueKey::Up));BOOST_TEST(check.checked.Get());
+}

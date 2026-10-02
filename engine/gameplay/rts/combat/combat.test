@@ -6,12 +6,14 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <tuple>
 #include <vector>
 
 import engine.gameplay.common.health.components.subdual;
 import engine.gameplay.rts.combat.algorithms.weapon_fitness;
+import engine.gameplay.rts.combat.components.contained_definitions;
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.combat.systems.impact_system;
 import engine.gameplay.common.identity.components.definition_ref;
@@ -31,6 +33,7 @@ import engine.gameplay.rts.combat.systems.weapon_bonus_retime_system;
 import engine.gameplay.rts.combat.systems.damage_reaction_system;
 import engine.gameplay.rts.combat.algorithms.waypoint_weapon;
 import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
 import engine.ecs.core.world;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
@@ -91,6 +94,7 @@ struct Battle
 		field.cellSize = Fixed::FromInt(1000);
 		field.heights.assign(4, Fixed{});
 		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
 		world.EmplaceResource<LaunchLayouts>();
 		world.EmplaceResource<TemplateEquivalence>();
 		world.EmplaceResource<Detonations>();
@@ -172,6 +176,9 @@ struct Battle
 		world.RegisterComponent<DrawHidden>();
 		world.RegisterComponent<Countermeasures>();
 		world.RegisterComponent<SneakyTarget>();
+		// Targeting's declared lookup may inspect a transport's occupants even
+		// when this fixture's ordinary units have no containment capability.
+		world.RegisterComponent<ContainedDefinitions>();
 		world.EmplaceResource<MissileReports>();
 		world.EmplaceResource<FlareLaunches>();
 		world.RegisterComponent<WeaponBonusConditions>();
@@ -545,6 +552,8 @@ void MakeChaser(Battle &battle, ecs::Entity tank, int speed, std::uint8_t autoCr
 }
 
 // A victim moving at `speed` a frame along `facing` (its locomotor's forward speed; no order of its own, so it stays put).
+// A jeep is not crushable by the tank (Object::canCrushOrSquish: CrusherLevel > CrushableLevel); infantry instead
+// opts into SquishCollide explicitly below, which permits squishing regardless of its crushable level.
 void MakeRunner(Battle &battle, ecs::Entity victim, Fixed speed, Engine::Math::TurnAngle facing, bool squishable = false)
 {
 	auto &world = battle.world;
@@ -552,7 +561,7 @@ void MakeRunner(Battle &battle, ecs::Entity victim, Fixed speed, Engine::Math::T
 	world.Get<Locomotion>(victim)->speed = speed;
 	world.Get<Transform>(victim)->facing = facing;
 	world.Add<Collider>(victim);
-	*world.Get<Collider>(victim) = {Fixed::FromInt(5), 0u, 0u};
+	*world.Get<Collider>(victim) = {Fixed::FromInt(5), 0u, 255u};
 	if (squishable)
 		world.Add<Squishable>(victim);
 }
@@ -664,7 +673,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_chasing_tank_matches_its_victims_speed_in_r
 	battle.Run(1, 1);
 	BOOST_TEST_REQUIRE(battle.world.Get<Pursuit>(tank)->active == 1u);
 	BOOST_TEST(battle.world.Get<Pursuit>(tank)->matched == 1u);
-	BOOST_TEST((battle.world.Get<Pursuit>(tank)->speed == Fixed::FromInt(2) * Fixed::FromRatio(95, 100)));
+	BOOST_TEST(battle.world.Get<Pursuit>(tank)->speed.Raw() == (Fixed::FromInt(2) * Fixed::FromRatio(95, 100)).Raw());
 }
 
 // legacy_parity: AI::findClosestEnemy's CAN_SEE (AttackUsesLineOfSight, KINDOF_ATTACK_NEEDS_LINE_OF_SIGHT:
@@ -842,6 +851,20 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_lookers_view_passes_over_slavers_and_its_fi
 		battle.world.Get<Slaved>(shooter)->master = shooterMaster;
 		const ecs::Entity owners[] = {stranger, victimMaster, shooterMaster};
 		grid.SetObstacle(obstacleCell, 10, owners[owner], ObstacleFootprint{}, false);
+		if (raised)
+		{
+			// Pathfinder::isAttackViewBlockedByObstacle (pathfinder.cppm:2656-2675): with a ground victim,
+			// a raised attacker walks its own layer. The obstacle must therefore exist in that layer's cells.
+			DeckLayer deck;
+			deck.x0 = 5;
+			deck.y0 = 8;
+			deck.width = 16;
+			deck.height = 5;
+			deck.type.assign(static_cast<std::size_t>(deck.width * deck.height), PathfindCellType::Clear);
+			deck.toGround.assign(deck.type.size(), 0);
+			deck.type[deck.Index(obstacleCell, 10)] = PathfindCellType::Obstacle;
+			grid.Decks().push_back(std::move(deck));
+		}
 		battle.Run(1, 16);
 		return battle.world.Get<AttackTarget>(shooter)->target == victim;
 	};
@@ -854,11 +877,12 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_lookers_view_passes_over_slavers_and_its_fi
 }
 
 // legacy_parity: AIAttackApproachTargetState::computePath -> requestAttackPath -> AIUpdateInterface::computeAttackPath, for
-// a victim 200 away (the cannon reaching 150): a ground attacker goes for the victim's position with its route asked to
+// a victim 200 away (the cannon's authored range 150, effective 147.5): a ground attacker goes for the victim's position with its route asked to
 // stop at the first spot it may fire from (Pathfinder::findAttackPath: AttackApproach active and searching, the range less
-// a quarter cell, 147.5, and no line of sight needed); a contact weapon (range 5: isContactWeapon) goes for the victim's
+// a further quarter cell, 145, and no line of sight needed); a contact weapon (range 5: isContactWeapon) goes for the victim's
 // position itself, no search; a flyer (an airborne locomotor) straight for Weapon::computeApproachTarget's spot, 0.9 of
-// its range (135) from the victim on the line to it: x 165.
+// its effective range (132.75) from the victim on the line to it: x 167.25. Weapon.cpp:460-470 rationalizes the authored
+// range; isGoalPosWithinAttackRange:2352-2360 explicitly subtracts another quarter cell even with that rationalization.
 BOOST_AUTO_TEST_CASE(legacy_parity_an_attacker_approaches_as_the_original_computes_its_attack_path)
 {
 	const auto approach = [](int kind) { // 0 ground, 1 contact, 2 flyer
@@ -894,7 +918,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_attacker_approaches_as_the_original_comput
 	BOOST_TEST(ground.active == 1u);
 	BOOST_TEST(ground.search == 1u);
 	BOOST_TEST(ground.sight == 0u);
-	BOOST_TEST((ground.goalRange == Fixed::FromInt(150) - Fixed::FromRatio(5, 2)));
+	BOOST_TEST(ground.goalRange.Raw() == Fixed::FromInt(145).Raw());
 	BOOST_TEST((ground.victimAt.XY() == victimAt));
 	BOOST_TEST(ground.approachTick == 11u); // MIN_RECOMPUTE_TIME on
 	const auto [contact, contactTo] = approach(1);
@@ -902,18 +926,20 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_attacker_approaches_as_the_original_comput
 	BOOST_TEST(contact.search == 0u);
 	const auto [flyer, flyerTo] = approach(2);
 	// (0.9 in fixed point: within a thousandth.)
-	BOOST_TEST((Engine::Math::Abs(flyerTo.x - Fixed::FromInt(165)) < Fixed::FromRatio(1, 1000)));
+	BOOST_TEST_CONTEXT("flyer destination x.Raw()=" << flyerTo.x.Raw() << ", y.Raw()=" << flyerTo.y.Raw())
+		BOOST_TEST((Engine::Math::Abs(flyerTo.x - Fixed::FromRatio(669, 4)) < Fixed::FromRatio(1, 1000)));
 	BOOST_TEST((flyerTo.y == Fixed::FromInt(100)));
 	BOOST_TEST(flyer.search == 0u);
 }
 
-// legacy_parity: Weapon::computeApproachTarget for a flyer too close (inside a MinimumAttackRange over a cell: 50, the
-// victim 30 away): halfway between its range and the minimum (100) plus both bounding circles (5 + 5) from the victim,
-// away from it, but not by turning about: facing the victim (east) it goes on past it to x 240; facing away (west) it goes
-// back to x 20.
+// legacy_parity: Weapon::computeApproachTarget for a flyer too close (authored MinimumAttackRange 50, effective 47.5,
+// the victim 30 away): halfway between its effective range 147.5 and minimum 47.5 (97.5) plus both bounding circles
+// (5 + 5) from the victim, away from it, but not by turning about: facing the victim (east) it goes on past it to x237.5;
+// facing away (west) it goes back to x22.5. Weapon.cpp:477-489,2115,2154. With the victim 55 away, the boundary gap is45,
+// still within effective minimum47.5 (PartitionManager.cpp:845-878), giving x262.5 east or47.5 west.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_flyer_too_close_heads_past_its_victim)
 {
-	const auto approach = [](int facingDegrees) {
+	const auto approach = [](int facingDegrees, int victimX = 130) {
 		Battle battle;
 		Player first;
 		first.human = true;
@@ -929,15 +955,23 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_flyer_too_close_heads_past_its_victim)
 		battle.world.Get<Locomotion>(attacker)->locomotor.height = HeightBehavior::SurfaceRelative;
 		battle.world.Add<MoveOrder>(attacker);
 		battle.world.Add<AttackApproach>(attacker);
-		const ecs::Entity victim = battle.Add(1, 130, 100, WeaponCatalog::None, 100000);
+		const ecs::Entity victim = battle.Add(1, victimX, 100, WeaponCatalog::None, 100000);
 		AttackTarget order{victim, true};
 		order.source = CommandSource::Player;
 		*battle.world.Get<AttackTarget>(attacker) = order;
 		battle.Run(1, 1);
 		return battle.world.Get<MoveOrder>(attacker)->destination;
 	};
-	BOOST_TEST((approach(0) == Engine::Math::FixedVector2{Fixed::FromInt(240), Fixed::FromInt(100)}));
-	BOOST_TEST((approach(180) == Engine::Math::FixedVector2{Fixed::FromInt(20), Fixed::FromInt(100)}));
+	const auto east = approach(0), west = approach(180);
+	BOOST_TEST(east.x.Raw() == Fixed::FromRatio(475, 2).Raw());
+	BOOST_TEST(east.y.Raw() == Fixed::FromInt(100).Raw());
+	BOOST_TEST(west.x.Raw() == Fixed::FromRatio(45, 2).Raw());
+	BOOST_TEST(west.y.Raw() == Fixed::FromInt(100).Raw());
+	const auto boundaryEast = approach(0, 155), boundaryWest = approach(180, 155);
+	BOOST_TEST(boundaryEast.x.Raw() == Fixed::FromRatio(525, 2).Raw());
+	BOOST_TEST(boundaryEast.y.Raw() == Fixed::FromInt(100).Raw());
+	BOOST_TEST(boundaryWest.x.Raw() == Fixed::FromRatio(95, 2).Raw());
+	BOOST_TEST(boundaryWest.y.Raw() == Fixed::FromInt(100).Raw());
 }
 
 // legacy_parity: AIAttackPursueTargetState::update: on its chase's first approach (m_isInitialApproach) its turret gets a
@@ -2662,13 +2696,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_burnt_out_missile_holds_then_is_killed_or_d
 // within it the aim succeeds as the body stands (onExit: setLocomotorGoalNone, so it turns no further). A rifle (no
 // AcceptableAimDelta) 1.5 degrees off its victim fires without turning; 2.5 degrees off it turns onto it first (30
 // degrees a tick). With AcceptableAimDelta 20 (GLARebelBikerMachineGun's), 15 degrees off it fires as it stands and 25
-// degrees off it turns. Turned, it faces the victim within 1024 turn units (~0.0001 degrees): the victim's spot is
-// placed with fixed-point sine and cosine.
+// degrees off it turns. Turned, it faces the actual quantized victim coordinates within 1024 turn units (~0.0001
+// degrees). PartitionManager::getRelativeAngle2D uses the vector between the actual positions, so the independent
+// atan2 oracle uses that vector, rather than the ideal angle used to place it with fixed-point sine and cosine.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 {
 	struct Result
 	{
 		Engine::Math::TurnAngle facing;
+		Engine::Math::TurnAngle bearing;
 		int shots{0};
 	};
 	const auto aim = [](Engine::Math::TurnAngle delta, Engine::Math::TurnAngle off) {
@@ -2682,6 +2718,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 			Fixed::FromInt(100) + Fixed::FromInt(80) * Engine::Math::Sin(off), {}};
 		*battle.world.Get<AttackTarget>(shooter) = {victim, true};
 		Result result;
+		const auto toTarget = battle.world.Get<Transform>(victim)->position.XY() - battle.world.Get<Transform>(shooter)->position.XY();
+		const double radians = std::atan2(static_cast<double>(toTarget.y.Raw()), static_cast<double>(toTarget.x.Raw()));
+		result.bearing.units = static_cast<std::uint32_t>(std::llround(radians * (4294967296.0 / (2.0 * std::numbers::pi))));
 		battle.Run(1, 1, [&](int) { battle.fired.ForEach([&](const Shot &shot) { result.shots += shot.source == shooter ? 1 : 0; }); });
 		result.facing = battle.world.Get<Transform>(shooter)->facing;
 		return result;
@@ -2692,12 +2731,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 	BOOST_TEST(within.facing.units == 0u);
 	BOOST_TEST(within.shots == 1);
 	const Result beyond = aim({}, degrees(25));
-	BOOST_TEST(onto(beyond.facing, degrees(25)));
+	BOOST_TEST(onto(beyond.facing, beyond.bearing));
+	BOOST_TEST(beyond.shots == 1);
 	const Result loose = aim(Engine::Math::TurnFromDegrees(20), degrees(150));
 	BOOST_TEST(loose.facing.units == 0u);
 	BOOST_TEST(loose.shots == 1);
 	const Result tooFar = aim(Engine::Math::TurnFromDegrees(20), degrees(250));
-	BOOST_TEST(onto(tooFar.facing, degrees(250)));
+	BOOST_TEST(onto(tooFar.facing, tooFar.bearing));
+	BOOST_TEST(tooFar.shots == 1);
 }
 
 // WeaponTemplate::fireWeaponTemplate with DamageDealtAtSelfPosition (GeneralsMD Weapon.cpp): the damage is dealt at the

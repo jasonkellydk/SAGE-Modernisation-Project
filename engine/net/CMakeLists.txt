@@ -25,3 +25,9 @@ set_source_files_properties(transport/udp_socket.cpp PROPERTIES LANGUAGE CXX)
 if(WIN32)
 	target_link_libraries(engine_net PUBLIC ws2_32 iphlpapi)
 endif()
+
+engine_add_module_library(engine_net_authority
+	MODULES authority/server.cppm
+	DEPENDS engine_net engine_core_serialization
+	TESTS authority/server.test
+	TESTS_OPTION ENGINE_NET_BUILD_TESTS)

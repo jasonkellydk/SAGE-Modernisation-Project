@@ -1,0 +1,41 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.audio_preview;
+
+BOOST_AUTO_TEST_CASE(effect_preview_restart_throttle_and_final_loop_use_strict_source_deadlines) {
+    using namespace renegade::presentation;
+    AudioPreview preview;
+    auto commands=preview.Changed(AudioCategory::Effects,100);
+    BOOST_REQUIRE_EQUAL(commands.size(),1u);BOOST_CHECK(commands[0].action==PreviewAction::Start);BOOST_TEST(commands[0].loop);
+    BOOST_TEST(preview.Changed(AudioCategory::Effects,250).empty());
+    commands=preview.Changed(AudioCategory::Effects,251);BOOST_REQUIRE_EQUAL(commands.size(),2u);
+    BOOST_CHECK(commands[0].action==PreviewAction::Stop);BOOST_CHECK(commands[1].action==PreviewAction::Start);
+    BOOST_TEST(preview.Frame(751).empty());commands=preview.Frame(752);BOOST_REQUIRE_EQUAL(commands.size(),1u);
+    BOOST_CHECK(commands[0].action==PreviewAction::SetLooping);BOOST_TEST(!commands[0].loop);
+    BOOST_TEST(preview.Frame(753).empty());
+    preview.Finished(AudioCategory::Effects);BOOST_REQUIRE_EQUAL(preview.Changed(AudioCategory::Effects,754).size(),1u);
+}
+BOOST_AUTO_TEST_CASE(music_extends_its_timeout_while_dialog_and_cinematic_continue_without_restarting) {
+    using namespace renegade::presentation;
+    for(auto category:{AudioCategory::Music,AudioCategory::Dialog,AudioCategory::Cinematic}) {
+        AudioPreview preview;auto commands=preview.Changed(category,0);
+        BOOST_REQUIRE_EQUAL(commands.size(),1u);BOOST_CHECK(commands[0].action==PreviewAction::Start);
+        BOOST_TEST(commands[0].loop==(category!=AudioCategory::Music));
+        commands=preview.Changed(category,500);
+        if(category==AudioCategory::Music) BOOST_TEST(commands.empty());
+        else {BOOST_REQUIRE_EQUAL(commands.size(),1u);BOOST_CHECK(commands[0].action==PreviewAction::SetLooping);BOOST_TEST(commands[0].loop);}
+        BOOST_TEST(preview.Frame(2500).empty());commands=preview.Frame(2501);BOOST_REQUIRE_EQUAL(commands.size(),1u);
+        BOOST_CHECK(commands[0].action==(category==AudioCategory::Music ? PreviewAction::Stop : PreviewAction::SetLooping));
+        BOOST_TEST(!commands[0].loop);
+        preview.Finished(category);BOOST_TEST(preview.Close().empty());
+    }
+}
+BOOST_AUTO_TEST_CASE(missing_preview_assets_and_reversed_time_do_not_start_or_expire_audio) {
+    using namespace renegade::presentation;
+    AudioPreview preview;BOOST_TEST(preview.Changed(AudioCategory::Dialog,10,false).empty());
+    BOOST_TEST(preview.Close().empty());preview.Changed(AudioCategory::Effects,1000);
+    BOOST_TEST(preview.Frame(0).empty());auto commands=preview.Close();BOOST_REQUIRE_EQUAL(commands.size(),1u);
+    BOOST_CHECK(commands[0].action==PreviewAction::Stop);BOOST_TEST(preview.Close().empty());
+    BOOST_CHECK(AudioPreview::filenames[0]=="laser_rifle_fire_01.wav");
+    BOOST_CHECK(AudioPreview::filenames[1]=="sakura battle theme.mp3");
+}

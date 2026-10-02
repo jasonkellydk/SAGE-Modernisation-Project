@@ -61,6 +61,7 @@ target_sources(engine_platform_sdl3 PUBLIC
 		adapters/sdl3/window/SDL3WindowService.cppm
 		adapters/sdl3/window/SDL3Window.cppm
 		adapters/sdl3/events/SDL3EventService.cppm
+        adapters/sdl3/input/SDL3Keys.cppm
 		adapters/sdl3/input/SDL3InputService.cppm
 		adapters/sdl3/input/SDL3TextInputService.cppm
 		adapters/sdl3/threading/SDL3ThreadingService.cppm
@@ -86,3 +87,16 @@ target_sources(engine_platform_sdl3 PUBLIC
 target_compile_features(engine_platform_sdl3 PUBLIC cxx_std_23)
 target_link_libraries(engine_platform_sdl3 PUBLIC engine_platform SDL3::SDL3 SDL3_net::SDL3_net)
 set_property(TARGET engine_platform_sdl3 PROPERTY CXX_SCAN_FOR_MODULES ON)
+
+if(BUILD_TESTING)
+	find_package(boost_included_unit_test_framework CONFIG REQUIRED)
+	add_executable(engine_platform_sdl3_events_tests adapters/sdl3/events/events.test)
+	set_source_files_properties(adapters/sdl3/events/events.test PROPERTIES LANGUAGE CXX)
+	target_link_libraries(engine_platform_sdl3_events_tests PRIVATE engine_platform_sdl3 Boost::included_unit_test_framework)
+	add_test(NAME engine_platform_sdl3_events_tests COMMAND engine_platform_sdl3_events_tests)
+	if(WIN32)
+		add_custom_command(TARGET engine_platform_sdl3_events_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:engine_platform_sdl3_events_tests> $<TARGET_FILE_DIR:engine_platform_sdl3_events_tests>
+			COMMAND_EXPAND_LISTS)
+	endif()
+endif()
