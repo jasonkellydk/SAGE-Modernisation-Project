@@ -20,6 +20,18 @@ public:
 		const char* path = SDL_GetBasePath();
 		return path ? std::filesystem::path(path) : std::filesystem::path{};
 	}
+	[[nodiscard]] std::filesystem::path preference_directory(const std::string& organization,const std::string& application) const override
+	{
+		// SDL owns platform-specific per-user placement and directory creation.
+		// Reject path syntax rather than letting caller labels escape that scope.
+		const auto valid=[](const std::string& name) {
+			return !name.empty() && name!="." && name!=".." && name.find_first_of("/\\:\0",0,4)==std::string::npos;
+		};
+		if(!valid(organization) || !valid(application)) return {};
+		char* path=SDL_GetPrefPath(organization.c_str(),application.c_str());
+		if(!path) return {};
+		const auto result=std::filesystem::u8path(path);SDL_free(path);return result;
+	}
 	bool acquire_single_instance(const std::string& identifier) override
 	{
 		if (identifier.empty() || (m_instanceSocket && identifier == m_identifier)) return m_instanceSocket != nullptr;

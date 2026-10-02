@@ -28,6 +28,20 @@ BOOST_AUTO_TEST_CASE(material_runtime_data_keeps_typed_texture_dependencies)
 	BOOST_CHECK(!material.Surface_Texture(Assets::MaterialTextureRole::Normal).Is_Valid());
 }
 
+BOOST_AUTO_TEST_CASE(material_publication_preserves_generated_texture_coordinates)
+{
+    Assets::MaterialAssetDesc description;
+    description.texture_mappings[0]=Assets::TextureEnvironmentMapping{Assets::TextureEnvironmentSource::Reflection};
+    description.texture_mappings[1]=Assets::TextureScrollMapping{{2,3},{0.1f,-0.2f}};
+    const Assets::MaterialAsset material({Assets::AssetType::Material,"environment"},description,{},{});
+    description.texture_mappings={};
+    BOOST_REQUIRE(material.Texture_Mappings()[0]);BOOST_REQUIRE(material.Texture_Mappings()[1]);
+    const auto& reflection=std::get<Assets::TextureEnvironmentMapping>(*material.Texture_Mappings()[0]);
+    const auto& scrolling=std::get<Assets::TextureScrollMapping>(*material.Texture_Mappings()[1]);
+    BOOST_CHECK(reflection.source==Assets::TextureEnvironmentSource::Reflection);
+    BOOST_TEST(scrolling.scale.x==2);BOOST_TEST(scrolling.rate_per_second.y==-0.2f);
+}
+
 BOOST_AUTO_TEST_CASE(surface_maps_and_parameters_are_immutable_after_publication)
 {
 	using namespace Assets;
@@ -85,4 +99,30 @@ BOOST_AUTO_TEST_CASE(material_runtime_retains_independent_lighting_colors)
 	BOOST_CHECK_EQUAL(material.Ambient_Color().g, 0.3f);
 	BOOST_CHECK_EQUAL(material.Specular_Color().b, 0.5f);
 	BOOST_CHECK_EQUAL(material.Emissive_Color().r, 0.4f);
+}
+
+BOOST_AUTO_TEST_CASE(authored_draw_state_is_optional_and_immutable_after_publication)
+{
+	using namespace Assets;
+	MaterialAssetDesc description;
+	const MaterialAsset defaults({AssetType::Material,"defaults"},description,{},{});
+	BOOST_TEST(!defaults.Draw_State());
+	description.draw_state = MaterialDrawState{MaterialBlendFactor::One,
+		MaterialBlendFactor::InverseSourceColor,MaterialDepthComparison::Equal};
+	description.depth_write = false;
+	const MaterialAsset authored({AssetType::Material,"screen"},description,{},{});
+	description.draw_state.reset();
+	BOOST_REQUIRE(authored.Draw_State());
+	BOOST_CHECK(authored.Draw_State()->source == MaterialBlendFactor::One);
+	BOOST_CHECK(authored.Draw_State()->destination == MaterialBlendFactor::InverseSourceColor);
+	BOOST_CHECK(authored.Draw_State()->depth_comparison == MaterialDepthComparison::Equal);
+	BOOST_TEST(!authored.Depth_Write());
+	BOOST_TEST(Validate_Material_Draw_State(*authored.Draw_State()));
+	auto invalid = *authored.Draw_State();
+	invalid.source = static_cast<MaterialBlendFactor>(255);
+	BOOST_TEST(!Validate_Material_Draw_State(invalid));
+	invalid = *authored.Draw_State(); invalid.destination = static_cast<MaterialBlendFactor>(255);
+	BOOST_TEST(!Validate_Material_Draw_State(invalid));
+	invalid = *authored.Draw_State(); invalid.depth_comparison = static_cast<MaterialDepthComparison>(255);
+	BOOST_TEST(!Validate_Material_Draw_State(invalid));
 }

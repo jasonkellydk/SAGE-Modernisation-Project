@@ -1,0 +1,34 @@
+#define BOOST_TEST_MODULE EngineLua
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <cstdint>
+#include <string>
+#include <variant>
+import engine.scripting.lua.lua_program;
+using namespace engine::scripting::lua;
+BOOST_AUTO_TEST_CASE(private_script_state_and_missing_callbacks)
+{
+	Program a, b;
+	constexpr auto source = "return { n = 0, Tick = function(self) self.n = self.n + 1; emit('value', self.n) end }";
+	BOOST_REQUIRE(a.Load(source, "a")); BOOST_REQUIRE(b.Load(source, "b"));
+	BOOST_REQUIRE(a.Invoke("Tick"));
+	auto twice = a.Invoke("Tick"); auto once = b.Invoke("Tick");
+	BOOST_REQUIRE(twice); BOOST_REQUIRE(once);
+	BOOST_TEST(std::get<std::int64_t>((*twice)[0].arguments[0]) == 2);
+	BOOST_TEST(std::get<std::int64_t>((*once)[0].arguments[0]) == 1);
+	BOOST_TEST(a.Invoke("Absent")->empty());
+}
+BOOST_AUTO_TEST_CASE(errors_budgets_and_no_native_loaders)
+{
+	Program script;
+	BOOST_TEST(!script.Load("this is invalid lua", "invalid"));
+	BOOST_TEST(!script.Load("return 42", "invalid return"));
+	BOOST_REQUIRE(script.Load("return { Tick = function(self) emit('before'); missing() end }", "error"));
+	BOOST_TEST(!script.Invoke("Tick"));
+	BOOST_REQUIRE(script.Load("return { Tick = function(self) while true do end end }", "loop"));
+	BOOST_TEST(!script.Invoke("Tick"));
+	BOOST_REQUIRE(script.Load("return { Tick = function(self) emit('check', type) end }", "no library"));
+	BOOST_TEST(!script.Invoke("Tick"));
+	BOOST_REQUIRE(script.Load("return { Tick = function(self) emit('fraction', 0.5) end }", "integer API"));
+	BOOST_TEST(!script.Invoke("Tick"));
+}

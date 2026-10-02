@@ -10,8 +10,13 @@ import Assets.Models;
 import Assets.Materials;
 import Assets.Textures;
 import Assets.Handles;
+import Graphics.Materials.TextureMapping;
 
 namespace Graphics {
+export struct PropTextureMappingContext final {
+    std::uint32_t milliseconds=0;
+    std::array<float,16> projection{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+};
 // Own GPU versions for a resolved asset. Draws use immutable prepared state;
 // source IO and asset-name lookup never occur during submission.
 export class PropAssetBinding final {
@@ -28,18 +33,20 @@ public:
     // `base_override`: a texture drawn on every part in place of its own base map (the original's tree buffer draws each
     // tree type with its TextureName); none: as authored.
     bool Load(Device& device,PropRenderer& renderer,Assets::AssetCache& assets,
-        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={}) {
+        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={},
+        unsigned mip_reduction=0,unsigned minimum_texture_dimension=1) {
         const auto* model=assets.Try_Get_Model(model_handle);
         if(!model) { error="model asset is not ready"; return false; }
         std::vector<PropAssetPart> geometry;
         if(!Build_Prop_Asset_Geometry(*model,geometry,error)) return false;
         PropAssetBinding next;
         next.m_device=&device; next.m_renderer=&renderer;
+        next.m_mip_reduction=mip_reduction;next.m_minimum_texture_dimension=minimum_texture_dimension;
         if(!model->Rig().skeleton_name.empty() && !next.m_rest_pose.Initialize(model->Rig(),error)) return false;
         for(const auto& source:geometry) {
             const auto* material=assets.Try_Get_Material(model->Materials()[source.material_index].asset_handle);
             if(!material) { error="model material is not ready"; return false; }
-            Part part; part.name=source.name;
+            Part part; part.name=source.name;part.sort_level=source.sort_level;
             part.skinning=source.skinning;
             if(!part.skinning.empty()) {
                 if(!next.m_rest_pose.Bone_Count()) { error="skin requires a resolved skeleton"; return false; }
@@ -51,6 +58,12 @@ public:
                 part.bone=attached->first; part.lod=attached->second;
             }
             part.style.depth_write=material->Depth_Write();
+            for(unsigned stage=0;stage<part.mappings.size();++stage) {
+                if(const auto& description=material->Texture_Mappings()[stage]) {
+                    try { part.mappings[stage]=TextureMapping::Create(*description,0); }
+                    catch(const std::exception& exception) { error=exception.what();return false; }
+                }
+            }
             const auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
             part.textured=material->Texturing() && base.Is_Valid();
             if(!next.Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
@@ -72,6 +85,18 @@ public:
                 part.style.source_blend=RHIBlendFactor::Zero; part.style.destination_blend=RHIBlendFactor::SourceColor; break;
             default: break;
             }
+            if(const auto& authored=material->Draw_State()) {
+                if(!Assets::Validate_Material_Draw_State(*authored)) { error="invalid authored material draw state"; return false; }
+                constexpr std::array factors{RHIBlendFactor::Zero,RHIBlendFactor::One,
+                    RHIBlendFactor::SourceColor,RHIBlendFactor::InverseSourceColor,
+                    RHIBlendFactor::SourceAlpha,RHIBlendFactor::InverseSourceAlpha};
+                constexpr std::array comparisons{RHIComparison::Never,RHIComparison::Less,
+                    RHIComparison::Equal,RHIComparison::LessEqual,RHIComparison::Greater,
+                    RHIComparison::NotEqual,RHIComparison::GreaterEqual,RHIComparison::Always};
+                part.style.source_blend=factors[static_cast<std::size_t>(authored->source)];
+                part.style.destination_blend=factors[static_cast<std::size_t>(authored->destination)];
+                part.style.depth_comparison=comparisons[static_cast<std::size_t>(authored->depth_comparison)];
+            }
             part.mesh=renderer.Create_Mesh(source.vertices,source.indices);
             if(!part.mesh.Is_Valid()) { error="could not create model geometry"; return false; }
             next.m_parts.push_back(std::move(part));
@@ -79,23 +104,25 @@ public:
         std::swap(m_device,next.m_device); std::swap(m_renderer,next.m_renderer);
         m_parts.swap(next.m_parts); m_textures.swap(next.m_textures);
         std::swap(m_rest_pose,next.m_rest_pose);
+        std::swap(m_mip_reduction,next.m_mip_reduction);std::swap(m_minimum_texture_dimension,next.m_minimum_texture_dimension);
         error.clear(); return true;
     }
     std::size_t Part_Count() const noexcept { return m_parts.size(); }
     std::size_t Texture_Count() const noexcept { return m_textures.size(); }
     std::string_view Part_Name(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].name : std::string_view{}; }
+    std::int32_t Part_Sort_Level(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].sort_level : 0; }
     // The bone a part hangs on (Invalid_Bone_Index when it has none).
     std::uint32_t Part_Bone(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].bone : Invalid_Bone_Index; }
     // `shroud`: the viewer's shroud image in the shroud slot (parameters.shroud on: the part multiplied by it).
     bool Draw_Part(CommandList& commands,std::size_t index,PropParameters parameters,
-        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={}) const {
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={},const PropTextureMappingContext* mapping=nullptr) const {
         if(!m_renderer || index>=m_parts.size()) return false;
         const auto& part=m_parts[index];
         if(part.lod!=lod) return true;
         bool visible=true;
         if(!Prepare_Pose(part,pose,parameters,visible)) return false;
         if(!visible) return true;
-        Prepare(part,parameters);
+        Prepare(part,parameters,mapping);
         MeshVersion mesh{m_renderer,part.mesh,false};
         if(!Mesh_For_Pose(part,pose,mesh)) return false;
         return m_renderer->Draw(commands,mesh.handle,part.style,parameters,Textures(part,shroud));
@@ -177,6 +204,7 @@ private:
     };
     struct Part {
         std::string name;
+        std::int32_t sort_level=0;
         PropMeshHandle mesh;
         PropStyle style;
         PropSurfaceParameters surface;
@@ -185,6 +213,7 @@ private:
         std::uint32_t bone=Invalid_Bone_Index;
         std::uint32_t lod=0;
         std::array<RHITextureHandle,PropTextureCount> textures{};
+        std::array<std::shared_ptr<TextureMapping>,2> mappings{};
         std::vector<PropVertex> bind_vertices;
         std::vector<std::uint32_t> indices;
         std::vector<PropSkinInfluences> skinning;
@@ -215,11 +244,20 @@ private:
         }
         return true;
     }
-    static void Prepare(const Part& part,PropParameters& parameters) {
+    static void Prepare(const Part& part,PropParameters& parameters,const PropTextureMappingContext* context=nullptr) {
         const auto team_color=parameters.surface.team_color;
         parameters.surface=part.surface; parameters.surface.team_color=team_color;
         parameters.textured=part.textured ? 1 : 0;
         parameters.alpha_cutoff=part.alpha_cutoff;
+        const PropTextureMappingContext defaults;
+        const auto& frame=context ? *context : defaults;
+        for(unsigned stage=0;stage<part.mappings.size();++stage) if(const auto& mapping=part.mappings[stage]) {
+            const auto result=mapping->Evaluate(frame.milliseconds,parameters.view,frame.projection);
+            parameters.uv_transform[stage]=result.transform;
+            parameters.uv_sources[stage*2]=static_cast<float>(result.coordinates.source);
+            parameters.uv_sources[stage*2+1]=result.coordinates.projected ? 1.0f : 0.0f;
+            if(result.bump) parameters.bump_matrix=*result.bump;
+        }
     }
     bool Upload(Assets::AssetCache& assets,Assets::TextureAssetHandle handle,RHITextureHandle& result) {
         if(!handle.Is_Valid()) { result={}; return true; }
@@ -227,11 +265,13 @@ private:
         const auto* source=assets.Try_Get_Texture(handle);
         if(!source || !source->Has_Pixels()) return false;
         // W3D's mesh textures load with every mip level (MIP_LEVELS_ALL, box filtered): far off they do not shimmer.
-        result=Create_Mipped_Texture(*m_device,source->Width(),source->Height(),source->Pixels(),source->Row_Pitch());
+        result=Create_Mipped_Texture(*m_device,source->Width(),source->Height(),source->Pixels(),source->Row_Pitch(),
+            0,m_mip_reduction,m_minimum_texture_dimension);
         if(!result.Is_Valid()) return false;
         m_textures.emplace_back(handle,result); return true;
     }
     Device* m_device=nullptr;
+    unsigned m_mip_reduction{},m_minimum_texture_dimension{1};
     PropRenderer* m_renderer=nullptr;
     ModelAssetPose m_rest_pose;
     std::vector<Part> m_parts;

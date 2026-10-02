@@ -24,14 +24,14 @@ struct WindowConfig
 {
 	std::string title{"SAGE"};
 	Extent2D size{};
-	Extent2D minimum_size{};
+	Extent2D minimum_size{0, 0};
 	bool resizable{true};
 	bool highDpi{true};
 	bool hidden{};
 	WindowMode mode{WindowMode::windowed};
 };
 
-enum class NativeWindowSystem : std::uint8_t { win32, x11, wayland, cocoa, uikit, android, unknown };
+enum class NativeWindowSystem : std::uint8_t { win32, x11, wayland, cocoa, uikit, android, unknown, automatic };
 
 // Native values are intentionally opaque. A renderer asks for the system it
 // supports and interprets the values only inside its platform backend.

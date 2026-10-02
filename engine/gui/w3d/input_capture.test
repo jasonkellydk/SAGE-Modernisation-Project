@@ -1,0 +1,42 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.input_capture;
+using namespace engine::gui::w3d;
+BOOST_AUTO_TEST_CASE(input_capture_keeps_latest_keyboard_request_and_delivers_it_once_after_focus_changes) {
+    InputCaptureModel model({30,100});unsigned calls{},notifications{};
+    model.assignment.Subscribe([&](const auto&){++notifications;});
+    const auto resolve=[&](unsigned value)->std::optional<InputAssignment> {
+        ++calls;return InputAssignment{value,std::u16string(1,char16_t(value))};
+    };
+    BOOST_TEST(!model.QueueKeyboard(12));model.Focus(true,200);
+    BOOST_TEST(model.QueueKeyboard(12));BOOST_TEST(model.QueueKeyboard(13));BOOST_TEST(calls==0u);
+    model.Focus(false,201);BOOST_TEST(model.Pending());BOOST_TEST(model.FlushKeyboard(resolve));
+    BOOST_TEST(calls==1u);BOOST_TEST(model.assignment.Get().input==13u);BOOST_TEST(notifications==2u);
+    BOOST_TEST(!model.FlushKeyboard(resolve));model.Focus(true,300);
+    BOOST_TEST(model.QueueKeyboard(101));BOOST_TEST(!model.FlushKeyboard(resolve));BOOST_TEST(calls==1u);
+    model.enabled.Set(false);BOOST_TEST(!model.QueueKeyboard(14));
+}
+BOOST_AUTO_TEST_CASE(input_capture_primary_pointer_deadline_is_strict_and_other_pointer_inputs_are_immediate) {
+    InputCaptureModel model({30,100});unsigned calls{};
+    const auto resolve=[&](unsigned value)->std::optional<InputAssignment>{++calls;return InputAssignment{value,u"input"};};
+    model.Focus(true,200);
+    BOOST_TEST(!model.Pointer(CapturePointer::Primary,5,230,resolve));BOOST_TEST(calls==0u);
+    for(auto action:{CapturePointer::Secondary,CapturePointer::Middle,CapturePointer::Wheel})
+        BOOST_TEST(model.Pointer(action,5,200,resolve));
+    BOOST_TEST(calls==3u);BOOST_TEST(model.Pointer(CapturePointer::Primary,5,231,resolve));
+    model.Focus(true,240);BOOST_TEST(model.Pointer(CapturePointer::Primary,5,240,resolve)); // retained focus keeps deadline
+    model.Focus(false,241);BOOST_TEST(!model.Pointer(CapturePointer::Wheel,5,300,resolve));
+    model.Focus(true,(std::numeric_limits<std::uint64_t>::max)()-10);
+    BOOST_TEST(!model.Pointer(CapturePointer::Primary,5,(std::numeric_limits<std::uint64_t>::max)(),resolve));
+    model.enabled.Set(false);BOOST_TEST(!model.Pointer(CapturePointer::Secondary,5,300,resolve));
+}
+BOOST_AUTO_TEST_CASE(input_capture_rejected_assignments_leave_id_and_caption_atomic_and_allow_empty_clear) {
+    InputCaptureModel model;model.Restore({42,u"previous"});model.Focus(true,0);
+    const auto reject=[](unsigned)->std::optional<InputAssignment>{return {};};
+    BOOST_TEST(model.QueueKeyboard(99));BOOST_TEST(!model.FlushKeyboard(reject));
+    BOOST_CHECK(model.assignment.Get()==InputAssignment({42,u"previous"}));
+    const auto clear=[](unsigned)->std::optional<InputAssignment>{return InputAssignment{};};
+    BOOST_TEST(model.Pointer(CapturePointer::Primary,0,1,clear));
+    BOOST_TEST(model.assignment.Get().input==0u);BOOST_TEST(model.assignment.Get().caption.empty());
+    BOOST_TEST(model.QueueKeyboard(10));BOOST_TEST(!model.FlushKeyboard({}));BOOST_TEST(!model.Pending());
+}

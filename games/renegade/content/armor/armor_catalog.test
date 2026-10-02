@@ -1,0 +1,23 @@
+#include <boost/test/unit_test.hpp>
+#include <string>
+import games.renegade.content.armor.armor_catalog;
+using namespace renegade;
+BOOST_AUTO_TEST_CASE(armor_definition_order_defaults_save_ids_and_case_lookup_match_original)
+{
+	auto catalog = content::ReadArmor("[Armor_Types]\n9=Flesh\n2=Kevlar\n[Warhead_Types]\n7=Steel\n1=Repair\n"
+		"[Armor_Save_IDs]\nFlesh=2\nKevlar=17\n[Warhead_Save_IDs]\nSteel=1\nRepair=15\n"
+		"[Soft_Armor]\n0=Flesh\n[Scale_Flesh]\nRepair=0\n[Shield_Kevlar]\nSteel=0.5\n");
+	BOOST_REQUIRE(catalog.has_value());
+	BOOST_TEST(catalog->Armor("flesh").value() == 0u); BOOST_TEST(catalog->Armor("KEVLAR").value() == 1u);
+	BOOST_TEST(catalog->Warhead("repair").value() == 1u); BOOST_TEST(catalog->armorSaveIds[1] == 17);
+	BOOST_TEST(catalog->warheadSaveIds[0] == 1); BOOST_TEST(catalog->soft[0]); BOOST_TEST(!catalog->soft[1]);
+	BOOST_TEST(catalog->rules.At(0, 0).multiplier.Raw() == Fixed::OneRaw);
+	BOOST_TEST(catalog->rules.At(0, 1).multiplier.Raw() == 0);
+	BOOST_TEST(catalog->rules.At(1, 0).absorption.Raw() == Fixed::Half().Raw());
+}
+BOOST_AUTO_TEST_CASE(armor_reader_rejects_invalid_mod_definitions)
+{
+	BOOST_TEST(!content::ReadArmor("[Armor_Types]\n0=Flesh\n").has_value());
+	BOOST_TEST(!content::ReadArmor("[Armor_Types]\n0=Flesh\n1=FLESH\n[Warhead_Types]\n0=Steel\n").has_value());
+	BOOST_TEST(!content::ReadArmor("[Armor_Types]\n0=Flesh\n[Warhead_Types]\n0=Steel\n[Scale_Flesh]\nSteel=NaN\n").has_value());
+}

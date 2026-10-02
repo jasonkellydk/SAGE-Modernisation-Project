@@ -1,0 +1,30 @@
+{
+  "version": 10,
+  "configurePresets": [
+    {
+      "name": "llvm-base", "hidden": true, "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../build/renegade/${hostSystemName}/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "$env{ENGINE_LLVM_ROOT}/bin/clang",
+        "CMAKE_CXX_COMPILER": "$env{ENGINE_LLVM_ROOT}/bin/clang++",
+        "CMAKE_MAKE_PROGRAM": "$env{ENGINE_NINJA}",
+        "CMAKE_PREFIX_PATH": "$env{ENGINE_DEPENDENCY_PREFIX}",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON", "BUILD_TESTING": "ON"
+      }
+    },
+    { "name": "llvm-release", "inherits": "llvm-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    {
+      "name": "llvm-windows-release", "inherits": "llvm-release",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "cacheVariables": { "CMAKE_C_COMPILER": "$env{ENGINE_LLVM_ROOT}/bin/clang-cl.exe", "CMAKE_CXX_COMPILER": "$env{ENGINE_LLVM_ROOT}/bin/clang-cl.exe" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "llvm-release", "configurePreset": "llvm-release", "targets": ["renegade_headless", "renegade_session_tests", "renegade_content_tests", "renegade_hud_tests", "renegade_mission_tests", "engine_gui_w3d_tests", "engine_net_authority_tests", "engine_scripting_lua_tests", "engine_config_tests", "engine_filesystem_tests", "engine_ecs_tests", "engine_net_tests", "engine_gui_mvvm_tests"] },
+    { "name": "llvm-windows-release", "configurePreset": "llvm-windows-release", "inherits": "llvm-release" }
+  ],
+  "testPresets": [
+    { "name": "llvm-release", "configurePreset": "llvm-release", "filter": { "include": { "name": "renegade|engine_gui_w3d|engine_gui_mvvm|engine_net|engine_scripting_lua|engine_config|engine_filesystem|engine_ecs|architecture|modern_code" } }, "output": { "outputOnFailure": true } },
+    { "name": "llvm-windows-release", "configurePreset": "llvm-windows-release", "inherits": "llvm-release" }
+  ]
+}

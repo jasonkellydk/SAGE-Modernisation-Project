@@ -1,0 +1,20 @@
+#include <boost/test/unit_test.hpp>
+import engine.gui.w3d.dialog_template;
+import engine.gui.w3d.dialog_layout;
+BOOST_AUTO_TEST_CASE(dialog_layout_centers_popups_and_preserves_authored_design_coordinates) {
+    engine::gui::w3d::DialogDefinition dialog;dialog.rect={0,0,400,300};
+    engine::gui::w3d::DialogControlDefinition control;control.rect={108,63,220,21};
+    const auto full=engine::gui::w3d::LayoutControl(dialog,control,800,600,400,300);
+    BOOST_TEST(full.left==216);BOOST_TEST(full.top==126);BOOST_TEST(full.right==656);BOOST_TEST(full.bottom==168);
+    dialog.rect={0,0,200,100};control.rect={0,0,200,100};
+    const auto popup=engine::gui::w3d::LayoutControl(dialog,control,800,600,400,300);
+    BOOST_TEST(popup.left==200);BOOST_TEST(popup.top==200);BOOST_TEST(popup.right==600);BOOST_TEST(popup.bottom==400);
+}
+BOOST_AUTO_TEST_CASE(dialog_layout_truncates_original_pixel_dimensions_and_offsets_child_controls) {
+    engine::gui::w3d::DialogDefinition dialog;dialog.rect={0,0,200,100};
+    engine::gui::w3d::DialogControlDefinition control;control.rect={1,1,17,11};
+    const auto popup=engine::gui::w3d::LayoutControl(dialog,control,1001,777,400,300);
+    BOOST_TEST(popup.left==252);BOOST_TEST(popup.top==261);BOOST_TEST(popup.right==294);BOOST_TEST(popup.bottom==289);
+    const auto child=engine::gui::w3d::LayoutControlAt(control,100,80,1001,777,400,300);
+    BOOST_TEST(child.left==102);BOOST_TEST(child.top==82);BOOST_TEST(child.right==144);BOOST_TEST(child.bottom==110);
+}

@@ -36,6 +36,9 @@ export struct ModelSubmeshDesc final
 	// counts as alpha on pass 0).
 	std::uint8_t pass = 0;
 	bool blends = false;
+	// Authored static order for this source mesh; zero bypasses static ordering.
+	// Ordinary transparency sorting remains a separate submission decision.
+	std::int32_t sort_level = 0;
 };
 
 export using ModelMaterialDesc = MaterialAssetDesc;
@@ -86,6 +89,7 @@ export struct ModelSubmesh final
 	// counts as alpha on pass 0).
 	std::uint8_t pass = 0;
 	bool blends = false;
+	std::int32_t sort_level = 0;
 };
 
 export struct ModelMaterial final
@@ -107,6 +111,7 @@ export struct ModelMaterial final
 	Color4f emissive_color{0, 0, 0, 1};
 	MaterialSurfaceParameters surface{};
 	std::array<AssetIdentity, MaterialSurfaceTextureCount> surface_textures{};
+	std::optional<MaterialDrawState> draw_state;
 };
 
 export class ModelAsset final
@@ -195,7 +200,7 @@ ModelAsset::ModelAsset(
 			submesh.first_index,
 			submesh.index_count,
 			submesh.material_index,
-			std::move(submesh.name), submesh.skinned, submesh.source_attributes, submesh.pass, submesh.blends});
+			std::move(submesh.name), submesh.skinned, submesh.source_attributes, submesh.pass, submesh.blends, submesh.sort_level});
 	}
 
 	m_materials.reserve(description.materials.size());
@@ -221,6 +226,7 @@ ModelAsset::ModelAsset(
 			material.specular_color,
 			material.emissive_color,
 			material.surface});
+		m_materials.back().draw_state = material.draw_state;
 		for (std::size_t index = 0; index < material.surface_textures.size(); ++index)
 			m_materials.back().surface_textures[index] =
 				{AssetType::Texture, Canonicalize_Asset_Name(material.surface_textures[index])};

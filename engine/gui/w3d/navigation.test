@@ -1,0 +1,66 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.navigation;
+import engine.gui.w3d.dialog_input;
+using namespace engine::gui::w3d;
+
+BOOST_AUTO_TEST_CASE(group_navigation_preserves_boundaries_after_disabled_controls_are_removed) {
+    std::array<GroupControl,6> controls{{{true,true},{true,false},{false,true},{true,false},{true,true},{true,true}}};
+    BOOST_TEST(*FindGroupControl(controls,0,-1)==3u);
+    BOOST_TEST(*FindGroupControl(controls,3,1)==0u);
+    BOOST_TEST(*FindGroupControl(controls,1,1)==3u);
+    BOOST_CHECK(!FindGroupControl(controls,4,-1));
+    BOOST_TEST(*FindGroupControl(controls,4,1)==4u);
+    BOOST_TEST(*FindGroupControl(controls,{},1)==1u);
+    BOOST_TEST(*FindGroupControl(controls,999,-1)==3u);
+    for(auto& control:controls) control.enabled=false;
+    BOOST_CHECK(!FindGroupControl(controls,0,1));BOOST_CHECK(!FindGroupControl({},0,1));
+}
+BOOST_AUTO_TEST_CASE(group_navigation_matches_independent_source_group_partition_oracle) {
+    // DialogBase.cpp source partitions the enabled list at WS_GROUP. Check all
+    // six-control enable/group masks with a separate partition-based oracle.
+    unsigned cases{};
+    for(unsigned enabled_mask=1;enabled_mask<64;++enabled_mask) for(unsigned group_mask=0;group_mask<64;++group_mask) {
+        std::array<GroupControl,6> controls;
+        std::vector<std::vector<std::size_t>> groups(1);
+        for(std::size_t i=0;i<controls.size();++i) {
+            controls[i]={bool(enabled_mask&(1u<<i)),bool(group_mask&(1u<<i))};
+            if(!controls[i].enabled) continue;
+            if(controls[i].begins_group && !groups.back().empty()) groups.emplace_back();
+            groups.back().push_back(i);
+        }
+        for(const auto& group:groups) for(std::size_t member=0;member<group.size();++member) for(const int direction:{-1,1}) {
+            std::optional<std::size_t> expected;
+            if(direction>0) expected=group[(member+1)%group.size()];
+            else if(member) expected=group[member-1];
+            else if(group.size()>1) expected=group.back();
+            const auto actual=FindGroupControl(controls,group[member],direction);
+            BOOST_REQUIRE(bool(actual==expected));++cases;
+        }
+    }
+    BOOST_TEST(cases==24576u);
+}
+BOOST_AUTO_TEST_CASE(tab_selection_clamps_source_navigation_and_notifies_only_effective_changes) {
+    TabSelectionModel tabs(3);unsigned changes{};
+    tabs.position.Subscribe([&](auto) {++changes;});BOOST_TEST(changes==1u);
+    BOOST_TEST(tabs.Key(SelectionAction::Previous));BOOST_TEST(tabs.position.Get()==0u);BOOST_TEST(changes==1u);
+    BOOST_TEST(tabs.Key(SelectionAction::Next));BOOST_TEST(tabs.position.Get()==1u);
+    BOOST_TEST(tabs.Key(SelectionAction::Last));BOOST_TEST(tabs.position.Get()==2u);
+    BOOST_TEST(tabs.Key(SelectionAction::Next));BOOST_TEST(tabs.position.Get()==2u);BOOST_TEST(changes==3u);
+    BOOST_TEST(tabs.Select(-9));BOOST_TEST(tabs.position.Get()==0u);
+    BOOST_TEST(tabs.Select(100));BOOST_TEST(tabs.position.Get()==2u);
+    BOOST_TEST(tabs.Key(SelectionAction::First));BOOST_TEST(tabs.position.Get()==0u);
+    TabSelectionModel empty(0);BOOST_TEST(!empty.Select(0));BOOST_TEST(!empty.Key(SelectionAction::Last));
+}
+BOOST_AUTO_TEST_CASE(menu_entry_cursor_uses_source_integer_caption_anchors) {
+    const auto left=MenuEntryCursor({10.75f,20.25f,80.75f,41.25f},41,true);
+    const auto center=MenuEntryCursor({10.75f,20.25f,80.75f,41.25f},41,false);
+    BOOST_REQUIRE(left);BOOST_REQUIRE(center);
+    BOOST_TEST((*left)[0]==31);BOOST_TEST((*left)[1]==30);
+    BOOST_TEST((*center)[0]==25);BOOST_TEST((*center)[1]==30);
+    const auto negative=MenuEntryCursor({-10.75f,-20.25f,1,0},0,true);
+    BOOST_REQUIRE(negative);BOOST_TEST((*negative)[0]==-10);BOOST_TEST((*negative)[1]==-10);
+    BOOST_CHECK(!MenuEntryCursor({1,0,0,1},1,true));
+    BOOST_CHECK(!MenuEntryCursor({0,0,1,1},-1,true));
+    BOOST_CHECK(!MenuEntryCursor({0,0,1,1},std::numeric_limits<float>::infinity(),true));
+}

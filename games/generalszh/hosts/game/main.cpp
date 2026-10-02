@@ -146,7 +146,7 @@ int Run(int argc, char **argv)
 	// Resizable at will: the game is drawn at its display resolution and stretched over the window (WindowScale).
 	windowConfig.resizable = true;
 	auto window = platform.windows().create(windowConfig);
-	const auto handle = window ? window->native_handle(engine::platform::NativeWindowSystem::win32) : std::nullopt;
+	const auto handle = window ? window->native_handle() : std::nullopt;
 	if (!handle || handle->window == nullptr)
 	{
 		std::fprintf(stderr, "window: %s\n", platform.last_error());

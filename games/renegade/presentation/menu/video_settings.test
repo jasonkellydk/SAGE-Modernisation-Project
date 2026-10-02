@@ -1,0 +1,44 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.video_settings;
+import engine.gui.w3d.value_controls;
+import engine.config.adapters.preferences.preferences_file;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(video_controls_preserve_source_ranges_atomic_initialization_and_hundredth_captions) {
+    unsigned updates{};VideoLevels observed{};VideoRamp curve{};
+    VideoSettings settings(video_default,[&](auto levels,const auto& ramp){++updates;observed=levels;curve=ramp;});
+    BOOST_TEST(updates==0u);BOOST_CHECK(settings.Levels()==video_default);
+    BOOST_TEST(settings.Caption(0)=="0.90");BOOST_TEST(settings.Caption(1)=="0.00");BOOST_TEST(settings.Caption(2)=="1.30");
+    settings.Activate();BOOST_TEST(updates==1u);BOOST_CHECK(observed==video_default);
+    settings.Restore({999,-999,999});BOOST_TEST(updates==2u);BOOST_CHECK(settings.Levels()==VideoLevels({210,-45,200}));
+    BOOST_TEST(settings.Caption(1)=="-0.45");BOOST_TEST(settings.Caption(2)=="2.00");
+    BOOST_TEST(engine::gui::w3d::HandleValueKey(settings.sliders[0],engine::gui::w3d::ValueKey::Home));
+    BOOST_TEST(settings.sliders[0].position.Get()==60);BOOST_TEST(updates==3u);BOOST_CHECK(curve==VideoCalibrationRamp(settings.Levels()));
+    BOOST_REQUIRE(VideoSettings::SliderIndex(1387));BOOST_TEST(*VideoSettings::SliderIndex(1387)==2u);
+    BOOST_REQUIRE(VideoSettings::CaptionIndex(1644));BOOST_TEST(*VideoSettings::CaptionIndex(1644)==1u);
+    BOOST_TEST(!VideoSettings::SliderIndex(1644));
+}
+BOOST_AUTO_TEST_CASE(video_curve_preserves_source_256_divisor_word_truncation_clamps_and_monotonicity) {
+    const auto linear=VideoCalibrationRamp({100,0,100});
+    for(unsigned i=0;i<256;++i) BOOST_TEST(linear[i]==i*65535u/256u);
+    const auto dark=VideoCalibrationRamp({100,-45,50});BOOST_TEST(dark[0]==0u);BOOST_TEST(dark[128]==0u);
+    BOOST_TEST(dark[255]==3148u);
+    const auto bright=VideoCalibrationRamp({100,45,200});BOOST_TEST(bright[0]==29490u);BOOST_TEST(bright[128]==65535u);
+    for(const auto levels:{video_default,VideoLevels{60,-45,50},VideoLevels{210,45,200},VideoLevels{100,0,100}}) {
+        const auto ramp=VideoCalibrationRamp(levels);BOOST_TEST(std::ranges::is_sorted(ramp));
+        // Independent double-precision source equation bounds platform powf rounding to one WORD.
+        for(unsigned i=0;i<256;++i) {
+            const auto reference=static_cast<int>(std::clamp(levels[2]/100.0*std::pow(i/256.0,1.0/(levels[0]/100.0))+levels[1]/100.0,0.0,1.0)*65535);
+            BOOST_CHECK_SMALL(int(ramp[i])-reference,2);
+        }
+    }
+    BOOST_CHECK(VideoCalibrationRamp({0,-100,999})==VideoCalibrationRamp({60,-50,200}));
+}
+BOOST_AUTO_TEST_CASE(video_preferences_replace_source_system_registry_entries_and_preserve_unknown_settings) {
+    auto preferences=engine::config::Preferences::Parse("mod preference = kept\nGamma_Correction = 999\nBrightness = -999\nContrast = 0\n");
+    BOOST_CHECK(ReadVideoPreferences(preferences)==VideoLevels({210,-45,50}));
+    WriteVideoPreferences(preferences,{101,-12,123});
+    const auto restored=engine::config::Preferences::Parse(preferences.Write());
+    BOOST_CHECK(ReadVideoPreferences(restored)==VideoLevels({101,-12,123}));BOOST_TEST(*restored.Find("mod preference")=="kept");
+    BOOST_CHECK(ReadVideoPreferences(engine::config::Preferences{})==video_default);
+}

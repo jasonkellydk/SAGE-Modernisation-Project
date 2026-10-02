@@ -1,0 +1,22 @@
+#define BOOST_TEST_MODULE EngineW3dMvvm
+#include <boost/test/included/unit_test.hpp>
+#include <string>
+import engine.gui.w3d.binding;
+using namespace engine::gui;
+BOOST_AUTO_TEST_CASE(text_bindings_initialize_update_and_unsubscribe)
+{
+	mvvm::Observable<std::string> property{"first"}; w3d::Control control;
+	{
+		w3d::TextBinding binding(property, control);
+		BOOST_TEST(control.text == "first");
+		property.Set("second"); BOOST_TEST(control.text == "second");
+	}
+	property.Set("third"); BOOST_TEST(control.text == "second");
+}
+BOOST_AUTO_TEST_CASE(command_bindings_follow_enabled_and_execute)
+{
+	int calls = 0; mvvm::Command command([&] { ++calls; }); w3d::Control control;
+	w3d::CommandBinding binding(command, control);
+	BOOST_TEST(binding.Activate()); BOOST_TEST(calls == 1);
+	command.enabled.Set(false); BOOST_TEST(!control.enabled); BOOST_TEST(!binding.Activate()); BOOST_TEST(calls == 1);
+}

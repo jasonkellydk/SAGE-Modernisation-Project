@@ -1,0 +1,32 @@
+#define BOOST_TEST_MODULE GuiImages
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.gui.images;
+import Graphics.Renderer2D;
+using namespace engine::gui::images;
+
+BOOST_AUTO_TEST_CASE(image_tiles_keep_partial_uvs_and_stop_at_callback_failure) {
+    std::vector<ImagePatch> patches;
+    const auto append=[&](ImagePatch patch) {patches.push_back(patch);return true;};
+    BOOST_REQUIRE(Tile_Image({2.5f,3.5f,27.5f,10.5f},{.1f,.2f,.5f,.8f},{10,7},append));
+    BOOST_REQUIRE_EQUAL(patches.size(),3);
+    BOOST_TEST(patches[0].screen.left==2.5f);BOOST_TEST(patches[0].screen.right==12.5f);
+    BOOST_TEST(patches[2].screen.left==22.5f);BOOST_TEST(patches[2].screen.right==27.5f);
+    BOOST_CHECK_SMALL(patches[2].uv.right-.3f,.000001f);BOOST_TEST(patches[2].uv.bottom==.8f);
+    patches.clear();
+    BOOST_REQUIRE(Tile_Image({2,3,9,28},{.1f,.2f,.5f,.8f},{7,10},append));
+    BOOST_REQUIRE_EQUAL(patches.size(),3);BOOST_TEST(patches[2].screen.top==23);
+    BOOST_CHECK_SMALL(patches[2].uv.bottom-.5f,.000001f);BOOST_TEST(patches[2].uv.right==.5f);
+    unsigned calls{};BOOST_TEST(!Tile_Image({0,0,25,7},{0,0,1,1},{10,7},[&](auto) {return ++calls<2;}));
+    BOOST_TEST(calls==2u);
+}
+BOOST_AUTO_TEST_CASE(image_tile_grid_bounds_malformed_and_excessive_work_before_emission) {
+    unsigned calls{};const auto append=[&](auto) {++calls;return true;};
+    BOOST_REQUIRE(Tile_Image({0,0,25,15},{0,0,1,1},{10,10},append));BOOST_TEST(calls==6u);
+    calls=0;
+    BOOST_TEST(!Tile_Image({0,0,25,15},{0,0,1,1},{0,10},append));
+    BOOST_TEST(!Tile_Image({0,0,25,15},{0,0,1,1},{.0001f,.0001f},append));
+    BOOST_TEST(!Tile_Image({0,0,std::numeric_limits<float>::infinity(),15},{0,0,1,1},{10,10},append));
+    BOOST_TEST(!Tile_Image({2,0,1,15},{0,0,1,1},{10,10},append));
+    BOOST_TEST(Tile_Image({0,0,0,15},{0,0,1,1},{10,10},append));BOOST_TEST(calls==0u);
+}

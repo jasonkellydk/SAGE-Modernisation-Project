@@ -1,6 +1,7 @@
 export module engine.platform.input;
 import std;
 import engine.platform.core.types;
+import engine.platform.events;
 
 export namespace engine::platform
 {
@@ -10,9 +11,17 @@ struct KeyboardState
 	const bool* keys{};
 	int count{};
 	bool caps_lock{};
+	// Optional adapter metadata maps portable physical keys to the borrowed
+	// native state array, preserving existing integer-indexed callers.
+	std::span<const int> key_indices;
 	[[nodiscard]] bool down(int key) const noexcept
 	{
 		return keys != nullptr && key >= 0 && key < count && keys[key];
+	}
+	[[nodiscard]] bool down(KeyCode key) const noexcept
+	{
+		const auto index=static_cast<unsigned>(key);
+		return index>0 && index<key_indices.size() && key_indices[index]>0 && down(key_indices[index]);
 	}
 };
 

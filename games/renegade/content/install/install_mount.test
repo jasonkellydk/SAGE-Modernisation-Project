@@ -1,0 +1,98 @@
+#define BOOST_TEST_MODULE RenegadeRetailInstall
+#include <boost/test/included/unit_test.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <string>
+#include <vector>
+import games.renegade.content.install.install_mount;
+import games.renegade.content.armor.armor_catalog;
+import engine.core.serialization.byte_stream;
+using namespace engine::filesystem;
+namespace
+{
+struct Fixture
+{
+	std::filesystem::path root = std::filesystem::temp_directory_path() / ("renegade-mix-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	Fixture() { std::filesystem::create_directories(root / "Data"); }
+	~Fixture() { std::error_code error; std::filesystem::remove_all(root, error); }
+	std::filesystem::path Write(std::string name, std::string payload = "hello")
+	{
+		engine::core::serialization::ByteWriter writer;
+		for (const char c : std::string("MIX1")) writer.U8(static_cast<std::uint8_t>(c));
+		const auto index = static_cast<std::uint32_t>(12 + payload.size());
+		writer.U32(index); writer.U32(index + 16);
+		for (const char c : payload) writer.U8(static_cast<std::uint8_t>(c));
+		writer.U32(1); writer.U32(mix::FilenameKey("Test.ini")); writer.U32(12); writer.U32(static_cast<std::uint32_t>(payload.size()));
+		writer.U32(1); writer.U8(9);
+		for (const char c : std::string("Test.ini")) writer.U8(static_cast<std::uint8_t>(c));
+		writer.U8(0);
+		const auto path = root / "Data" / name;
+		std::ofstream file(path, std::ios::binary); const auto &bytes = writer.Bytes();
+		file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		return path;
+	}
+};
+}
+BOOST_AUTO_TEST_SUITE(install)
+BOOST_AUTO_TEST_CASE(mix1_crc_read_precedence_and_parallel_reads)
+{
+	BOOST_TEST(mix::FilenameKey("test.ini") == 0xBBA89E24u);
+	Fixture fixture; const auto path = fixture.Write("always.dat");
+	auto archive = MixArchiveSource::Open(path); BOOST_REQUIRE(archive);
+	auto read = (*archive)->Read("test.ini"); BOOST_REQUIRE(read);
+	BOOST_TEST(std::string(reinterpret_cast<const char *>(read->data()), read->size()) == "hello");
+	fixture.Write("always.dbs", "database"); fixture.Write("Always2.dat", "patch");
+	auto mounted = renegade::content::MountInstall(fixture.root); BOOST_REQUIRE(mounted);
+	BOOST_TEST(mounted->files->ReadText("TEST.INI").value() == "patch");
+	std::ofstream(fixture.root / "Data" / "TEST.INI") << "loose";
+	mounted = renegade::content::MountInstall(fixture.root); BOOST_REQUIRE(mounted);
+	BOOST_TEST(mounted->files->ReadText("test.ini").value() == "loose");
+	auto future = std::async(std::launch::async, [&] { return (*archive)->Read("test.ini"); });
+	BOOST_TEST((*archive)->Read("test.ini")->size() == 5u); BOOST_TEST(future.get()->size() == 5u);
+}
+BOOST_AUTO_TEST_CASE(truncated_bad_signature_out_of_range_and_missing_install_are_rejected)
+{
+	Fixture fixture; auto path = fixture.Write("invalid.mix");
+	std::filesystem::resize_file(path, 20); BOOST_TEST(!MixArchiveSource::Open(path));
+	path = fixture.Write("invalid.mix");
+	{ std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out); file.put('X'); }
+	BOOST_TEST(!MixArchiveSource::Open(path));
+	path = fixture.Write("invalid.mix");
+	{ std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out); file.seekp(4); file.write("\xff\xff\xff\xff", 4); }
+	BOOST_TEST(!MixArchiveSource::Open(path));
+	BOOST_TEST(!renegade::content::MountInstall(fixture.root));
+}
+BOOST_AUTO_TEST_CASE(retail_archives)
+{
+	const char *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail integration skipped: RENEGADE_INSTALL_DIR is unset"); return; }
+	auto mounted = renegade::content::MountInstall(install);
+	BOOST_REQUIRE_MESSAGE(mounted.has_value(), (mounted ? "" : mounted.error()));
+	BOOST_TEST(mounted->archives.size() >= 30u);
+	BOOST_TEST(mounted->files->FileCount() > 10000u);
+	BOOST_TEST(mounted->files->Exists("armor.ini"));
+	BOOST_TEST(mounted->files->Exists("M01.ldd"));
+	BOOST_TEST(mounted->files->ReadText("armor.ini")->find("[Armor") != std::string::npos);
+	auto armor = renegade::content::ReadArmor(mounted->files->ReadText("armor.ini").value());
+	BOOST_REQUIRE_MESSAGE(armor.has_value(), (armor ? "" : armor.error()));
+	BOOST_TEST(armor->armors.size() >= 31u); BOOST_TEST(armor->warheads.size() >= 27u);
+	BOOST_TEST(armor->armorSaveIds[armor->Armor("ShieldKevlar").value()] == 17);
+	const auto flesh = armor->Armor("SkinFlesh").value(), steel = armor->Warhead("Steel").value();
+	BOOST_TEST(armor->rules.At(flesh, steel).multiplier.Raw() == renegade::Fixed::FromInt(2).Raw());
+	// Exercise payload reads from every archive without copying retail assets.
+	for (const auto &name : mounted->archives)
+	{
+		std::filesystem::path actual;
+		for (const auto &file : std::filesystem::directory_iterator(std::filesystem::path(install) / "Data"))
+			if (NormalizePath(file.path().filename().generic_string()) == name) actual = file.path();
+		auto archive = MixArchiveSource::Open(actual); BOOST_REQUIRE(archive);
+		const auto paths = (*archive)->Paths(); BOOST_REQUIRE(!paths.empty());
+		BOOST_REQUIRE((*archive)->Read(paths.front()));
+	}
+}
+BOOST_AUTO_TEST_SUITE_END()

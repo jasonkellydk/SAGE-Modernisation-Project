@@ -11,6 +11,7 @@ export struct PropAssetPart final {
     std::vector<PropVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<PropSkinInfluences> skinning;
+    std::int32_t sort_level=0;
 };
 
 export bool Build_Prop_Asset_Geometry(const Assets::ModelAsset& model,
@@ -53,6 +54,7 @@ export bool Build_Prop_Asset_Geometry(const Assets::ModelAsset& model,
         if(!Finite_Prop_Vertices(batch.Vertices())) { error="nonfinite model vertex"; return false; }
         PropAssetPart part;
         part.name=submesh.name; part.material_index=submesh.material_index;
+        part.sort_level=submesh.sort_level;
         part.vertices.assign(batch.Vertices().begin(),batch.Vertices().end());
         part.indices.assign(batch.Indices().begin(),batch.Indices().end());
         part.skinning=std::move(skinning);

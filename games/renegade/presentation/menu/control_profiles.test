@@ -1,0 +1,34 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.control_profiles;
+import games.renegade.content.input.profile_catalog;
+import engine.gui.w3d.text_edit;
+import engine.gui.w3d.list_selection;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(control_profile_source_sort_and_empty_slot_selection_keep_builtins_read_only) {
+    renegade::content::InputProfileCatalog catalog{{{u"Built in","builtin.cfg",false,false},
+        {u"z custom","input01.cfg",false,true},{u"Default","DEFAULT_INPUT.CFG",true,false},
+        {u"A custom","input02.cfg",false,true}},"input01.cfg"};
+    ControlProfiles model(catalog);model.Open();
+    const std::array<std::size_t,5> expected{2,3,1,0,4};BOOST_CHECK_EQUAL_COLLECTIONS(model.Rows().begin(),model.Rows().end(),expected.begin(),expected.end());
+    BOOST_TEST(model.list.selected.Get()==4);BOOST_TEST(model.name.enabled.Get());BOOST_TEST(model.name.text.Get().empty());
+    BOOST_TEST(int(model.Load().action)==int(ProfileAction::None));BOOST_TEST(int(model.Delete().action)==int(ProfileAction::None));
+    BOOST_TEST(int(model.Save().action)==int(ProfileAction::NeedName));
+    model.list.Select(0);BOOST_CHECK(model.name.text.Get()==u"Default");BOOST_TEST(!model.name.enabled.Get());
+    BOOST_TEST(int(model.Save().action)==int(ProfileAction::None));BOOST_TEST(int(model.Delete().action)==int(ProfileAction::None));
+    BOOST_CHECK(model.Load().filename=="DEFAULT_INPUT.CFG");
+}
+BOOST_AUTO_TEST_CASE(control_profile_source_create_overwrite_delete_requests_require_explicit_confirmation) {
+    renegade::content::InputProfileCatalog catalog{{{u"Default","DEFAULT_INPUT.CFG",true,false},{u"Custom","input01.cfg",false,true}},"input01.cfg"};
+    ControlProfiles model(catalog);model.Open();model.name.Restore(u"New name");
+    auto request=model.Save();BOOST_TEST(int(request.action)==int(ProfileAction::Create));BOOST_CHECK(request.name==u"New name");BOOST_TEST(!model.Pending());
+    model.list.Select(1);model.name.Restore(u"Renamed");
+    BOOST_TEST(int(model.Save().action)==int(ProfileAction::PromptOverwrite));BOOST_TEST(model.Pending());
+    BOOST_TEST(int(model.Confirm(false).action)==int(ProfileAction::None));BOOST_CHECK(catalog.profiles[1].name==u"Custom");
+    model.Save();request=model.Confirm(true);BOOST_TEST(int(request.action)==int(ProfileAction::Save));
+    BOOST_CHECK(request.filename=="input01.cfg");BOOST_CHECK(request.name==u"Renamed");BOOST_TEST(!model.Pending());
+    BOOST_TEST(int(model.Confirm(true).action)==int(ProfileAction::None));
+    request=model.Delete();BOOST_TEST(int(request.action)==int(ProfileAction::PromptDelete));BOOST_CHECK(request.name==u"Custom");
+    request=model.Confirm(true);BOOST_TEST(int(request.action)==int(ProfileAction::Delete));BOOST_CHECK(request.filename=="input01.cfg");
+    model.name.Restore(u"");BOOST_TEST(int(model.Save().action)==int(ProfileAction::NeedName));
+}

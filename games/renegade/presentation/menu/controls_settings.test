@@ -1,0 +1,112 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.controls_settings;
+import games.renegade.content.presentation.input_configuration;
+import engine.gui.w3d.input_capture;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(controls_reload_restores_applied_camera_option_while_input_profiles_replace_pending_fields) {
+    renegade::content::InputConfiguration configuration;
+    ControlsSettings model(configuration,{},true);
+    model.camera_locked.checked.Set(false);model.Defaults(configuration);BOOST_TEST(model.camera_locked.checked.Get());
+    model.camera_locked.checked.Set(false);model.Apply();model.camera_locked.checked.Set(true);
+    model.Defaults(configuration);BOOST_TEST(!model.camera_locked.checked.Get());
+}
+using namespace renegade::content;
+using engine::gui::w3d::CapturePointer;
+namespace {
+std::u16string Caption(InputId input) {const auto name=InputFileName(input);return {name.begin(),name.end()};}
+void Send(ControlsSettings& model,unsigned tab,unsigned control,KeyCode key,unsigned time=1000) {
+    model.Focus(tab,control,time);BOOST_REQUIRE(model.QueueKeyboard(tab,control,unsigned(key)));model.FlushKeyboard();
+}
+}
+BOOST_AUTO_TEST_CASE(controls_use_original_tabs_noncontiguous_ids_and_quantized_look_apply) {
+    InputConfiguration configuration;configuration.misc.sensitivity=.539f;
+    configuration.misc.invert=false;configuration.misc.invert_2d=true;configuration.misc.damage_indicators=false;
+    configuration.misc.target_steering=true;
+    ControlsSettings controls(configuration,Caption,true);
+    BOOST_TEST(controls.sensitivity.position.Get()==53);BOOST_TEST(controls.camera_locked.checked.Get());
+    BOOST_TEST(!controls.invert.checked.Get());BOOST_TEST(controls.invert_2d.checked.Get());BOOST_TEST(!controls.damage_indicators.checked.Get());
+    unsigned fields{};
+    for(const auto& tab:controls_tabs) for(unsigned row=0;row<tab.functions.size();++row) for(bool secondary:{false,true}) {
+        BOOST_REQUIRE(controls.Capture(tab.resource,secondary ? secondary_input_controls[row] : primary_input_controls[row]));++fields;
+    }
+    BOOST_TEST(fields==72u);BOOST_TEST(!controls.Capture(137,1221));BOOST_TEST(!controls.Capture(138,1220));
+    BOOST_CHECK(controls_tabs[4].functions[4]=="ObjectivesScreen");BOOST_CHECK(controls_tabs[4].functions[5]=="MapScreen");
+    controls.sensitivity.Set(0);controls.invert.checked.Set(true);controls.Apply();
+    BOOST_TEST(controls.Configuration().misc.sensitivity==0);BOOST_TEST(controls.Configuration().misc.invert);
+    BOOST_TEST(!controls.Configuration().misc.target_steering);controls.sensitivity.Set(100);controls.Apply();
+    BOOST_TEST(controls.Configuration().misc.sensitivity==1);
+}
+BOOST_AUTO_TEST_CASE(controls_capture_rejects_reserved_modifiers_allows_shift_and_delete_clears_alias) {
+    ControlsSettings controls({},Caption);controls.Focus(137,1220,1000);
+    for(const auto input:{"Left_Control_Key","Right_Control_Key","Left_Alt_Key","Right_Alt_Key","Left_Windows_Key","Right_Windows_Key","App_Menu_Key"}) {
+        BOOST_REQUIRE(controls.QueueKeyboard(137,1220,InputFromName(input)));controls.FlushKeyboard();
+        BOOST_TEST(controls.Configuration().Get("MoveForward").primary==0u);
+    }
+    BOOST_REQUIRE(controls.QueueKeyboard(137,1220,0));controls.FlushKeyboard();BOOST_TEST(!controls.conflict.Get());
+    Send(controls,137,1229,KeyCode::left_shift);
+    BOOST_TEST(controls.Configuration().Get("Jump").primary==unsigned(KeyCode::left_shift));
+    BOOST_TEST(controls.Configuration().Get("MoveUp").primary==unsigned(KeyCode::left_shift));
+    Send(controls,137,1229,KeyCode::del);
+    BOOST_TEST(controls.Configuration().Get("Jump").primary==0u);BOOST_TEST(controls.Configuration().Get("MoveUp").primary==0u);
+    BOOST_TEST(controls.Capture(137,1229)->assignment.Get().caption.empty());
+    Send(controls,137,1234,KeyCode::q); // second row secondary
+    BOOST_TEST(controls.Configuration().Get("MoveBackward").secondary==unsigned(KeyCode::q));
+}
+BOOST_AUTO_TEST_CASE(controls_source_conflict_oracle_covers_all_remappable_destination_pairs) {
+    const auto zoom=[](std::string_view name){return name=="ZoomIn" || name=="ZoomOut";};
+    unsigned checked{};
+    for(const auto destination:remappable_functions) for(const auto existing:remappable_functions) {
+        InputConfiguration configuration;BOOST_REQUIRE(configuration.Set(existing,false,unsigned(KeyCode::q)));
+        ControlsSettings controls(configuration,Caption);
+        const auto found=controls.FindConflict(destination,unsigned(KeyCode::q));
+        const bool expected=(!zoom(existing) && !zoom(destination)) ||
+            (existing!=destination && zoom(existing) && zoom(destination));
+        BOOST_TEST(found.has_value()==expected);if(found) BOOST_CHECK(*found==existing);++checked;
+    }
+    BOOST_TEST(checked==1296u);
+}
+BOOST_AUTO_TEST_CASE(controls_conflict_cancel_restores_caption_and_yes_clears_full_action_dictionary_preserving_zoom) {
+    InputConfiguration configuration;
+    configuration.Set("MoveForward",false,unsigned(KeyCode::w));configuration.Set("MoveBackward",false,unsigned(KeyCode::s));
+    configuration.Set("GenericDebug0",false,unsigned(KeyCode::w));configuration.Set("GenericDebug0",true,unsigned(KeyCode::w));
+    configuration.Set("ZoomIn",false,unsigned(KeyCode::w));
+    ControlsSettings controls(configuration,Caption);
+    Send(controls,137,1223,KeyCode::w);BOOST_REQUIRE(controls.conflict.Get());
+    BOOST_CHECK(controls.conflict.Get()->previous=="MoveForward");
+    BOOST_TEST(controls.Configuration().Get("MoveBackward").primary==unsigned(KeyCode::s));
+    BOOST_TEST(controls.Capture(137,1223)->assignment.Get().input==unsigned(KeyCode::w)); // provisional visible assignment
+    BOOST_TEST(!controls.QueueKeyboard(137,1223,unsigned(KeyCode::q)));
+    BOOST_REQUIRE(controls.Confirm(false));BOOST_TEST(!controls.conflict.Get());
+    BOOST_TEST(controls.Capture(137,1223)->assignment.Get().input==unsigned(KeyCode::s));
+    Send(controls,137,1223,KeyCode::w);BOOST_REQUIRE(controls.Confirm(true));
+    BOOST_TEST(controls.Configuration().Get("MoveForward").primary==0u);
+    BOOST_TEST(controls.Configuration().Get("MoveBackward").primary==unsigned(KeyCode::w));
+    BOOST_TEST(controls.Configuration().Get("GenericDebug0").primary==0u);BOOST_TEST(controls.Configuration().Get("GenericDebug0").secondary==0u);
+    BOOST_TEST(controls.Configuration().Get("ZoomIn").primary==unsigned(KeyCode::w));
+    BOOST_TEST(!controls.Confirm(true));
+    Send(controls,139,1228,KeyCode::w); // ZoomOut
+    BOOST_REQUIRE(controls.conflict.Get());BOOST_REQUIRE(controls.Confirm(true));
+    BOOST_TEST(controls.Configuration().Get("ZoomIn").primary==0u);
+    BOOST_TEST(controls.Configuration().Get("MoveBackward").primary==0u); // a zoom destination clears all matching functions
+    BOOST_TEST(controls.Configuration().Get("ZoomOut").primary==unsigned(KeyCode::w));
+}
+BOOST_AUTO_TEST_CASE(controls_primary_delay_pointer_bindings_latest_pending_and_defaults_reload) {
+    ControlsSettings controls({},Caption);controls.Focus(139,1220,1000);
+    const auto mouse=InputFromName("Left_Mouse_Button");
+    BOOST_TEST(!controls.Pointer(139,1220,CapturePointer::Primary,mouse,1500));
+    BOOST_TEST(controls.Pointer(139,1220,CapturePointer::Primary,mouse,1501));
+    BOOST_TEST(controls.Configuration().Get("FireWeaponPrimary").primary==mouse);
+    controls.Focus(139,1223,1510);const auto wheel=InputFromName("Mouse_Wheel_Forward");
+    BOOST_TEST(controls.Pointer(139,1223,CapturePointer::Wheel,wheel,1510));
+    BOOST_TEST(controls.Configuration().Get("FireWeaponSecondary").primary==wheel);
+    BOOST_TEST(controls.Configuration().Get("UseWeapon").primary==wheel);
+    BOOST_REQUIRE(controls.QueueKeyboard(139,1223,unsigned(KeyCode::q)));
+    BOOST_REQUIRE(controls.QueueKeyboard(139,1223,unsigned(KeyCode::e)));
+    controls.Focus(137,1220,1600);controls.FlushKeyboard();
+    BOOST_TEST(controls.Configuration().Get("FireWeaponSecondary").primary==unsigned(KeyCode::e));
+    InputConfiguration defaults;defaults.Set("MoveForward",false,unsigned(KeyCode::w));defaults.misc.sensitivity=.75f;
+    controls.Defaults(defaults);BOOST_TEST(controls.sensitivity.position.Get()==75);
+    BOOST_TEST(controls.Capture(137,1220)->assignment.Get().input==unsigned(KeyCode::w));
+    BOOST_TEST(controls.Configuration().Get("FireWeaponSecondary").primary==0u);
+}

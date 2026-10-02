@@ -1,0 +1,39 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.menu_entry;
+import engine.gui.w3d.dialog_template;
+using namespace engine::gui::w3d;
+
+BOOST_AUTO_TEST_CASE(w3d_flat_buttons_use_menu_entries_after_checkbox_classification) {
+    DialogControlDefinition definition;definition.kind.ordinal=0x80;definition.style=0x50018100;
+    BOOST_TEST(IsMenuEntry(definition));
+    definition.style=0x50018103;BOOST_TEST(!IsMenuEntry(definition));
+    definition.style=0x5001030b;BOOST_TEST(!IsMenuEntry(definition));
+    definition.kind.ordinal.reset();definition.kind.text=u"Button";definition.style=0x5003830b;
+    BOOST_TEST(IsMenuEntry(definition));
+    definition.kind.text=u"Static";BOOST_TEST(!IsMenuEntry(definition));
+}
+BOOST_AUTO_TEST_CASE(w3d_menu_entries_take_composed_durations_and_notify_phase_changes_once) {
+    MenuEntryModel entry({25,100});
+    std::vector<MenuEntryPhase> phases;entry.phase.Subscribe([&](auto phase) {phases.push_back(phase);});
+    entry.Focus(true,1000);entry.Focus(true,1001);BOOST_TEST(entry.Press(1002));
+    entry.Release(1003);entry.Focus(false,1004);
+    BOOST_TEST(!entry.Tick(1026));BOOST_TEST(entry.Tick(1027));BOOST_TEST(!entry.Tick(1028));
+    BOOST_REQUIRE_EQUAL(phases.size(),4);
+    BOOST_CHECK(phases[0]==MenuEntryPhase::Idle);BOOST_CHECK(phases[1]==MenuEntryPhase::Focused);
+    BOOST_CHECK(phases[2]==MenuEntryPhase::Pressed);BOOST_CHECK(phases[3]==MenuEntryPhase::Idle);
+    BOOST_CHECK_THROW(MenuEntryModel(MenuEntryTimings{0,100}),std::invalid_argument);
+    BOOST_CHECK_THROW(MenuEntryModel(MenuEntryTimings{25,0}),std::invalid_argument);
+}
+BOOST_AUTO_TEST_CASE(w3d_menu_entry_focus_feedback_is_distinct_from_press_and_timer_changes) {
+    MenuEntryModel entry({25,100});
+    BOOST_TEST(entry.Focus(true,100));BOOST_TEST(!entry.Focus(true,101));
+    BOOST_TEST(entry.Press(102,true));BOOST_TEST(!entry.Focus(false,103));
+    // Focus loss clears the retained pointer flag in the original control.
+    BOOST_TEST(entry.Focus(true,104));BOOST_TEST(!entry.Tick(204));
+    BOOST_TEST(!entry.Focus(true,205));
+    entry.Focus(false,206);entry.Press(207,true);
+    BOOST_TEST(!entry.Focus(true,208));
+    entry.Release(209);BOOST_TEST(!entry.Focus(true,210));
+    BOOST_TEST(entry.Tick(232));BOOST_TEST(!entry.Focus(true,233));
+}

@@ -1,0 +1,20 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.audio_preferences;
+import games.renegade.presentation.menu.audio_settings;
+
+BOOST_AUTO_TEST_CASE(audio_preferences_match_registry_defaults_integer_flags_and_clamped_volumes) {
+    using namespace renegade::presentation;
+    auto preferences=engine::config::Preferences::Parse("music volume = 72\nsound volume = -1\ndialog volume = 200\ncinematic enabled = 2\nmusic enabled = 0\nother = retained\n");
+    const auto state=ReadAudioPreferences(preferences,{43,31,50,100});
+    BOOST_TEST(state.volumes[0]==0);BOOST_TEST(state.volumes[1]==72);BOOST_TEST(state.volumes[2]==100);BOOST_TEST(state.volumes[3]==100);
+    BOOST_TEST(state.enabled[0]);BOOST_TEST(!state.enabled[1]);BOOST_TEST(state.enabled[2]);BOOST_TEST(!state.enabled[3]);
+    AudioSettings settings;ApplyAudioPreferences(settings,state);
+    BOOST_TEST(!settings.volumes[1].enabled.Get());
+    settings.volumes[1].Set(83);WriteAudioPreferences(preferences,CaptureAudioPreferences(settings));
+    BOOST_REQUIRE(preferences.Find("other"));BOOST_TEST(*preferences.Find("other")=="retained");
+    const auto restored=ReadAudioPreferences(engine::config::Preferences::Parse(preferences.Write()),{1,2,3,4});
+    BOOST_TEST(restored.volumes[1]==83);BOOST_TEST(!restored.enabled[1]);
+    settings.defaults_command.Execute();const auto defaults=CaptureAudioPreferences(settings);
+    BOOST_TEST(defaults.volumes[1]==31);BOOST_TEST(!defaults.enabled[1]);
+}

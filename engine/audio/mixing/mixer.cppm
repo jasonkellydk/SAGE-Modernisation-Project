@@ -15,6 +15,12 @@ export namespace engine::audio
 {
 using VoiceId = std::uint64_t;
 
+struct OutputStatistics
+{
+	std::uint64_t stereoFrames{};
+	std::uint64_t nonSilentFrames{};
+};
+
 struct VoiceStart
 {
 	std::shared_ptr<const PcmBuffer> buffer; // or
@@ -39,6 +45,13 @@ public:
 	explicit Mixer(std::uint32_t sampleRate) : m_sampleRate(sampleRate) { m_busGain.fill(1.0f); }
 
 	std::uint32_t SampleRate() const noexcept { return m_sampleRate; }
+	// Cumulative output delivered to the device adapter, after bus and master
+	// gains. Safe to read from the game thread; an in-flight block may appear
+	// in one counter before the other. This does not measure the loudspeaker.
+	OutputStatistics OutputStats() const noexcept
+	{
+		return {m_outputFrames.load(std::memory_order_relaxed),m_nonSilentFrames.load(std::memory_order_relaxed)};
+	}
 
 	// Game side ----------------------------------------------------------------
 
@@ -54,6 +67,9 @@ public:
 	void Stop(VoiceId id, std::uint32_t fadeFrames = 64) { Send(StopCommand{id, fadeFrames}); }
 	void SetPosition(VoiceId id, Vec3 position) { Send(PositionCommand{id, position}); }
 	void SetGain(VoiceId id, float gain) { Send(GainCommand{id, gain}); }
+	// Change looping at the next mix block without rewinding the voice. Turning
+	// it off lets the current playback cycle reach its end.
+	void SetLooping(VoiceId id, bool loop) { Send(LoopCommand{id, loop}); }
 	void SetBusGain(Bus bus, float gain) { Send(BusCommand{bus, gain}); }
 	void SetMasterGain(float gain) { Send(MasterCommand{gain}); }
 	void SetListener(const Listener &listener) { Send(listener); }
@@ -85,6 +101,12 @@ public:
 			m_voices.erase(id);
 		for (float &sample : out)
 			sample = SoftClip(sample * m_master);
+		std::uint64_t nonSilent{};
+		for (std::size_t frame = 0; frame < frames; ++frame)
+			if (out[frame * 2] != 0.0f || out[frame * 2 + 1] != 0.0f)
+				++nonSilent;
+		m_nonSilentFrames.fetch_add(nonSilent,std::memory_order_relaxed);
+		m_outputFrames.fetch_add(frames,std::memory_order_relaxed);
 		if (!ended.empty())
 		{
 			const std::lock_guard lock(m_finishedMutex);
@@ -132,8 +154,13 @@ private:
 		VoiceId id;
 		bool paused;
 	};
+	struct LoopCommand
+	{
+		VoiceId id;
+		bool loop;
+	};
 	using Command =
-		std::variant<StartCommand, StopCommand, PositionCommand, GainCommand, BusCommand, MasterCommand, Listener, StopAllCommand, PauseCommand>;
+		std::variant<StartCommand, StopCommand, PositionCommand, GainCommand, BusCommand, MasterCommand, Listener, StopAllCommand, PauseCommand, LoopCommand>;
 
 	struct Voice
 	{
@@ -196,6 +223,11 @@ private:
 	{
 		if (const auto found = m_voices.find(command.id); found != m_voices.end())
 			found->second.start.gain = command.gain;
+	}
+	void Apply(const LoopCommand &command)
+	{
+		if (const auto found = m_voices.find(command.id); found != m_voices.end())
+			found->second.start.loop = command.loop;
 	}
 	void Apply(const BusCommand &command) { m_busGain[static_cast<std::size_t>(command.bus)] = command.gain; }
 	void Apply(const MasterCommand &command) { m_master = command.gain; }
@@ -306,6 +338,8 @@ private:
 	VoiceId m_nextId{0};
 	std::mutex m_finishedMutex;
 	std::vector<VoiceId> m_finished;
+	std::atomic<std::uint64_t> m_outputFrames{};
+	std::atomic<std::uint64_t> m_nonSilentFrames{};
 
 	// Audio thread only.
 	std::unordered_map<VoiceId, Voice> m_voices;

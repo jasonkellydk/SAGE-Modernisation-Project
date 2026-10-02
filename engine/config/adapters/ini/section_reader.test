@@ -1,0 +1,18 @@
+#include <boost/test/unit_test.hpp>
+#include <string>
+import engine.config.adapters.ini.section_reader;
+BOOST_AUTO_TEST_CASE(section_ini_preserves_order_and_case_insensitive_updates)
+{
+	auto document = engine::config::ini::ReadSections("fixture", "[Types]\r\r\n9=First\n2=Second ; comment\n[TYPES]\n9=Updated\n");
+	BOOST_REQUIRE(document.has_value());
+	const auto *section = engine::config::ini::FindSection(*document, "TYPES");
+	BOOST_REQUIRE(section); BOOST_REQUIRE(section->children.size() == 2);
+	BOOST_TEST(std::string(section->children[0].Value()) == "Updated");
+	BOOST_TEST(std::string(section->children[1].Value()) == "Second");
+}
+BOOST_AUTO_TEST_CASE(section_ini_reports_invalid_entries)
+{
+	BOOST_TEST(!engine::config::ini::ReadSections("fixture", "value=1\n").has_value());
+	BOOST_TEST(!engine::config::ini::ReadSections("fixture", "[]\n").has_value());
+	BOOST_TEST(!engine::config::ini::ReadSections("fixture", "[types]\n=1\n").has_value());
+}

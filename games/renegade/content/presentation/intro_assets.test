@@ -1,0 +1,56 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import Video.FFmpeg.Decoder;
+
+namespace {
+class RetailMovieAudio final : public Engine::Video::AudioSink {
+public:
+    bool Submit(const Engine::Video::DecodedAudioChunk& chunk) override {
+        if(!chunk.Is_Valid()) return false;
+        if(chunks) BOOST_TEST(chunk.presentation_time_us>=last_time);
+        last_time=chunk.presentation_time_us;++chunks;
+        frames+=chunk.samples.size()/(chunk.channels*2);
+        for(std::size_t offset=0;offset<chunk.samples.size();offset+=2) {
+            const unsigned value=std::to_integer<unsigned>(chunk.samples[offset])|
+                (std::to_integer<unsigned>(chunk.samples[offset+1])<<8);
+            non_silent+=value!=0;
+        }
+        return true;
+    }
+    void Start() noexcept override {}
+    void Pause() noexcept override {}
+    void Resume() noexcept override {}
+    void Stop() noexcept override {}
+    void Reset() noexcept override {}
+    unsigned chunks{};std::uint64_t frames{},non_silent{},last_time{};
+};
+}
+// Source identities: Commando/movie.cpp Startup_Movies. Dimensions, frame
+// counts and rate are fixtures from this ledger's retail movie inventory.
+BOOST_AUTO_TEST_CASE(retail_intro_movies_decode_every_video_frame_and_non_silent_audio_to_the_end) {
+    const auto* installation=std::getenv("RENEGADE_INSTALL_DIR");BOOST_REQUIRE(installation && *installation);
+    struct Fixture {const char* name;std::uint64_t frames;};
+    for(const auto fixture:{Fixture{"EA_WW.BIK",230},Fixture{"R_Intro.BIK",475}}) {
+        Engine::Video::FFmpegDecoder decoder;RetailMovieAudio audio;decoder.Set_Audio_Sink(&audio);
+        const auto path=std::filesystem::path(installation)/"Data"/"Movies"/fixture.name;
+        BOOST_REQUIRE_MESSAGE(decoder.Open(path.string()),path.string());
+        const auto info=decoder.Info();BOOST_TEST(info.width==800);BOOST_TEST(info.height==600);
+        BOOST_TEST(info.frame_count==fixture.frames);BOOST_CHECK_SMALL(info.frame_duration_seconds-1.0/15,0.000001);
+        std::uint64_t decoded{},visible{},previous_time{};Engine::Video::DecodedVideoFrame frame;
+        for(;;) {
+            const auto result=decoder.Decode_Next(frame);
+            if(result==Engine::Video::DecodeResult::EndOfStream) break;
+            BOOST_REQUIRE(result==Engine::Video::DecodeResult::Frame);BOOST_REQUIRE(frame.Is_Valid());
+            BOOST_TEST(frame.width==800);BOOST_TEST(frame.height==600);BOOST_TEST(frame.frame_index==decoded);
+            BOOST_TEST(frame.presentation_time_us>=previous_time);previous_time=frame.presentation_time_us;++decoded;
+            for(unsigned y=1;y<16;++y) for(unsigned x=1;x<16;++x) {
+                const auto offset=std::size_t(y*frame.height/16)*frame.row_pitch+(x*frame.width/16)*4;
+                visible+=std::to_integer<unsigned>(frame.pixels[offset])+std::to_integer<unsigned>(frame.pixels[offset+1])+
+                    std::to_integer<unsigned>(frame.pixels[offset+2])>64;
+            }
+        }
+        BOOST_TEST(decoded==fixture.frames);BOOST_TEST(visible>0);BOOST_TEST(audio.chunks>0);
+        BOOST_TEST(audio.frames>0);BOOST_TEST(audio.non_silent>0);
+        decoder.Close();BOOST_TEST(decoder.Info().frame_count==0);
+    }
+}

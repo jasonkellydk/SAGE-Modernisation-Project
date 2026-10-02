@@ -11,6 +11,7 @@ engine_add_module_library(engine_config
 		document/document.cppm
 		document/diagnostics.cppm
 		adapters/ini/ini_reader.cppm
+		adapters/ini/section_reader.cppm
 		adapters/json/json_reader.cppm
 		adapters/preferences/preferences_file.cppm
 		binding/values.cppm
@@ -18,6 +19,7 @@ engine_add_module_library(engine_config
 	DEPENDS engine_core_math_fixed engine_time
 	TESTS
 		adapters/ini/ini_reader.test
+		adapters/ini/section_reader.test
 		adapters/json/json_reader.test
 		adapters/preferences/preferences_file.test
 		binding/schema.test

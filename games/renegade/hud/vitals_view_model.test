@@ -1,0 +1,15 @@
+#define BOOST_TEST_MODULE RenegadeVitalsMvvm
+#include <boost/test/included/unit_test.hpp>
+#include <string>
+import games.renegade.hud.vitals_view_model;
+import engine.gui.w3d.binding;
+BOOST_AUTO_TEST_CASE(vitals_flow_from_shared_components_through_mvvm_to_w3d_controls)
+{
+	renegade::hud::VitalsViewModel model;
+	engine::gui::w3d::Control healthControl, armorControl;
+	engine::gui::w3d::TextBinding healthBinding(model.healthText, healthControl), armorBinding(model.armorText, armorControl);
+	engine::gameplay::Health health; health.current = Engine::Math::Fixed::FromInt(75);
+	engine::gameplay::Shield shield; shield.current = Engine::Math::Fixed::FromInt(20);
+	model.Update(health, shield);
+	BOOST_TEST(healthControl.text == "75"); BOOST_TEST(armorControl.text == "20");
+}

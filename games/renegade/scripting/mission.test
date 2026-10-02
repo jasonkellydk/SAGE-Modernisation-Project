@@ -1,0 +1,36 @@
+#define BOOST_TEST_MODULE RenegadeLuaMissionParity
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <variant>
+import engine.scripting.lua.lua_program;
+using namespace engine::scripting::lua;
+BOOST_AUTO_TEST_CASE(M03_destroyed_turret_callback_trace_matches_original)
+{
+	std::ifstream file(std::string(RENEGADE_SCRIPT_DIR) + "/M03_Destroyed_Turret.lua");
+	BOOST_REQUIRE(file);
+	const std::string source{std::istreambuf_iterator<char>(file), {}};
+	Program script; BOOST_REQUIRE(script.Load(source, "M03_Destroyed_Turret"));
+	const std::array<Value, 1> created{std::int64_t{17}};
+	auto commands = script.Invoke("Created", created); BOOST_REQUIRE(commands);
+	BOOST_REQUIRE(commands->size() == 2);
+	for (std::size_t i = 0; i < 2; ++i)
+	{
+		BOOST_TEST((*commands)[i].name == "Start_Timer");
+		BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[0]) == 17);
+		BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[1]) == (i == 0 ? 1000 : 4000));
+		BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[2]) == static_cast<std::int64_t>(i));
+	}
+	const std::array<Value, 2> expired{std::int64_t{17}, std::int64_t{0}};
+	auto sound = script.Invoke("Timer_Expired", expired); BOOST_REQUIRE(sound); BOOST_REQUIRE(sound->size() == 1);
+	BOOST_TEST((*sound)[0].name == "Create_2D_Sound");
+	BOOST_TEST(std::get<std::string>((*sound)[0].arguments[0]) == "EVA_Enemy_Structure_Destroyed");
+	for (const auto id : {1, 42})
+	{
+		const std::array<Value, 2> other{std::int64_t{17}, std::int64_t{id}};
+		BOOST_TEST(script.Invoke("Timer_Expired", other)->empty());
+	}
+}

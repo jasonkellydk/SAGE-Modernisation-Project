@@ -1,0 +1,56 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.list_selection;
+using namespace engine::gui::w3d;
+BOOST_AUTO_TEST_CASE(list_selection_preserves_initial_absence_clamping_and_explicit_deselection) {
+    ListSelectionModel list;const std::array heights{10.f,12.f,8.f};BOOST_REQUIRE(list.Configure(heights,40));
+    BOOST_TEST(list.selected.Get()==-1);BOOST_TEST(list.scroll.Get()==0);
+    unsigned changes{};list.selected.Subscribe([&](int){++changes;});
+    BOOST_TEST(list.Key(ListAction::Previous).handled);BOOST_TEST(list.selected.Get()==0);
+    BOOST_TEST(!list.Select(-20));BOOST_TEST(changes==2u);
+    BOOST_TEST(list.Select(99));BOOST_TEST(list.selected.Get()==2);BOOST_TEST(!list.Select(99));
+    list.selection_allowed=false;BOOST_TEST(!list.Select(0));BOOST_TEST(list.selected.Get()==2);
+    list.selection_allowed=true;list.no_selection_allowed=true;BOOST_TEST(list.Select(-1));BOOST_TEST(list.selected.Get()==-1);
+    BOOST_TEST(list.Key(ListAction::Activate).activate);list.ClearSelection();BOOST_TEST(list.selected.Get()==-1);
+    BOOST_REQUIRE(list.Configure({},40));BOOST_TEST(!list.Select(0));BOOST_TEST(list.selected.Get()==-1);
+}
+BOOST_AUTO_TEST_CASE(list_paging_preserves_source_exact_fit_and_distinct_selection_scroll_rules) {
+    ListSelectionModel list;const std::array heights{10.f,10.f,10.f,10.f,10.f,10.f,10.f};
+    BOOST_REQUIRE(list.Configure(heights,30));BOOST_TEST(list.EndOfPage()==1);BOOST_TEST(list.LastPageTop()==5);
+    list.Key(ListAction::PageNext);BOOST_TEST(list.selected.Get()==1);BOOST_TEST(list.scroll.Get()==0);
+    list.Key(ListAction::PageNext);BOOST_TEST(list.selected.Get()==1);BOOST_TEST(list.scroll.Get()==2);
+    list.Key(ListAction::PagePrevious);BOOST_TEST(list.selected.Get()==2);BOOST_TEST(list.scroll.Get()==2);
+    list.Key(ListAction::PagePrevious);BOOST_TEST(list.selected.Get()==2);BOOST_TEST(list.scroll.Get()==0);
+    list.Key(ListAction::Last);BOOST_TEST(list.selected.Get()==6);BOOST_TEST(list.scroll.Get()==4);
+    list.Wheel(1);BOOST_TEST(list.scroll.Get()==5);BOOST_TEST(list.selected.Get()==6);
+    list.Wheel(1);BOOST_TEST(list.scroll.Get()==5);list.Wheel(-1);BOOST_TEST(list.scroll.Get()==4);
+    list.Key(ListAction::First);BOOST_TEST(list.scroll.Get()==0);BOOST_TEST(list.selected.Get()==0);
+    BOOST_REQUIRE(list.HitRow(10));BOOST_TEST(*list.HitRow(10)==0);BOOST_TEST(*list.HitRow(10.01f)==1);
+    BOOST_TEST(!list.HitRow(-1));BOOST_TEST(!list.HitRow(31));
+}
+BOOST_AUTO_TEST_CASE(list_variable_height_hit_testing_truncates_each_source_integer_anchor) {
+    ListSelectionModel list;const std::array heights{5.75f,6.5f,7.25f};BOOST_REQUIRE(list.Configure(heights,30));
+    BOOST_TEST(*list.HitRow(8.75f,3.75f)==0);BOOST_TEST(*list.HitRow(8.76f,3.75f)==1);
+    BOOST_TEST(*list.HitRow(14.5f,3.75f)==1);BOOST_TEST(*list.HitRow(14.51f,3.75f)==2);
+    BOOST_TEST(!list.HitRow(std::numeric_limits<float>::infinity()));
+    BOOST_TEST(!list.Configure(heights,0));BOOST_TEST(!list.Configure(std::array{0.f},30));
+    BOOST_TEST(!list.Configure(std::array{std::numeric_limits<float>::quiet_NaN()},30));BOOST_TEST(list.Count()==3);
+}
+BOOST_AUTO_TEST_CASE(list_embedded_scrollbar_preserves_zero_page_notifications_variable_paging_and_silent_reverse_sync) {
+    ListSelectionModel list;BOOST_REQUIRE(list.Configure(std::array{10.f,20.f,30.f,40.f},50));
+    unsigned parent_position{},parent_page{},selection_events{};int top_seen_by_parent=-1;
+    list.scrollbar.ParentNotifications([&](int){++parent_position;top_seen_by_parent=list.scroll.Get();},[&](int){++parent_page;top_seen_by_parent=list.scroll.Get();});
+    list.selected.Subscribe([&](int){++selection_events;});
+    BOOST_TEST(list.LastPageTop()==3);BOOST_TEST(list.scrollbar.PageSize()==0);
+    list.scrollbar.Page(1);BOOST_TEST(top_seen_by_parent==0);BOOST_TEST(list.scroll.Get()==1);
+    list.scrollbar.Page(1);BOOST_TEST(list.scroll.Get()==2);
+    list.scrollbar.Page(1);BOOST_TEST(list.scroll.Get()==2);BOOST_TEST(parent_position==0u);BOOST_TEST(parent_page==3u);
+    BOOST_TEST(list.selected.Get()==-1);BOOST_TEST(selection_events==1u);
+    list.scrollbar.Set(3);BOOST_TEST(top_seen_by_parent==2);BOOST_TEST(list.scroll.Get()==3);BOOST_TEST(parent_position==1u);
+    list.scrollbar.Page(-1);BOOST_TEST(list.scroll.Get()==3); // Original variable-height boundary, not a conventional full page.
+    list.Wheel(-1);BOOST_TEST(list.scrollbar.position.Get()==2);BOOST_TEST(parent_position==1u);
+    list.Select(0);BOOST_TEST(list.scrollbar.position.Get()==0);BOOST_TEST(parent_position==1u);
+    list.scrollbar.Set(3);BOOST_TEST(parent_position==2u);
+    BOOST_REQUIRE(list.Configure({},50,false));BOOST_TEST(list.scroll.Get()==0);BOOST_TEST(list.scrollbar.Maximum()==0);
+    BOOST_TEST(parent_position==3u);BOOST_TEST(top_seen_by_parent==3);
+}

@@ -457,6 +457,7 @@ export bool W3DRead_Vertex_Material(W3DByteSpan bytes, W3DVertexMaterialData &re
 		return false;
 	for (unsigned stage=0;stage<parsed.mappings.size();++stage)
 		parsed.mappings[stage]=W3DRead_Texture_Mapping(parsed.material.source_attributes,stage,parsed.mapper_arguments[stage]);
+	parsed.material.texture_mappings=parsed.mappings;
 	result = std::move(parsed);
 	return true;
 }

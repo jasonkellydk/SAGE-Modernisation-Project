@@ -55,3 +55,8 @@ probe(presentation_director "games/generalszh/presentation/audio/sound_director.
 probe(presentation_entity_map "games/generalszh/hosts/game/view.cpp" "std::unordered_map<std::uint64_t, Look> looks;" "presentation-object-style")
 probe(presentation_system "games/generalszh/presentation/objects/systems/look_systems.cppm" "struct LookSystem { using Query = Q; };" pass)
 message(STATUS "Gameplay architecture checker self-tests passed")
+probe(renegade_system "games/renegade/gameplay/defense/systems/defense_system.cppm" "struct DefenseSystem {};" pass)
+probe(renegade_root "games/renegade/session/session.cppm" "ecs::Scheduler scheduler;" pass)
+probe(renegade_owner "games/renegade/gameplay/defense/resources/owner.cppm" "ecs::Scheduler scheduler;" execution-owner)
+probe(renegade_engine_import "engine/gameplay/common/health/systems/x.cppm" "import games.renegade.gameplay.defense;" engine-game-import)
+probe(renegade_engine_alias "engine/gameplay/fps/x/components/x.cppm" "import renegade.session;" engine-game-import)

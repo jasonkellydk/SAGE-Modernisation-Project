@@ -1,0 +1,39 @@
+#define BOOST_TEST_MODULE EngineMovieSound
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <span>
+#include <cstddef>
+import engine.audio.adapters.video.movie_sound;
+import Video.Decoder;
+
+BOOST_AUTO_TEST_CASE(movie_pcm_is_owned_downmixed_and_drained_through_shared_mixer) {
+    engine::audio::Mixer mixer(48000);engine::audio::MovieSound sound(mixer);
+    std::array<short,4> pcm{16384,8192,-16384,-8192};
+    Engine::Video::DecodedAudioChunk chunk{48000,2,Engine::Video::AudioSampleFormat::S16,0,std::as_bytes(std::span(pcm))};
+    BOOST_REQUIRE(sound.Submit(chunk));BOOST_TEST(sound.Queued()==2);
+    pcm.fill(0); // Decoder storage may be overwritten as soon as Submit returns.
+    sound.Start();std::array<float,4> mixed{};mixer.Mix(mixed);
+    BOOST_TEST(mixed[0]==0.5f);BOOST_TEST(mixed[1]==0.25f);
+    BOOST_TEST(mixed[2]==-0.5f);BOOST_TEST(mixed[3]==-0.25f);
+    sound.Reset();mixer.Mix(mixed);BOOST_TEST(mixed[0]==0);
+}
+BOOST_AUTO_TEST_CASE(movie_mono_rate_conversion_and_invalid_chunks) {
+    engine::audio::Mixer mixer(48000);engine::audio::MovieSound sound(mixer);
+    std::array<short,4> pcm{16384,16384,16384,16384};
+    Engine::Video::DecodedAudioChunk chunk{24000,1,Engine::Video::AudioSampleFormat::S16,0,std::as_bytes(std::span(pcm))};
+    BOOST_REQUIRE(sound.Submit(chunk));BOOST_TEST(sound.Queued()==8);sound.Start();
+    std::array<float,16> mixed{};mixer.Mix(mixed);
+    for(float sample:mixed) BOOST_TEST(sample==0.5f);
+    chunk.sample_rate=0;BOOST_TEST(!sound.Submit(chunk));
+}
+BOOST_AUTO_TEST_CASE(movie_bus_can_be_muted_independently_of_dialogue) {
+    engine::audio::Mixer mixer(48000);engine::audio::MovieSound sound(mixer,engine::audio::Bus::Cinematic);
+    mixer.SetBusGain(engine::audio::Bus::Speech,0);mixer.SetBusGain(engine::audio::Bus::Cinematic,0.25f);
+    std::array<short,8> pcm{};pcm.fill(16384);
+    Engine::Video::DecodedAudioChunk chunk{48000,2,Engine::Video::AudioSampleFormat::S16,0,std::as_bytes(std::span(pcm))};
+    BOOST_REQUIRE(sound.Submit(chunk));sound.Start();std::array<float,4> mixed{};mixer.Mix(mixed);
+    for(float sample:mixed) BOOST_TEST(sample==0.125f);
+    mixer.SetBusGain(engine::audio::Bus::Cinematic,0);mixer.Mix(mixed);
+    // Mixer gain changes ramp over the block; the final sample reaches mute.
+    BOOST_TEST(mixed.back()==0.0f);
+}

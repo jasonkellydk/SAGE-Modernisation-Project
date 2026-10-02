@@ -1,0 +1,60 @@
+#define BOOST_TEST_MODULE EngineAuthority
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+import engine.net.authority.server;
+using namespace engine::net;
+using namespace engine::net::authority;
+BOOST_AUTO_TEST_CASE(many_players_share_transport_and_receive_authoritative_snapshots)
+{
+	Server server; std::vector<std::unique_ptr<Connection>> clients;
+	const std::array<std::byte, 1> payload{std::byte{42}};
+	for (PeerId id = 1; id <= 256; ++id)
+	{
+		auto [client, connection] = MakeLoopback(); BOOST_REQUIRE(server.Connect(id, std::move(connection)));
+		client->Send(EncodeInput(1, 1, payload)); clients.push_back(std::move(client));
+	}
+	const auto inputs = server.BeginTick(1); BOOST_REQUIRE(inputs.size() == 256);
+	for (std::size_t i = 0; i < inputs.size(); ++i) BOOST_TEST(inputs[i].peer == i + 1);
+	server.Publish(payload);
+	for (auto &client : clients)
+	{
+		auto packet = client->Receive(); BOOST_REQUIRE(packet);
+		auto snapshot = DecodeSnapshot(*packet); BOOST_REQUIRE(snapshot);
+		BOOST_TEST(snapshot->tick == 1u); BOOST_TEST(std::to_integer<unsigned>(snapshot->payload[0]) == 42u);
+	}
+	BOOST_TEST(server.BeginTick(2).empty()); // No lockstep wait.
+}
+BOOST_AUTO_TEST_CASE(duplicate_stale_future_malformed_and_disconnected_inputs_are_rejected)
+{
+	Server server; auto [client, connection] = MakeLoopback(); BOOST_REQUIRE(server.Connect(9, std::move(connection)));
+	client->Send(EncodeInput(1, 1, {})); client->Send(EncodeInput(1, 1, {}));
+	client->Send(EncodeInput(2, 0, {})); client->Send(EncodeInput(2, 99, {}));
+	client->Send({std::byte{3}}); client->Send(EncodeInput(2, 2, {}));
+	BOOST_TEST(server.BeginTick(1).size() == 1u);
+	BOOST_TEST(server.BeginTick(2).size() == 1u);
+	client->Send(EncodeInput(3, 3, {})); server.Disconnect(9);
+	BOOST_TEST(!client->Open()); BOOST_TEST(server.BeginTick(3).empty());
+}
+BOOST_AUTO_TEST_CASE(peer_and_future_queue_limits_are_bounded)
+{
+	Server server(Limits{1, 2, 8, 4}); auto [client, connection] = MakeLoopback(); BOOST_REQUIRE(server.Connect(1, std::move(connection)));
+	auto [other, rejected] = MakeLoopback(); BOOST_TEST(!server.Connect(2, std::move(rejected)));
+	for (std::uint64_t seq = 1; seq <= 8; ++seq) client->Send(EncodeInput(seq, 5, {}));
+	BOOST_TEST(server.BeginTick(1).empty()); BOOST_TEST(server.BeginTick(2).empty());
+	BOOST_TEST(server.BeginTick(3).empty()); BOOST_TEST(server.BeginTick(4).empty());
+	BOOST_TEST(server.BeginTick(5).size() == 2u);
+}
+BOOST_AUTO_TEST_CASE(remote_close_drops_future_inputs_and_oversized_packets_are_rejected)
+{
+	Server server(Limits{2, 4, 8, 4, 16}); auto [client, connection] = MakeLoopback();
+	BOOST_REQUIRE(server.Connect(1, std::move(connection)));
+	const std::vector<std::byte> oversized(9);
+	client->Send(EncodeInput(1, 1, oversized)); client->Send(EncodeInput(1, 2, {}));
+	BOOST_TEST(server.BeginTick(1).empty());
+	BOOST_CHECK_THROW(server.Publish(std::vector<std::byte>(17)), std::invalid_argument);
+	client->Close(); BOOST_TEST(server.BeginTick(2).empty()); BOOST_TEST(server.Players() == 0u);
+}

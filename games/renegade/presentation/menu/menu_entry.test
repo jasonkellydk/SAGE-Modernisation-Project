@@ -1,0 +1,78 @@
+#include <boost/test/unit_test.hpp>
+import games.renegade.presentation.menu.menu_entry;
+import std;
+import engine.gui.w3d.dialog_template;
+using namespace renegade::presentation;
+using namespace engine::gui::w3d;
+
+BOOST_AUTO_TEST_CASE(interface_sounds_follow_source_control_kind_and_activation_edge) {
+    DialogControlDefinition control;control.kind.ordinal=0x80;control.style=0x8003;
+    BOOST_CHECK(InterfaceKind(control)==InterfaceControlKind::Value);
+    control.style=0x8000;BOOST_CHECK(InterfaceKind(control)==InterfaceControlKind::Entry);
+    control.style=0;BOOST_CHECK(InterfaceKind(control)==InterfaceControlKind::Button);
+    control.kind.ordinal.reset();control.kind.text=u"Button";
+    BOOST_CHECK(InterfaceKind(control)==InterfaceControlKind::Button);
+    control.kind.text=u"msctls_trackbar32";BOOST_CHECK(InterfaceKind(control)==InterfaceControlKind::Other);
+    using Kind=InterfaceControlKind;using Action=InterfaceInteraction;
+    // buttonctrl.cpp clicks on down, even if the later up misses the button;
+    // keyboard command clicks once. Pointer-up must not duplicate that sound.
+    std::vector<unsigned> button_sounds;
+    for(auto action:{Action::Focus,Action::PointerDown,Action::PointerUp,Action::KeyboardCommand})
+        if(auto sound=InterfaceSound(Kind::Button,action)) button_sounds.push_back(*sound);
+    BOOST_CHECK(button_sounds==std::vector<unsigned>({0,0}));
+    // The menu entry animation reports its own press edge and focus acquisition.
+    BOOST_REQUIRE(InterfaceSound(Kind::Entry,Action::Focus));
+    BOOST_TEST(*InterfaceSound(Kind::Entry,Action::Focus)==1u);
+    BOOST_REQUIRE(InterfaceSound(Kind::Entry,Action::Press));
+    BOOST_TEST(*InterfaceSound(Kind::Entry,Action::Press)==0u);
+    BOOST_TEST(!InterfaceSound(Kind::Entry,Action::KeyboardCommand));
+    for(auto kind:{Kind::Value,Kind::Other})
+        for(auto action:{Action::Focus,Action::Press,Action::PointerDown,Action::KeyboardCommand,Action::PointerUp,Action::ValueChange})
+            BOOST_TEST(!InterfaceSound(kind,action));
+}
+
+BOOST_AUTO_TEST_CASE(menu_entry_press_deadline_survives_release_and_focus_loss) {
+    MenuEntryModel entry(menu_entry_timings);entry.Focus(true,1000);
+    BOOST_TEST(entry.Press(1100));entry.Release(1101);entry.Focus(false,1102);
+    BOOST_TEST(!entry.Press(1200));BOOST_TEST(!entry.Tick(1399));
+    BOOST_CHECK(entry.phase.Get()==MenuEntryPhase::Pressed);
+    BOOST_TEST(entry.Tick(1400));BOOST_CHECK(entry.phase.Get()==MenuEntryPhase::Idle);
+    BOOST_TEST(!entry.Tick(1401));BOOST_TEST(!entry.Tick(5000));
+}
+BOOST_AUTO_TEST_CASE(menu_entry_focus_pulse_restarts_at_deadline_without_emitting_commands) {
+    MenuEntryModel entry(menu_entry_timings);entry.Focus(true,100);
+    BOOST_TEST(!entry.Tick(1099));BOOST_TEST(entry.Elapsed(1099)==999);
+    BOOST_TEST(!entry.Tick(1100));BOOST_TEST(entry.Elapsed(1100)==0);
+    entry.Press(1200);BOOST_TEST(entry.Tick(1500));
+    BOOST_CHECK(entry.phase.Get()==MenuEntryPhase::Focused);BOOST_TEST(entry.Elapsed(1500)==0);
+    BOOST_TEST(entry.Elapsed(1499)==0);
+}
+BOOST_AUTO_TEST_CASE(menu_entry_focus_reentry_after_release_replaces_pending_press_with_highlight) {
+    // On_Kill_Focus preserves DOWN; On_Set_Focus switches to HILIGHT when
+    // WasButtonPressedOnMe is false. Focus loss alone does not cancel the press.
+    MenuEntryModel entry(menu_entry_timings);entry.Focus(true,1000);
+    entry.Press(1100,true);entry.Release(1101);entry.Focus(false,1102);
+    BOOST_CHECK(entry.phase.Get()==MenuEntryPhase::Pressed);
+    entry.Focus(true,1200);BOOST_CHECK(entry.phase.Get()==MenuEntryPhase::Focused);
+    BOOST_TEST(!entry.Tick(1400));BOOST_TEST(entry.Elapsed(1400)==200);
+}
+BOOST_AUTO_TEST_CASE(menu_entry_glow_matches_source_midpoints_and_boundary_snap) {
+    auto value=MenuEntryAppearance(MenuEntryPhase::Pressed,0);
+    BOOST_TEST(value.radius_x==5);BOOST_TEST(value.radius_y==5);BOOST_TEST(value.glow==0xff300000u);
+    value=MenuEntryAppearance(MenuEntryPhase::Pressed,75);
+    BOOST_TEST(value.radius_x==43);BOOST_TEST(value.radius_y==11);BOOST_TEST(value.glow==0xff300e00u);
+    value=MenuEntryAppearance(MenuEntryPhase::Pressed,150);
+    BOOST_TEST(value.radius_x==82);BOOST_TEST(value.radius_y==17);BOOST_TEST(value.glow==0xff301c00u);
+    value=MenuEntryAppearance(MenuEntryPhase::Pressed,225);
+    BOOST_TEST(value.radius_x==121);BOOST_TEST(value.radius_y==23);BOOST_TEST(value.glow==0xff180e00u);
+    value=MenuEntryAppearance(MenuEntryPhase::Pressed,299);
+    BOOST_TEST(value.radius_x==159);BOOST_TEST(value.radius_y==29);
+    value=MenuEntryAppearance(MenuEntryPhase::Pressed,300);
+    BOOST_TEST(value.radius_x==160);BOOST_TEST(value.radius_y==60);BOOST_TEST(value.glow==0xff000000u);
+    value=MenuEntryAppearance(MenuEntryPhase::Focused,500);
+    BOOST_TEST(value.radius_x==32);BOOST_TEST(value.glow==0xff100000u);
+    value=MenuEntryAppearance(MenuEntryPhase::Focused,750);
+    BOOST_TEST(value.radius_x==46);BOOST_TEST(value.glow==0xff080000u);
+    value=MenuEntryAppearance(MenuEntryPhase::Focused,0,true);
+    BOOST_TEST(value.radius_x==160);BOOST_TEST(value.radius_y==60);BOOST_TEST(value.glow==0xff100000u);
+}

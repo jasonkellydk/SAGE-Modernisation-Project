@@ -189,11 +189,15 @@ engine_add_module_library(engine_gameplay_movement
 	TESTS rts/movement/movement.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
+# Passive health components are shared independently of damage policies.
+engine_add_module_library(engine_gameplay_health_components
+	MODULES common/health/components/health.cppm common/health/components/shield.cppm
+	DEPENDS engine_ecs engine_core_math_fixed)
+
 # common/health: armor, hit points, damage application and deaths.
 engine_add_module_library(engine_gameplay_health
 	MODULES
 		common/health/definitions/armor.cppm
-		common/health/components/health.cppm
 		common/health/components/health_floor.cppm
 		common/health/components/damage_scalar.cppm
 		common/health/components/second_life.cppm
@@ -208,7 +212,7 @@ engine_add_module_library(engine_gameplay_health
 		common/health/components/subdual.cppm
 		common/health/systems/subdual_system.cppm
 		common/health/systems/status_damage_system.cppm
-	DEPENDS engine_ecs engine_core_math_fixed engine_gameplay_spatial engine_gameplay_status)
+	DEPENDS engine_ecs engine_core_math_fixed engine_gameplay_spatial engine_gameplay_status engine_gameplay_health_components)
 
 # common/physics: bodies moved by forces (gravity, friction, bouncing, tumbling).
 engine_add_module_library(engine_gameplay_physics

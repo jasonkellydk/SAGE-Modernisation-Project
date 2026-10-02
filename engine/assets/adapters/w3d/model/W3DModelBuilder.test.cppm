@@ -32,6 +32,50 @@ BOOST_AUTO_TEST_CASE(model_builder_keeps_optional_skin_weights)
     BOOST_TEST(description.skin_bone_count == 8u);
 }
 
+BOOST_AUTO_TEST_CASE(authored_screen_blend_and_depth_survive_shader_decode_and_model_building)
+{
+	// EA w3d_file.h's ONE / ONE_MINUS_SRC_COLOR, depth writes off. This
+	// 16-byte source fixture is also used by the retail EVA gizmo meshes.
+	const std::array<std::byte,16> wire{std::byte{3},std::byte{0},std::byte{0},std::byte{3},
+		std::byte{2},std::byte{1},std::byte{0},std::byte{1},std::byte{1},std::byte{0},
+		std::byte{0},std::byte{2},std::byte{0},std::byte{0},std::byte{0},std::byte{2}};
+	Assets::W3D::W3DShaderSettings shader;
+	BOOST_REQUIRE(Assets::W3D::W3DRead_Shader(wire,shader));
+	Assets::W3D::W3DParsedMesh mesh;
+	mesh.header.sort_level=1;
+	mesh.positions={{0,0,0},{1,0,0},{0,1,0}};
+	mesh.normals.assign(3,{0,0,1});mesh.stage_texcoords.assign(3,{});mesh.colors.assign(3,{});
+	mesh.triangles={{0,1,2}};
+	mesh.materials.vertex_materials.push_back({{"screen",""}});
+	mesh.materials.shaders.push_back(shader);
+	Assets::W3D::W3DMaterialPass pass;pass.vertex_material_index=0;pass.shader_index=0;
+	mesh.materials.passes.push_back(pass);
+	Assets::ModelAssetDesc description;
+	Assets::W3D::W3DAppend_Mesh(description,mesh);
+	BOOST_REQUIRE_EQUAL(description.materials.size(),1u);
+	const auto& material=description.materials[0];
+	BOOST_REQUIRE(material.draw_state);
+	BOOST_CHECK(material.draw_state->source==Assets::MaterialBlendFactor::One);
+	BOOST_CHECK(material.draw_state->destination==Assets::MaterialBlendFactor::InverseSourceColor);
+	BOOST_CHECK(material.draw_state->depth_comparison==Assets::MaterialDepthComparison::LessEqual);
+	BOOST_TEST(!material.depth_write);
+	BOOST_CHECK(material.render_mode!=Assets::MaterialRenderMode::AlphaBlend);
+	BOOST_TEST(description.submeshes[0].blends);
+	BOOST_TEST(description.submeshes[0].sort_level==1);
+	mesh.header.sort_level=3;
+	Assets::W3D::W3DAppend_Mesh(description,mesh);
+	BOOST_REQUIRE_EQUAL(description.submeshes.size(),2u);
+	BOOST_TEST(description.submeshes[0].sort_level==1);
+	BOOST_TEST(description.submeshes[1].sort_level==3);
+	// Depth writes and alpha blending are independent properties.
+	mesh.materials.shaders[0].destination_blend=0;
+	description={};Assets::W3D::W3DAppend_Mesh(description,mesh);
+	BOOST_REQUIRE(description.materials[0].draw_state);
+	BOOST_CHECK(description.materials[0].draw_state->destination==Assets::MaterialBlendFactor::Zero);
+	BOOST_CHECK(description.materials[0].render_mode==Assets::MaterialRenderMode::Opaque);
+	BOOST_TEST(!description.submeshes[0].blends);
+}
+
 BOOST_AUTO_TEST_CASE(model_builder_creates_generic_submesh_and_dependencies)
 {
 	Assets::W3D::W3DParsedMesh mesh;
@@ -46,6 +90,7 @@ BOOST_AUTO_TEST_CASE(model_builder_creates_generic_submesh_and_dependencies)
 	mesh.colors.assign(3, {});
 	mesh.triangles.push_back({0, 1, 2});
 	mesh.materials.vertex_materials.push_back({{"body_material", "Body.TGA"}});
+	mesh.materials.vertex_materials.back().material.texture_mappings[0]=Assets::TextureEnvironmentMapping{Assets::TextureEnvironmentSource::Reflection};
 	mesh.materials.textures.push_back({"Body.TGA"});
 	mesh.materials.passes.push_back({0, 0, {}});
 
@@ -56,6 +101,8 @@ BOOST_AUTO_TEST_CASE(model_builder_creates_generic_submesh_and_dependencies)
 	BOOST_REQUIRE_EQUAL(description.indices.size(), 3);
 	BOOST_REQUIRE_EQUAL(description.submeshes.size(), 1);
 	BOOST_REQUIRE_EQUAL(description.materials.size(), 1);
+	BOOST_REQUIRE(description.materials[0].texture_mappings[0]);
+	BOOST_CHECK(std::get<Assets::TextureEnvironmentMapping>(*description.materials[0].texture_mappings[0]).source==Assets::TextureEnvironmentSource::Reflection);
 	BOOST_CHECK(description.submeshes[0].material_index == 0);
 	// Each submesh keeps its own mesh's attribute bits (W3DMeshRenderObject::Load_W3D reads hidden, collision and geometry
 	// type per mesh), not only the model's union.

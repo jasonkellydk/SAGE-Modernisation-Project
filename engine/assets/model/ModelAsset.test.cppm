@@ -64,3 +64,35 @@ BOOST_AUTO_TEST_CASE(model_runtime_keeps_surface_texture_identity_and_shading_pa
 	BOOST_TEST(model.Materials()[0].surface_textures[role].canonical_name == "textures/normal.dds");
 	BOOST_CHECK(model.Materials()[0].surface_textures[role].type == Assets::AssetType::Texture);
 }
+
+BOOST_AUTO_TEST_CASE(flattened_submeshes_keep_independent_static_levels_and_default_zero)
+{
+	Assets::ModelAssetDesc description;
+	description.sort_level = 19;
+	description.submeshes.push_back({0,3,0,"background"});
+	description.submeshes.back().sort_level = 5;
+	description.submeshes.push_back({3,3,0,"overlay"});
+	description.submeshes.back().sort_level = 1;
+	description.submeshes.push_back({6,3,0,"ordinary"});
+	const Assets::ModelAsset model({Assets::AssetType::Model,"mixed"},description);
+	BOOST_REQUIRE_EQUAL(model.Submeshes().size(),3u);
+	BOOST_CHECK_EQUAL(model.Sort_Level(),19);
+	BOOST_CHECK_EQUAL(model.Submeshes()[0].sort_level,5);
+	BOOST_CHECK_EQUAL(model.Submeshes()[1].sort_level,1);
+	BOOST_CHECK_EQUAL(model.Submeshes()[2].sort_level,0);
+}
+
+BOOST_AUTO_TEST_CASE(model_material_roundtrip_keeps_explicit_draw_state_and_absence)
+{
+	Assets::ModelAssetDesc description;
+	description.materials.push_back({"explicit"});
+	description.materials.back().draw_state = Assets::MaterialDrawState{
+		Assets::MaterialBlendFactor::One,Assets::MaterialBlendFactor::InverseSourceColor,
+		Assets::MaterialDepthComparison::Always};
+	description.materials.push_back({"default"});
+	const Assets::ModelAsset model({Assets::AssetType::Model,"materials"},description);
+	BOOST_REQUIRE_EQUAL(model.Materials().size(),2u);
+	BOOST_REQUIRE(model.Materials()[0].draw_state.has_value());
+	BOOST_CHECK(model.Materials()[0].draw_state==description.materials[0].draw_state);
+	BOOST_CHECK(!model.Materials()[1].draw_state.has_value());
+}

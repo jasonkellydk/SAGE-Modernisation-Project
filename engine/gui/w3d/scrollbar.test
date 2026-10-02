@@ -1,0 +1,60 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gui.w3d.scrollbar;
+using namespace engine::gui::w3d;
+namespace {
+constexpr ScrollGeometry geometry{{0,0,20,20},{0,180,20,200},{0,60,20,80},{0,20,20,160}};
+}
+BOOST_AUTO_TEST_CASE(w3d_scroll_source_range_changes_preserve_position_and_page_effects_survive_zero_movement) {
+    std::vector<std::pair<char,int>> notifications;
+    ScrollBarModel model([&](int value){notifications.emplace_back('p',value);},[&](int value){notifications.emplace_back('g',value);});
+    model.Set(70);notifications.clear();model.Range(10,20);
+    BOOST_TEST(model.position.Get()==70);BOOST_TEST(notifications.empty());
+    model.Set(70,false);BOOST_TEST(model.position.Get()==20);BOOST_TEST(notifications.empty());
+    model.PageSize(0);model.Page(1);
+    BOOST_REQUIRE_EQUAL(notifications.size(),1);BOOST_CHECK(notifications[0]==std::pair('g',1));
+    notifications.clear();model.PageSize(7);model.Page(-1);
+    const std::array expected{std::pair('p',13),std::pair('g',-1)};
+    BOOST_CHECK(std::ranges::equal(notifications,expected));
+    notifications.clear();model.Page(1,false);BOOST_TEST(model.position.Get()==20);BOOST_TEST(notifications.empty());
+    model.Range(25,5);BOOST_TEST(model.Minimum()==25);BOOST_TEST(model.Maximum()==25);BOOST_TEST(model.position.Get()==20);
+    model.Key(ScrollAction::First);BOOST_TEST(model.position.Get()==25);
+}
+BOOST_AUTO_TEST_CASE(w3d_scroll_notifications_reach_parent_before_advise_sink_with_source_position_before_page_order) {
+    std::vector<int> events;
+    ScrollBarModel model([&](int value){events.push_back(200+value);},[&](int value){events.push_back(400+value);});
+    model.ParentNotifications([&](int value){events.push_back(100+value);},[&](int value){events.push_back(300+value);});
+    model.Range(0,5);model.PageSize(10);model.Page(1);
+    BOOST_CHECK(std::ranges::equal(events,std::array{105,205,301,401}));
+    events.clear();model.Page(1);BOOST_CHECK(std::ranges::equal(events,std::array{301,401}));
+    events.clear();model.Page(-1,false);BOOST_TEST(events.empty());BOOST_TEST(model.position.Get()==0);
+}
+BOOST_AUTO_TEST_CASE(w3d_scroll_source_arrow_holds_advance_per_render_and_page_area_does_not_repeat) {
+    ScrollBarModel model;model.Range(0,12);model.Set(5);
+    BOOST_REQUIRE(model.PointerDown(10,10,geometry));BOOST_TEST(model.position.Get()==5);
+    for(int frame=1;frame<=8;++frame) {model.AdvanceRender();BOOST_TEST(model.position.Get()==std::max(0,5-frame));}
+    BOOST_REQUIRE(model.PointerDown(10,190,geometry));BOOST_TEST(model.position.Get()==0);
+    for(int frame=1;frame<=15;++frame) {model.AdvanceRender();BOOST_TEST(model.position.Get()==std::min(12,frame));}
+    model.LoseFocus();model.AdvanceRender();BOOST_TEST(model.position.Get()==12);BOOST_TEST(model.Pressed());
+    model.PointerUp();BOOST_TEST(!model.Pressed());BOOST_TEST(!model.Captured());
+    model.Set(11);BOOST_REQUIRE(model.PointerDown(10,30,geometry));BOOST_TEST(model.position.Get()==1);
+    for(int frame=0;frame<12;++frame) model.AdvanceRender();BOOST_TEST(model.position.Get()==1);
+    model.CaptureLost();BOOST_TEST(!model.Captured());
+    model.enabled.Set(false);BOOST_TEST(!model.Key(ScrollAction::Last));BOOST_TEST(!model.PointerDown(10,190,geometry));
+}
+BOOST_AUTO_TEST_CASE(w3d_scroll_source_drag_uses_grab_offset_truncation_bounds_and_safe_geometry) {
+    // Independent source equation: thumb60, track20..160, min10,max50.
+    // Grab at thumbY61/70/79 then delta7 yields 10+int(47/140*40)==23.
+    for(const float grab:{61.f,70.f,79.f}) {
+        ScrollBarModel model;model.Range(10,50);model.Set(21);
+        BOOST_REQUIRE(model.PointerDown(10,grab,geometry));BOOST_CHECK(model.Interaction()==ScrollInteraction::Drag);
+        BOOST_REQUIRE(model.PointerMove(grab+7,geometry));BOOST_TEST(model.position.Get()==23);
+        BOOST_REQUIRE(model.PointerMove(grab-200,geometry));BOOST_TEST(model.position.Get()==10);
+        BOOST_REQUIRE(model.PointerMove(grab+200,geometry));BOOST_TEST(model.position.Get()==50);
+        auto invalid=geometry;invalid.track.bottom=invalid.track.top;
+        BOOST_TEST(!model.PointerMove(grab,invalid));BOOST_TEST(model.position.Get()==50);
+        BOOST_TEST(!model.PointerMove(std::numeric_limits<float>::quiet_NaN(),geometry));
+        model.Range(10,10);BOOST_REQUIRE(model.PointerMove(grab,geometry));BOOST_TEST(model.position.Get()==10);
+        model.PointerUp();BOOST_TEST(!model.PointerMove(grab,geometry));
+    }
+}

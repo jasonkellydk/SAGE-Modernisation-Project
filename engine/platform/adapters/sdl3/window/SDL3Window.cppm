@@ -19,6 +19,11 @@ public:
 	[[nodiscard]] Point2D position() const noexcept override { int x = 0, y = 0; SDL_GetWindowPosition(m_window, &x, &y); return {static_cast<float>(x), static_cast<float>(y)}; }
 	[[nodiscard]] std::optional<NativeWindowHandle> native_handle(NativeWindowSystem system) const noexcept override
 	{
+		if (system == NativeWindowSystem::automatic) {
+			for (const auto candidate : {NativeWindowSystem::win32, NativeWindowSystem::wayland, NativeWindowSystem::x11, NativeWindowSystem::cocoa})
+				if (auto handle = native_handle(candidate)) return handle;
+			return std::nullopt;
+		}
 		const auto props = SDL_GetWindowProperties(m_window);
 		if (system == NativeWindowSystem::win32) { auto* handle = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr); if (handle) return NativeWindowHandle{system, nullptr, handle}; }
 		if (system == NativeWindowSystem::x11) { auto* display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr); const auto window = SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0); if (display && window) return NativeWindowHandle{system, display, reinterpret_cast<void*>(static_cast<std::uintptr_t>(window))}; }

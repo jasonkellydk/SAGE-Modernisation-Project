@@ -35,3 +35,23 @@ BOOST_AUTO_TEST_CASE(model_conversion_keeps_large_indices_uvs_normals_and_tangen
     Assets::ModelAsset invalid({Assets::AssetType::Model,"bad"},source);
     BOOST_TEST(!Graphics::Build_Prop_Asset_Geometry(invalid,parts,error));
 }
+
+BOOST_AUTO_TEST_CASE(flattened_geometry_keeps_per_part_static_order_without_inheriting_root)
+{
+    Assets::ModelAssetDesc source;
+    source.sort_level=20;
+    source.vertices.resize(3); source.indices={0,1,2};
+    source.materials.push_back({"shared"});
+    source.submeshes.push_back({0,3,0,"back"});
+    source.submeshes.back().sort_level=5;
+    source.submeshes.push_back({0,3,0,"front"});
+    source.submeshes.back().sort_level=1;
+    source.submeshes.push_back({0,3,0,"ordinary"});
+    Assets::ModelAsset model({Assets::AssetType::Model,"mixed"},source);
+    std::vector<Graphics::PropAssetPart> parts; std::string error;
+    BOOST_REQUIRE(Graphics::Build_Prop_Asset_Geometry(model,parts,error));
+    BOOST_REQUIRE_EQUAL(parts.size(),3u);
+    BOOST_CHECK_EQUAL(parts[0].sort_level,5);
+    BOOST_CHECK_EQUAL(parts[1].sort_level,1);
+    BOOST_CHECK_EQUAL(parts[2].sort_level,0);
+}

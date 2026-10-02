@@ -1,0 +1,36 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.audio_settings;
+BOOST_AUTO_TEST_CASE(technical_tabs_compose_source_key_directions_with_retail_page_resources) {
+    using engine::gui::w3d::ValueKey;
+    renegade::presentation::TechOptions tabs;
+    BOOST_TEST(tabs.Resource()==231u);BOOST_TEST(tabs.Key(ValueKey::Down));BOOST_TEST(tabs.Resource()==233u);
+    BOOST_TEST(tabs.Key(ValueKey::End));BOOST_TEST(tabs.Resource()==232u);
+    BOOST_TEST(tabs.Key(ValueKey::Right));BOOST_TEST(tabs.Resource()==232u);
+    BOOST_TEST(tabs.Key(ValueKey::Left));BOOST_TEST(tabs.Resource()==233u);
+    BOOST_TEST(tabs.Key(ValueKey::Home));BOOST_TEST(tabs.Key(ValueKey::Up));BOOST_TEST(tabs.Resource()==231u);
+    BOOST_TEST(!tabs.Select(3));BOOST_TEST(!tabs.Key(ValueKey::Space));BOOST_TEST(!tabs.Key(ValueKey::Enter));
+}
+
+BOOST_AUTO_TEST_CASE(audio_defaults_match_source_and_clamp_ini_overrides) {
+    const auto original=renegade::presentation::ReadAudioDefaults("");BOOST_REQUIRE(original);
+    BOOST_TEST((*original)[0]==43);BOOST_TEST((*original)[1]==31);BOOST_TEST((*original)[2]==50);BOOST_TEST((*original)[3]==100);
+    const auto mod=renegade::presentation::ReadAudioDefaults("[Default Volume]\nMUSIC_VOLUME=200\nSOUND_VOLUME=-10\nDIALOG_VOLUME=72\n");
+    BOOST_REQUIRE(mod);BOOST_TEST((*mod)[0]==0);BOOST_TEST((*mod)[1]==100);BOOST_TEST((*mod)[2]==72);BOOST_TEST((*mod)[3]==100);
+    BOOST_CHECK(!renegade::presentation::ReadAudioDefaults("[Default Volume]\nMUSIC_VOLUME=invalid\n"));
+}
+BOOST_AUTO_TEST_CASE(audio_checkboxes_disable_sliders_and_defaults_preserve_muting) {
+    std::array<int,4> applied{};std::array<bool,4> enabled{};
+    renegade::presentation::AudioSettings settings({43,31,50,100},[&](auto category,int value,bool on) {
+        applied[static_cast<unsigned>(category)]=value;enabled[static_cast<unsigned>(category)]=on;
+    });
+    BOOST_TEST(applied[1]==31);BOOST_TEST(enabled[1]);
+    settings.volumes[1].Set(83);BOOST_TEST(applied[1]==83);
+    BOOST_REQUIRE(settings.enabled[1].Toggle());BOOST_TEST(!enabled[1]);BOOST_TEST(!settings.volumes[1].enabled.Get());
+    BOOST_TEST(!settings.volumes[1].Key(engine::gui::w3d::RangeAction::Increment));
+    BOOST_REQUIRE(settings.defaults_command.Execute());BOOST_TEST(applied[1]==31);BOOST_TEST(!enabled[1]);
+    BOOST_REQUIRE(settings.enabled[1].Toggle());BOOST_TEST(enabled[1]);BOOST_TEST(settings.volumes[1].enabled.Get());
+    BOOST_TEST(*renegade::presentation::AudioSettings::SliderIndex(1028)==3);
+    BOOST_TEST(*renegade::presentation::AudioSettings::CheckIndex(1025)==2);
+    BOOST_CHECK(!renegade::presentation::AudioSettings::SliderIndex(1339));
+}

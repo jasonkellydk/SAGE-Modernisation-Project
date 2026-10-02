@@ -1,0 +1,57 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.presentation.menu.performance_settings;
+import engine.gui.w3d.value_controls;
+import engine.config.adapters.preferences.preferences_file;
+using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(performance_presets_and_expert_controls_preserve_source_application_lifetime) {
+    PerformanceSettings model;
+    BOOST_CHECK(model.Values()==PerformanceValues({2,2,1,2,1,1,0}));
+    BOOST_TEST(model.level.position.Get()==2);BOOST_TEST(!model.expert.checked.Get());BOOST_TEST(!model.npatches.enabled.Get());
+    for(int level=0;level<4;++level) {
+        model.level.Set(level);BOOST_CHECK(model.Values()==performance_presets[level]);
+        const auto applied=model.Apply();constexpr std::array budgets{0,0,5000,10000};
+        BOOST_TEST(applied.dynamic_budget==budgets[level]);BOOST_TEST(applied.static_budget==budgets[level]);
+        BOOST_TEST(applied.texture_reduction==std::max(2-level,0));BOOST_TEST(applied.shadow_mode==level);
+    }
+    const auto previous=model.Applied();model.sliders[4].Set(0);model.static_projectors.Toggle();
+    BOOST_CHECK(model.Applied()==previous);BOOST_TEST(model.level.position.Get()==3); // expert edits do not re-rate
+    model.expert.Toggle();model.Open();BOOST_TEST(!model.expert.checked.Get());
+    BOOST_TEST(model.Apply().dynamic_budget==0);BOOST_TEST(!model.Apply().static_projectors);
+    BOOST_TEST(!engine::gui::w3d::HandleValueKey(model.npatches,engine::gui::w3d::ValueKey::Space));
+    BOOST_CHECK(model.Slider(1008)==&model.level);
+    // resource.h associates these IDs with shadow/texture/particle/surface/geometry.
+    BOOST_CHECK(model.Slider(1010)==&model.sliders[0]);BOOST_CHECK(model.Slider(1012)==&model.sliders[1]);
+    BOOST_CHECK(model.Slider(1013)==&model.sliders[2]);BOOST_CHECK(model.Slider(1015)==&model.sliders[3]);
+    BOOST_CHECK(model.Slider(1017)==&model.sliders[4]);BOOST_CHECK(!model.Slider(1007));
+    BOOST_CHECK(model.Check(1009)==&model.static_projectors);BOOST_CHECK(!model.Check(1010));
+    BOOST_TEST(!PerformanceSettings::ExpertControl(41,41));BOOST_TEST(PerformanceSettings::ExpertControl(41.01f,41));
+}
+BOOST_AUTO_TEST_CASE(performance_rating_matches_independent_source_oracle_for_every_supported_option_tuple) {
+    // Enumerate all 4*3^4*2 source-supported combinations, retaining duplicate
+    // preset matches (texture high, geometry low and NPatches zero).
+    constexpr int table[4][7]={{0,0,0,0,0,0,0},{1,1,0,0,0,0,0},{2,2,1,1,1,1,0},{3,2,2,2,2,1,0}};
+    for(int s=0;s<4;++s) for(int t=0;t<3;++t) for(int p=0;p<3;++p) for(int f=0;f<3;++f)
+    for(int g=0;g<3;++g) for(int b=0;b<2;++b) {
+        const PerformanceValues input{s,t,p,f,g,b,0};float total{};
+        for(unsigned column=0;column<7;++column) {
+            int count{},sum{};for(int row=0;row<4;++row) if(table[row][column]==input[column]) {sum+=row;++count;}
+            total+=float(sum)/count;
+        }
+        BOOST_TEST(DeterminePerformance(input)==int(total/7+.4f));
+    }
+    BOOST_TEST(GeometrySetting(999)==0);BOOST_TEST(GeometrySetting(1000)==1);BOOST_TEST(GeometrySetting(5000)==1);BOOST_TEST(GeometrySetting(5001)==2);
+    BOOST_TEST(DeterminePerformance({99,99,99,99,99,99,99})==0);
+}
+BOOST_AUTO_TEST_CASE(performance_preferences_preserve_budget_thresholds_and_unsupported_npatch_storage) {
+    auto preferences=engine::config::Preferences::Parse("mod=retained\nNPatches=1\nDynamic_LOD_Budget=5001\nStatic_LOD_Budget=1000\nTexture_Resolution=7\nStatic_Projectors=-1\n");
+    const auto original=ReadPerformancePreferences(preferences);BOOST_TEST(original.dynamic_budget==5001);BOOST_TEST(original.static_budget==1000);
+    PerformanceSettings settings(original);BOOST_TEST(settings.sliders[4].position.Get()==2);BOOST_TEST(settings.sliders[1].position.Get()==0);
+    BOOST_TEST(!settings.npatches.checked.Get());BOOST_TEST(settings.Apply().npatches);
+    WritePerformancePreferences(preferences,settings.Applied());const auto restored=engine::config::Preferences::Parse(preferences.Write());
+    BOOST_TEST(restored.Number("NPatches",0)==1);BOOST_TEST(restored.Number("Dynamic_LOD_Budget",0)==10000);
+    BOOST_TEST(restored.Number("Static_LOD_Budget",0)==10000);BOOST_TEST(restored.Number("Dynamic_Projectors",0)==1);
+    BOOST_TEST(*restored.Find("mod")=="retained");
+    PerformanceSettings supported(original,true);BOOST_TEST(supported.npatches.checked.Get());supported.npatches.Toggle();
+    WritePerformancePreferences(preferences,supported.Apply(),true);BOOST_TEST(preferences.Number("NPatches",1)==0);
+}

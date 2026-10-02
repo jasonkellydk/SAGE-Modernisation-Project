@@ -1,0 +1,39 @@
+#include <boost/test/unit_test.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include <span>
+import engine.gui.w3d.dialog_template;
+
+namespace {
+std::vector<std::byte> Template(bool extended) {
+    std::vector<std::byte> bytes;
+    const auto put = [&](std::uint32_t value, unsigned size) { for (unsigned i=0;i<size;++i) bytes.push_back(std::byte(value >> (i*8))); };
+    const auto text = [&](const char16_t* value) { do { put(*value,2); } while (*value++); };
+    if (extended) { put(1,2); put(0xffff,2); put(0,4); put(0,4); put(0x40,4); }
+    else { put(0x40,4); put(0,4); }
+    put(1,2); put(0,2); put(0,2); put(400,2); put(300,2);
+    put(0,2); put(0,2); text(u"IDS_MENU_TITLE"); put(8,2);
+    if (extended) { put(700,2); put(1,1); put(1,1); }
+    text(u"Arial");
+    while (bytes.size()%4) put(0,1);
+    if (extended) put(0,4);
+    put(0,4); put(0,4); put(108,2); put(63,2); put(220,2); put(21,2); put(extended ? 70000 : 123,extended ? 4 : 2);
+    put(0xffff,2); put(0x80,2); text(u"IDS_MENU_TEXT073"); put(4,2); put(0x1234,2);
+    return bytes;
+}
+}
+BOOST_AUTO_TEST_CASE(resource_dialog_preserves_source_descriptors_and_layout) {
+    for (bool extended : {false,true}) {
+        const auto bytes=Template(extended); const auto dialog=engine::gui::w3d::ReadDialogTemplate(bytes);
+        BOOST_REQUIRE(dialog.has_value()); BOOST_TEST(dialog->rect.width==400); BOOST_TEST(dialog->rect.height==300);
+        BOOST_REQUIRE_EQUAL(dialog->controls.size(),1u);
+        const auto& item=dialog->controls[0]; BOOST_TEST(item.id==(extended ? 70000u : 123u));
+        BOOST_TEST(item.rect.x==108); BOOST_TEST(item.rect.height==21); BOOST_TEST(*item.kind.ordinal==0x80);
+        BOOST_CHECK(item.title.text==u"IDS_MENU_TEXT073"); BOOST_CHECK(dialog->font==u"Arial");
+        BOOST_REQUIRE_EQUAL(item.creation_data.size(),2u); BOOST_TEST(std::to_integer<unsigned>(item.creation_data[0])==0x34);
+        if (extended) { BOOST_TEST(dialog->font_weight==700); BOOST_TEST(dialog->font_italic==1); }
+        for (std::size_t length=0;length<bytes.size();++length)
+            BOOST_CHECK(!engine::gui::w3d::ReadDialogTemplate(std::span(bytes).first(length)));
+    }
+}

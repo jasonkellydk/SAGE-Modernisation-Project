@@ -80,6 +80,9 @@ public:
 	}
 
 	std::size_t Size() const noexcept { return m_entries.size(); }
+	// Ordered, read-only enumeration for consumers such as content unlock lists.
+	// Mutating the preferences invalidates this view.
+	std::span<const std::pair<std::string,std::string>> Entries() const noexcept { return m_entries; }
 
 private:
 	static std::string_view Trim(std::string_view text) noexcept

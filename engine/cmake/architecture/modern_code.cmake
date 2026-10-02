@@ -8,6 +8,8 @@
 #   genre-dependency engine/gameplay/common importing rts/fps, or rts<->fps
 #   world-access     gameplay reaching the mutable World via GetWorld(); use
 #                    ecs::Lookup for reads and Commands() for writes
+#   native-platform game/W3D UI bypassing engine/platform through native headers,
+#                    SDL calls, DLL imports or OS-specific entry points
 # Graphics, gui, assets and video are still shared with the legacy build and
 # are outside this guard's scope for now.
 cmake_minimum_required(VERSION 3.25)
@@ -17,9 +19,9 @@ endif()
 
 set(modern_roots
     engine/ecs engine/jobs engine/events engine/time engine/core/math/fixed engine/core/serialization engine/net engine/audio engine/effects engine/config engine/filesystem engine/compression engine/level engine/localization engine/scripting
-    engine/gameplay games/generalszh)
+    engine/gameplay games/generalszh games/renegade engine/gui/w3d)
 # Presentation code may use float; everything else in scope is simulation.
-set(float_exempt "^(engine/audio|engine/effects|games/generalszh/presentation|games/generalszh/hosts|engine/core/math/fixed/presentation|engine/level/presentation)/")
+set(float_exempt "^(engine/audio|engine/effects|engine/gui/w3d|games/(generalszh|renegade)/(presentation|hosts|content/presentation)|engine/core/math/fixed/presentation|engine/level/presentation)/")
 
 if(NOT DEFINED MODERN_CODE_DEBT_FILE)
     set(MODERN_CODE_DEBT_FILE "${CMAKE_CURRENT_LIST_DIR}/modern_code_debt.cmake")
@@ -60,7 +62,13 @@ foreach(path IN LISTS sources)
             report("${path}" legacy-include)
             break()
         endif()
+        if(path MATCHES "^(games/renegade|engine/gui/w3d)/" AND include MATCHES "(windows[.]h|[Ww]inuser[.]h|[Ww]insock|SDL[23]/|X11/|Cocoa/|dlfcn[.]h)")
+            report("${path}" native-platform)
+        endif()
     endforeach()
+    if(path MATCHES "^(games/renegade|engine/gui/w3d)/" AND text MATCHES "(DllImport|dllimport|SDL_[A-Za-z_0-9]+|LoadLibrary[A-Za-z]*[ \t]*\\(|GetProcAddress[ \t]*\\(|SendMessage[A-Za-z]*[ \t]*\\(|PostMessage[A-Za-z]*[ \t]*\\()")
+        report("${path}" native-platform)
+    endif()
     if(text MATCHES "(^|[^A-Za-z_0-9])(AsciiString|UnicodeString|Real|Int|UnsignedInt|Bool|UnsignedShort|UnsignedByte|Coord2D|Coord3D|ICoord2D|ICoord3D)([^A-Za-z_0-9]|$)")
         report("${path}" legacy-type)
     endif()
@@ -73,7 +81,7 @@ foreach(path IN LISTS sources)
     if(text MATCHES "static[^;{}()]*[ \t&*](Get)?Instance[ \t]*\\(")
         report("${path}" singleton)
     endif()
-    if(path MATCHES "^(engine/gameplay|games/generalszh)/" AND text MATCHES "GetWorld[ \t]*\\(")
+    if(path MATCHES "^(engine/gameplay|games/(generalszh|renegade))/" AND text MATCHES "GetWorld[ \t]*\\(")
         report("${path}" world-access)
     endif()
     # common is genre-neutral; genres never depend on each other.
@@ -82,6 +90,9 @@ foreach(path IN LISTS sources)
        OR (path MATCHES "^engine/gameplay/rts/" AND text MATCHES "${import_prefix}fps[.]")
        OR (path MATCHES "^engine/gameplay/fps/" AND text MATCHES "${import_prefix}rts[.]"))
         report("${path}" genre-dependency)
+    endif()
+    if(path MATCHES "^(games/renegade|engine/gui/w3d)/" AND NOT path MATCHES "[.]cppm$")
+        report("${path}" module-only)
     endif()
 endforeach()
 
