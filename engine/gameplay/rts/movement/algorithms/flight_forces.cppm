@@ -189,38 +189,6 @@ inline void FlightMoveTowards(Transform &transform, Locomotion &motion, const Fl
 	}
 }
 
-// AIUpdateInterface::getLocomotorDistanceToGoal for a flyer's leg (computeFlightDistToGoal over its path from where it
-// was when the goal was set to the goal: what is left along that line, 0 once past; for aircraft no more than the
-// straight distance). The leg starts afresh when the goal changes.
-struct FlightLeg
-{
-	Engine::Math::Fixed along; // computeFlightDistToGoal
-	Engine::Math::Fixed left;  // getLocomotorDistanceToGoal
-};
-
-inline FlightLeg TrackFlightLeg(const Transform &transform, Locomotion &motion, Engine::Math::FixedVector2 goal) noexcept
-{
-	using Engine::Math::Fixed;
-	if (motion.tracking == 0 || motion.flightGoal != goal)
-	{
-		motion.flightFrom = transform.position.XY();
-		motion.flightGoal = goal;
-		motion.tracking = 1;
-	}
-	const Engine::Math::FixedVector2 path = goal - motion.flightFrom;
-	const Fixed length = Engine::Math::Length(path);
-	const Engine::Math::FixedVector2 toGoal = goal - transform.position.XY();
-	FlightLeg leg;
-	if (length > Fixed{})
-	{
-		const Fixed dot = (toGoal.x * path.x + toGoal.y * path.y) / length;
-		leg.along = dot >= Fixed{} ? dot : Fixed{};
-	}
-	const Fixed straight = Engine::Math::Length(toGoal);
-	leg.left = leg.along > straight ? straight : leg.along;
-	return leg;
-}
-
 // Locomotor::locoUpdate_maintainCurrentPosition for a flyer: the place it holds taken; not braking; wings above their
 // terrain, while driven, aim for the far side of their circle at their least speed (maintainCurrentPositionWings); hover,
 // while driven, brakes its forward speed toward its least (maintainCurrentPositionHover); then its height.

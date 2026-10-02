@@ -155,6 +155,20 @@ struct Base
 	{
 		for (int step = 0; step < most && world.Get<Jet>(jet)->state != state; ++step)
 			Step();
+		if (world.Get<Jet>(jet)->state != state)
+		{
+			const Jet &cycle = *world.Get<Jet>(jet);
+			const Transform &at = *world.Get<Transform>(jet);
+			const Locomotion &motion = *world.Get<Locomotion>(jet);
+			const MoveOrder &order = *world.Get<MoveOrder>(jet);
+			BOOST_TEST_INFO("Until expected state " << static_cast<unsigned int>(state) << ", actual " << static_cast<unsigned int>(cycle.state)
+				<< ", tick " << tick << ", position raw (" << at.position.x.Raw() << "," << at.position.y.Raw() << "," << at.position.z.Raw()
+				<< "), speed raw " << motion.speed.Raw() << ", close raw " << motion.locomotor.closeEnough.Raw()
+				<< ", cap raw " << motion.speedCap.Raw() << ", order mode " << static_cast<unsigned int>(order.mode)
+				<< ", destination raw (" << order.destination.x.Raw() << "," << order.destination.y.Raw()
+				<< "), leg " << static_cast<unsigned int>(cycle.leg) << "/" << static_cast<unsigned int>(cycle.pathCount)
+				<< ", forced " << static_cast<unsigned int>(motion.forced) << ", locomotor " << static_cast<unsigned int>(motion.locomotor.appearance));
+		}
 		return world.Get<Jet>(jet)->state == state ? tick : 0;
 	}
 
@@ -181,23 +195,31 @@ BOOST_AUTO_TEST_CASE(a_jet_waits_parked_until_it_has_something_to_do)
 	BOOST_TEST((base.world.Get<Transform>(mig)->position.x == Fixed::FromInt(980)));
 }
 
-// JetOrHeliReturnForLandingState inherits AIInternalMoveToState: the return state completes when its movement does.
-// Kinematic Steer accepts max(closeEnough, speed): at speed 6 it may stop 5 units short of the approach. The cycle
-// must accept that endpoint, including the exact edge, but not an endpoint one fixed-point unit beyond it.
-BOOST_AUTO_TEST_CASE(a_kinematic_return_uses_the_movements_arrival_boundary)
+// JetOrHeliReturnForLandingState inherits AIInternalMoveToState: aircraft complete by what remains along their flight
+// leg, strictly below authored CloseEnoughDist. On an eastward leg from (1000,1000) to (1175,1000), an aircraft 30
+// units sideways still has only its eastward displacement left. Neither its speed nor a larger radial distance
+// widens the authored completion limit; crossing the goal plane leaves zero along the leg.
+BOOST_AUTO_TEST_CASE(a_kinematic_return_uses_the_authored_flight_leg_completion_boundary)
 {
 	Airfield field;
 	field.spaceCount = field.runwayCount = 1;
 	field.runways[0] = {{Fixed::FromInt(1000), Fixed::FromInt(1000), {}}, {Fixed::FromInt(1100), Fixed::FromInt(1000), {}}};
-	const auto returns = [&](Fixed distance, Fixed speed, Fixed closeEnough) {
+	const Engine::Math::FixedVector2 goal{Fixed::FromInt(1175), Fixed::FromInt(1000)};
+	const auto check = [&](Fixed left, Fixed speed, Fixed closeEnough, bool reached) {
 		Jet jet;
 		jet.flight = Wings();
 		jet.state = JetState::Returning;
 		Locomotion motion = MakeLocomotion(Wings());
 		motion.speed = speed;
 		motion.locomotor.closeEnough = closeEnough;
+		motion.tracking = 1;
+		motion.flightFrom = {Fixed::FromInt(1000), Fixed::FromInt(1000)};
+		motion.flightGoal = goal;
 		Transform transform;
-		transform.position = {Fixed::FromInt(1175) + distance, Fixed::FromInt(1000), Fixed::FromInt(100)};
+		transform.position = {Fixed::FromInt(1175) - left, Fixed::FromInt(1030), Fixed::FromInt(100)};
+		Transform moved = transform;
+		Locomotion movement = motion;
+		BOOST_TEST(Steer(moved, movement, goal, true) == reached);
 		MoveOrder order;
 		RunwayTable table;
 		RunwayJetContext context;
@@ -206,15 +228,29 @@ BOOST_AUTO_TEST_CASE(a_kinematic_return_uses_the_movements_arrival_boundary)
 		context.tick = 1;
 		std::vector<DamageRecord> damage;
 		StepRunwayJet(context, jet, motion, order, transform, nullptr, nullptr, nullptr, nullptr, damage);
-		return jet.state;
+		BOOST_TEST((jet.state == (reached ? JetState::AwaitLanding : JetState::Returning)));
 	};
-	BOOST_TEST((returns(Fixed::FromInt(5), Fixed::FromInt(6), Fixed::One()) == JetState::AwaitLanding));
-	BOOST_TEST((returns(Fixed::FromInt(6), Fixed::FromInt(6), Fixed::One()) == JetState::AwaitLanding));
-	BOOST_TEST((returns(Fixed::FromInt(6) + Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::One()) == JetState::Returning));
-	BOOST_TEST((returns(Fixed::FromInt(8), Fixed::FromInt(6), Fixed::FromInt(8)) == JetState::AwaitLanding));
-	BOOST_TEST((returns(Fixed::FromInt(8) + Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::FromInt(8)) == JetState::Returning));
-	BOOST_TEST((returns(Fixed::One(), Fixed{}, Fixed::One()) == JetState::AwaitLanding));
-	BOOST_TEST((returns(Fixed::One() + Fixed::FromRaw(1), Fixed{}, Fixed::One()) == JetState::Returning));
+	check(Fixed::FromInt(2), Fixed::FromInt(6), Fixed::One(), false);
+	check(Fixed::One(), Fixed::FromInt(6), Fixed::One(), false);
+	check(Fixed::One() - Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::One(), true);
+	check(Fixed{}, Fixed::FromInt(6), Fixed::One(), true);
+	check(Fixed::FromInt(-10), Fixed::FromInt(6), Fixed::One(), true);
+	check(Fixed::FromInt(8), Fixed::FromInt(6), Fixed::FromInt(8), false);
+	check(Fixed::FromInt(8) - Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::FromInt(8), true);
+	check(Fixed::One(), Fixed{}, Fixed::One(), false);
+	check(Fixed::One() - Fixed::FromRaw(1), Fixed{}, Fixed::One(), true);
+	// No goal clears the prior leg, and the next move starts its own leg rather than completing on the old plane.
+	Transform transform;
+	transform.position = {Fixed::FromInt(1185), Fixed::FromInt(1030), Fixed::FromInt(100)};
+	Locomotion motion = MakeLocomotion(Wings());
+	motion.tracking = 1;
+	motion.flightFrom = {Fixed::FromInt(1000), Fixed::FromInt(1000)};
+	motion.flightGoal = goal;
+	Coast(transform, motion);
+	BOOST_TEST(motion.tracking == 0u);
+	const auto from = transform.position.XY();
+	BOOST_TEST(!Steer(transform, motion, goal, true));
+	BOOST_TEST((motion.flightFrom == from));
 }
 
 // Locomotor::getMaxSpeedForCondition caps the authored rate by setMaxSpeed; landing sets that cap to MinSpeed
