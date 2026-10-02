@@ -44,6 +44,13 @@ public:
 	// The main menu comes (back) into view: its buttons flash in (MainMenuInit's first launch; LogoFade on return).
 	void Enter(bool first)
 	{
+		// MainMenuInit (run again by Shell::doPop as the menu comes back, after a match too): the layout afresh, its other
+		// drop-downs hidden, the main one showing (no panel change plays).
+		if (!first)
+		{
+			m_shown = MainMenuPanel::Main;
+			m_viewModel.panel.Set(MainMenuPanel::Main);
+		}
 		visiblePanels.Set(Bit(m_viewModel.panel.Get()));
 		if (first)
 		{

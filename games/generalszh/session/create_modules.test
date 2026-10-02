@@ -54,6 +54,7 @@ import engine.gameplay.rts.economy.resources.player_energy;
 import engine.gameplay.common.health.components.pending_damage;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.locomotor_choice;
 import engine.gameplay.rts.collision.components.collider;
 import engine.gameplay.rts.collision.components.collide_weapon;
 import engine.gameplay.common.fire.components.flammable;
@@ -1314,6 +1315,109 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_tunnel_network_shares_room_heals_and_caves_
 	BOOST_TEST((!world.IsAlive(hurt) || world.Has<gp::Dying>(hurt)));
 }
 
+// Issue #52, as a player plays it: tunnels a GLA worker builds (DozerAIUpdate's construction, the tunnels' TunnelContain
+// running once they are finished) are one network; rebels told to enter the first (MSG_ENTER: groupEnter -> aiEnter) go
+// in, and the second's evacuate (MSG_EVACUATE) lets them out of the second.
+BOOST_AUTO_TEST_CASE(legacy_parity_built_tunnels_take_rebels_in_and_out_by_orders)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t team = match->Team(game, 1);
+	const ecs::Entity worker = game.Place("GLAInfantryWorker", match->At(400, 250), {}, team);
+	const std::uint32_t gla = world.Get<gp::Owner>(worker)->player;
+	world.Resource<gp::PlayerMoney>().Deposit(gla, 100000);
+	game.Tick();
+	const auto finish = [&](ecs::Entity site) {
+		for (int tick = 0; tick < 30 * 120 && world.IsAlive(site) && world.Has<gp::UnderConstruction>(site); ++tick)
+			game.Tick();
+		return world.IsAlive(site) && !world.Has<gp::UnderConstruction>(site);
+	};
+	const ecs::Entity first = generalszh::gameplay::BeginConstruction(game.Game(), worker, "GLATunnelNetwork", match->At(300, 300), {});
+	BOOST_TEST_REQUIRE(world.IsAlive(first));
+	BOOST_TEST_REQUIRE(finish(first));
+	const ecs::Entity second = generalszh::gameplay::BeginConstruction(game.Game(), worker, "GLATunnelNetwork", match->At(600, 300), {});
+	BOOST_TEST_REQUIRE(world.IsAlive(second));
+	BOOST_TEST_REQUIRE(finish(second));
+	std::vector<ecs::Entity> rebels;
+	for (int index = 0; index < 3; ++index)
+		rebels.push_back(game.Place("GLAInfantryRebel", match->At(380 + index * 12, 380), {}, team));
+	game.Tick();
+	auto enter = commands::Encode(commands::Enter{rebels, first});
+	enter.player = gla;
+	game.Tick(std::span(&enter, 1));
+	const auto &manifest = world.Resource<gp::CargoManifest>();
+	for (int tick = 0; tick < 30 * 30 && manifest.Count(first) < rebels.size(); ++tick)
+		game.Tick();
+	BOOST_TEST(manifest.Count(first) == rebels.size());
+	BOOST_TEST(manifest.Count(second) == rebels.size());
+	auto out = commands::Encode(commands::Evacuate{{second}});
+	out.player = gla;
+	game.Tick(std::span(&out, 1));
+	for (int tick = 0; tick < 30 * 30 && manifest.Count(second) > 0u; ++tick)
+		game.Tick();
+	BOOST_TEST(manifest.Count(second) == 0u);
+	for (const ecs::Entity rebel : rebels)
+	{
+		BOOST_TEST(!world.Has<gp::Passenger>(rebel));
+		const auto spot = world.Get<gp::Transform>(rebel)->position.XY();
+		const auto exit = world.Get<gp::Transform>(second)->position.XY();
+		BOOST_TEST((Engine::Math::Abs(spot.x - exit.x) < Fixed::FromInt(100) && Engine::Math::Abs(spot.y - exit.y) < Fixed::FromInt(100)));
+	}
+}
+
+// Issue #54 (AIUpdateInterface::doLocomotor -> chooseGoodLocomotorFromCurrentSet; EA AIPathfind.cpp
+// Pathfinder::chooseBestLocomotorForPosition / validLocomotorSurfacesForCellType; LocomotorSet::getValidSurfaces): the
+// Combat Cycle's SET_NORMAL is CombatBikeGroundLocomotor then CombatBikeCliffLocomotor (Surfaces = CLIFF). It is routed
+// over ground and cliff alike, moves on its cliff locomotor from the first tick it stands in a cliff cell and on its
+// ground one again the first tick it is back on clear ground; its rider's set changes keep both.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_combat_cycle_takes_its_cliff_locomotor_on_cliffs)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity bike = game.Place("GLAVehicleCombatBike", match->At(300, 300), {}, match->Team(game, 1));
+	BOOST_TEST_REQUIRE(world.Has<gp::LocomotorChoice>(bike));
+	const auto &choice = *world.Get<gp::LocomotorChoice>(bike);
+	BOOST_TEST(choice.count == 2u);
+	BOOST_TEST(choice.options[1].surfaces == gp::locomotor_surface::Cliff);
+	BOOST_TEST(world.Get<gp::NavigationAgent>(bike)->surfaces == (gp::locomotor_surface::Ground | gp::locomotor_surface::Cliff));
+	const auto &grid = world.Resource<gp::NavigationGrid>();
+	BOOST_TEST_REQUIRE(grid.ClearanceFor(gp::locomotor_surface::Ground | gp::locomotor_surface::Cliff) != nullptr);
+	// A cliff cell, and a clear one, of the map.
+	std::optional<Engine::Math::FixedVector2> cliff, clear;
+	for (std::int32_t y = 0; y < grid.Height() && (!cliff || !clear); ++y)
+		for (std::int32_t x = 0; x < grid.Width(); ++x)
+		{
+			const Engine::Math::FixedVector2 centre{Fixed::FromInt(x * 10 + 5), Fixed::FromInt(y * 10 + 5)};
+			if (!cliff && grid.Type(x, y) == gp::PathfindCellType::Cliff)
+				cliff = centre;
+			if (!clear && grid.Type(x, y) == gp::PathfindCellType::Clear && x > 20 && y > 20)
+				clear = centre;
+		}
+	BOOST_TEST_REQUIRE((cliff.has_value() && clear.has_value()));
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Ground);
+	world.Get<gp::Transform>(bike)->position = {cliff->x, cliff->y, game.Game().ground.At(*cliff)};
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Cliff);
+	BOOST_TEST(world.Get<gp::LocomotorChoice>(bike)->current == 1u);
+	world.Get<gp::Transform>(bike)->position = {clear->x, clear->y, game.Game().ground.At(*clear)};
+	game.Tick();
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Ground);
+	BOOST_TEST(world.Get<gp::LocomotorChoice>(bike)->current == 0u);
+}
+
 // TunnelTracker::isValidContainerFor: no aircraft in a tunnel network.
 BOOST_AUTO_TEST_CASE(legacy_parity_aircraft_do_not_enter_tunnels)
 {
@@ -2404,7 +2508,12 @@ BOOST_AUTO_TEST_CASE(legacy_parity_what_a_builder_may_make)
 	const std::int64_t before = money.Balance(america);
 	BOOST_TEST(!world.IsAlive(generalszh::gameplay::BeginConstruction(game.Game(), dozer, "AmericaWarFactory", match->At(400, 400), {})));
 	BOOST_TEST(money.Balance(america) == before);
-	game.Place("AmericaSupplyCenter", match->At(600, 600), {}, team);
+	// ProductionPrerequisite::calcNumPrereqUnitsOwned -> countObjectsByThingTemplate(ignoreUnderConstruction TRUE): a
+	// Supply Center still being built is no prerequisite; finished, it is.
+	const ecs::Entity center = game.Place("AmericaSupplyCenter", match->At(600, 600), {}, team);
+	world.Add<gp::UnderConstruction>(center);
+	BOOST_TEST((can(dozer, "AmericaWarFactory") == CanMake::NoPrerequisites));
+	world.Remove<gp::UnderConstruction>(center);
 	BOOST_TEST((can(dozer, "AmericaWarFactory") == CanMake::Ok));
 	BOOST_TEST((can(dozer, "ChinaPowerPlant") == CanMake::NoPrerequisites)); // not in its command set
 	const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(700, 300), {}, team);

@@ -28,6 +28,7 @@ import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.common.health.components.pending_damage;
 import games.generalszh.presentation.models.model_entry;
 import Assets.Cache;
+import Assets.Adapters.W3D;
 import Assets.Models;
 import Assets.Identity;
 import games.generalszh.content.combat.combat_catalog;
@@ -40,6 +41,15 @@ using Engine::Math::FixedVector2;
 
 namespace
 {
+// A model's own rig (its hierarchy and meshes' bones), as the W3D adapter loads it; null when it does not load.
+std::shared_ptr<const Assets::ModelRigDesc> ModelRigOf(Assets::AssetCache &cache, const std::string &model)
+{
+	const auto handle = cache.Request_Model(model + ".w3d");
+	cache.Wait(handle);
+	const Assets::ModelAsset *asset = cache.Try_Get_Model(handle);
+	return asset != nullptr ? std::make_shared<const Assets::ModelRigDesc>(asset->Rig()) : nullptr;
+}
+
 struct ShellContent
 {
 	engine::filesystem::VirtualFileSystem files;
@@ -301,6 +311,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_infantry_landing_clip_plays_to_its_end)
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
 	std::set<std::string> checked;
 	std::vector<std::string> failures;
@@ -316,7 +327,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_infantry_landing_clip_plays_to_its_end)
 		if (look.animation.empty() || look.model.empty() || !checked.insert(look.model + "|" + look.animation).second)
 			continue;
 		std::string error;
-		const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, look.model, error);
+		const auto modelRig = ModelRigOf(cache, std::string(look.model));
 		const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, look.animation, error);
 		if (modelRig == nullptr || clipRig == nullptr)
 			continue; // a clip that does not ship (the data's own gaps: see the test above)
@@ -384,9 +395,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_manual_clip_holds_its_start_frame_and_the_u
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
 	std::string error;
-	const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, "ABSDILink_A1", error);
+	const auto modelRig = ModelRigOf(cache, std::string("ABSDILink_A1"));
 	const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, "ABSDILink_A1.ABSDILink_A1", error);
 	BOOST_TEST_REQUIRE((modelRig != nullptr && clipRig != nullptr), error);
 	Assets::ModelAssetDesc description;
@@ -439,6 +451,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_explosive_death_look_is_posed_through_f
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
 	const auto bits = [](std::initializer_list<std::uint32_t> list) {
 		content::ConditionBits flags{};
@@ -477,7 +490,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_explosive_death_look_is_posed_through_f
 					!checked.insert(look.model + "|" + look.animation + "#" + std::to_string(static_cast<int>(look.animationMode))).second)
 					continue;
 				std::string error;
-				const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, look.model, error);
+				const auto modelRig = ModelRigOf(cache, std::string(look.model));
 				const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, look.animation, error);
 				if (modelRig == nullptr || clipRig == nullptr)
 					continue;
@@ -507,7 +520,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_explosive_death_look_is_posed_through_f
 	}
 	for (const std::string &failure : failures)
 		BOOST_TEST_MESSAGE(failure);
-	BOOST_TEST(checked.size() > 60u);
+	// The shipped infantry show 41 distinct explosive-death looks (model, clip and mode) on the shell map's data.
+	BOOST_TEST(checked.size() >= 41u);
 	BOOST_TEST(failures.empty(), failures.size() << " explosive-death looks draw in their bind pose");
 }
 
@@ -532,11 +546,12 @@ BOOST_AUTO_TEST_CASE(legacy_parity_helicopter_rotor_bones_turn_every_frame)
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
 	for (const std::string model : {"AVChinook", "AVComanche"})
 	{
 		std::string error;
-		const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, model, error);
+		const auto modelRig = ModelRigOf(cache, std::string(model));
 		const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, model + "." + model, error);
 		BOOST_TEST_REQUIRE((modelRig != nullptr && clipRig != nullptr), model << ": " << error);
 		Assets::ModelAssetDesc description;

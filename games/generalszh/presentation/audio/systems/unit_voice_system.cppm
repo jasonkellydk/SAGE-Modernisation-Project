@@ -180,14 +180,15 @@ struct UnitVoiceSystem
 				continue;
 			const std::array<float, 3> where{Engine::Math::ToFloat(at->position.x), Engine::Math::ToFloat(at->position.y), Engine::Math::ToFloat(at->position.z)};
 			const std::uint32_t player = owner != nullptr ? owner->player : SoundRequest::NoOwner;
+			// setObjectID: the speaker's voice ("to prevent voice stepping"), the car bomb's line too.
 			if (!pick->sound.empty())
-				sounds.push_back({std::string(pick->sound), where, player});
+				sounds.push_back({std::string(pick->sound), where, player, true, std::nullopt, speaker});
 			const std::string &extra = pick->carBomb == CarBombVoice::Attack ? misc.carBombAttack
 				: pick->carBomb == CarBombVoice::Move                       ? misc.carBombMove
 				: pick->carBomb == CarBombVoice::Select                     ? misc.carBombSelect
 																			 : std::string{};
 			if (pick->carBomb != CarBombVoice::None && !extra.empty())
-				sounds.push_back({extra, where, player});
+				sounds.push_back({extra, where, player, true, std::nullopt, speaker});
 		}
 		cues.clear();
 	}

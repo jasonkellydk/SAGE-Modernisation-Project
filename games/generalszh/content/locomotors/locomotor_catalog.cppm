@@ -201,6 +201,25 @@ std::string_view ObjectLocomotorName(const ObjectDefinition &object, const engin
 	return {};
 }
 
+// Every locomotor of the object's set that exists, in the set's order (AIUpdateModuleData::findLocomotorTemplateVector:
+// a cliff climber's ground then cliff locomotor); empty when it has none.
+std::vector<const LocomotorDefinition *> ObjectLocomotors(const ObjectDefinition &object,
+	const engine::config::DefinitionTable<LocomotorDefinition> &locomotors, std::string_view set = "SET_NORMAL")
+{
+	std::vector<const LocomotorDefinition *> found;
+	for (const engine::config::Node *node : object.locomotorSets)
+	{
+		if (node == nullptr || node->values.size() < 2 || node->Value(0) != set)
+			continue;
+		for (std::size_t index = 1; index < node->values.size(); ++index)
+			if (const auto *locomotor = locomotors.Find(node->Value(index)))
+				found.push_back(locomotor);
+		if (!found.empty())
+			break;
+	}
+	return found;
+}
+
 // The first locomotor of the object's set (SET_NORMAL unless asked
 // otherwise), or null when it has none.
 const LocomotorDefinition *ObjectLocomotor(const ObjectDefinition &object,

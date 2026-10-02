@@ -12,6 +12,7 @@ import games.generalszh.content.install.install_mount;
 import engine.filesystem.core.virtual_file_system;
 import Engine.UI.WND.Document;
 import Engine.UI.WND.Input;
+import Engine.UI.WND.Transitions;
 
 using namespace generalszh::shell;
 using namespace Engine::UI::WND;
@@ -52,6 +53,22 @@ std::optional<std::string> Click(WNDPointer &pointer, WNDDocument &document, std
 }
 
 BOOST_AUTO_TEST_SUITE(main_menu_view)
+
+// Issue #56 (Shell::doPop runs the main menu's MainMenuInit again as it comes back, a match's end too: dropDown none, the
+// other drop-downs hidden, MainMenuDefaultMenuLogoFade): left from the Single Player drop-down (Skirmish), the menu comes
+// back on its main drop-down, without the panel's own change playing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_main_menu_comes_back_on_its_main_drop_down)
+{
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	WNDTransitions transitions({}, TransitionHost{});
+	MainMenuMotion motion(menu, transitions);
+	menu.panel.Set(MainMenuPanel::SinglePlayer);
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	motion.Enter(false);
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	BOOST_TEST(motion.visiblePanels.Get() == (1u << static_cast<unsigned>(MainMenuPanel::Main)));
+}
 
 // The original's main menu, clicked through its own layout: Single Player
 // opens its drop-down, Back closes it, Options asks for the options screen.

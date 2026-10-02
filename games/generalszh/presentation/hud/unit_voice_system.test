@@ -16,6 +16,8 @@
 import games.generalszh.presentation.audio.systems.unit_voice_system;
 import games.generalszh.presentation.interaction.algorithms.hotkey_teams;
 import games.generalszh.presentation.objects.systems.waypoint_path_system;
+import games.generalszh.presentation.objects.resources.presentation_resources;
+import games.generalszh.presentation.interaction.resources.mouse_tooltip;
 import games.generalszh.presentation.objects.algorithms.look_setup;
 import games.generalszh.session.session;
 import games.generalszh.session.setup.skirmish_level;
@@ -203,6 +205,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_last_selected_ranger_answers_on_the_shipp
 	BOOST_TEST(heard[0].sound == "RangerVoiceMove");
 	presentation::UnitVoiceCue garrison{presentation::VoiceOrder::Enter};
 	garrison.target = barracks;
+	BOOST_TEST_REQUIRE(game.World().IsAlive(barracks)); // DEBUG-TEMP
+	BOOST_TEST_REQUIRE(game.World().Get<engine::gameplay::DefinitionRef>(barracks) != nullptr); // DEBUG-TEMP
 	heard = voices.Answer(garrison);
 	BOOST_TEST_REQUIRE(heard.size() == 1u);
 	BOOST_TEST(heard[0].sound == "RangerVoiceGarrison");
@@ -416,6 +420,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_waypoint_paths_show_in_waypoint_mode)
 	auto &pointer = world.EmplaceResource<presentation::PointerInput>();
 	world.EmplaceResource<presentation::TerrainHeightHandle>();
 	auto &paths = world.EmplaceResource<presentation::WaypointPaths>();
+	world.EmplaceResource<presentation::PresentationFrame>();
+	if (world.FindResource<presentation::MouseTooltip>() == nullptr)
+		world.EmplaceResource<presentation::MouseTooltip>();
 	presentation::WaypointPathSystem system;
 	ecs::SystemRegistry registry;
 	registry.Register(system);

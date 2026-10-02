@@ -1009,6 +1009,48 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_and_sound_schedules_compose_without_
 // and music play; a PLAYER sound only for its own player (so the shell map's eyes, UncloakedGLA, never hear another
 // player's pilot eject or promotion); ALLIES for its allies but not itself; ENEMIES for its enemies; a sound bound to a
 // player that names none does not play, unless it is a player UI sound.
+// Issue #53 (Core/GameEngine/Source/Common/Audio/GameSounds.cpp SoundManager::canPlayNow / violatesVoice,
+// isObjectPlayingVoice; CommandXlat.cpp pickAndPlayUnitVoiceResponse: setObjectID "to prevent voice stepping"): a voice
+// event for an object already saying one is dropped, unless its Control is interrupt; another object's voice, a sound that
+// is no voice, and a voice once the first has played out all play. Requests are carried out in order (processRequestList),
+// so the second of two in one frame finds the first playing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_says_one_voice_at_a_time)
+{
+	Stage stage;
+	namespace type = engine::audio::sound_type;
+	const auto voice = [](std::string name, std::string file, std::uint32_t control = 0) {
+		SoundEventDefinition sound = Sound(std::move(name), std::move(file), Bus::Effects, control);
+		sound.type = type::World | type::Voice | type::Everyone;
+		return sound;
+	};
+	stage.content.events.Define("Move") = voice("Move", "move");
+	stage.content.events.Define("Attack") = voice("Attack", "attack");
+	stage.content.events.Define("Cry") = voice("Cry", "cry", sound_control::Interrupt);
+	const ecs::Entity other = stage.world.Create();
+	auto &requests = stage.world.Resource<SoundRequests>().pending;
+	const auto say = [&](std::string sound, ecs::Entity who) {
+		SoundRequest request;
+		request.sound = std::move(sound);
+		request.object = who;
+		requests.push_back(std::move(request));
+	};
+	say("Move", stage.entity);
+	say("Attack", stage.entity); // still saying Move: dropped
+	say("Attack", other);        // another unit: heard
+	say("Cry", stage.entity);    // interrupt: heard over it
+	say("Creak", stage.entity);  // no voice: heard
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("move") == 1u);
+	BOOST_TEST(stage.Count("attack") == 1u);
+	BOOST_TEST(stage.Count("cry") == 1u);
+	BOOST_TEST(stage.Count("creak") == 1u);
+	// Played out (10 frames, mixed before the next frame): the unit speaks again.
+	stage.Frame(false);
+	say("Attack", stage.entity);
+	stage.Frame(false);
+	BOOST_TEST(stage.Count("attack") == 2u);
+}
+
 BOOST_AUTO_TEST_CASE(legacy_parity_sounds_play_for_their_audience)
 {
 	namespace type = engine::audio::sound_type;

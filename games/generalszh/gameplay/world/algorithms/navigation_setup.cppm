@@ -4,6 +4,7 @@ import std;
 export import games.generalszh.gameplay.world.resources.game_world;
 export import engine.gameplay.rts.navigation.algorithms.grid_classification;
 export import engine.gameplay.rts.navigation.algorithms.clearance;
+import games.generalszh.content.locomotors.locomotor_catalog;
 
 // The level's pathfinding grid: one cell per heightmap cell over the largest
 // playable area, cliffs where the map's cliff bits say, water where the ground
@@ -44,6 +45,18 @@ inline void BuildNavigationGrid(GameWorld &game, engine::gameplay::NavigationGri
 		if ((locomotor.surfaces & gp::locomotor_surface::Air) == 0 && locomotor.surfaces != 0 &&
 			std::find(sets.begin(), sets.end(), locomotor.surfaces) == sets.end())
 			sets.push_back(locomotor.surfaces);
+	// A set of more than one ground locomotor is routed over all their surfaces (LocomotorSet::getValidSurfaces).
+	for (const auto &[name, object] : game.templates.Content().objects)
+		for (const engine::config::Node *node : object.locomotorSets)
+		{
+			if (node == nullptr || node->values.size() < 3)
+				continue;
+			std::uint8_t surfaces = 0;
+			for (const auto *locomotor : content::ObjectLocomotors(object, game.templates.Content().locomotors, node->Value(0)))
+				surfaces = static_cast<std::uint8_t>(surfaces | locomotor->surfaces);
+			if ((surfaces & gp::locomotor_surface::Air) == 0 && surfaces != 0 && std::find(sets.begin(), sets.end(), surfaces) == sets.end())
+				sets.push_back(surfaces);
+		}
 	std::sort(sets.begin(), sets.end());
 	grid.Clearance().clear();
 	for (const std::uint8_t surfaces : sets)

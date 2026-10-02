@@ -203,10 +203,10 @@ inline UserOptions ReadUserOptions(const engine::config::Preferences &preference
 	// getTextureReduction: atoi, at most 2 (without the key the original asks the hardware; here none).
 	if (preferences.Find("TextureReduction"))
 		options.textureReduction = static_cast<int>((std::min)(preferences.Number("TextureReduction", 0), std::int64_t{2}));
-	// getStaticGameDetail: getStaticGameLODIndex, case blind over Low, Medium, High and Custom (an unknown name keeps
-	// the level the game has).
+	// getStaticGameDetail: getStaticGameLODIndex, case blind over StaticGameLODNames (Low, Medium, High, VeryHigh,
+	// Custom; an unknown name keeps the level the game has).
 	if (const auto lod = preferences.Find("StaticGameLOD"))
-		for (const int level : DetailBoxLevels)
+		for (int level = 0; level <= CustomLod; ++level)
 			if (SameNoCase(*lod, StaticLodNames[level]))
 				options.staticLod = level;
 	if (const auto resolution = preferences.Find("Resolution"))

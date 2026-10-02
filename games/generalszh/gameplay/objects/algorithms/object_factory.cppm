@@ -145,6 +145,7 @@ import engine.gameplay.common.weapons.components.weapon_slots;
 import engine.gameplay.rts.combat.components.point_defense;
 import engine.gameplay.common.identity.components.team_member;
 import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.locomotor_choice;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.rts.containment.components.transport;
@@ -908,6 +909,13 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		world.Get<gameplay::Locomotion>(entity)->majorRadius = object->geometry.majorRadius;
 		// Its bounding circle (the distance it turns about its TurnPivotOffset is a fraction of).
 		world.Get<gameplay::Locomotion>(entity)->boundingRadius = content::BoundingCircleRadius(object->geometry);
+		// A set of more than one locomotor (a cliff climber's ground and cliff ones): which it moves on is chosen for where
+		// it stands each tick (LocomotorChoiceSystem).
+		if (const auto set = content::ObjectLocomotors(*object, content.locomotors); set.size() > 1)
+		{
+			world.Add<gameplay::LocomotorChoice>(entity);
+			*world.Get<gameplay::LocomotorChoice>(entity) = gameplay::MakeLocomotorChoice(set);
+		}
 		if (locomotor->wanderWidth != Fixed{})
 			gameplay::StartWander(*world.Get<gameplay::Locomotion>(entity),
 				[&](std::int64_t low, std::int64_t high) { return Engine::Math::UniformInt(game.random, low, high); });
@@ -1584,7 +1592,10 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		// Centred in its cell when an odd number across, or capped.
 		const bool centered = (across & 1) != 0 || across / 2 > 2;
 		world.Add<gameplay::NavigationAgent>(entity);
-		*world.Get<gameplay::NavigationAgent>(entity) = {locomotor->surfaces, reach, static_cast<std::uint8_t>(centered ? 1 : 0)};
+		// Routed over every surface its set moves on (LocomotorSet::getValidSurfaces).
+		const auto *choice = world.Get<gameplay::LocomotorChoice>(entity);
+		const std::uint8_t surfaces = choice != nullptr ? gameplay::SetSurfaces(*choice) : locomotor->surfaces;
+		*world.Get<gameplay::NavigationAgent>(entity) = {surfaces, reach, static_cast<std::uint8_t>(centered ? 1 : 0)};
 		// Its goal claims (AIUpdateInterface's m_pathfindGoalCell) and where its moves end.
 		world.Add<gameplay::PathfindGoal>(entity);
 		world.Add<gameplay::MoveGoal>(entity);
