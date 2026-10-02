@@ -1,17 +1,5 @@
-module;
-#include <array>
-#include <algorithm>
-#include <bit>
-#include <cstring>
-#include <map>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Trees.Renderer;
+import std;
 import engine.profiling;
 export import Graphics.Scene.Trees.Geometry;
 export import Graphics.RHI;

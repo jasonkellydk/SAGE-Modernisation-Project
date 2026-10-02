@@ -1,0 +1,39 @@
+#include <boost/test/unit_test.hpp>
+
+#include <chrono>
+#include <cstddef>
+#include <optional>
+#include <thread>
+#include <vector>
+
+import engine.net.transport.udp_socket;
+
+using namespace engine::net;
+
+BOOST_AUTO_TEST_SUITE(udp_socket)
+
+// Two sockets on this machine: a datagram from one reaches the other, from where it was sent.
+BOOST_AUTO_TEST_CASE(a_datagram_goes_from_one_socket_to_another)
+{
+	auto listener = UdpSocket::Open(0, true, LoopbackAddress);
+	auto sender = UdpSocket::Open(0, true, LoopbackAddress);
+	BOOST_TEST_REQUIRE((listener != nullptr && sender != nullptr));
+	BOOST_TEST(listener->Port() != 0);
+	BOOST_TEST(!listener->Receive().has_value()); // nothing yet, and no waiting
+	const std::vector<std::byte> hello{std::byte{'L'}, std::byte{'A'}, std::byte{'N'}};
+	BOOST_TEST(sender->SendTo({LoopbackAddress, listener->Port()}, hello));
+	std::optional<Datagram> got;
+	for (int attempt = 0; attempt < 200 && !got; ++attempt)
+	{
+		got = listener->Receive();
+		if (!got)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	BOOST_TEST_REQUIRE(got.has_value());
+	BOOST_TEST((got->bytes == hello));
+	BOOST_TEST((got->from == Endpoint{LoopbackAddress, sender->Port()}));
+	BOOST_TEST(ToString(0xC0A80102) == "192.168.1.2");
+	BOOST_TEST((LocalAddress{0xC0A80102, 0xFFFFFF00}.Broadcast() == 0xC0A801FFu));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

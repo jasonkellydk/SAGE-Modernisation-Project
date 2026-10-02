@@ -1,8 +1,5 @@
-module;
-#include <functional>
-#include <string>
-#include <utility>
 export module Graphics.Scene.Models.Factory;
+import std;
 
 namespace Graphics {
 // Immutable creation record. The callback owns any source data it needs and

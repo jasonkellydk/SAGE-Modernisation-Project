@@ -1,0 +1,694 @@
+#define BOOST_TEST_MODULE GeneralsZhContent
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <set>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.objects.model_draw;
+import games.generalszh.content.containment.transport_content;
+import games.generalszh.content.locomotors.locomotor_catalog;
+import games.generalszh.content.containment.parachute_content;
+import games.generalszh.content.install.install_mount;
+import engine.level.adapters.generals_map.map_reader;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using namespace Engine::Math::Literals;
+
+namespace
+{
+struct Built
+{
+	Document document;
+	Diagnostics diagnostics;
+	DefinitionTable<ObjectDefinition> objects;
+};
+
+void Build(Built &built, std::string text)
+{
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	ini::Read(built.document, built.document.AddSource("objects.ini", std::move(text)), grammar, built.diagnostics);
+	BindContext context{built.diagnostics, engine::time::FixedStep{30}};
+	built.objects = BuildObjectCatalog(built.document, context);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(object_catalog)
+
+BOOST_AUTO_TEST_CASE(defaults_reskins_and_module_edits_follow_the_original_rules)
+{
+	Built built;
+	Build(built,
+		"Object DefaultThingTemplate\n"
+		"  VisionRange = 100\n"
+		"  InheritableModule\n"
+		"    Behavior = AutoHealBehavior ModuleTag_DefaultHeal\n"
+		"    End\n"
+		"  End\n"
+		"  Behavior = SquishCollide ModuleTag_DefaultSquish\n"
+		"  End\n"
+		"End\n"
+		"Object AmericaTankCrusader\n"
+		"  Side = America\n"
+		"  KindOf = SELECTABLE CAN_ATTACK VEHICLE\n"
+		"  Geometry = BOX\n"
+		"  GeometryMajorRadius = 12.5\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = AVCrusader\n"
+		"    End\n"
+		"  End\n"
+		"  Behavior = AIUpdateInterface ModuleTag_02\n"
+		"  End\n"
+		"  Body = ActiveBody ModuleTag_03\n"
+		"    MaxHealth = 480\n"
+		"  End\n"
+		"  RemoveModule = ModuleTag_03\n"
+		"End\n"
+		"ObjectReskin AmericaTankCrusaderGold AmericaTankCrusader\n"
+		"  DisplayName = OBJECT:GoldCrusader\n"
+		"  Draw = W3DTankDraw ModuleTag_Gold\n"
+		"  End\n"
+		"  Side = China\n"
+		"End\n");
+	const ObjectDefinition *crusader = built.objects.Find("AmericaTankCrusader");
+	BOOST_TEST_REQUIRE(crusader != nullptr);
+	BOOST_TEST(crusader->visionRange.Raw() == (100_fx).Raw());
+	BOOST_TEST(crusader->Is("VEHICLE"));
+	BOOST_TEST(!crusader->Is("STRUCTURE"));
+	BOOST_TEST((crusader->geometry.shape == GeometryShape::Box));
+	BOOST_TEST(crusader->geometry.majorRadius.Raw() == (12.5_fx).Raw());
+	// ModuleInfo::clearCopiedFromDefaultEntries: the inheritable default survives; the default SquishCollide
+	// (COLLIDE) shares no interface with what the tank declares (DRAW, UPDATE, BODY) and survives too; the body is
+	// removed again.
+	BOOST_TEST_REQUIRE(crusader->modules.size() == 4u);
+	BOOST_TEST(crusader->modules[0].tag == "ModuleTag_DefaultHeal");
+	BOOST_TEST(crusader->modules[0].copied);
+	BOOST_TEST(crusader->modules[1].tag == "ModuleTag_DefaultSquish");
+	BOOST_TEST(crusader->modules[2].type == "W3DTankDraw");
+	BOOST_TEST(crusader->modules[2].block->Find("DefaultConditionState")->Find("Model")->Value() == "AVCrusader");
+	BOOST_TEST(crusader->modules[3].type == "AIUpdateInterface");
+
+	// s_objectReskinFieldParseTable: a reskin takes Draw, geometry, fence and MaxSimultaneous* only.
+	const ObjectDefinition *gold = built.objects.Find("AmericaTankCrusaderGold");
+	BOOST_TEST_REQUIRE(gold != nullptr);
+	BOOST_TEST(gold->reskinnedFrom == "AmericaTankCrusader");
+	BOOST_TEST(gold->side == "America"); // Side is not a reskin field
+	BOOST_TEST(gold->displayName.empty()); // nor is DisplayName
+	BOOST_TEST(gold->FindModule(ModuleSlot::Draw)->tag == "ModuleTag_Gold");
+	BOOST_TEST(gold->FindModule(ModuleSlot::Behavior) != nullptr);
+	BOOST_TEST(built.diagnostics.Format(built.document).find("unknown key 'Side' in 'ObjectReskin'") != std::string::npos);
+	BOOST_TEST(built.diagnostics.Format(built.document).find("unknown key 'DisplayName' in 'ObjectReskin'") != std::string::npos);
+}
+
+namespace
+{
+bool HasModule(const ObjectDefinition &object, std::string_view tag)
+{
+	for (const ModuleEntry &module : object.modules)
+		if (module.tag == tag)
+			return true;
+	return false;
+}
+
+// A DefaultThingTemplate as the shipped Default\Object.ini composes it.
+constexpr const char *DefaultTemplate = "Object DefaultThingTemplate\n"
+										"  WeaponSet\n"
+										"    Conditions = None\n"
+										"    Weapon = PRIMARY None\n"
+										"  End\n"
+										"  ArmorSet\n"
+										"    Conditions = None\n"
+										"    Armor = NoArmor\n"
+										"  End\n"
+										"  Body = InactiveBody ModuleTag_DefaultInactiveBody\n"
+										"  End\n"
+										"  Behavior = DestroyDie ModuleTag_DefaultDestroyDie\n"
+										"  End\n"
+										"  Draw = W3DDefaultDraw ModuleTag_DefaultW3DDefaultDraw\n"
+										"  End\n"
+										"  InheritableModule\n"
+										"    Behavior = AutoHealBehavior ModuleTag_DefaultAutoHealBehavior\n"
+										"    End\n"
+										"  End\n"
+										"  OverrideableByLikeKind\n"
+										"    Behavior = StealthUpdate ModuleTag_DefaultStealthUpdate\n"
+										"    End\n"
+										"  End\n"
+										"End\n";
+}
+
+// ModuleInfo::clearCopiedFromDefaultEntries / clearAiModuleInfo and ThingTemplate::parseModuleName (ThingTemplate.cpp),
+// with the module interfaces of ModuleFactory (getInterfaceMask): a declared module drops the copied ones sharing an
+// interface with it - an AIUpdateInterface (UPDATE) leaves the default DestroyDie (DIE) alone, a SlowDeathBehavior
+// (UPDATE | DIE) takes it; the inheritable default AutoHeal stays for a trainable object (IsTrainable read before the
+// module) and goes for one that is not; the default StealthUpdate (overrideable by like kind) stays on an infantry
+// (a GPS scrambler candidate) and goes from a structure (immune) or when a StealthUpdate is declared; a body replaces
+// the default InactiveBody, a draw the default draw; an AI module drops an earlier AI module (and FlightDeckBehavior,
+// whose data is an AIUpdateModuleData, does too); a Body line takes only body modules.
+BOOST_AUTO_TEST_CASE(legacy_parity_declared_modules_clear_the_copied_ones_by_interface)
+{
+	Built built;
+	Build(built, std::string(DefaultTemplate) +
+		"Object Soldier\n"
+		"  IsTrainable = Yes\n"
+		"  KindOf = SELECTABLE INFANTRY SCORE\n"
+		"  Behavior = AIUpdateInterface ModuleTag_AI\n"
+		"  End\n"
+		"  Body = ActiveBody ModuleTag_Body\n"
+		"  End\n"
+		"End\n"
+		"Object Mortal\n"
+		"  IsTrainable = Yes\n"
+		"  KindOf = SELECTABLE INFANTRY SCORE\n"
+		"  Behavior = SlowDeathBehavior ModuleTag_Death\n"
+		"  End\n"
+		"  Draw = W3DModelDraw ModuleTag_Draw\n"
+		"  End\n"
+		"End\n"
+		"Object Barracks\n"
+		"  KindOf = STRUCTURE SELECTABLE\n"
+		"  Behavior = ProductionUpdate ModuleTag_Production\n"
+		"  End\n"
+		"End\n"
+		"Object Sneaky\n"
+		"  IsTrainable = Yes\n"
+		"  KindOf = INFANTRY SCORE\n"
+		"  Behavior = StealthUpdate ModuleTag_Stealth\n"
+		"  End\n"
+		"End\n"
+		"Object Dozer\n"
+		"  Behavior = AIUpdateInterface ModuleTag_AI\n"
+		"  End\n"
+		"  Behavior = DozerAIUpdate ModuleTag_DozerAI\n"
+		"  End\n"
+		"  Behavior = FlightDeckBehavior ModuleTag_Deck\n"
+		"  End\n"
+		"End\n"
+		"Object Wrong\n"
+		"  Body = DestroyDie ModuleTag_NotABody\n"
+		"  End\n"
+		"End\n");
+	const ObjectDefinition &soldier = *built.objects.Find("Soldier");
+	BOOST_TEST(HasModule(soldier, "ModuleTag_DefaultDestroyDie"));
+	BOOST_TEST(HasModule(soldier, "ModuleTag_DefaultAutoHealBehavior"));
+	BOOST_TEST(HasModule(soldier, "ModuleTag_DefaultStealthUpdate"));
+	BOOST_TEST(HasModule(soldier, "ModuleTag_DefaultW3DDefaultDraw"));
+	BOOST_TEST(!HasModule(soldier, "ModuleTag_DefaultInactiveBody"));
+	BOOST_TEST(HasModule(soldier, "ModuleTag_Body"));
+
+	const ObjectDefinition &mortal = *built.objects.Find("Mortal");
+	BOOST_TEST(!HasModule(mortal, "ModuleTag_DefaultDestroyDie"));
+	BOOST_TEST(HasModule(mortal, "ModuleTag_DefaultAutoHealBehavior"));
+	BOOST_TEST(!HasModule(mortal, "ModuleTag_DefaultW3DDefaultDraw"));
+	BOOST_TEST(HasModule(mortal, "ModuleTag_DefaultInactiveBody"));
+
+	const ObjectDefinition &barracks = *built.objects.Find("Barracks");
+	BOOST_TEST(!HasModule(barracks, "ModuleTag_DefaultAutoHealBehavior"));
+	BOOST_TEST(!HasModule(barracks, "ModuleTag_DefaultStealthUpdate"));
+	BOOST_TEST(!HasModule(barracks, "ModuleTag_DefaultDestroyDie")); // ProductionUpdate is UPDATE | DIE
+
+	const ObjectDefinition &sneaky = *built.objects.Find("Sneaky");
+	BOOST_TEST(!HasModule(sneaky, "ModuleTag_DefaultStealthUpdate"));
+	BOOST_TEST(HasModule(sneaky, "ModuleTag_Stealth"));
+
+	const ObjectDefinition &dozer = *built.objects.Find("Dozer");
+	BOOST_TEST(!HasModule(dozer, "ModuleTag_AI"));
+	BOOST_TEST(!HasModule(dozer, "ModuleTag_DozerAI"));
+	BOOST_TEST(HasModule(dozer, "ModuleTag_Deck"));
+
+	BOOST_TEST(!HasModule(*built.objects.Find("Wrong"), "ModuleTag_NotABody"));
+	BOOST_TEST(built.diagnostics.HasErrors());
+}
+
+// ThingTemplate::parseArmorTemplateSet / parseWeaponTemplateSet: the first set an object declares drops all the sets
+// copied from DefaultThingTemplate; one that declares none keeps them.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_objects_first_set_drops_the_copied_sets)
+{
+	Built built;
+	Build(built, std::string(DefaultTemplate) +
+		"Object Armored\n"
+		"  ArmorSet\n"
+		"    Conditions = PLAYER_UPGRADE\n"
+		"    Armor = TankArmor\n"
+		"  End\n"
+		"  WeaponSet\n"
+		"    Conditions = VETERAN\n"
+		"    Weapon = PRIMARY Gun\n"
+		"  End\n"
+		"  WeaponSet\n"
+		"    Conditions = None\n"
+		"    Weapon = PRIMARY SmallGun\n"
+		"  End\n"
+		"End\n"
+		"Object Plain\n"
+		"End\n");
+	const ObjectDefinition &armored = *built.objects.Find("Armored");
+	BOOST_TEST_REQUIRE(armored.armorSets.size() == 1u);
+	BOOST_TEST(armored.armorSets[0]->Find("Armor")->Value() == "TankArmor");
+	BOOST_TEST_REQUIRE(armored.weaponSets.size() == 2u);
+	BOOST_TEST(armored.weaponSets[0]->Find("Weapon")->Value(1) == "Gun");
+	BOOST_TEST(armored.weaponSets[1]->Find("Weapon")->Value(1) == "SmallGun");
+	const ObjectDefinition &plain = *built.objects.Find("Plain");
+	BOOST_TEST_REQUIRE(plain.armorSets.size() == 1u);
+	BOOST_TEST(plain.armorSets[0]->Find("Armor")->Value() == "NoArmor");
+	BOOST_TEST(plain.weaponSets.size() == 1u);
+}
+
+// ThingTemplate::parseReplaceModule / parseRemoveModule / parseModuleName: a replacement of the replaced module's type
+// under a new tag takes its place; another type, the same tag, or a tag that is not there are errors (INI_INVALID_DATA);
+// RemoveModule takes every module of the tag.
+BOOST_AUTO_TEST_CASE(legacy_parity_replace_and_remove_module_as_the_thing_template)
+{
+	Built good;
+	Build(good, std::string(DefaultTemplate) +
+		"Object Tank\n"
+		"  Behavior = SlowDeathBehavior ModuleTag_Death\n"
+		"  End\n"
+		"  ReplaceModule ModuleTag_Death\n"
+		"    Behavior = SlowDeathBehavior ModuleTag_Death2\n"
+		"      DestructionDelay = 100\n"
+		"    End\n"
+		"  End\n"
+		"  RemoveModule = ModuleTag_DefaultW3DDefaultDraw\n"
+		"End\n");
+	const ObjectDefinition &tank = *good.objects.Find("Tank");
+	BOOST_TEST(!HasModule(tank, "ModuleTag_Death"));
+	BOOST_TEST(HasModule(tank, "ModuleTag_Death2"));
+	BOOST_TEST(!HasModule(tank, "ModuleTag_DefaultW3DDefaultDraw"));
+	BOOST_TEST(!good.diagnostics.HasErrors());
+
+	for (const char *bad : {"  ReplaceModule ModuleTag_Death\n    Behavior = DestroyDie ModuleTag_Other\n    End\n  End\n",
+			 "  ReplaceModule ModuleTag_Death\n    Behavior = SlowDeathBehavior ModuleTag_Death\n    End\n  End\n",
+			 "  ReplaceModule ModuleTag_Missing\n    Behavior = SlowDeathBehavior ModuleTag_New\n    End\n  End\n",
+			 "  RemoveModule = ModuleTag_Missing\n"})
+	{
+		Built built;
+		Build(built, std::string(DefaultTemplate) + "Object Tank\n  Behavior = SlowDeathBehavior ModuleTag_Death\n  End\n" + bad + "End\n");
+		BOOST_TEST(built.diagnostics.HasErrors(), bad);
+	}
+}
+
+// A map's map.ini over the objects (GameLogic::startNewGame's INI_LOAD_CREATE_OVERRIDES; ThingFactory::parseObjectDefinition,
+// newOverride / newTemplate; ThingTemplate::parseModuleName, parseAddModule, parseReplaceModule): an override starts as a
+// copy of the object; AddModule's block adds its modules without clearing the copied ones (the default DestroyDie stays
+// next to a SlowDeathBehavior) and reads its other fields too (SoundAmbient = NoSound); a bare module line is refused;
+// ReplaceModule swaps a module; an override's first WeaponSet replaces the copied sets; an object new to the map starts
+// from DefaultThingTemplate; a second override of the same object builds on the first.
+BOOST_AUTO_TEST_CASE(legacy_parity_map_ini_overrides_compose_as_the_thing_factory)
+{
+	Built built;
+	Build(built, std::string(DefaultTemplate) +
+		"Object Tank\n"
+		"  SoundAmbient = TankHum\n"
+		"  Behavior = AIUpdateInterface ModuleTag_AI\n"
+		"  End\n"
+		"  Draw = W3DModelDraw ModuleTag_Draw\n"
+		"  End\n"
+		"  WeaponSet\n"
+		"    Conditions = None\n"
+		"    Weapon = PRIMARY TankGun\n"
+		"  End\n"
+		"End\n");
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	Document mapIni;
+	Diagnostics mapDiagnostics;
+	ini::Read(mapIni, mapIni.AddSource("map.ini",
+		"Object Tank\n"
+		"  AddModule ModuleTag_Maytag\n"
+		"    Behavior = SlowDeathBehavior ModuleTag_MapDeath\n"
+		"    End\n"
+		"    SoundAmbient = NoSound\n"
+		"  End\n"
+		"  ReplaceModule ModuleTag_Draw\n"
+		"    Draw = W3DModelDraw ModuleTag_Draw_Override\n"
+		"    End\n"
+		"  End\n"
+		"  WeaponSet\n"
+		"    Conditions = None\n"
+		"    Weapon = PRIMARY MapGun\n"
+		"  End\n"
+		"End\n"
+		"Object Tank\n"
+		"  RemoveModule = ModuleTag_MapDeath\n"
+		"End\n"
+		"Object MapProp\n"
+		"  AddModule\n"
+		"    Draw = W3DModelDraw ModuleTag_PropDraw\n"
+		"    End\n"
+		"  End\n"
+		"End\n"),
+		grammar, mapDiagnostics);
+	BindContext context{mapDiagnostics, engine::time::FixedStep{30}};
+	const auto changed = ApplyObjectOverrides(built.objects, mapIni, context);
+	BOOST_TEST(!mapDiagnostics.HasErrors());
+	BOOST_TEST_REQUIRE(changed.size() == 2u);
+	BOOST_TEST(changed[0] == "Tank");
+	BOOST_TEST(changed[1] == "MapProp");
+	const ObjectDefinition &tank = *built.objects.Find("Tank");
+	BOOST_TEST(HasModule(tank, "ModuleTag_DefaultDestroyDie"));
+	BOOST_TEST(!HasModule(tank, "ModuleTag_MapDeath")); // removed by the second override
+	BOOST_TEST(HasModule(tank, "ModuleTag_AI"));
+	BOOST_TEST(!HasModule(tank, "ModuleTag_Draw"));
+	BOOST_TEST(HasModule(tank, "ModuleTag_Draw_Override"));
+	BOOST_TEST(tank.Sound("SoundAmbient").empty());
+	BOOST_TEST_REQUIRE(tank.weaponSets.size() == 1u);
+	BOOST_TEST(tank.weaponSets[0]->Find("Weapon")->Value(1) == "MapGun");
+	const ObjectDefinition &prop = *built.objects.Find("MapProp");
+	BOOST_TEST(HasModule(prop, "ModuleTag_PropDraw"));
+	BOOST_TEST(HasModule(prop, "ModuleTag_DefaultW3DDefaultDraw")); // nothing cleared in an override load
+	BOOST_TEST(HasModule(prop, "ModuleTag_DefaultDestroyDie"));
+
+	// A module outside AddModule / ReplaceModule in an override.
+	Document bad;
+	Diagnostics badDiagnostics;
+	ini::Read(bad, bad.AddSource("map.ini", "Object Tank\n  Behavior = DestroyDie ModuleTag_Bare\n  End\nEnd\n"), grammar, badDiagnostics);
+	BindContext badContext{badDiagnostics, engine::time::FixedStep{30}};
+	ApplyObjectOverrides(built.objects, bad, badContext);
+	BOOST_TEST(badDiagnostics.HasErrors());
+	BOOST_TEST(!HasModule(*built.objects.Find("Tank"), "ModuleTag_Bare"));
+}
+
+// The shipped Maps\MD_USA01\map.ini over the shipped objects: AmericaStrategyCenter gains its GrantUpgradeCreate
+// (ModuleTag_USA01_give_MOAB, granting Upgrade_AmericaMOAB); ChinaJetCargoPlane's AddModule clears its SoundAmbient
+// (C130AmbientLoop -> NoSound) and its ReplaceModule swaps ModuleTag_01 for ModuleTag_01_Override (model NVCargoPln).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shipped_map_overrides_its_objects)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	auto objects = BuildObjectCatalog(document, context);
+	BOOST_TEST_REQUIRE(objects.Find("ChinaJetCargoPlane") != nullptr);
+	BOOST_TEST(objects.Find("ChinaJetCargoPlane")->Sound("SoundAmbient") == "C130AmbientLoop");
+	const Document &mapIni = loader.Load({"Maps/MD_USA01/map"});
+	BindContext mapContext{loader.DiagnosticsFor(mapIni), engine::time::FixedStep{30}};
+	const auto changed = ApplyObjectOverrides(objects, mapIni, mapContext);
+	for (const auto &entry : loader.DiagnosticsFor(mapIni).Entries())
+		if (entry.severity == Severity::Error)
+			BOOST_TEST_MESSAGE("  error: " << mapIni.Describe(entry.location) << ": " << entry.message);
+	BOOST_TEST(loader.DiagnosticsFor(mapIni).ErrorCount() == 0u);
+	BOOST_TEST(!changed.empty());
+	const ObjectDefinition &center = *objects.Find("AmericaStrategyCenter");
+	BOOST_TEST(HasModule(center, "ModuleTag_USA01_give_MOAB"));
+	const ObjectDefinition &plane = *objects.Find("ChinaJetCargoPlane");
+	BOOST_TEST(plane.Sound("SoundAmbient").empty());
+	BOOST_TEST(!HasModule(plane, "ModuleTag_01"));
+	BOOST_TEST_REQUIRE(HasModule(plane, "ModuleTag_01_Override"));
+	for (const ModuleEntry &module : plane.modules)
+		if (module.tag == "ModuleTag_01_Override")
+			BOOST_TEST(module.block->Find("DefaultConditionState")->Find("Model")->Value() == "NVCargoPln");
+}
+
+BOOST_AUTO_TEST_CASE(reskins_need_a_known_source)
+{
+	Built built;
+	Build(built, "ObjectReskin Copy Missing\nEnd\n");
+	BOOST_TEST(built.objects.Size() == 0u);
+	BOOST_TEST(built.diagnostics.HasErrors());
+}
+
+BOOST_AUTO_TEST_CASE(shipped_objects_build_and_cover_the_shell_map)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const Document &crates = loader.Load({"Data/INI/Default/Crate", "Data/INI/Crate"});
+	Diagnostics &diagnostics = loader.DiagnosticsFor(document);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const Document *documents[] = {&document, &crates};
+	const auto objects = BuildObjectCatalog(documents, context);
+	BOOST_TEST_MESSAGE("objects: " << objects.Size() << ", diagnostics: " << diagnostics.Entries().size()
+		<< " (" << diagnostics.ErrorCount() << " errors)");
+	BOOST_TEST(objects.Size() > 1500u);
+	// legacy_parity: Object::isNonFactionStructure (Object.cpp; KindOf.cpp's KINDOFMASK_FS fsList, which leaves FS_POWER out):
+	// a power plant (FS_POWER only) is a structure of no faction, as is a civilian building; a barracks and a supply
+	// centre are faction structures; a tank is no structure.
+	for (const auto &[name, nonFaction] : {std::pair{"AmericaPowerPlant", true}, std::pair{"ChinaPowerPlant", true}, std::pair{"AmericaBarracks", false},
+			 std::pair{"AmericaSupplyCenter", false}, std::pair{"AmericaTankCrusader", false}})
+		if (const ObjectDefinition *object = objects.Find(name))
+			BOOST_TEST(IsNonFactionStructure(*object) == nonFaction, name);
+		else
+			BOOST_TEST(false, name << " missing");
+	// Veterancy fields (ThingTemplate ExperienceValue / ExperienceRequired / IsTrainable).
+	if (const ObjectDefinition *ranger = objects.Find("AmericaInfantryRanger"))
+	{
+		BOOST_TEST((ranger->experienceValue == std::array<std::int32_t, 4>{20, 20, 40, 60}));
+		BOOST_TEST((ranger->experienceRequired == std::array<std::int32_t, 4>{0, 40, 60, 120}));
+		BOOST_TEST(ranger->trainable);
+	}
+	else
+		BOOST_TEST(false, "no AmericaInfantryRanger");
+	// legacy_parity (ModuleInfo::clearCopiedFromDefaultEntries over the shipped Default\Object.ini): the Ranger
+	// (IsTrainable, INFANTRY before its modules) keeps the default auto heal and stealth and loses the default
+	// DestroyDie to its SlowDeathBehaviors; the barracks (a STRUCTURE, not trainable) keeps neither default. A reskin's
+	// Draw replaces its source's (Chem_GLAHoleCommandCenter: one draw, its model UBHole), its other modules copied.
+	if (const ObjectDefinition *ranger = objects.Find("AmericaInfantryRanger"))
+	{
+		BOOST_TEST(HasModule(*ranger, "ModuleTag_DefaultAutoHealBehavior"));
+		BOOST_TEST(HasModule(*ranger, "ModuleTag_DefaultStealthUpdate"));
+		BOOST_TEST(!HasModule(*ranger, "ModuleTag_DefaultDestroyDie"));
+		BOOST_TEST(!HasModule(*ranger, "ModuleTag_DefaultInactiveBody"));
+	}
+	if (const ObjectDefinition *barracks = objects.Find("AmericaBarracks"))
+	{
+		BOOST_TEST(!HasModule(*barracks, "ModuleTag_DefaultAutoHealBehavior"));
+		BOOST_TEST(!HasModule(*barracks, "ModuleTag_DefaultStealthUpdate"));
+	}
+	if (const ObjectDefinition *hole = objects.Find("Chem_GLAHoleCommandCenter"))
+	{
+		std::size_t draws = 0;
+		for (const ModuleEntry &module : hole->modules)
+			if (module.slot == ModuleSlot::Draw)
+			{
+				++draws;
+				BOOST_TEST(!module.copied);
+				BOOST_TEST(module.block->Find("ConditionState")->Find("Model")->Value() == "UBHole");
+			}
+		BOOST_TEST(draws == 1u);
+		BOOST_TEST(hole->reskinnedFrom == "Chem_GLAHole");
+		BOOST_TEST(HasModule(*hole, "ModuleTag_DefaultDestroyDie") == HasModule(*objects.Find("Chem_GLAHole"), "ModuleTag_DefaultDestroyDie"));
+	}
+	else
+		BOOST_TEST(false, "no Chem_GLAHoleCommandCenter");
+	for (const auto &entry : diagnostics.Entries())
+		if (entry.severity == Severity::Error)
+			BOOST_TEST_MESSAGE("  error: " << document.Describe(entry.location) << ": " << entry.message);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+
+	const auto shell = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+	BOOST_TEST_REQUIRE(shell.has_value());
+	std::set<std::string> missing;
+	// Road points (flags 0x2/0x4) name Road definitions and scorch marks are
+	// decals; neither is an object.
+	for (const auto &placement : shell->level.placements)
+		if ((placement.flags & 0x6u) == 0 && !placement.properties.Contains("scorchType") && !objects.Contains(placement.type))
+			missing.insert(placement.type);
+	for (const std::string &type : missing)
+		BOOST_TEST_MESSAGE("  missing object type " << type);
+	BOOST_TEST(missing.empty());
+
+	// Every mobile unit the shell map places or reinforces with has a locomotor.
+	const Document &locomotorSet = loader.Load({"Data/INI/Locomotor"});
+	Diagnostics &locomotorDiagnostics = loader.DiagnosticsFor(locomotorSet);
+	BindContext locomotorContext{locomotorDiagnostics, engine::time::FixedStep{30}};
+	const auto locomotors = BuildLocomotorCatalog(locomotorSet, locomotorContext);
+	BOOST_TEST_MESSAGE("locomotors: " << locomotors.Size() << " (" << locomotorDiagnostics.ErrorCount() << " errors)");
+	BOOST_TEST(locomotors.Size() > 100u);
+	BOOST_TEST(locomotorDiagnostics.ErrorCount() == 0u);
+	for (const char *type : {"AmericaVehicleComanche", "AmphibiousTransport", "ChinaJetMIG", "GLAInfantryRebel", "CarAmbulance",
+			 "GLAVehicleTechnical", "AmericaVehicleChinook"})
+	{
+		const ObjectDefinition *object = objects.Find(type);
+		BOOST_TEST_REQUIRE(object != nullptr);
+		if (!object->buildVariations.empty())
+			object = objects.Find(object->buildVariations.front());
+		BOOST_TEST_REQUIRE(object != nullptr);
+		const auto *locomotor = ObjectLocomotor(*object, locomotors);
+		BOOST_TEST(locomotor != nullptr, type << " has a SET_NORMAL locomotor");
+		if (locomotor != nullptr)
+			BOOST_TEST_MESSAGE("  " << type << ": speed " << locomotor->maxSpeed.Raw() / 65536.0 << "/tick, height "
+				<< locomotor->preferredHeight.Raw() / 65536.0 << ", appearance " << static_cast<int>(locomotor->appearance));
+	}
+	const auto *mig = ObjectLocomotor(*objects.Find("ChinaJetMIG"), locomotors);
+	BOOST_TEST((mig != nullptr && mig->appearance == engine::gameplay::LocomotorAppearance::Wings));
+
+	// OpenContain's PassengersAllowedToFire (TransportContain::isPassengerAllowedToFire: infantry only):
+	// the Humvee's riders fire out of it, the Chinook's do not.
+	const engine::time::FixedStep step{30};
+	const auto humvee = ReadObjectTransport(*objects.Find("AmericaVehicleHumvee"), step);
+	BOOST_TEST_REQUIRE(humvee.has_value());
+	BOOST_TEST(humvee->passengersFire);
+	BOOST_TEST(humvee->infantryOnly);
+	const auto chinook = ReadObjectTransport(*objects.Find("AmericaVehicleChinook"), step);
+	BOOST_TEST_REQUIRE(chinook.has_value());
+	BOOST_TEST(!chinook->passengersFire);
+}
+
+BOOST_AUTO_TEST_CASE(resting_models_come_from_the_default_condition_state_or_model_name)
+{
+	Built built;
+	Build(built,
+		"Object Tank\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    ConditionState = REALLYDAMAGED\n"
+		"      Model = TankDamaged\n"
+		"    End\n"
+		"    DefaultConditionState\n"
+		"      Model = TankHealthy\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Tree\n"
+		"  Draw = W3DTreeDraw ModuleTag_01\n"
+		"    ModelName = PTPalm01\n"
+		"  End\n"
+		"End\n"
+		"Object Hidden\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = NONE\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Ambient\n"
+		"  Draw = W3DDefaultDraw ModuleTag_01\n"
+		"  End\n"
+		"End\n");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tank")).model == "TankHealthy");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tree")).model == "PTPalm01");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Tree")).drawType == "W3DTreeDraw");
+	BOOST_TEST(DefaultModel(*built.objects.Find("Hidden")).model.empty());
+	// W3DDefaultDraw (the ambient sound objects' draw) renders nothing in retail: its model exists only under LOAD_TEST_ASSETS.
+	BOOST_TEST(DefaultModel(*built.objects.Find("Ambient")).model.empty());
+}
+
+BOOST_AUTO_TEST_CASE(resting_models_carry_the_default_condition_state_animation)
+{
+	Built built;
+	Build(built,
+		"Object Chopper\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = AVChinook\n"
+		"      Animation = AVChinook.AVChinook\n"
+		"      AnimationMode = LOOP\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Soldier\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = UITRST_SKN\n"
+		"      IdleAnimation = UITRST_SKL.UITRST_IDLA\n"
+		"      IdleAnimation = UITRST_SKL.UITRST_IDLB\n"
+		"    End\n"
+		"  End\n"
+		"End\n"
+		"Object Still\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n"
+		"      Model = CBBarrel\n"
+		"    End\n"
+		"  End\n"
+		"End\n");
+	const RestingModel chopper = DefaultModel(*built.objects.Find("Chopper"));
+	BOOST_TEST(chopper.model == "AVChinook");
+	BOOST_TEST(chopper.animation == "AVChinook.AVChinook");
+	BOOST_TEST((chopper.animationMode == ModelAnimationMode::Loop));
+	BOOST_TEST(!chopper.idleAnimation);
+	const RestingModel soldier = DefaultModel(*built.objects.Find("Soldier"));
+	BOOST_TEST(soldier.animation == "UITRST_SKL.UITRST_IDLA");
+	BOOST_TEST((soldier.animationMode == ModelAnimationMode::Once));
+	BOOST_TEST(soldier.idleAnimation);
+	const RestingModel still = DefaultModel(*built.objects.Find("Still"));
+	BOOST_TEST(still.model == "CBBarrel");
+	BOOST_TEST(still.animation.empty());
+}
+
+// LocomotorTemplate's fields (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Locomotor.cpp, getFieldParse) as the
+// shipped Locomotor.ini sets them: TurnPivotOffset (parseReal: Sentry -0.33, Humvee -0.5), CirclingRadius (MIG 100, B3
+// 150), SlideIntoPlaceTime (parseDurationReal: 100 ms is 3 frames, Helix and Chinook), AirborneTargetingHeight (parseInt:
+// Comanche 30, Battle Drone 20; unset INT_MAX: never, the Scorpion), the physics options (below), and
+// LocomotorWorksWhenDead (the Comanche's yes, the boat's no; read with the hover locomotors a dead helicopter flies on).
+BOOST_AUTO_TEST_CASE(legacy_parity_locomotors_read_pivot_circling_slide_and_targeting_height)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &locomotorSet = loader.Load({"Data/INI/Locomotor"});
+	BindContext context{loader.DiagnosticsFor(locomotorSet), engine::time::FixedStep{30}};
+	const auto locomotors = BuildLocomotorCatalog(locomotorSet, context);
+	const auto find = [&](const char *name) {
+		const auto *locomotor = locomotors.Find(name);
+		BOOST_TEST_REQUIRE(locomotor != nullptr, name);
+		return locomotor;
+	};
+	// -0.33 parsed to the nearest 1/65536.
+	BOOST_TEST(std::abs(find("SentryLocomotor")->turnPivotOffset.Raw() + 21627) <= 1);
+	BOOST_TEST((find("HumveeLocomotor")->turnPivotOffset == Engine::Math::Fixed{} - Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((find("ScorpionLocomotor")->turnPivotOffset == Engine::Math::Fixed{}));
+	BOOST_TEST((find("MIGLocomotor")->circlingRadius == Engine::Math::Fixed::FromInt(100)));
+	BOOST_TEST((find("B3Locomotor")->circlingRadius == Engine::Math::Fixed::FromInt(150)));
+	BOOST_TEST((find("HelixLocomotor")->slideIntoPlace == Engine::Math::Fixed::FromInt(3)));
+	BOOST_TEST((find("ChinookLocomotor")->slideIntoPlace == Engine::Math::Fixed::FromInt(3)));
+	BOOST_TEST((find("ComancheLocomotor")->airborneTargetingHeight == Engine::Math::Fixed::FromInt(30)));
+	BOOST_TEST((find("BattleDroneLocomotor")->airborneTargetingHeight == Engine::Math::Fixed::FromInt(20)));
+	BOOST_TEST((find("ScorpionLocomotor")->airborneTargetingHeight == Engine::Math::Fixed::FromInt(2147483647)));
+	// setPhysicsOptions' fields: Extra2DFriction (parseFrictionPerSec: 30 a second is 1 a frame), Apply2DFrictionWhenAirborne,
+	// StickToGround (infantry yes, the Humvee no).
+	BOOST_TEST((find("ParachuteLocomotor")->extraFriction == Engine::Math::Fixed::One()));
+	BOOST_TEST(find("ComancheLocomotor")->airborneFriction == 1u);
+	BOOST_TEST(find("FreeFallLocomotor")->airborneFriction == 0u);
+	BOOST_TEST(find("BasicHumanLocomotor")->stickToGround == 1u);
+	BOOST_TEST(find("HumveeLocomotor")->stickToGround == 0u);
+	// The force-driven flight's fields: Lift / LiftDamaged (parseAccelerationReal: 120 and 80 a second squared), SpeedLimitZ
+	// (parseVelocityReal: 15 a second; unset 999999), CloseEnoughDist3D, AllowAirborneMotiveForce.
+	BOOST_TEST(std::abs(find("ComancheLocomotor")->lift.Raw() - Engine::Math::Fixed::FromRatio(2, 15).Raw()) <= 1); // to the nearest 1/65536
+	BOOST_TEST(std::abs(find("ComancheLocomotor")->liftDamaged.Raw() - Engine::Math::Fixed::FromRatio(4, 45).Raw()) <= 1); // to the nearest 1/65536
+	BOOST_TEST(std::abs(find("MIGLocomotor")->liftFull.Raw() - Engine::Math::Fixed::FromRatio(2, 15).Raw()) <= 1); // to the nearest 1/65536
+	BOOST_TEST((find("ParachuteLocomotor")->speedLimitZ == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST(std::abs(find("ScorpionLocomotor")->speedLimitZ.Raw() - Engine::Math::Fixed::FromRatio(999999, 30).Raw()) <= 1); // to the nearest 1/65536
+	BOOST_TEST(find("ParachuteLocomotor")->closeEnough3D == 1u);
+	BOOST_TEST(find("ComancheLocomotor")->airborneMotiveForce == 1u);
+	BOOST_TEST(find("ScorpionLocomotor")->airborneMotiveForce == 0u);
+	const HoverLocomotors hovers = ReadHoverLocomotors(locomotorSet, engine::time::FixedStep{30});
+	BOOST_TEST_REQUIRE(hovers.contains("ComancheLocomotor"));
+	BOOST_TEST(hovers.at("ComancheLocomotor").worksWhenDead);
+	BOOST_TEST_REQUIRE(hovers.contains("BasicBoatLocomotor"));
+	BOOST_TEST(!hovers.at("BasicBoatLocomotor").worksWhenDead);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

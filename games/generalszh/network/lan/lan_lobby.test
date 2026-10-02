@@ -1,0 +1,267 @@
+#define BOOST_TEST_MODULE GeneralsZhLanLobby
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <string>
+#include <utility>
+#include <vector>
+
+import games.generalszh.network.lan.lan_lobby;
+
+using namespace generalszh::network::lan;
+namespace setup = generalszh::session::setup;
+
+namespace
+{
+// A LAN in one process: every machine's inbox; a broadcast reaches everyone else.
+struct Network
+{
+	std::map<std::uint32_t, std::deque<std::pair<std::uint32_t, std::vector<std::byte>>>> inboxes;
+
+	Link LinkFor(std::uint32_t ip)
+	{
+		inboxes[ip];
+		Link link;
+		link.send = [this, ip](std::uint32_t to, std::span<const std::byte> datagram) {
+			for (auto &[address, inbox] : inboxes)
+				if ((to == Broadcast && address != ip) || address == to)
+					inbox.emplace_back(ip, std::vector<std::byte>(datagram.begin(), datagram.end()));
+		};
+		link.receive = [this, ip]() -> std::optional<std::pair<std::uint32_t, std::vector<std::byte>>> {
+			auto &inbox = inboxes[ip];
+			if (inbox.empty())
+				return std::nullopt;
+			auto datagram = std::move(inbox.front());
+			inbox.pop_front();
+			return datagram;
+		};
+		return link;
+	}
+};
+
+LobbyServices Services()
+{
+	LobbyServices services;
+	services.hasMap = [](const std::string &, std::uint32_t) { return true; };
+	services.seed = [] { return 0x1234u; };
+	services.startCountdown = 5;
+	return services;
+}
+
+constexpr std::uint32_t HostIp = 0xC0A80102, JoinerIp = 0xC0A80103;
+}
+
+BOOST_AUTO_TEST_SUITE(lan_lobby)
+
+// Legacy parity (Transport.cpp encryptBuf/decryptBuf and its CRC, LANAPI.h's packed LANMessage).
+BOOST_AUTO_TEST_CASE(legacy_parity_datagrams_are_framed_and_laid_out_as_the_originals)
+{
+	Message message;
+	message.type = MessageType::GameAnnounce;
+	message.name = u"Jason";
+	message.gameName = u"C0A8010200001234";
+	message.options = "US=1;M=03maps/x;MC=1;MS=1;SD=1;C=100;S=X:X:X:X:X:X:X:X:;";
+	message.inProgress = true;
+	const std::vector<std::byte> datagram = Frame(message);
+	BOOST_TEST(datagram.size() == 477u);
+	// The first word: the CRC xored with 0xFADE, stored byte-swapped.
+	const auto payload = Encode(message);
+	BOOST_TEST(payload.size() == 471u);
+	BOOST_TEST(std::to_integer<int>(payload[4]) == 'J'); // the name at 4, UTF-16
+	BOOST_TEST(std::to_integer<int>(payload[34]) == 'C'); // the union at 34
+	BOOST_TEST(std::to_integer<int>(payload[68]) == 1);   // inProgress
+	BOOST_TEST(std::to_integer<int>(payload[69]) == 'U'); // options at 69
+	const auto back = Unframe(datagram);
+	BOOST_TEST_REQUIRE(back.has_value());
+	BOOST_TEST((back->name == u"Jason"));
+	BOOST_TEST(back->options == message.options);
+	BOOST_TEST(back->inProgress);
+	std::vector<std::byte> broken = datagram;
+	broken[100] ^= std::byte{1};
+	BOOST_TEST(!Unframe(broken).has_value()); // the CRC catches it
+	BOOST_TEST(Crc(std::string_view("ab")) == ((static_cast<std::uint32_t>('a') << 1) + 'b'));
+}
+
+// Legacy parity (LANAPI::update, handleRequestLocations, handleGameAnnounce, handleRequestJoin,
+// handleJoinAccept, OnGameOptions, handleSetAccept, RequestGameStartTimer, handleRequestGameLeave):
+// a host and a joiner find each other, set up a game, count down and start; then one leaves.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_game_is_hosted_joined_accepted_and_started)
+{
+	Network lan;
+	std::uint64_t now = 1000;
+	std::vector<std::u16string> hostChat, joinerChat;
+	int hostStarted = 0, joinerStarted = 0, joined = 0;
+	std::optional<Result> joinResult;
+	LobbyEvents hostEvents, joinerEvents;
+	hostEvents.chat = [&](std::u16string, std::uint32_t, std::u16string text, ChatType) { hostChat.push_back(text); };
+	hostEvents.gameStarted = [&] { ++hostStarted; };
+	joinerEvents.chat = [&](std::u16string, std::uint32_t, std::u16string text, ChatType) { joinerChat.push_back(text); };
+	joinerEvents.gameStarted = [&] { ++joinerStarted; };
+	joinerEvents.gameJoined = [&](Result result) { joinResult = result, ++joined; };
+	LanLobby host(lan.LinkFor(HostIp), HostIp, Services(), hostEvents);
+	LanLobby joiner(lan.LinkFor(JoinerIp), JoinerIp, Services(), joinerEvents);
+	const auto step = [&](std::uint64_t ms) {
+		for (std::uint64_t t = 0; t < ms; t += 100)
+		{
+			now += 100;
+			host.Update(now);
+			joiner.Update(now);
+		}
+	};
+	host.RequestSetName(u"Host");
+	joiner.RequestSetName(u"Guest");
+	host.RequestLocations();
+	joiner.RequestLocations();
+	step(400);
+	BOOST_TEST(host.Players().size() == 2u);
+	BOOST_TEST(joiner.Players().size() == 2u);
+
+	// The host makes a game: its name is its address and seed; its slots open for a 4-player map.
+	host.RequestGameCreate(false, "maps\\tournament continent\\tournament continent.map");
+	BOOST_TEST_REQUIRE(host.CurrentGame() != nullptr);
+	BOOST_TEST((host.CurrentGame()->name == u"C0A8010200001234"));
+	BOOST_TEST(host.AmIHost());
+	host.CurrentGame()->setup.AdjustSlotsForMap(4);
+	host.BroadcastOptions();
+	host.RequestGameAnnounce();
+	step(400);
+	BOOST_TEST_REQUIRE(joiner.Games().size() == 1u);
+	BOOST_TEST(joiner.Games().front().setup.map == "maps\\tournament continent\\tournament continent.map");
+
+	// The joiner asks in and takes the first open slot.
+	joiner.RequestGameJoin(joiner.Games().front().name);
+	step(400);
+	BOOST_TEST(joined == 1);
+	BOOST_TEST_REQUIRE((joinResult == Result::Ok));
+	BOOST_TEST(joiner.LocalSlot() == 1);
+	BOOST_TEST(host.CurrentGame()->setup.slots[1].Human());
+	BOOST_TEST((host.CurrentGame()->setup.slots[1].name == u"Guest"));
+
+	// The joiner asks for red; the host decides and everyone hears.
+	Message ask;
+	joiner.RequestGameOptions("Color=1", 0);
+	step(400);
+	BOOST_TEST(host.CurrentGame()->setup.slots[1].color == 1);
+	BOOST_TEST(joiner.CurrentGame()->setup.slots[1].color == 1);
+	// Chat reaches the other side.
+	joiner.RequestPlayerChat(u"hello");
+	step(200);
+	BOOST_TEST_REQUIRE(!hostChat.empty());
+	BOOST_TEST((hostChat.back() == u"hello"));
+
+	// The joiner accepts; the host counts down 5 .. 1 a second apart, then both start.
+	joiner.RequestAccept();
+	step(400);
+	BOOST_TEST(host.CurrentGame()->setup.slots[1].accepted);
+	host.CurrentGame()->setup.slots[0].accepted = true;
+	host.RequestGameStartTimer(5);
+	step(6500);
+	BOOST_TEST(hostStarted == 1);
+	BOOST_TEST(joinerStarted == 1);
+	BOOST_TEST(host.CurrentGame()->inProgress);
+	BOOST_TEST((host.CurrentGame()->setup.slots[2].state == setup::SlotState::Closed)); // startGame closed the open slots
+}
+
+// Legacy parity (RequestGameLeave, handleRequestGameLeave, the ACT_LEAVE timeout, the 20 s lobby timeout,
+// resetAccepted): a joiner leaving frees its slot and un-accepts everyone; the host leaving sends joiners back.
+BOOST_AUTO_TEST_CASE(legacy_parity_leaving_frees_the_slot_and_the_host_leaving_ends_the_game)
+{
+	Network lan;
+	std::uint64_t now = 1000;
+	int joinerLeft = 0;
+	LobbyEvents joinerEvents;
+	joinerEvents.leftGame = [&] { ++joinerLeft; };
+	LanLobby host(lan.LinkFor(HostIp), HostIp, Services());
+	LanLobby joiner(lan.LinkFor(JoinerIp), JoinerIp, Services(), joinerEvents);
+	const auto step = [&](std::uint64_t ms) {
+		for (std::uint64_t t = 0; t < ms; t += 100)
+		{
+			now += 100;
+			host.Update(now);
+			joiner.Update(now);
+		}
+	};
+	host.RequestSetName(u"Host");
+	joiner.RequestSetName(u"Guest");
+	host.RequestGameCreate(false, "maps\\x\\x.map");
+	host.CurrentGame()->setup.AdjustSlotsForMap(2);
+	host.RequestGameAnnounce();
+	step(400);
+	joiner.RequestGameJoin(joiner.Games().front().name);
+	step(400);
+	BOOST_TEST_REQUIRE(joiner.LocalSlot() == 1);
+	host.CurrentGame()->setup.slots[1].accepted = true;
+
+	// The joiner leaves: the host frees the slot and tells it so, and it is back in the lobby once
+	// (the 5-second wait is for a host that does not answer).
+	joiner.RequestGameLeave();
+	step(400);
+	BOOST_TEST((host.CurrentGame()->setup.slots[1].state == setup::SlotState::Open));
+	BOOST_TEST(joinerLeft == 1);
+	step(5000);
+	BOOST_TEST(joinerLeft == 1);
+	BOOST_TEST(joiner.InLobby());
+	BOOST_TEST(joiner.CurrentGame() == nullptr);
+
+	// Back in: the host leaves, the joiner is sent back to the lobby at once.
+	joiner.RequestGameJoin(host.CurrentGame()->name);
+	step(400);
+	BOOST_TEST_REQUIRE(joiner.LocalSlot() == 1);
+	host.RequestGameLeave();
+	step(400);
+	BOOST_TEST(joinerLeft == 2);
+	BOOST_TEST(joiner.InLobby());
+	BOOST_TEST(host.InLobby());
+
+	// A name the game has is refused (case sensitive, as the original's).
+	host.RequestGameCreate(false, "maps\\x\\x.map");
+	host.CurrentGame()->setup.AdjustSlotsForMap(2);
+	host.RequestGameAnnounce();
+	joiner.RequestSetName(u"Host");
+	std::optional<Result> result;
+	LobbyEvents events;
+	events.gameJoined = [&](Result r) { result = r; };
+	events.leftGame = [&] { ++joinerLeft; };
+	joiner.SetEvents(events);
+	step(400);
+	joiner.RequestGameJoin(host.CurrentGame()->name);
+	step(400);
+	BOOST_TEST_REQUIRE(result.has_value());
+	BOOST_TEST((*result == Result::DuplicateName));
+}
+
+// Legacy parity (the 20 s lobby timeout, the 5 s join timeout).
+BOOST_AUTO_TEST_CASE(legacy_parity_silent_players_and_unanswered_joins_time_out)
+{
+	Network lan;
+	std::uint64_t now = 1000;
+	std::optional<Result> result;
+	LobbyEvents events;
+	events.gameJoined = [&](Result r) { result = r; };
+	LanLobby a(lan.LinkFor(HostIp), HostIp, Services());
+	LanLobby b(lan.LinkFor(JoinerIp), JoinerIp, Services(), events);
+	a.RequestSetName(u"A");
+	b.RequestSetName(u"B");
+	for (int i = 0; i < 4; ++i)
+		now += 100, a.Update(now), b.Update(now);
+	BOOST_TEST(b.Players().size() == 2u);
+	// A goes quiet (its machine stops): B forgets it after 20 seconds.
+	for (int i = 0; i < 210; ++i)
+		now += 100, b.Update(now);
+	BOOST_TEST(b.Players().size() == 1u);
+	// A join no one answers fails after 5 seconds.
+	b.RequestGameJoinDirectConnect(0xC0A801FE);
+	for (int i = 0; i < 52; ++i)
+		now += 100, b.Update(now);
+	BOOST_TEST_REQUIRE(result.has_value());
+	BOOST_TEST((*result == Result::Timeout));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

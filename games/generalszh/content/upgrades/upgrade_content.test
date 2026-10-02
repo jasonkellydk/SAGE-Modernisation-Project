@@ -1,0 +1,83 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.upgrades.upgrade_content;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(upgrade_content)
+
+// UpgradeCenter: the three veterancy "upgrades" first (per object, never built), then Upgrade.ini's in order;
+// Type OBJECT or PLAYER, BuildTime in seconds, BuildCost. Objects' UpgradeMux fields bind in module order.
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_upgrades_and_triggers_bind)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const UpgradeCatalog catalog = BuildUpgradeCatalog(loader.Load({"Data/INI/Default/Upgrade", "Data/INI/Upgrade"}), 30);
+	BOOST_TEST(catalog.upgrades.size() == 85u);
+	BOOST_TEST(catalog.upgrades.size() <= engine::gameplay::UpgradeMask::Capacity);
+	BOOST_TEST(*catalog.Find("Upgrade_Veterancy_VETERAN") == 0u);
+	BOOST_TEST(*catalog.Find("Upgrade_Veterancy_HEROIC") == 2u);
+	BOOST_TEST(!catalog.upgrades[0].player);
+	const UpgradeContent &radar = catalog.upgrades[*catalog.Find("Upgrade_AmericaRadar")];
+	BOOST_TEST(!radar.player); // Type = OBJECT
+	BOOST_TEST(radar.cost == 500);
+	BOOST_TEST(radar.buildTicks == 300u); // 10 s
+	// ButtonImage (parseAsciiString) and AcademyClassify (parseIndexList over TheAcademyClassificationTypeNames): the
+	// three radars are ACT_UPGRADE_RADAR (AcademyStats::recordUpgrade's m_researchedRadar), nothing else is classified.
+	BOOST_TEST(radar.buttonImage == "SARadarUpgrade");
+	BOOST_TEST(radar.academyClassification == 1u);
+	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_ChinaRadar")].academyClassification == 1u);
+	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_GLARadar")].academyClassification == 1u);
+	std::size_t classified = 0;
+	for (const UpgradeContent &upgrade : catalog.upgrades)
+		classified += upgrade.academyClassification != 0 ? 1u : 0u;
+	BOOST_TEST(classified == 3u);
+	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_AmericaChemicalSuits")].player);
+
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const auto ranger = ReadObjectUpgrades(*objects.Find("AmericaInfantryRanger"), catalog);
+	BOOST_TEST_REQUIRE(ranger.size() == 5u);
+	// AutoHealBehavior: only at elite or heroic veterancy (either).
+	BOOST_TEST(ranger[0].effect.module == "AutoHealBehavior");
+	BOOST_TEST(ranger[0].trigger.activation.Has(*catalog.Find("Upgrade_Veterancy_ELITE")));
+	BOOST_TEST(ranger[0].trigger.activation.Has(*catalog.Find("Upgrade_Veterancy_HEROIC")));
+	BOOST_TEST(!ranger[0].trigger.requiresAll);
+	BOOST_TEST((ranger[2].effect.kind == UpgradeEffectKind::WeaponSet));
+	BOOST_TEST(ranger[2].trigger.activation.Has(*catalog.Find("Upgrade_AmericaRangerFlashBangGrenade")));
+	BOOST_TEST(ranger[2].effect.weapons[1] == "RangerFlashBangGrenadeWeapon");
+	BOOST_TEST((ranger[3].effect.kind == UpgradeEffectKind::Armor));
+	BOOST_TEST(ranger[3].effect.armor == "ChemSuitHumanArmor");
+	// The rebel's camouflage; the Comanche's countermeasures wait for their upgrade.
+	bool camouflage = false;
+	for (const auto &entry : ReadObjectUpgrades(*objects.Find("GLAInfantryRebel"), catalog))
+		camouflage = camouflage || (entry.effect.kind == UpgradeEffectKind::Stealth && entry.trigger.activation.Has(*catalog.Find("Upgrade_GLACamouflage")));
+	BOOST_TEST(camouflage);
+	bool countermeasures = false;
+	for (const auto &entry : ReadObjectUpgrades(*objects.Find("AmericaVehicleComanche"), catalog))
+		countermeasures = countermeasures ||
+			(entry.effect.module == "CountermeasuresBehavior" && entry.trigger.activation.Has(*catalog.Find("Upgrade_AmericaCountermeasures")));
+	BOOST_TEST(countermeasures);
+	// No object has more triggers than the upgrade pass tracks.
+	for (const auto &[name, object] : objects)
+		BOOST_TEST(ReadObjectUpgrades(object, catalog).size() <= 32u, name);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

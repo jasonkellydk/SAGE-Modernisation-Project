@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Graphics.FrameOwner;
+import std;
 
 export import Graphics.FrameTargets;
 

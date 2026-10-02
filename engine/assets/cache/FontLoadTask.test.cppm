@@ -2,13 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE FontLoadTaskTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <cstddef>
-#include <fstream>
-#include <string>
-#include <vector>
 
 export module Assets.Tests.FontLoadTask;
+import std;
 
 import Assets.Cache;
 import Assets.Cache.FontLoadTask;

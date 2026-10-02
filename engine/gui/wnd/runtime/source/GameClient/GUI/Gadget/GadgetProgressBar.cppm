@@ -54,6 +54,7 @@ module;
 #include "GameClient/GameWindowManager.h"
 
 export module Engine.UI.WND.Runtime.Gadget.ProgressBar;
+import std;
 
 #include "GameClient/Gadget.h"
 

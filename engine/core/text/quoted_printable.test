@@ -1,0 +1,34 @@
+#define BOOST_TEST_MODULE EngineCoreText
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+
+import engine.core.text.quoted_printable;
+import engine.core.text.utf;
+
+using namespace engine::core::text;
+
+BOOST_AUTO_TEST_SUITE(quoted_printable)
+
+// Legacy parity (QuotedPrintable.cpp): a real Skirmish.ini's "UserName = J_00a_00s_00o_00n_00".
+BOOST_AUTO_TEST_CASE(legacy_parity_names_encode_as_the_original_writes_them)
+{
+	BOOST_TEST(EncodeQuotedPrintable(u"Jason") == "J_00a_00s_00o_00n_00");
+	BOOST_TEST((DecodeQuotedPrintableWide("J_00a_00s_00o_00n_00") == u"Jason"));
+	BOOST_TEST(EncodeQuotedPrintable(u"Æ b") == "_C6_00_20_00b_00"); // non-ASCII and spaces
+	BOOST_TEST((DecodeQuotedPrintableWide(EncodeQuotedPrintable(u"Æ b")) == u"Æ b"));
+	BOOST_TEST(EncodeQuotedPrintable(std::string("maps\\a b.map")) == "maps_5Ca_20b_2Emap");
+	BOOST_TEST(DecodeQuotedPrintable("maps_5Ca_20b_2Emap") == "maps\\a b.map");
+	BOOST_TEST(DecodeQuotedPrintable("maps\\plain.map") == "maps\\plain.map"); // unencoded text reads as itself
+	BOOST_TEST(DecodeQuotedPrintable("end_") == "end");                       // a trailing '_' stops it
+}
+
+BOOST_AUTO_TEST_CASE(utf8_and_utf16_convert_both_ways)
+{
+	const std::u16string text = u"Jæson 中 \U0001F600";
+	BOOST_TEST(ToUtf8(text) == "J\xC3\xA6son \xE4\xB8\xAD \xF0\x9F\x98\x80");
+	BOOST_TEST((FromUtf8(ToUtf8(text)) == text));
+	BOOST_TEST((FromUtf8("a\xFF" "b") == u"a�b"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

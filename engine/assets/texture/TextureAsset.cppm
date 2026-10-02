@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Textures;
+import std;
 
 import Assets.Identity;
 

@@ -1,0 +1,647 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <cstring>
+#include <tuple>
+#include <vector>
+#include <utility>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.gameplay.crates.resources.crates;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.content.combat.loadout_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.loadout.components.loadout;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.ecs.query.query;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.vision.resources.shroud_map;
+import engine.filesystem.core.virtual_file_system;
+
+// Zero Hour's crates on real data: salvage and money crates picked up
+// (CrateCollide::onCollide, SalvageCrateCollide, MoneyCrateCollide) and a
+// salvage crate left by a salvager's kill (CreateCrateDie with
+// SalvageCrateData), in a skirmish: player0 America (a human), player1 the
+// GLA (an AI; its faction's IntrinsicSciences give it SCIENCE_GLA).
+using namespace generalszh;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Files made up for a test, mounted ahead of the install (as a mod's loose files would be).
+class MemorySource final : public engine::filesystem::FileSource
+{
+public:
+	explicit MemorySource(std::vector<std::pair<std::string, std::string>> files)
+	{
+		for (auto &[path, text] : files)
+			m_files.emplace_back(engine::filesystem::NormalizePath(path), std::move(text));
+	}
+	std::string_view Name() const noexcept override { return "test"; }
+	std::vector<std::string> Paths() const override
+	{
+		std::vector<std::string> paths;
+		for (const auto &[path, text] : m_files)
+			paths.push_back(path);
+		return paths;
+	}
+	std::optional<std::vector<std::byte>> Read(std::string_view path) const override
+	{
+		for (const auto &[name, text] : m_files)
+			if (name == path)
+			{
+				std::vector<std::byte> bytes(text.size());
+				std::memcpy(bytes.data(), text.data(), text.size());
+				return bytes;
+			}
+		return std::nullopt;
+	}
+
+private:
+	std::vector<std::pair<std::string, std::string>> m_files;
+};
+
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	// `extraFiles`: made-up files mounted ahead of the install (see MemorySource).
+	explicit Install(std::vector<std::pair<std::string, std::string>> extraFiles = {});
+};
+
+Install::Install(std::vector<std::pair<std::string, std::string>> extraFiles)
+{
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		if (!extraFiles.empty())
+			files.Mount(std::make_unique<MemorySource>(std::move(extraFiles)));
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+}
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// Retail Zero Hour ships no object with a HealCrateCollide or ShroudCrateCollide (Crate.ini only describes them), so these
+// two are the stock SupplyDropZoneCrate with those modules instead of its MoneyCrateCollide, as a mod or map would add them.
+constexpr std::string_view TestCratesIni = R"ini(
+Object TestHealCrate
+  Draw = W3DModelDraw ModuleTag_01
+    DefaultConditionState
+      Model = PMUNCrate03
+    End
+  End
+  KindOf = PARACHUTABLE CRATE
+  Behavior = HealCrateCollide ModuleTag_02
+    ForbiddenKindOf = PROJECTILE
+  End
+  Behavior = PhysicsBehavior ModuleTag_04
+    Mass = 75.0
+  End
+  Geometry = BOX
+  GeometryMajorRadius = 12.0
+  GeometryMinorRadius = 12.0
+  GeometryHeight = 12.0
+  GeometryIsSmall = Yes
+End
+
+Object TestShroudCrate
+  Draw = W3DModelDraw ModuleTag_01
+    DefaultConditionState
+      Model = PMUNCrate03
+    End
+  End
+  KindOf = PARACHUTABLE CRATE
+  Behavior = ShroudCrateCollide ModuleTag_02
+    ForbiddenKindOf = PROJECTILE
+  End
+  Behavior = PhysicsBehavior ModuleTag_04
+    Mass = 75.0
+  End
+  Geometry = BOX
+  GeometryMajorRadius = 12.0
+  GeometryMinorRadius = 12.0
+  GeometryHeight = 12.0
+  GeometryIsSmall = Yes
+End
+)ini";
+
+Install &DataWithTestCrates()
+{
+	static Install install({{"Data/INI/Object/TestCrates.ini", std::string(TestCratesIni)}});
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+std::vector<ecs::Entity> Named(session::Session &game, std::string_view name)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<engine::gameplay::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.DefinitionName(refs[row].index) == name)
+				found.push_back(entities[row]);
+	});
+	return found;
+}
+
+bool Shows(session::Session &game, ecs::Entity entity, std::string_view condition)
+{
+	const auto *look = game.World().Get<engine::gameplay::Appearance>(entity);
+	return look != nullptr && look->Test(content::ModelConditionBit(condition));
+}
+}
+
+BOOST_AUTO_TEST_SUITE(crates)
+
+// SalvageCrateCollide::executeCrateBehavior on a Technical (SALVAGER WEAPON_SALVAGER; SalvageCrate: PickupScience
+// SCIENCE_GLA, WeaponChance 100%, LevelChance 25%, MinMoney 25, MaxMoney 75, 12 across): the crate it rests on is
+// picked up the tick it is touched (onCollide in the tick's physics) and goes (destroyObject). The first crate
+// fits CRATEUPGRADE_ONE, the second swaps it for CRATEUPGRADE_TWO (doWeaponSet), each shown as its WEAPONSET_
+// model condition (TheWeaponSetTypeToModelConditionTypeMap); a fully fitted Technical gets a level on a 25% roll,
+// else 25..75 cash. An American Humvee on a salvage crate leaves it (no SCIENCE_GLA).
+BOOST_AUTO_TEST_CASE(legacy_parity_salvage_crates_fit_a_technical)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	const ecs::Entity technical = game.Place("GLAVehicleTechnical", match->At(0, -200), {}, match->Team(game, 1));
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(technical));
+	BOOST_TEST_REQUIRE(world.IsAlive(humvee));
+	BOOST_TEST_REQUIRE(world.Get<engine::gameplay::Loadout>(technical) != nullptr);
+	const std::uint32_t one = content::SetFlag(content::WeaponSetFlagNames, "CRATEUPGRADE_ONE");
+	const std::uint32_t two = content::SetFlag(content::WeaponSetFlagNames, "CRATEUPGRADE_TWO");
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	const auto dropOn = [&](ecs::Entity on) {
+		const ecs::Entity crate = game.Place("SalvageCrate", game.TransformOf(on)->position.XY(), {}, 0);
+		BOOST_TEST_REQUIRE(world.IsAlive(crate));
+		game.Tick();
+		return crate;
+	};
+
+	ecs::Entity crate = dropOn(technical);
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].picker == technical));
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Salvage));
+	BOOST_TEST(world.Get<engine::gameplay::Loadout>(technical)->weaponFlags == one);
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	BOOST_TEST(Shows(game, technical, "WEAPONSET_CRATEUPGRADE_ONE"));
+
+	crate = dropOn(technical);
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST(world.Get<engine::gameplay::Loadout>(technical)->weaponFlags == two);
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	BOOST_TEST(!Shows(game, technical, "WEAPONSET_CRATEUPGRADE_ONE"));
+	BOOST_TEST(Shows(game, technical, "WEAPONSET_CRATEUPGRADE_TWO"));
+
+	// Fully fitted: a level or money from here on.
+	auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	int levels = 0, cash = 0;
+	for (int round = 0; round < 12; ++round)
+	{
+		const std::int64_t before = money.Balance(gla);
+		const std::uint8_t level = world.Get<engine::gameplay::Experience>(technical)->level;
+		dropOn(technical);
+		BOOST_TEST_REQUIRE(pickups.size() == 1u);
+		// (A level shows as its weapon set flag too: WEAPONSET_VETERAN ...)
+		BOOST_TEST((world.Get<engine::gameplay::Loadout>(technical)->weaponFlags & (one | two)) == two);
+		if (pickups[0].kind == gameplay::CratePickup::Kind::Level)
+		{
+			++levels;
+			BOOST_TEST(world.Get<engine::gameplay::Experience>(technical)->level == level + 1);
+			BOOST_TEST(money.Balance(gla) == before);
+		}
+		else
+		{
+			++cash;
+			BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Money));
+			BOOST_TEST(pickups[0].floats);
+			BOOST_TEST(pickups[0].amount >= 25);
+			BOOST_TEST(pickups[0].amount <= 75);
+			BOOST_TEST(money.Balance(gla) - before == pickups[0].amount);
+		}
+		game.Tick();
+	}
+	BOOST_TEST_MESSAGE(levels << " levels, " << cash << " cash crates");
+	BOOST_TEST(world.Get<engine::gameplay::Experience>(technical)->level <= 3u);
+	BOOST_TEST(cash > 0);
+
+	crate = dropOn(humvee);
+	BOOST_TEST(pickups.empty());
+	game.Tick();
+	BOOST_TEST(world.IsAlive(crate));
+}
+
+// MoneyCrateCollide::executeCrateBehavior (SupplyDropZoneCrate: MoneyProvided 250, UpgradedBoost
+// Upgrade_AmericaSupplyLines Boost:25): 250 to whoever picks it up, 275 once the player has Supply Lines;
+// the money floats no text (only a salvage crate's does).
+BOOST_AUTO_TEST_CASE(legacy_parity_money_crates_pay_with_their_upgrade_boost)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	const auto pickUp = [&]() {
+		const std::int64_t before = money.Balance(america);
+		game.Place("SupplyDropZoneCrate", game.TransformOf(humvee)->position.XY(), {}, 0);
+		game.Tick();
+		BOOST_TEST_REQUIRE(pickups.size() == 1u);
+		BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Money));
+		BOOST_TEST(!pickups[0].floats);
+		BOOST_TEST(pickups[0].amount == money.Balance(america) - before);
+		game.Tick();
+		return money.Balance(america) - before;
+	};
+	BOOST_TEST(pickUp() == 250);
+	world.Resource<engine::gameplay::PlayerUpgrades>().Grant(america, *shell.game.upgrades.Find("Upgrade_AmericaSupplyLines"));
+	BOOST_TEST(pickUp() == 275);
+}
+
+// CreateCrateDie with SalvageCrateData (CreationChance 1.0, KilledByType SALVAGER, KillerScience SCIENCE_GLA): a
+// Humvee a GLA Technical kills leaves a SalvageCrate of nobody's on open ground within 5 of where it died (else
+// 125); the game with the crate on the ground runs the same on 1 and 4 workers and checkpoints exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_salvager_kill_leaves_a_salvage_crate)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		game->Place("GLAVehicleTechnical", match->At(0, -200), {}, match->Team(*game, 1));
+		const ecs::Entity humvee = game->Place("AmericaVehicleHumvee", match->At(80, -200), {}, match->Team(*game, 0));
+		game->World().Get<engine::gameplay::Health>(humvee)->current = Fixed::One();
+		return std::pair{std::move(game), humvee};
+	};
+	auto [one, humvee] = build(1);
+	auto [four, other] = build(4);
+	const auto where = one->TransformOf(humvee)->position.XY();
+	int ticks = 0;
+	while (Named(*one, "SalvageCrate").empty() && ticks < 600)
+	{
+		one->Tick();
+		four->Tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("crate after " << ticks << " ticks");
+	const auto crates = Named(*one, "SalvageCrate");
+	BOOST_TEST_REQUIRE(crates.size() == 1u);
+	const auto dead = one->TransformOf(humvee);
+	const auto died = dead ? dead->position.XY() : where;
+	BOOST_TEST((Engine::Math::Distance(one->TransformOf(crates[0])->position.XY(), died) <= Fixed::FromInt(125)));
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == one->StateHash());
+	for (int tick = 0; tick < 150; ++tick)
+	{
+		one->Tick();
+		four->Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	BOOST_TEST(restored->StateHash() == one->StateHash());
+}
+
+// UnitCrateCollide::executeCrateBehavior (2FreeCrusadersCrate: UnitCount 2, UnitName AmericaTankCrusader): the unit
+// that picks it up gets two Crusaders on its player's default team, set down within 20 of it, facing its way.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_crate_gives_its_units)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	const auto crusaders = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::DefinitionRef>, ecs::Read<gp::Owner>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto refs = chunk.template Get<gp::DefinitionRef>();
+			const auto owners = chunk.template Get<gp::Owner>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < refs.size(); ++row)
+				if (game.DefinitionName(refs[row].index) == "AmericaTankCrusader" && owners[row].player == america)
+					found.push_back(entities[row]);
+		});
+		return found;
+	};
+	const std::size_t before = crusaders().size();
+	const ecs::Entity crate = game.Place("2FreeCrusadersCrate", game.TransformOf(humvee)->position.XY(), {}, 0);
+	BOOST_TEST_REQUIRE(world.IsAlive(crate));
+	game.Tick();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Unit));
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	const auto made = crusaders();
+	BOOST_TEST_REQUIRE(made.size() == before + 2);
+	const auto from = game.TransformOf(humvee)->position.XY();
+	for (std::size_t index = before; index < made.size(); ++index)
+		BOOST_TEST((Engine::Math::DistanceSquared(game.TransformOf(made[index])->position.XY(), from) <= Engine::Math::Fixed::FromInt(40 * 40)));
+}
+
+// HealCrateCollide::executeCrateBehavior -> Player::healAllObjects -> Object::healCompletely (attemptHealing
+// HUGE_DAMAGE_AMOUNT of HEALING): the tick a Humvee touches the crate, everything of its player's (the hurt Humvee, a
+// hurt Power Plant) is back to full health, the enemy's hurt Technical is not, and the crate goes. The same on 1 and 4
+// workers, and a checkpoint taken after it plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_heal_crate_heals_everything_its_player_has)
+{
+	Install &shell = DataWithTestCrates();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity humvee, plant, technical, crate;
+	};
+	const auto build = [&](std::size_t workers) {
+		Game made{std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers))};
+		made.humvee = made.game->Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(*made.game, 0));
+		made.plant = made.game->Place("AmericaPowerPlant", match->At(-200, -300), {}, match->Team(*made.game, 0));
+		made.technical = made.game->Place("GLAVehicleTechnical", match->At(0, -500), {}, match->Team(*made.game, 1));
+		for (const ecs::Entity hurt : {made.humvee, made.plant, made.technical})
+		{
+			auto *health = made.game->World().Get<gp::Health>(hurt);
+			BOOST_TEST_REQUIRE(health != nullptr);
+			health->current = health->maximum / Fixed::FromInt(4);
+		}
+		made.crate = made.game->Place("TestHealCrate", made.game->TransformOf(made.humvee)->position.XY(), {}, 0);
+		return made;
+	};
+	Game one = build(1), four = build(4);
+	auto &world = one.game->World();
+	BOOST_TEST_REQUIRE(world.IsAlive(one.crate));
+	const auto health = [&](ecs::Entity entity) { return *world.Get<gp::Health>(entity); };
+	one.game->Tick();
+	four.game->Tick();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].picker == one.humvee));
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Heal));
+	BOOST_TEST((health(one.humvee).current == health(one.humvee).maximum));
+	BOOST_TEST((health(one.plant).current == health(one.plant).maximum));
+	BOOST_TEST((health(one.technical).current == health(one.technical).maximum / Fixed::FromInt(4)));
+	one.game->Tick();
+	four.game->Tick();
+	BOOST_TEST(!world.IsAlive(one.crate));
+	BOOST_TEST(one.game->StateHash() == four.game->StateHash());
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		one.game->Tick();
+		four.game->Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(one.game->StateHash() == four.game->StateHash());
+	BOOST_TEST(restored->StateHash() == one.game->StateHash());
+}
+
+// ShroudCrateCollide::executeCrateBehavior -> PartitionManager::revealMapForPlayer: the tick a Humvee touches the crate,
+// no cell of the map is left shrouded for its player (what nobody of its looks at is fogged, not clear), the enemy's
+// shroud is untouched, and the crate goes. The same on 1 and 4 workers, and a checkpoint taken after it plays on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shroud_crate_reveals_the_map_to_its_player)
+{
+	Install &shell = DataWithTestCrates();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		const ecs::Entity humvee = game->Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(*game, 0));
+		const ecs::Entity crate = game->Place("TestShroudCrate", game->TransformOf(humvee)->position.XY(), {}, 0);
+		// A skirmish starts fogged (GameLogic::startNewGame: revealMapForPlayer unless UseShroud); the crate is met on a
+		// map shrouded for both (shroudMapForPlayer, as a script or a shrouded game leaves it).
+		for (const char *seat : {"player0", "player1"})
+			game->World().Resource<gp::ShroudMap>().ShroudAll(*game->Teams().FindPlayer(seat));
+		return std::tuple{std::move(game), humvee, crate};
+	};
+	auto [one, humvee, crate] = build(1);
+	auto [four, otherHumvee, otherCrate] = build(4);
+	auto &world = one->World();
+	const std::uint32_t america = *one->Teams().FindPlayer("player0");
+	const std::uint32_t gla = *one->Teams().FindPlayer("player1");
+	const auto count = [&](std::uint32_t player, gp::CellShroud status) {
+		const auto &shroud = world.Resource<gp::ShroudMap>();
+		std::size_t cells = 0;
+		for (std::int32_t y = 0; y < shroud.CellsY(); ++y)
+			for (std::int32_t x = 0; x < shroud.CellsX(); ++x)
+				cells += shroud.Status(player, x, y) == status ? 1u : 0u;
+		return cells;
+	};
+	const std::size_t glaShrouded = count(gla, gp::CellShroud::Shrouded);
+	BOOST_TEST_REQUIRE(count(america, gp::CellShroud::Shrouded) > 0u);
+	one->Tick();
+	four->Tick();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].picker == humvee));
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Shroud));
+	BOOST_TEST(count(america, gp::CellShroud::Shrouded) == 0u);
+	BOOST_TEST(count(america, gp::CellShroud::Fogged) > 0u);
+	BOOST_TEST(count(gla, gp::CellShroud::Shrouded) == glaShrouded);
+	one->Tick();
+	four->Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		one->Tick();
+		four->Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	BOOST_TEST(restored->StateHash() == one->StateHash());
+}
+
+// CrateCollide::isValidToExecute with AllowMultiPickup No (TheSuperHackers' fix of the retail quirk that let two pickers
+// both collect a crate in one frame, kept by the port; no shipped crate sets it): two Humvees standing where a
+// SupplyDropZoneCrate lands touch it in the same frame; only the first collects its 250.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crate_is_collected_once_in_a_frame)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const ecs::Entity first = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	game.Place("AmericaVehicleHumvee", match->At(204, -200), {}, match->Team(game, 0));
+	auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	const std::int64_t before = money.Balance(america);
+	game.Place("SupplyDropZoneCrate", game.TransformOf(first)->position.XY(), {}, 0);
+	game.Tick();
+	BOOST_TEST(pickups.size() == 1u);
+	game.Tick();
+	BOOST_TEST(money.Balance(america) - before == 250);
+}
+
+// VeterancyCrateCollide::executeCrateBehavior / isValidToExecute (the shipped MediumLevelUpCrate: EffectRange 250): a
+// Humvee touching it takes it, and every object of its player within 250 of the Humvee (FROM_CENTER_2D) gains a level
+// (gainExpForLevel, with the next tick's veterancy pass); one of its player's 400 away and an enemy beside it do not.
+// A retail quirk fixed (ledger B): the original first asks the crate's own AI whether it heads for the collector, which a
+// crate (no AI) never does, so retail never gives a level-up crate.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_level_up_crate_promotes_its_players_objects_about_the_collector)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	const ecs::Entity near = game.Place("AmericaVehicleHumvee", match->At(400, -200), {}, match->Team(game, 0));
+	const ecs::Entity far = game.Place("AmericaVehicleHumvee", match->At(600, -200), {}, match->Team(game, 0));
+	const ecs::Entity enemy = game.Place("GLAVehicleTechnical", match->At(260, -200), {}, match->Team(game, 1));
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(humvee) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(humvee)->trainable);
+	const ecs::Entity crate = game.Place("MediumLevelUpCrate", game.TransformOf(humvee)->position.XY(), {}, 0);
+	BOOST_TEST_REQUIRE(world.IsAlive(crate));
+	game.Tick();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Veterancy));
+	BOOST_TEST((pickups[0].picker == humvee));
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	BOOST_TEST(world.Get<gp::Experience>(humvee)->level == 1u);
+	BOOST_TEST(world.Get<gp::Experience>(near)->level == 1u);
+	BOOST_TEST(world.Get<gp::Experience>(far)->level == 0u);
+	BOOST_TEST(world.Get<gp::Experience>(enemy)->level == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

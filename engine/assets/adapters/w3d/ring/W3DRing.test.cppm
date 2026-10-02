@@ -4,17 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <string>
-#include <vector>
-
 export module Assets.Tests.Adapters.W3D.Ring;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Rings;

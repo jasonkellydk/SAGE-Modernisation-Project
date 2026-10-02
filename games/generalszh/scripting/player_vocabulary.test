@@ -1,0 +1,639 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+import games.generalszh.scripting.player_vocabulary;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+
+namespace
+{
+// Two players: "me" (0, the script's own) and "them" (1, its enemy).
+struct Players final : generalszh::scripting::PlayerScriptHost
+{
+	std::int64_t money{1000};
+	std::pair<std::int64_t, std::int64_t> power{10, 8};
+	std::int64_t start{2};
+	std::int64_t tanks{3};
+	std::map<std::string, std::int64_t> seen;
+	std::vector<std::string> upgrades{"Upgrade_Shoes"};
+	std::map<std::string, std::vector<std::string>> lists;
+
+	std::optional<std::uint32_t> ResolvePlayer(std::size_t, const std::string &name) override
+	{
+		if (name == "<This Player>" || name == "me")
+			return 0u;
+		if (name == "<This Player's Enemy>" || name == "them")
+			return 1u;
+		return std::nullopt;
+	}
+	std::int64_t Money(std::uint32_t) const override { return money; }
+	bool MusicCompleted(const std::string &track, std::int64_t times) const override { return track == musicTrack && musicPlays >= times; }
+	std::string musicTrack{"Game_GLA_01"};
+	std::int64_t musicPlays{1};
+	std::pair<std::int64_t, std::int64_t> Power(std::uint32_t) const override { return power; }
+	std::int64_t StartIndex(std::uint32_t) const override { return start; }
+	std::string Side(std::uint32_t player) const override { return player == 0 ? "GLA" : "America"; }
+	bool HasAnyObjects(std::uint32_t player) const override { return player == 0; }
+	bool HasAnyBuildFacility(std::uint32_t player) const override { return player == 0; }
+	std::int64_t CountBuildings(std::uint32_t player, bool faction) const override { return player == 0 ? (faction ? 2 : 3) : 0; }
+	std::int64_t CountGarrisoned(std::uint32_t player) const override { return player == 0 ? 2 : 0; }
+	std::int64_t CountCaptured(std::uint32_t player) const override { return player == 0 ? 1 : 0; }
+	bool CanBuildAny(std::uint32_t player, const std::string &types) override { return player == 0 && types == "AmericaTankCrusader"; }
+	bool Discovered(std::uint32_t player, std::uint32_t by) const override { return player == 0 && by == 1; }
+	bool TakeCompletedUpgradeFrom(std::uint32_t player, const std::string &upgrade, const std::string &unit) override
+	{
+		return player == 0 && upgrade == "Upgrade_AmericaTOWMissile" && unit == "Factory";
+	}
+	std::int64_t CountObjects(std::uint32_t, const std::string &types, bool) const override { return types == "Tank" || lists.contains(types) ? tanks : 0; }
+	std::int64_t RecordedCount(std::uint32_t, const std::string &types) const override { return seen.contains(types) ? seen.at(types) : 0; }
+	void RecordCount(std::uint32_t, const std::string &types, std::int64_t count) override { seen[types] = count; }
+	bool TakeCompletedUpgrade(std::uint32_t, const std::string &upgrade) override { return std::erase(upgrades, upgrade) > 0; }
+	bool TakeAcquiredScience(std::uint32_t, const std::string &) override { return false; }
+	bool NamedAlive(const std::string &name) const override { return name == "Hero"; }
+	bool BridgeBroken(const std::string &name, bool broken) const override { return name == (broken ? "Broken" : "Mended"); }
+	std::vector<std::string> relations;
+	std::optional<LastAttack> NamedLastAttack(const std::string &unit) const override
+	{
+		if (unit == "Hero")
+			return LastAttack{1u, 1u, "GLAInfantryRebel"};
+		if (unit == "Ghost")
+			return LastAttack{1u, std::nullopt, "GLAInfantryRebel"}; // its attacker is gone
+		if (unit == "Fresh")
+			return LastAttack{};
+		return std::nullopt;
+	}
+	std::vector<LastAttack> TeamLastAttacks(const std::string &team) const override
+	{
+		if (team == "Army")
+			return {LastAttack{}, LastAttack{1u, 1u, "GLATankScorpion"}};
+		if (team == "Widows")
+			return {LastAttack{1u, std::nullopt, "GLATankScorpion"}};
+		return {};
+	}
+	bool TypeMatches(const std::string &types, const std::string &type) const override { return types == type || (types == "Tanks" && type == "GLATankScorpion"); }
+	bool AttackedBy(std::uint32_t player, std::uint32_t attacker) const override { return player == 0 && attacker == 1; }
+	std::optional<std::pair<std::uint32_t, std::uint32_t>> NamedContain(const std::string &unit) const override
+	{
+		if (unit == "Bunker")
+			return std::pair{0u, 5u};
+		if (unit == "Bus")
+			return std::pair{3u, 3u};
+		if (unit == "Van")
+			return std::pair{1u, 3u};
+		return std::nullopt;
+	}
+	bool NamedDiscovered(const std::string &unit, std::uint32_t player) const override { return unit == "Hero" && player == 1; }
+	bool TeamDiscovered(const std::string &team, std::uint32_t player) const override { return team == "Army" && player == 1; }
+	bool NamedReachedPathEnd(const std::string &unit, const std::string &label) const override { return unit == "Hero" && label == "Road"; }
+	bool BuildingEnteredBy(const std::string &building, std::uint32_t player) const override { return building == "Bunker" && player == 0; }
+	bool EnemySighted(const std::string &unit, std::int64_t alliance, std::uint32_t player) const override { return unit == "Hero" && alliance == 0 && player == 1; }
+	bool TypeSighted(const std::string &unit, const std::string &types, std::uint32_t player) const override { return unit == "Hero" && types == "Tanks" && player == 1; }
+	bool TeamReachedPathEnd(const std::string &team, const std::string &label) const override { return team == "Army" && label == "Road"; }
+	void SetPlayerRelationship(std::uint32_t from, std::uint32_t to, std::int64_t relationship) override
+	{
+		relations.push_back(std::to_string(from) + ">" + std::to_string(to) + "=" + std::to_string(relationship));
+	}
+	NamedUnit NamedUnitState(const std::string &name) const override
+	{
+		if (name == "Hero")
+			return {true, false, true, 0};
+		if (name == "Falling")
+			return {true, true, true, 0};
+		if (name == "Gone")
+			return {false, false, true, 0};
+		return {};
+	}
+	std::optional<std::int64_t> NamedHealthPercent(const std::string &name) const override { return name == "Hero" ? std::optional<std::int64_t>(50) : std::nullopt; }
+	bool TeamHasUnits(const std::string &team) const override { return team == "Army"; }
+	std::vector<std::string> built;
+	bool canBuildBase{true};
+	void SetCanBuildBase(std::uint32_t, bool can) override { canBuildBase = can; }
+	bool listed{true};
+	void SetListInScoreScreen(std::uint32_t, bool list) override { listed = list; }
+	void BuildBySupplies(std::uint32_t, std::int64_t, const std::string &) override {}
+	void BuildNearestTeam(std::uint32_t, const std::string &, const std::string &) override {}
+	std::vector<std::string> ranks;
+	void RepairStructure(std::uint32_t player, const std::string &structure) override { ranks.push_back(std::to_string(player) + "repair" + structure); }
+	std::vector<std::string> powerEvents{"0:SuperweaponA10"};
+	bool TakeSpecialPowerEvent(int stage, std::uint32_t player, const std::string &power, const std::optional<std::string> &unit) override
+	{
+		const std::string key = std::to_string(stage) + ":" + power + (unit ? "@" + *unit : std::string{});
+		(void)player;
+		return std::erase(powerEvents, key) > 0;
+	}
+	void FireSpecialPowerAtMostCost(std::uint32_t self, std::uint32_t player, const std::string &power) override
+	{
+		ranks.push_back(std::to_string(self) + "fire" + std::to_string(player) + power);
+	}
+	std::uint64_t powerReadyAt{1000};
+	int readinessLooks{0};
+	std::tuple<bool, bool, std::uint64_t> SpecialPowerReadiness(std::uint32_t, const std::string &power, std::uint64_t latest) override
+	{
+		++readinessLooks;
+		if (power != "SuperweaponA10")
+			return {false, false, 0};
+		return {true, false, std::min(latest, powerReadyAt)};
+	}
+	void AddSkillPoints(std::uint32_t player, std::int64_t points) override { ranks.push_back(std::to_string(player) + "+sp" + std::to_string(points)); }
+	void PlayerHunt(std::uint32_t player) override { ranks.push_back(std::to_string(player) + " hunts"); }
+	void PlayerExitAllBuildings(std::uint32_t player) override { ranks.push_back(std::to_string(player) + " ungarrisons"); }
+	void EnableScoring(bool on) override { ranks.push_back(on ? "scoring on" : "scoring off"); }
+	void AddRankLevels(std::uint32_t player, std::int64_t levels) override { ranks.push_back(std::to_string(player) + "+rank" + std::to_string(levels)); }
+	bool SoundComplete(bool speech, const std::string &name) override
+	{
+		soundAsks.push_back((speech ? "speech:" : "audio:") + name);
+		return name == "Done";
+	}
+	std::vector<std::string> soundAsks;
+	void CommandBarButton(const std::string &button, const std::string &objectType, std::optional<std::int64_t> slot) override
+	{
+		commandBar.push_back(button + "@" + objectType + (slot ? ":" + std::to_string(*slot) : std::string(":none")));
+	}
+	std::vector<std::string> commandBar;
+	void SwitchBoundary(std::int64_t boundary) override { boundaries.push_back(boundary); }
+	void ChangeWaterHeight(const std::string &water, Engine::Math::Fixed, Engine::Math::Fixed, Engine::Math::Fixed) override { waterChanged.push_back(water); }
+	void SetWaterHeight(const std::string &water, Engine::Math::Fixed) override { waterSet.push_back(water); }
+	std::vector<std::string> waterChanged;
+	std::vector<std::string> waterSet;
+	std::vector<std::int64_t> boundaries;
+	void FreezeTime(bool frozen) override { ranks.push_back(frozen ? "frozen" : "thawed"); }
+	void SelectSkillset(std::uint32_t player, std::int64_t skillset) override { ranks.push_back(std::to_string(player) + " skillset " + std::to_string(skillset)); }
+	void SetTeamDelaySeconds(std::uint32_t player, std::int64_t seconds) override { ranks.push_back(std::to_string(player) + " team delay " + std::to_string(seconds)); }
+	void OverrideHulkLifetime(Engine::Math::Fixed seconds) override { hulkSeconds.push_back(seconds); }
+	std::vector<Engine::Math::Fixed> hulkSeconds;
+	void SetBuildable(const std::string &objectType, std::int64_t status) override { buildable.emplace_back(objectType, status); }
+	std::vector<std::pair<std::string, std::int64_t>> buildable;
+	void SetRankLevel(std::uint32_t player, std::int64_t level) override { ranks.push_back(std::to_string(player) + "=rank" + std::to_string(level)); }
+	void GrantScience(std::uint32_t player, const std::string &science) override { ranks.push_back(std::to_string(player) + "grant" + science); }
+	void PurchaseScience(std::uint32_t player, const std::string &science) override { ranks.push_back(std::to_string(player) + "buy" + science); }
+	void SetScienceAvailability(std::uint32_t player, const std::string &science, const std::string &availability) override
+	{
+		ranks.push_back(std::to_string(player) + availability + science);
+	}
+	bool CanPurchaseScience(std::uint32_t player, const std::string &science) const override { return player == 1 && science == "SCIENCE_Cheap"; }
+	std::int64_t SciencePurchasePoints(std::uint32_t player) const override { return player == 1 ? 3 : 0; }
+	void SetSkillPointsModifier(std::uint32_t player, Engine::Math::Fixed modifier) override
+	{
+		ranks.push_back(std::to_string(player) + "x" + std::to_string(modifier.Raw()));
+	}
+	std::vector<std::string> defenses;
+	void BuildBaseDefense(std::uint32_t player, const std::string &structure, bool flank) override
+	{
+		defenses.push_back(std::to_string(player) + (flank ? "flank:" : "front:") + structure);
+	}
+	void BuildSpecificBuilding(std::uint32_t player, const std::string &structure) override { built.push_back(std::to_string(player) + structure); }
+	void ObjectTypeList(const std::string &list, const std::string &type, bool add) override
+	{
+		if (add)
+			lists[list].push_back(type);
+	}
+	std::vector<std::string> shroud;
+	static std::string Who(std::optional<std::uint32_t> player) { return player ? std::to_string(*player) : std::string("humans"); }
+	void ShroudAtWaypoint(const std::string &waypoint, Engine::Math::Fixed radius, std::optional<std::uint32_t> player, bool cover) override
+	{
+		shroud.push_back((cover ? "cover:" : "reveal:") + waypoint + "@" + std::to_string(radius.Round()) + ":" + Who(player));
+	}
+	void ShroudEntireMap(std::optional<std::uint32_t> player, MapShroud what) override
+	{
+		shroud.push_back("map" + std::to_string(static_cast<int>(what)) + ":" + Who(player));
+	}
+	void RevealNamed(const std::string &name, const std::string &waypoint, Engine::Math::Fixed radius, std::optional<std::uint32_t> player) override
+	{
+		shroud.push_back("named:" + name + ":" + waypoint + "@" + std::to_string(radius.Round()) + ":" + Who(player));
+	}
+	void UndoRevealNamed(const std::string &name) override { shroud.push_back("unnamed:" + name); }
+};
+
+level::ScriptCall Call(std::string name, std::vector<std::pair<std::string, std::int64_t>> parameters)
+{
+	level::ScriptCall call;
+	call.name = std::move(name);
+	for (auto &[text, integer] : parameters)
+	{
+		level::ScriptParameter parameter;
+		parameter.text = text;
+		parameter.integer = integer;
+		call.parameters.push_back(parameter);
+	}
+	return call;
+}
+
+bool Holds(Players &players, const level::ScriptCall &condition)
+{
+	Vocabulary vocabulary;
+	generalszh::scripting::AddPlayerVocabulary(vocabulary, &players);
+	const auto *handler = vocabulary.FindCondition(condition.name);
+	BOOST_REQUIRE(handler != nullptr);
+	level::Scenario scenario;
+	ScriptRuntime runtime(scenario, vocabulary);
+	ScriptCallContext context{runtime, 0, NoSubject, condition, 1};
+	return (*handler)(context);
+}
+
+void Act(Players &players, const level::ScriptCall &action)
+{
+	Vocabulary vocabulary;
+	generalszh::scripting::AddPlayerVocabulary(vocabulary, &players);
+	const auto *handler = vocabulary.FindAction(action.name);
+	BOOST_REQUIRE(handler != nullptr);
+	level::Scenario scenario;
+	ScriptRuntime runtime(scenario, vocabulary);
+	ScriptCallContext context{runtime, 0, NoSubject, action, 1};
+	(*handler)(context);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(player_vocabulary)
+
+// legacy_parity: ScriptConditions::evaluatePlayerHasCredits compares the credits parameter to the money, that way
+// round: PLAYER_HAS_CREDITS(500, less than, me) holds for 1000 in the bank (500 < 1000); (1500, less than) does not.
+BOOST_AUTO_TEST_CASE(legacy_parity_credits_compare_the_parameter_to_the_money)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_CREDITS", {{"", 500}, {"", 0}, {"<This Player>", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_CREDITS", {{"", 1500}, {"", 0}, {"<This Player>", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_CREDITS", {{"", 500}, {"", 0}, {"nobody", 0}})));
+}
+
+// legacy_parity: evaluateSkirmishPlayerHasComparisonGarrisoned / evaluateSkirmishPlayerHasComparisonCapturedUnits: the
+// player's garrisons with anyone inside (2 here) and captured units (1) against the count; an unknown player never.
+BOOST_AUTO_TEST_CASE(legacy_parity_garrisoned_and_captured_counts_are_compared)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("SKIRMISH_PLAYER_HAS_COMPARISON_GARRISONED", {{"<This Player>", 0}, {"", 2}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_COMPARISON_GARRISONED", {{"<This Player>", 0}, {"", 4}, {"", 2}})));
+	BOOST_TEST(Holds(players, Call("SKIRMISH_PLAYER_HAS_COMPARISON_CAPTURED_UNITS", {{"<This Player>", 0}, {"", 3}, {"", 1}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_COMPARISON_CAPTURED_UNITS", {{"nobody", 0}, {"", 1}, {"", 5}})));
+}
+
+// legacy_parity: evaluateSkirmishPlayerHasPrereqsToBuild (ObjectTypes::canBuildAny) and
+// evaluateSkirmishPlayerHasDiscoveredPlayer: each asks its player's side; an unknown player never.
+BOOST_AUTO_TEST_CASE(legacy_parity_prerequisite_and_discovery_conditions)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("SKIRMISH_PLAYER_HAS_PREREQUISITE_TO_BUILD", {{"<This Player>", 0}, {"AmericaTankCrusader", 0}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_PREREQUISITE_TO_BUILD", {{"<This Player>", 0}, {"AmericaJetRaptor", 0}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_PREREQUISITE_TO_BUILD", {{"nobody", 0}, {"AmericaTankCrusader", 0}})));
+	BOOST_TEST(Holds(players, Call("SKIRMISH_PLAYER_HAS_DISCOVERED_PLAYER", {{"<This Player>", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_DISCOVERED_PLAYER", {{"them", 0}, {"<This Player>", 0}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_DISCOVERED_PLAYER", {{"<This Player>", 0}, {"nobody", 0}})));
+}
+
+// legacy_parity: evaluateUpgradeFromUnitComplete asks for the named unit's completed upgrade; MISSION_ATTEMPTS, the
+// DEFUNCT_ general selections and the OBSOLETE_ conditions are never true.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_upgrade_from_a_named_unit_and_the_never_true_conditions)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("PLAYER_BUILT_UPGRADE_FROM_NAMED", {{"<This Player>", 0}, {"Upgrade_AmericaTOWMissile", 0}, {"Factory", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_BUILT_UPGRADE_FROM_NAMED", {{"<This Player>", 0}, {"Upgrade_AmericaTOWMissile", 0}, {"Other", 0}})));
+	for (const char *never : {"MISSION_ATTEMPTS", "DEFUNCT_PLAYER_SELECTED_GENERAL", "DEFUNCT_PLAYER_SELECTED_GENERAL_FROM_NAMED", "OBSOLETE_SCRIPT_1",
+			 "OBSOLETE_SCRIPT_2"})
+		BOOST_TEST(!Holds(players, Call(never, {{"<This Player>", 0}, {"", 2}, {"", 0}})));
+}
+
+// legacy_parity: ScriptEngine::isVideoComplete over a list nothing fills (InGameUI::stopMovie's notifyOfCompletedVideo is
+// commented out in the original): HAS_FINISHED_VIDEO never holds.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_video_is_never_reported_finished)
+{
+	Players players;
+	BOOST_TEST(!Holds(players, Call("HAS_FINISHED_VIDEO", {{"MD_USA01", 0}})));
+}
+
+// legacy_parity: ScriptConditions::evaluateMultiplayerAlliedDefeat -> VictoryConditions::isLocalAlliedDefeat outside a
+// multiplayer game (GC_ChemGeneral's and GC_ChinaBoss's scripts): VictoryConditions::update never runs there, no single
+// alliance is ever left, so it is never true.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_map_asking_for_an_allied_defeat_outside_a_network_game_is_told_no)
+{
+	Players players;
+	BOOST_TEST(!Holds(players, Call("MULTIPLAYER_ALLIED_DEFEAT", {})));
+}
+
+// legacy_parity: ScriptConditions::evaluateMusicHasCompleted -> AudioManager::hasMusicTrackCompleted(track, times): the
+// track playing has played through at least that many times (MD_GLA03's "GLA Post Track Silence" asks once).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_music_track_has_completed)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_01", 0}, {"", 1}})));
+	BOOST_TEST(!Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_01", 0}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("MUSIC_TRACK_HAS_COMPLETED", {{"Game_GLA_02", 0}, {"", 1}})));
+}
+
+// legacy_parity: hasSufficientPower (production at least consumption) and getEnergySupplyRatio against percent/100:
+// 10 made for 8 used is 125%, above 100 and not above 150; nothing used compares the production itself.
+BOOST_AUTO_TEST_CASE(legacy_parity_power_and_its_supply_ratio)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_POWER", {{"me", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_NO_POWER", {{"me", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_NO_POWER", {{"nobody", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_POWER_COMPARE_PERCENT", {{"me", 0}, {"", 4}, {"", 100}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_POWER_COMPARE_PERCENT", {{"me", 0}, {"", 4}, {"", 150}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_POWER_COMPARE_PERCENT", {{"me", 0}, {"", 2}, {"", 125}})));
+	players.power = {3, 0};
+	BOOST_TEST(Holds(players, Call("PLAYER_POWER_COMPARE_PERCENT", {{"me", 0}, {"", 2}, {"", 300}})));
+	players.power = {5, 8};
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_POWER", {{"me", 0}})));
+}
+
+// legacy_parity: evaluatePlayerHasComparisonValueExcessPower compares production less consumption (10 - 8 = 2) to the
+// value; evaluateAllBuildFacilitiesDestroyed: !hasAnyBuildFacility, and a player that is not there has none;
+// evaluatePlayerHasNOrFewerBuildings / FactionBuildings: count >= countBuildings (3) / MP_COUNT_FOR_VICTORY structures
+// (2), a player that is not there never; evaluatePlayerDestroyedNOrMoreBuildings is unimplemented: always false.
+BOOST_AUTO_TEST_CASE(legacy_parity_excess_power_and_building_counts)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("PLAYER_EXCESS_POWER_COMPARE_VALUE", {{"me", 0}, {"", 2}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_EXCESS_POWER_COMPARE_VALUE", {{"me", 0}, {"", 4}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_EXCESS_POWER_COMPARE_VALUE", {{"nobody", 0}, {"", 2}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_ALL_BUILDFACILITIES_DESTROYED", {{"me", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_ALL_BUILDFACILITIES_DESTROYED", {{"nobody", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_N_OR_FEWER_BUILDINGS", {{"me", 0}, {"", 3}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_N_OR_FEWER_BUILDINGS", {{"me", 0}, {"", 2}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_N_OR_FEWER_FACTION_BUILDINGS", {{"me", 0}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_N_OR_FEWER_FACTION_BUILDINGS", {{"me", 0}, {"", 1}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_N_OR_FEWER_BUILDINGS", {{"nobody", 0}, {"", 9}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_DESTROYED_N_BUILDINGS_PLAYER", {{"me", 0}, {"", 0}, {"me", 0}})));
+}
+
+// legacy_parity: START_POSITION_IS counts from 1; PLAYER_ALL_DESTROYED holds for a player with nothing (or none).
+BOOST_AUTO_TEST_CASE(legacy_parity_start_position_and_all_destroyed)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("START_POSITION_IS", {{"<This Player>", 0}, {"", 3}})));
+	BOOST_TEST(!Holds(players, Call("START_POSITION_IS", {{"<This Player>", 0}, {"", 2}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_ALL_DESTROYED", {{"me", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_ALL_DESTROYED", {{"<This Player's Enemy>", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_ALL_DESTROYED", {{"nobody", 0}})));
+}
+
+// legacy_parity: evaluatePlayerLostObjectType keeps the count it saw: 3 tanks first seen (not fewer than 0), then
+// 2 (fewer: holds, once), then 2 again (no).
+BOOST_AUTO_TEST_CASE(legacy_parity_lost_object_type_remembers_the_count)
+{
+	Players players;
+	const auto lost = Call("PLAYER_LOST_OBJECT_TYPE", {{"me", 0}, {"Tank", 0}});
+	BOOST_TEST(!Holds(players, lost));
+	players.tanks = 2;
+	BOOST_TEST(Holds(players, lost));
+	BOOST_TEST(!Holds(players, lost));
+}
+
+// legacy_parity: isUpgradeComplete with removeFromList: a finished upgrade is noticed once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_finished_upgrade_is_noticed_once)
+{
+	Players players;
+	const auto built = Call("PLAYER_BUILT_UPGRADE", {{"me", 0}, {"Upgrade_Shoes", 0}});
+	BOOST_TEST(Holds(players, built));
+	BOOST_TEST(!Holds(players, built));
+}
+
+// Object type lists name several types for the counting conditions (OBJECTLIST_ADDOBJECTTYPE); BUILT_BY_PLAYER and
+// PLAYER_HAS_OBJECT_COMPARISON(player, comparison, count, type) count them; the named-unit and team conditions.
+BOOST_AUTO_TEST_CASE(object_type_lists_and_the_unit_conditions)
+{
+	Players players;
+	BOOST_TEST(!Holds(players, Call("BUILT_BY_PLAYER", {{"Armour", 0}, {"me", 0}})));
+	Act(players, Call("OBJECTLIST_ADDOBJECTTYPE", {{"Armour", 0}, {"Tank", 0}}));
+	BOOST_TEST(Holds(players, Call("BUILT_BY_PLAYER", {{"Armour", 0}, {"me", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_OBJECT_COMPARISON", {{"me", 0}, {"", 3}, {"", 3}, {"Armour", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_OBJECT_COMPARISON", {{"me", 0}, {"", 4}, {"", 3}, {"Armour", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_NOT_DESTROYED", {{"Hero", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_NOT_DESTROYED", {{"Nobody", 0}})));
+	BOOST_TEST(Holds(players, Call("UNIT_HEALTH", {{"Hero", 0}, {"", 0}, {"", 60}})));
+	BOOST_TEST(!Holds(players, Call("UNIT_HEALTH", {{"Nobody", 0}, {"", 0}, {"", 60}})));
+	BOOST_TEST(Holds(players, Call("TEAM_HAS_UNITS", {{"Army", 0}})));
+	BOOST_TEST(!Holds(players, Call("TEAM_HAS_UNITS", {{"Navy", 0}})));
+}
+
+// ScriptActions::updatePlayerRelationTowardPlayer (PLAYER_RELATES_PLAYER: player, other player, relationship as the
+// third parameter): the first player's view of the second; an unknown player does nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_player_relates_to_another)
+{
+	Players players;
+	Act(players, Call("PLAYER_RELATES_PLAYER", {{"me", 0}, {"them", 0}, {"", 2}}));
+	Act(players, Call("PLAYER_RELATES_PLAYER", {{"them", 0}, {"me", 0}, {"", 0}}));
+	Act(players, Call("PLAYER_RELATES_PLAYER", {{"me", 0}, {"nobody", 0}, {"", 1}}));
+	const std::vector<std::string> expected{"0>1=2", "1>0=0"};
+	BOOST_TEST(players.relations == expected, boost::test_tools::per_element());
+}
+
+// ScriptActions::excludePlayerFromScoreScreen (PLAYER_EXCLUDE_FROM_SCORE_SCREEN): the player is left off the score
+// screen (setListInScoreScreen(FALSE)); an unknown player: nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_player_is_excluded_from_the_score_screen)
+{
+	Players players;
+	Act(players, Call("PLAYER_EXCLUDE_FROM_SCORE_SCREEN", {{"nobody", 0}}));
+	BOOST_TEST(players.listed);
+	Act(players, Call("PLAYER_EXCLUDE_FROM_SCORE_SCREEN", {{"me", 0}}));
+	BOOST_TEST(!players.listed);
+}
+
+// ScriptConditions::evaluateNamedAttackedByPlayer (the attacker's player as it hit, or the attacker's now while it is
+// there), evaluateTeamAttackedByPlayer (a member's attacker still there), evaluateNamedAttackedByType /
+// evaluateTeamAttackedByType (its type as it hit, the attacker gone or not; type lists), and
+// evaluateSkirmishPlayerHasBeenAttackedByPlayer (Player::getAttackedBy).
+BOOST_AUTO_TEST_CASE(legacy_parity_attacked_by_conditions)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("NAMED_ATTACKED_BY_PLAYER", {{"Hero", 0}, {"them", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_ATTACKED_BY_PLAYER", {{"Ghost", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_ATTACKED_BY_PLAYER", {{"Hero", 0}, {"me", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_ATTACKED_BY_PLAYER", {{"Fresh", 0}, {"nobody", 0}})));
+	BOOST_TEST(Holds(players, Call("TEAM_ATTACKED_BY_PLAYER", {{"Army", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("TEAM_ATTACKED_BY_PLAYER", {{"Widows", 0}, {"them", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_ATTACKED_BY_OBJECTTYPE", {{"Ghost", 0}, {"GLAInfantryRebel", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_ATTACKED_BY_OBJECTTYPE", {{"Fresh", 0}, {"GLAInfantryRebel", 0}})));
+	BOOST_TEST(Holds(players, Call("TEAM_ATTACKED_BY_OBJECTTYPE", {{"Widows", 0}, {"Tanks", 0}})));
+	BOOST_TEST(!Holds(players, Call("TEAM_ATTACKED_BY_OBJECTTYPE", {{"Army", 0}, {"GLAInfantryRebel", 0}})));
+	BOOST_TEST(Holds(players, Call("SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER", {{"me", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("SKIRMISH_PLAYER_HAS_BEEN_ATTACKED_BY_PLAYER", {{"them", 0}, {"me", 0}})));
+}
+
+// evaluateIsBuildingEmpty / evaluateNamedHasFreeContainerSlots (a container only) and evaluateNamedDiscovered /
+// evaluateTeamDiscovered reach the host with their player.
+BOOST_AUTO_TEST_CASE(legacy_parity_container_and_discovery_conditions)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("NAMED_BUILDING_IS_EMPTY", {{"Bunker", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_BUILDING_IS_EMPTY", {{"Van", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_BUILDING_IS_EMPTY", {{"Hero", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_HAS_FREE_CONTAINER_SLOTS", {{"Van", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_HAS_FREE_CONTAINER_SLOTS", {{"Bus", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_HAS_FREE_CONTAINER_SLOTS", {{"Hero", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_DISCOVERED", {{"Hero", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_DISCOVERED", {{"Hero", 0}, {"me", 0}})));
+	BOOST_TEST(Holds(players, Call("TEAM_DISCOVERED", {{"Army", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("TEAM_DISCOVERED", {{"Army", 0}, {"nobody", 0}})));
+	BOOST_TEST(Holds(players, Call("NAMED_REACHED_WAYPOINTS_END", {{"Hero", 0}, {"Road", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_REACHED_WAYPOINTS_END", {{"Hero", 0}, {"River", 0}})));
+	BOOST_TEST(Holds(players, Call("TEAM_REACHED_WAYPOINTS_END", {{"Army", 0}, {"Road", 0}})));
+	BOOST_TEST(Holds(players, Call("ENEMY_SIGHTED", {{"Hero", 0}, {"", 0}, {"them", 0}})));
+	BOOST_TEST(Holds(players, Call("BUILDING_ENTERED_BY_PLAYER", {{"me", 0}, {"Bunker", 0}})));
+	BOOST_TEST(!Holds(players, Call("BUILDING_ENTERED_BY_PLAYER", {{"them", 0}, {"Bunker", 0}})));
+	BOOST_TEST(!Holds(players, Call("ENEMY_SIGHTED", {{"Hero", 0}, {"", 2}, {"them", 0}})));
+	BOOST_TEST(Holds(players, Call("TYPE_SIGHTED", {{"Hero", 0}, {"Tanks", 0}, {"them", 0}})));
+	BOOST_TEST(!Holds(players, Call("TYPE_SIGHTED", {{"Hero", 0}, {"Tanks", 0}, {"me", 0}})));
+}
+
+// ScriptConditions::evaluateNamedUnitDestroyed / ...Dying / ...TotallyDead / evaluateNamedCreated /
+// evaluateNamedOwnedByPlayer: a living unit is created, not destroyed; a dying one (effectively dead, still there) is
+// destroyed and dying, not totally dead; one gone whose name was known is destroyed and totally dead, not dying or
+// created; a name never known is none of these; owned by its controlling player only.
+BOOST_AUTO_TEST_CASE(legacy_parity_named_unit_life_conditions)
+{
+	Players players;
+	const auto holds = [&](const char *condition, const char *unit) { return Holds(players, Call(condition, {{unit, 0}})); };
+	BOOST_TEST(holds("NAMED_CREATED", "Hero"));
+	BOOST_TEST(!holds("NAMED_DESTROYED", "Hero"));
+	BOOST_TEST(!holds("NAMED_DYING", "Hero"));
+	BOOST_TEST(!holds("NAMED_TOTALLY_DEAD", "Hero"));
+	BOOST_TEST(holds("NAMED_CREATED", "Falling"));
+	BOOST_TEST(holds("NAMED_DESTROYED", "Falling"));
+	BOOST_TEST(holds("NAMED_DYING", "Falling"));
+	BOOST_TEST(!holds("NAMED_TOTALLY_DEAD", "Falling"));
+	BOOST_TEST(!holds("NAMED_CREATED", "Gone"));
+	BOOST_TEST(holds("NAMED_DESTROYED", "Gone"));
+	BOOST_TEST(!holds("NAMED_DYING", "Gone"));
+	BOOST_TEST(holds("NAMED_TOTALLY_DEAD", "Gone"));
+	for (const char *condition : {"NAMED_CREATED", "NAMED_DESTROYED", "NAMED_DYING", "NAMED_TOTALLY_DEAD"})
+		BOOST_TEST(!holds(condition, "Nobody"));
+	BOOST_TEST(Holds(players, Call("NAMED_OWNED_BY_PLAYER", {{"Hero", 0}, {"me", 0}})));
+	BOOST_TEST(!Holds(players, Call("NAMED_OWNED_BY_PLAYER", {{"Gone", 0}, {"me", 0}})));
+}
+
+// ScriptActions::doBuildBaseDefense / doBuildBaseStructure: always the current player (the script's own); the defence
+// actions take the side's structure, the structure actions the one named.
+BOOST_AUTO_TEST_CASE(legacy_parity_base_defense_actions_build_for_the_scripts_own_player)
+{
+	Players players;
+	Act(players, Call("SKIRMISH_BUILD_BASE_DEFENSE_FRONT", {}));
+	Act(players, Call("SKIRMISH_BUILD_BASE_DEFENSE_FLANK", {}));
+	Act(players, Call("SKIRMISH_BUILD_STRUCTURE_FRONT", {{"AmericaPatriotBattery", 0}}));
+	Act(players, Call("SKIRMISH_BUILD_STRUCTURE_FLANK", {{"AmericaFireBase", 0}}));
+	BOOST_TEST((players.defenses == std::vector<std::string>{"0front:", "0flank:", "0front:AmericaPatriotBattery", "0flank:AmericaFireBase"}));
+}
+
+// ScriptActions: doPlayerAddSkillPoints, doPlayerAddRankLevels, doPlayerSetRankLevel, doPlayerGrantScience,
+// doPlayerPurchaseScience, doAffectSkillPointsModifier: each on the player named (parameter 0), with its value.
+BOOST_AUTO_TEST_CASE(legacy_parity_rank_actions_reach_the_named_player)
+{
+	Players players;
+	Act(players, Call("PLAYER_ADD_SKILLPOINTS", {{"them", 0}, {"", 250}}));
+	Act(players, Call("PLAYER_ADD_RANKLEVEL", {{"them", 0}, {"", 2}}));
+	Act(players, Call("PLAYER_SET_RANKLEVEL", {{"<This Player>", 0}, {"", 3}}));
+	Act(players, Call("PLAYER_GRANT_SCIENCE", {{"them", 0}, {"SCIENCE_Paradrop1", 0}}));
+	Act(players, Call("PLAYER_PURCHASE_SCIENCE", {{"them", 0}, {"SCIENCE_Paradrop1", 0}}));
+	Act(players, Call("PLAYER_ADD_SKILLPOINTS", {{"nobody", 0}, {"", 5}}));
+	BOOST_TEST((players.ranks == std::vector<std::string>{"1+sp250", "1+rank2", "0=rank3", "1grantSCIENCE_Paradrop1", "1buySCIENCE_Paradrop1"}));
+}
+
+// ScriptActions::doAffectPlayerSkillset (skill set 1..5 as written, 0-based to the AI) and updateBaseConstructionSpeed
+// (the seconds as written), on the player named; MAP_SWITCH_BORDER, TECHTREE_MODIFY_BUILDABILITY_OBJECT and
+// SCRIPTING_OVERRIDE_HULK_LIFETIME hand on their values.
+BOOST_AUTO_TEST_CASE(legacy_parity_skillset_team_delay_border_buildability_and_hulk_actions)
+{
+	Players players;
+	Act(players, Call("PLAYER_SELECT_SKILLSET", {{"them", 0}, {"", 3}}));
+	Act(players, Call("SET_BASE_CONSTRUCTION_SPEED", {{"them", 0}, {"", 25}}));
+	Act(players, Call("PLAYER_SELECT_SKILLSET", {{"nobody", 0}, {"", 1}}));
+	BOOST_TEST((players.ranks == std::vector<std::string>{"1 skillset 2", "1 team delay 25"}));
+	Act(players, Call("MAP_SWITCH_BORDER", {{"", 2}}));
+	BOOST_TEST((players.boundaries == std::vector<std::int64_t>{2}));
+	Act(players, Call("TECHTREE_MODIFY_BUILDABILITY_OBJECT", {{"AmericaInfantryRanger", 0}, {"", 2}}));
+	BOOST_TEST_REQUIRE(players.buildable.size() == 1u);
+	BOOST_TEST(players.buildable[0].first == "AmericaInfantryRanger");
+	BOOST_TEST(players.buildable[0].second == 2);
+}
+
+// ScriptActions::doPlayerSetScienceAvailability (the named player, the science, its availability as written);
+// ScriptConditions::evaluateCanPurchaseScience (isCapableOfPurchasingScience) and evaluateSciencePurchasePoints (at least
+// that many points); no such player: false.
+BOOST_AUTO_TEST_CASE(legacy_parity_science_availability_and_purchase_conditions)
+{
+	Players players;
+	Act(players, Call("PLAYER_SCIENCE_AVAILABILITY", {{"them", 0}, {"SCIENCE_Paradrop1", 0}, {"Hidden", 0}}));
+	Act(players, Call("PLAYER_SCIENCE_AVAILABILITY", {{"nobody", 0}, {"SCIENCE_Paradrop1", 0}, {"Hidden", 0}}));
+	BOOST_TEST((players.ranks == std::vector<std::string>{"1HiddenSCIENCE_Paradrop1"}));
+	BOOST_TEST(Holds(players, Call("PLAYER_CAN_PURCHASE_SCIENCE", {{"them", 0}, {"SCIENCE_Cheap", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_CAN_PURCHASE_SCIENCE", {{"them", 0}, {"SCIENCE_Dear", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_CAN_PURCHASE_SCIENCE", {{"nobody", 0}, {"SCIENCE_Cheap", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_HAS_SCIENCEPURCHASEPOINTS", {{"them", 0}, {"", 3}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_SCIENCEPURCHASEPOINTS", {{"them", 0}, {"", 4}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_HAS_SCIENCEPURCHASEPOINTS", {{"nobody", 0}, {"", 0}})));
+}
+
+// ScriptConditions::evaluateSkirmishSpecialPowerIsReady keeps its next look in the power parameter (friend_setInt): a
+// power that does not exist is never true (-1); not ready at tick 100, it waits for the soonest ready tick, at most
+// 10 s (300 ticks) on: no look before tick 400, then again.
+BOOST_AUTO_TEST_CASE(legacy_parity_special_power_ready_waits_before_looking_again)
+{
+	Players players;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddPlayerVocabulary(vocabulary, &players);
+	const auto *handler = vocabulary.FindCondition("SKIRMISH_SPECIAL_POWER_READY");
+	BOOST_REQUIRE(handler != nullptr);
+	level::Scenario scenario;
+	ScriptRuntime runtime(scenario, vocabulary);
+	const auto look = [&](const level::ScriptCall &call, std::uint64_t tick, std::int64_t &memo) {
+		ScriptCallContext context{runtime, 0, NoSubject, call, tick, &memo};
+		return (*handler)(context);
+	};
+	std::int64_t unknownMemo = 0;
+	const auto unknown = Call("SKIRMISH_SPECIAL_POWER_READY", {{"<This Player>", 0}, {"NoSuchPower", 0}});
+	BOOST_TEST(!look(unknown, 100, unknownMemo));
+	BOOST_TEST(unknownMemo == -1);
+	BOOST_TEST(!look(unknown, 5000, unknownMemo));
+	BOOST_TEST(players.readinessLooks == 1);
+	std::int64_t memo = 0;
+	const auto a10 = Call("SKIRMISH_SPECIAL_POWER_READY", {{"<This Player>", 0}, {"SuperweaponA10", 0}});
+	BOOST_TEST(!look(a10, 100, memo));
+	BOOST_TEST(memo == 400);
+	BOOST_TEST(!look(a10, 399, memo));
+	BOOST_TEST(players.readinessLooks == 2);
+	BOOST_TEST(!look(a10, 400, memo));
+	BOOST_TEST(players.readinessLooks == 3);
+	BOOST_TEST(memo == 700);
+}
+
+// ScriptConditions::evaluatePlayerSpecialPowerFromUnitTriggered: the trigger heard is taken by the first to ask.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_triggered_special_power_is_heard_once)
+{
+	Players players;
+	BOOST_TEST(Holds(players, Call("PLAYER_TRIGGERED_SPECIAL_POWER", {{"<This Player>", 0}, {"SuperweaponA10", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_TRIGGERED_SPECIAL_POWER", {{"<This Player>", 0}, {"SuperweaponA10", 0}})));
+	BOOST_TEST(!Holds(players, Call("PLAYER_COMPLETED_SPECIAL_POWER", {{"<This Player>", 0}, {"SuperweaponA10", 0}})));
+	players.powerEvents.push_back("0:SuperweaponA10@Bomber");
+	BOOST_TEST(!Holds(players, Call("PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED", {{"<This Player>", 0}, {"SuperweaponA10", 0}, {"Other", 0}})));
+	BOOST_TEST(Holds(players, Call("PLAYER_TRIGGERED_SPECIAL_POWER_FROM_NAMED", {{"<This Player>", 0}, {"SuperweaponA10", 0}, {"Bomber", 0}})));
+}
+
+// ScriptActions::executeAction: MAP_REVEAL_AT_WAYPOINT / MAP_SHROUD_AT_WAYPOINT(waypoint, radius, player), the four
+// whole-map actions (player) and the permanent reveal (waypoint, radius, player, name) and its undo (name); an empty
+// player (or one not found) is every human player, except for a named reveal, which then reveals nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_shroud_actions_read_their_parameters)
+{
+	Players players;
+	const auto withRadius = [](level::ScriptCall call, std::size_t index, std::int64_t radius) {
+		call.parameters[index].number = Engine::Math::Fixed::FromInt(radius);
+		return call;
+	};
+	Act(players, withRadius(Call("MAP_REVEAL_AT_WAYPOINT", {{"Spot", 0}, {"", 0}, {"them", 0}}), 1, 200));
+	Act(players, withRadius(Call("MAP_SHROUD_AT_WAYPOINT", {{"Spot", 0}, {"", 0}, {"", 0}}), 1, 90));
+	Act(players, Call("MAP_REVEAL_ALL", {{"", 0}}));
+	Act(players, Call("MAP_REVEAL_ALL_PERM", {{"me", 0}}));
+	Act(players, Call("MAP_REVEAL_ALL_UNDO_PERM", {{"nobody", 0}}));
+	Act(players, Call("MAP_SHROUD_ALL", {{"them", 0}}));
+	Act(players, withRadius(Call("MAP_REVEAL_PERMANENTLY_AT_WAYPOINT", {{"Spot", 0}, {"", 0}, {"nobody", 0}, {"Look", 0}}), 1, 300));
+	Act(players, Call("MAP_UNDO_REVEAL_PERMANENTLY_AT_WAYPOINT", {{"Look", 0}}));
+	BOOST_TEST((players.shroud == std::vector<std::string>{"reveal:Spot@200:1", "cover:Spot@90:humans", "map0:humans", "map1:0", "map2:humans", "map3:1",
+		"named:Look:Spot@300:humans", "unnamed:Look"}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

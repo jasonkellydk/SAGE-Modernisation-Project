@@ -1,0 +1,229 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.observer_panel;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.match.resources.match_outcome;
+
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+std::u16string Label(std::string_view label)
+{
+	if (label == "CONTROLBAR:ObsPlayerLabel")
+		return u"%ls [%ls]";
+	return std::u16string(label.begin(), label.end());
+}
+
+hud::ObserverCandidate Candidate(std::uint32_t player, std::string name, std::u16string shown, bool observer, bool human, int team, bool ai)
+{
+	hud::ObserverCandidate candidate;
+	candidate.player = player;
+	candidate.name = std::move(name);
+	candidate.displayName = std::move(shown);
+	candidate.color = 0xFF000000u | player;
+	candidate.enabledImage = "Image" + std::to_string(player);
+	candidate.flagImage = "Flag" + std::to_string(player);
+	candidate.observer = observer;
+	candidate.human = human;
+	candidate.team = team;
+	candidate.ai = ai;
+	return candidate;
+}
+
+std::vector<hud::ObserverCandidate> Players()
+{
+	return {Candidate(0, "", u"Neutral", false, false, -1, false), Candidate(1, "player0", u"Jason", false, true, 0, false),
+		Candidate(2, "player1", u"Watcher", true, true, -1, false), Candidate(3, "player2", u"Hard AI", false, false, -1, true),
+		Candidate(4, "player4", u"Other", false, true, 1, false)};
+}
+}
+
+BOOST_AUTO_TEST_SUITE(observer_panel)
+
+// legacy_parity: ControlBarObserver.cpp ControlBar::populateObserverList. A multiplayer game: player0 .. player7 in slot
+// order, observers left out, each button its PlayerTemplate's EnabledImage and its name as tooltip, its label
+// CONTROLBAR:ObsPlayerLabel with its name and "Team:<team + 1>" ("Team:AI": a computer on no team) in its colour.
+// Otherwise the first human who is not an observer, labelled with its name.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_observer_list_shows_the_watched_players)
+{
+	const std::vector<hud::ObserverCandidate> players = Players();
+	const auto list = hud::PopulateObserverList(players, true, Label);
+	BOOST_TEST_REQUIRE(list.size() == 3u);
+	BOOST_TEST(list[0].player == 1u);
+	BOOST_TEST(list[0].image == "Image1");
+	BOOST_TEST((list[0].tooltip == u"Jason"));
+	BOOST_TEST((list[0].label == u"Jason [Team:1]"));
+	BOOST_TEST(list[0].color == 0xFF000001u);
+	BOOST_TEST((list[1].label == u"Hard AI [Team:AI]"));
+	BOOST_TEST((list[2].label == u"Other [Team:2]"));
+	const auto single = hud::PopulateObserverList(players, false, Label);
+	BOOST_TEST_REQUIRE(single.size() == 1u);
+	BOOST_TEST(single[0].player == 1u);
+	BOOST_TEST((single[0].label == u"Jason"));
+	BOOST_TEST((hud::FormatObserverLabel(u"%s (%s)", {u"A", u"B"}) == u"A (B)"));
+}
+
+// legacy_parity: ControlBar::setControlBarSchemeByPlayer / switchToContext(CB_CONTEXT_OBSERVER_LIST) and
+// ControlBarObserverSystem / populateObserverInfoWindow / ControlBar::update. Inactive, the bar shows the list (the info
+// window hidden, ButtonIdleWorker hidden, ButtonGeneral disabled); a player's button shows its info window (counts, name
+// in its colour, FlagWaterMark, the portrait window) in place of the list; it is filled again on frames divisible by 15
+// (LOGICFRAMES_PER_SECOND / 2) only; Cancel goes back to the list; active again, both hide.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_observer_bar_switches_between_list_and_info)
+{
+	std::int64_t units = 3;
+	hud::ObserverPanelViewModel panel(Players, [&](std::uint32_t player) -> std::optional<hud::ObserverInfo> {
+		hud::ObserverInfo info;
+		info.units = units;
+		info.buildings = 2;
+		info.unitsKilled = 5;
+		info.unitsLost = 1;
+		info.name = u"Hard AI";
+		info.color = 0xFF000003u;
+		info.flag = "Flag" + std::to_string(player);
+		return info;
+	}, Label, true);
+	panel.SetObserverBar(true);
+	BOOST_TEST(panel.listShown.Get());
+	BOOST_TEST(!panel.infoShown.Get());
+	BOOST_TEST(!panel.idleWorkerShown.Get());
+	BOOST_TEST(!panel.generalEnabled.Get());
+	BOOST_TEST(panel.buttonShown[2].Get());
+	BOOST_TEST(!panel.buttonShown[3].Get());
+	BOOST_TEST(panel.buttonImage[1].Get() == "Image3");
+	BOOST_TEST(panel.labelColor[1].Get() == 0xFF000003u);
+
+	panel.playerClicked[1].Execute();
+	BOOST_TEST(panel.infoShown.Get());
+	BOOST_TEST(!panel.listShown.Get());
+	BOOST_TEST(panel.LookAt().value_or(0) == 3u);
+	BOOST_TEST((panel.units.Get() == u"3"));
+	BOOST_TEST((panel.buildings.Get() == u"2"));
+	BOOST_TEST((panel.unitsKilled.Get() == u"5"));
+	BOOST_TEST((panel.unitsLost.Get() == u"1"));
+	BOOST_TEST((panel.name.Get() == u"Hard AI"));
+	BOOST_TEST(panel.nameColor.Get() == 0xFF000003u);
+	BOOST_TEST(panel.flag.Get() == "Flag3");
+	BOOST_TEST(panel.portraitShown.Get());
+
+	units = 4;
+	panel.Update(29);
+	BOOST_TEST((panel.units.Get() == u"3"));
+	panel.Update(30);
+	BOOST_TEST((panel.units.Get() == u"4"));
+
+	panel.cancel.Execute();
+	BOOST_TEST(!panel.infoShown.Get());
+	BOOST_TEST(panel.listShown.Get());
+	BOOST_TEST(!panel.LookAt().has_value());
+
+	panel.SetObserverBar(false);
+	BOOST_TEST(!panel.listShown.Get());
+	BOOST_TEST(!panel.infoShown.Get());
+	BOOST_TEST(panel.idleWorkerShown.Get());
+	BOOST_TEST(panel.generalEnabled.Get());
+}
+
+// legacy_parity: GameLogic::startNewGame over a shipped map: an observer's slot becomes a player of its own ("player1",
+// human, FactionObserver: IsObserver), on a start spot no player holds (populateRandomStartPosition's observer pass), with
+// no starting buildings or units (placeNetworkBuildingsForPlayer is skipped for it) and not among the match's players
+// (VictoryConditions::cachePlayerPtrs). populateObserverInfoWindow's counts for America after its start: 1 unit (the
+// dozer: SCORE, not STRUCTURE) and 1 building (the command centre: SCORE and STRUCTURE).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_observer_slot_is_a_watching_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Watcher");
+	setup.slots[1].playerTemplate = session::setup::ObserverTemplate;
+	setup.slots[2].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[2].playerTemplate = templateOf("FactionChina");
+	setup.slots[2].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	BOOST_TEST_REQUIRE(skirmish.players.size() == 3u);
+	const session::setup::SkirmishPlayer &watcher = skirmish.players[1];
+	BOOST_TEST(watcher.name == "player1");
+	BOOST_TEST(watcher.observer);
+	BOOST_TEST(watcher.human);
+	BOOST_TEST(watcher.playerTemplate == templateOf("FactionObserver"));
+	BOOST_TEST((watcher.startPosition == 1 || watcher.startPosition == 3));
+
+	session::SessionOptions options{3, 1, {}, {"player0", "player1", "player2"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t observer = *game.Teams().FindPlayer("player1");
+	BOOST_TEST(game.PlayerTemplateName(observer) == "FactionObserver");
+	const auto &outcome = game.World().Resource<engine::gameplay::MatchOutcome>();
+	BOOST_TEST(outcome.Of(america) != nullptr);
+	BOOST_TEST(outcome.Of(observer) == nullptr);
+
+	hud::ObserverCandidate usa;
+	usa.player = america;
+	hud::ObserverCandidate watching;
+	watching.player = observer;
+	const hud::ObserverInfo usaInfo = hud::ReadObserverInfo(game, usa);
+	BOOST_TEST(usaInfo.units == 1);
+	BOOST_TEST(usaInfo.buildings == 1);
+	BOOST_TEST(usaInfo.unitsKilled == 0);
+	const hud::ObserverInfo watchingInfo = hud::ReadObserverInfo(game, watching);
+	BOOST_TEST(watchingInfo.units == 0);
+	BOOST_TEST(watchingInfo.buildings == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,155 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <string_view>
+
+import games.generalszh.shell.load_screen.load_screen_view;
+import games.generalszh.shell.load_screen.load_screen_kind;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+import Engine.UI.WND.Document;
+
+using namespace generalszh::shell;
+using namespace Engine::UI::WND;
+
+BOOST_AUTO_TEST_SUITE(load_screen_view)
+
+namespace
+{
+bool Load(engine::filesystem::VirtualFileSystem &files, WNDDocument &document, std::string_view layout)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return false;
+	generalszh::content::MountInstall(files, install);
+	const auto text = files.ReadText(layout);
+	return text && document.Parse(*text);
+}
+
+bool Hidden(WNDDocument &document, std::string_view window)
+{
+	return Has_Flag(document.Find_Window(window)->flags, WindowFlag::Hidden);
+}
+
+const std::string &CellImage(WNDDocument &document, std::string_view window, std::size_t cell)
+{
+	return document.Find_Window(window)->draw_states[0].cells[cell].image_name;
+}
+}
+
+// Snapshot of the shipped ShellGameLoadScreen.wnd as LoadScreen.cpp ShellGameLoadScreen::init / update leave it: the
+// first load shows "TitleScreen" over the parent with StaticTextLegal and the bar; a later load has the layout's
+// LoadPageHuge back and no legal text.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_shell_load_screen_as_the_original_draws_it)
+{
+	engine::filesystem::VirtualFileSystem files;
+	WNDDocument document;
+	if (!Load(files, document, "Window/Menus/ShellGameLoadScreen.wnd"))
+		return;
+	ShellGameLoadScreenViewModel screen;
+	WNDBindings bindings(document);
+	BindShellGameLoadScreenView(bindings, screen, {}, {});
+	BOOST_TEST(bindings.MissingWindows().empty());
+	const std::string parent = "ShellGameLoadScreen.wnd:ParentShellGameLoadScreen";
+	BOOST_TEST(CellImage(document, parent, 0) == "LoadPageHuge");
+	BOOST_TEST(Hidden(document, "ShellGameLoadScreen.wnd:StaticTextLegal"));
+	screen.Init(true);
+	screen.Update(load_progress::PostPreloadAssets);
+	BOOST_TEST(CellImage(document, parent, 0) == "TitleScreen");
+	BOOST_TEST(!Hidden(document, "ShellGameLoadScreen.wnd:StaticTextLegal"));
+	BOOST_TEST(!Hidden(document, "ShellGameLoadScreen.wnd:ProgressLoad"));
+	BOOST_TEST(document.Find_Window("ShellGameLoadScreen.wnd:ProgressLoad")->progress == 91);
+	screen.Init(false);
+	BOOST_TEST(CellImage(document, parent, 0) == "LoadPageHuge");
+	BOOST_TEST(Hidden(document, "ShellGameLoadScreen.wnd:StaticTextLegal"));
+	BOOST_TEST(document.Find_Window("ShellGameLoadScreen.wnd:ProgressLoad")->progress == 0);
+}
+
+// Snapshot of the shipped SinglePlayerLoadScreen.wnd after a USA mission's movie (SinglePlayerLoadScreen::init): the
+// MissionLoad_USA background, the blue bar centre (image 6), the objectives, location and captions hidden, the bar at
+// (2 + 30) / 1.3 = 24 once the map is loaded.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_mission_load_screen_as_the_original_draws_it)
+{
+	engine::filesystem::VirtualFileSystem files;
+	WNDDocument document;
+	if (!Load(files, document, "Window/Menus/SinglePlayerLoadScreen.wnd"))
+		return;
+	MissionLoadScreenViewModel screen;
+	WNDBindings bindings(document);
+	MissionLoadScreenView view(bindings, screen, false, {}, {});
+	BOOST_TEST(bindings.MissingWindows().empty());
+	screen.Init(false);
+	screen.StartMovie("USA", 900);
+	screen.EndMovie();
+	screen.Update(load_progress::PostLoadMap);
+	BOOST_TEST(CellImage(document, "SinglePlayerLoadScreen.wnd:ParentSinglePlayerLoadScreen", 0) == "MissionLoad_USA");
+	BOOST_TEST(CellImage(document, "SinglePlayerLoadScreen.wnd:ProgressLoad", 6) == "LoadingBar_ProgressCenter2");
+	BOOST_TEST(document.Find_Window("SinglePlayerLoadScreen.wnd:ProgressLoad")->progress == 24);
+	for (const char *hidden : {"Percent", "ObjectivesWin", "StaticTextCameoText0", "StaticTextCameoText3"})
+		BOOST_TEST(Hidden(document, std::string("SinglePlayerLoadScreen.wnd:") + hidden));
+}
+
+// Snapshot of the shipped MultiplayerLoadScreen.wnd for a two-player skirmish (MultiPlayerLoadScreen::init): two rows
+// in their house colours, the computer player's bar hidden, the other six rows hidden, the human's number on its spot,
+// the spots past the map's four hidden, the local general's name and features.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_multiplayer_load_screen_as_the_original_draws_it)
+{
+	engine::filesystem::VirtualFileSystem files;
+	WNDDocument document;
+	if (!Load(files, document, "Window/Menus/MultiplayerLoadScreen.wnd"))
+		return;
+	MultiplayerLoadScreenViewModel screen;
+	WNDBindings bindings(document);
+	MultiplayerLoadScreenView view(bindings, document, screen, {}, {});
+	BOOST_TEST(bindings.MissingWindows().empty());
+
+	MultiplayerLoadScreenSetup game;
+	game.factions = {{"FactionAmerica", u"USA", "GUI:BioFeatures_USA", "Load_USA", false, "", ""}};
+	game.colors = {0xFFDDE20D, 0xFFFF0000, 0xFF0000FF};
+	game.text = [](std::string_view label) { return std::u16string(label.begin(), label.end()); };
+	SetupMap map;
+	map.players = 4;
+	map.extentWidth = map.extentHeight = 100;
+	map.starts = {{1000, 1000}, {9000, 1000}, {1000, 9000}, {9000, 9000}};
+	game.map = &map;
+	game.chosen.slots[0].SetState(setup::SlotState::Player, u"Jason");
+	game.chosen.slots[0].playerTemplate = 0;
+	game.chosen.slots[0].color = 2;
+	game.chosen.slots[0].startPos = 1;
+	game.chosen.slots[1].SetState(setup::SlotState::EasyAI);
+	game.playerTemplate = {0, 0, -1, -1, -1, -1, -1, -1};
+	game.color = {2, -1, -1, -1, -1, -1, -1, -1};
+	game.startPos = {1, 2, -1, -1, -1, -1, -1, -1};
+	game.names[0] = u"Jason";
+	game.names[1] = u"Easy Army";
+	screen.Init(game);
+	screen.Update(load_progress::PostPathfinderNewMap);
+
+	const std::string at = "MultiplayerLoadScreen.wnd:";
+	BOOST_TEST((document.Find_Window(at + "StaticTextPlayer0")->text == u"Jason"));
+	BOOST_TEST((document.Find_Window(at + "StaticTextSide0")->text == u"USA"));
+	BOOST_TEST((document.Find_Window(at + "StaticTextPlayer1")->text == u"Easy Army"));
+	BOOST_TEST((document.Find_Window(at + "StaticTextSide1")->text == u"GUI:Random"));
+	BOOST_TEST(document.Find_Window(at + "StaticTextPlayer0")->text_styles[0].color.blue == 1.0f);
+	BOOST_TEST(document.Find_Window(at + "StaticTextPlayer0")->text_styles[0].color.red == 0.0f);
+	BOOST_TEST(document.Find_Window(at + "ProgressLoad0")->progress == 21);
+	BOOST_TEST(CellImage(document, at + "ProgressLoad0", 6) == "LoadingBar_ProgressCenter2");
+	BOOST_TEST(!Hidden(document, at + "ProgressLoad0"));
+	BOOST_TEST(Hidden(document, at + "ProgressLoad1"));
+	for (int row = 2; row < 8; ++row)
+	{
+		BOOST_TEST(Hidden(document, at + "StaticTextPlayer" + std::to_string(row)));
+		BOOST_TEST(Hidden(document, at + "ProgressLoad" + std::to_string(row)));
+	}
+	BOOST_TEST((document.Find_Window(at + "ButtonMapStartPosition1")->text == u"NUMBER:1"));
+	BOOST_TEST(document.Find_Window(at + "ButtonMapStartPosition2")->text.empty());
+	BOOST_TEST(!Hidden(document, at + "ButtonMapStartPosition3"));
+	BOOST_TEST(Hidden(document, at + "ButtonMapStartPosition4"));
+	BOOST_TEST((document.Find_Window(at + "LocalGeneralName")->text == u"USA"));
+	BOOST_TEST((document.Find_Window(at + "LocalGeneralFeatures")->text == u"GUI:BioFeatures_USA"));
+	BOOST_TEST(CellImage(document, at + "LocalGeneralPortrait", 0) == "SAFactionLogoLg_US");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

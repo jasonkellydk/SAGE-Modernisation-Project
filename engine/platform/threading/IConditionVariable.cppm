@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module engine.platform.threading.condition;
+import std;
 export import engine.platform.threading.mutex;
 export namespace engine::platform
 {

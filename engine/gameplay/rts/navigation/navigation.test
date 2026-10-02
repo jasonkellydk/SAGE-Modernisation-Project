@@ -1,0 +1,523 @@
+#define BOOST_TEST_MODULE EngineGameplayNavigation
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import engine.gameplay.rts.navigation.algorithms.grid_classification;
+import engine.gameplay.rts.navigation.algorithms.clearance;
+import engine.gameplay.rts.navigation.algorithms.route_search;
+import engine.gameplay.rts.navigation.algorithms.decks;
+import engine.gameplay.rts.navigation.algorithms.view_blocked;
+import engine.gameplay.rts.navigation.algorithms.attack_view;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+std::string Row(const NavigationGrid &grid, std::int32_t y, std::int32_t from, std::int32_t to)
+{
+	std::string out;
+	for (std::int32_t x = from; x <= to; ++x)
+		out += static_cast<char>('0' + static_cast<int>(grid.Type(x, y)));
+	return out;
+}
+
+std::string Room(const NavigationGrid &grid, const ClearancePlane &plane, std::int32_t y, std::int32_t from, std::int32_t to)
+{
+	std::string out;
+	for (std::int32_t x = from; x <= to; ++x)
+		out += static_cast<char>('0' + plane.room[grid.Index(x, y)]);
+	return out;
+}
+
+ObstacleFootprint Box(int hx, int hy) { return {.majorRadius = Fixed::FromInt(hx), .minorRadius = Fixed::FromInt(hy), .shape = ObstacleShape::Box}; }
+
+FixedVector2 At(int cellX, int cellY) { return {Fixed::FromInt(cellX * 10 + 5), Fixed::FromInt(cellY * 10 + 5)}; }
+
+// A grid with a wall of obstacle cells down column `wallX` (except rows in `gaps`), and its ground clearance.
+struct Walled
+{
+	NavigationGrid grid;
+	ClearancePlane ground{locomotor_surface::Ground, {}};
+	Walled(std::int32_t size, std::int32_t wallX, std::vector<std::int32_t> gaps) : grid(size, size)
+	{
+		for (std::int32_t y = 0; y < size; ++y)
+			if (std::find(gaps.begin(), gaps.end(), y) == gaps.end())
+				grid.SetObstacle(wallX, y, {1, 1}, Box(1, 1), false);
+		BuildClearance(grid, ground);
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(navigation_grid)
+
+// A box takes the cells whose centres its rotated rectangle covers; a cylinder those within its radius; the first
+// obstacle owns a cell, taking it out clears only its own.
+BOOST_AUTO_TEST_CASE(footprints_cover_the_cells_their_shapes_cover)
+{
+	NavigationGrid grid(20, 20);
+	const ecs::Entity barracks{1, 1}, silo{2, 1};
+	StampFootprint(grid, barracks, Box(15, 10), {Fixed::FromInt(50), Fixed::FromInt(50)}, {}, true);
+	BOOST_TEST(Row(grid, 5, 2, 7) == "044440"); // centres 35..65 inside |x - 50| <= 15
+	BOOST_TEST(Row(grid, 3, 2, 7) == "000000"); // 35 is outside |y - 50| <= 10
+	// Turned a quarter: long across y.
+	NavigationGrid turned(20, 20);
+	StampFootprint(turned, barracks, Box(15, 10), {Fixed::FromInt(50), Fixed::FromInt(50)}, Engine::Math::TurnFromDegrees(90), true);
+	BOOST_TEST(Row(turned, 3, 3, 6) == "0440");
+	BOOST_TEST(Row(turned, 5, 3, 6) == "0440");
+	StampFootprint(grid, silo, {.majorRadius = Fixed::FromInt(12), .shape = ObstacleShape::Cylinder}, {Fixed::FromInt(70), Fixed::FromInt(50)}, {}, true);
+	BOOST_TEST((grid.Obstacle(6, 5) == barracks)); // the barracks had it first
+	BOOST_TEST((grid.Obstacle(7, 5) == silo));
+	StampFootprint(grid, barracks, Box(15, 10), {Fixed::FromInt(50), Fixed::FromInt(50)}, {}, false);
+	BOOST_TEST(Row(grid, 5, 2, 8) == "0000040"); // (6, 5) cleared with the barracks
+}
+
+// Cliffs where the map marks them, water where any corner is under water (water wins), obstacles stay.
+BOOST_AUTO_TEST_CASE(terrain_classification_keeps_obstacles)
+{
+	NavigationGrid grid(10, 10);
+	StampFootprint(grid, {1, 1}, Box(4, 4), {Fixed::FromInt(15), Fixed::FromInt(85)}, {}, true);
+	ClassifyTerrain(grid, [](std::int32_t x, std::int32_t y) { return (x == 5 && y == 5) || (x == 1 && y == 1); },
+		[](Fixed x, Fixed y) { return x == Fixed::FromInt(10) && y == Fixed::FromInt(10); });
+	BOOST_TEST((grid.Type(1, 1) == PathfindCellType::Water));
+	BOOST_TEST((grid.Type(0, 0) == PathfindCellType::Water));
+	BOOST_TEST((grid.Type(5, 5) == PathfindCellType::Cliff));
+	BOOST_TEST((grid.Type(4, 5) == PathfindCellType::Clear));
+	BOOST_TEST((grid.Type(1, 8) == PathfindCellType::Obstacle));
+}
+
+// Clearance: the Chebyshev distance to the nearest unusable cell or the edge; a region rebuilt after a change
+// matches a full rebuild.
+BOOST_AUTO_TEST_CASE(clearance_counts_the_room_around_each_cell)
+{
+	Walled walled(12, 6, {});
+	BOOST_TEST(Room(walled.grid, walled.ground, 5, 0, 11) == "123321012321");
+	walled.grid.RemoveObstacle(6, 5, {1, 1});
+	BuildClearance(walled.grid, walled.ground, 6, 5, 6, 5);
+	ClearancePlane full{locomotor_surface::Ground, {}};
+	BuildClearance(walled.grid, full);
+	BOOST_TEST((walled.ground.room == full.room));
+	BOOST_TEST(Room(walled.grid, walled.ground, 5, 4, 8) == "21112"); // the wall above and below the opening
+}
+
+// A search that runs out of budget settles for the reached cell nearest the goal, marked as cut short.
+BOOST_AUTO_TEST_CASE(an_exhausted_search_is_a_partial_route)
+{
+	Walled open(60, -1, {});
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(open.grid, open.ground, {0, 20}, At(2, 2), At(55, 50), scratch);
+	BOOST_TEST(route.exhausted);
+	BOOST_TEST(!route.reachedGoal);
+	BOOST_TEST(route.points.size() >= 2u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(ground_routes)
+
+// Pathfinder::adjustDestination: a goal inside a block of obstacle cells (a structure) becomes the open cell nearest
+// it on the nearest ring out, and the route reaches it (so the mover stops there rather than searching on).
+BOOST_AUTO_TEST_CASE(a_goal_inside_obstacles_moves_to_the_nearest_open_cell)
+{
+	Walled block(30, -1, {});
+	for (std::int32_t y = 10; y <= 14; ++y)
+		for (std::int32_t x = 10; x <= 14; ++x)
+			block.grid.SetObstacle(x, y, {2, 1}, Box(1, 1), false);
+	BuildClearance(block.grid, block.ground);
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(block.grid, block.ground, {}, At(2, 12), At(11, 12), scratch);
+	BOOST_TEST(route.reachedGoal);
+	BOOST_TEST((route.points.back() == At(9, 12))); // the block's west edge, level with the goal
+}
+
+// Pathfinder's tunneling from an invalid start (a unit a new building was put over): a mover of one cell's reach in the
+// middle of a 5x5 structure tunnels out through its cells and the too-tight ring beside them, then on to its goal; and
+// clientSafeQuickDoesPathExist from inside the structure compares terrain zones (doingTerrainZone): the far side of the
+// map is reachable, a spot walled off by terrain (impassable cells all round) is not.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mover_inside_a_structure_tunnels_out)
+{
+	Walled block(30, -1, {});
+	for (std::int32_t y = 10; y <= 14; ++y)
+		for (std::int32_t x = 10; x <= 14; ++x)
+			block.grid.SetObstacle(x, y, {3, 1}, Box(1, 1), false);
+	for (std::int32_t y = 24; y <= 28; ++y)
+		for (std::int32_t x = 24; x <= 28; ++x)
+			if (x == 24 || x == 28 || y == 24 || y == 28)
+				block.grid.SetType(x, y, PathfindCellType::Impassable);
+	BuildClearance(block.grid, block.ground);
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(block.grid, block.ground, {1}, At(12, 12), At(20, 12), scratch);
+	BOOST_TEST(route.reachedGoal);
+	BOOST_TEST((route.points.back() == At(20, 12)));
+	block.grid.Clearance().push_back(block.ground);
+	BOOST_TEST(QuickPathExists(block.grid, locomotor_surface::Ground, At(12, 12), At(2, 2)));
+	BOOST_TEST(!QuickPathExists(block.grid, locomotor_surface::Ground, At(12, 12), At(26, 26)));
+}
+
+// Across open ground a route is one straight segment.
+BOOST_AUTO_TEST_CASE(open_ground_is_one_straight_leg)
+{
+	Walled open(20, -1, {});
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(open.grid, open.ground, {}, At(2, 2), At(15, 9), scratch);
+	BOOST_TEST(route.reachedGoal);
+	BOOST_TEST_REQUIRE(route.points.size() == 2u);
+	BOOST_TEST((route.points.back() == At(15, 9)));
+}
+
+// Through a wall's one gap, turning at it; a mover too wide for the gap goes to the reachable cell nearest the goal.
+BOOST_AUTO_TEST_CASE(routes_go_through_gaps_their_movers_fit)
+{
+	Walled walled(20, 10, {3});
+	RouteScratch scratch;
+	const FoundRoute narrow = FindRoute(walled.grid, walled.ground, {}, At(2, 15), At(17, 15), scratch);
+	BOOST_TEST(narrow.reachedGoal);
+	BOOST_TEST_REQUIRE(narrow.points.size() >= 3u);
+	bool throughGap = false;
+	for (const FixedVector2 &point : narrow.points)
+		throughGap = throughGap || (point.y <= Fixed::FromInt(45) && point.x >= Fixed::FromInt(95) && point.x <= Fixed::FromInt(115));
+	BOOST_TEST(throughGap);
+	const FoundRoute wide = FindRoute(walled.grid, walled.ground, {1}, At(2, 15), At(17, 15), scratch);
+	BOOST_TEST(!wide.reachedGoal);
+	BOOST_TEST((wide.points.back() == At(8, 15))); // room 2 at column 8, beside the wall at 10
+	// The same query gives the same route.
+	const FoundRoute again = FindRoute(walled.grid, walled.ground, {}, At(2, 15), At(17, 15), scratch);
+	BOOST_TEST((again.points == narrow.points));
+}
+
+// A mover inside a blocked cell walks out of it.
+BOOST_AUTO_TEST_CASE(a_mover_in_a_blocked_cell_walks_out)
+{
+	Walled walled(20, 10, {3});
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(walled.grid, walled.ground, {}, At(10, 12), At(4, 12), scratch);
+	BOOST_TEST(route.reachedGoal);
+	BOOST_TEST_REQUIRE(route.points.size() == 2u);
+}
+
+// A search that runs out of budget settles for the reached cell nearest the goal, marked as cut short.
+BOOST_AUTO_TEST_CASE(an_exhausted_search_is_a_partial_route)
+{
+	Walled open(60, -1, {});
+	RouteScratch scratch;
+	const FoundRoute route = FindRoute(open.grid, open.ground, {0, 20}, At(2, 2), At(55, 50), scratch);
+	BOOST_TEST(route.exhausted);
+	BOOST_TEST(!route.reachedGoal);
+	BOOST_TEST(route.points.size() >= 2u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Decks (the original's bridge pathfinding layers: PathfindLayer::classifyLayerMapCell with Bridge's isPointOnBridge,
+// isCellOnSide, isCellOnEnd and isCellEntryPoint; Pathfinder::changeBridgeState): a river of water across a flat map, 20
+// deep under a deck 30 wide from x 100 to 200 at y 50 (its surface 20 up, off the ground by more than a cell's height).
+namespace
+{
+struct River
+{
+	engine::level::Heightfield field;
+	std::optional<GroundHeight> ground;
+	NavigationGrid grid{32, 12};
+	DeckGeometry deck;
+
+	River()
+	{
+		field.width = 33;
+		field.height = 13;
+		field.border = 0;
+		field.cellSize = Fixed::FromInt(10);
+		field.heights.assign(33 * 13, Fixed{});
+		ground.emplace(field);
+		for (std::int32_t y = 0; y < 12; ++y)
+			for (std::int32_t x = 12; x <= 17; ++x)
+				grid.SetType(x, y, PathfindCellType::Water);
+		const Fixed z = Fixed::FromInt(20);
+		deck.from = {Fixed::FromInt(100), Fixed::FromInt(50), z};
+		deck.to = {Fixed::FromInt(200), Fixed::FromInt(50), z};
+		deck.fromLeft = {Fixed::FromInt(100), Fixed::FromInt(65), z};
+		deck.fromRight = {Fixed::FromInt(100), Fixed::FromInt(35), z};
+		deck.toLeft = {Fixed::FromInt(200), Fixed::FromInt(65), z};
+		deck.toRight = {Fixed::FromInt(200), Fixed::FromInt(35), z};
+		grid.Clearance().push_back(ClearancePlane{locomotor_surface::Ground});
+	}
+
+	ClearancePlane &Plane() { return grid.Clearance().front(); }
+	void Build() { BuildClearance(grid, Plane()); }
+};
+
+std::string DeckRow(const NavigationGrid &grid, std::uint8_t layer, std::int32_t y)
+{
+	const DeckLayer &deck = grid.Decks()[layer - 1];
+	std::string out;
+	for (std::int32_t x = deck.x0; x < deck.x0 + deck.width; ++x)
+		out += deck.toGround[deck.Index(x, y)] != 0 ? 'E' : static_cast<char>('0' + static_cast<int>(deck.type[deck.Index(x, y)]));
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_deck_is_classified_as_the_original_bridge_layer)
+{
+	River river;
+	const auto layer = AddDeck(river.grid, *river.ground, {}, river.deck);
+	BOOST_TEST_REQUIRE(layer.has_value());
+	BOOST_TEST(*layer == 1u);
+	const DeckLayer &deck = river.grid.Decks().front();
+	// Bounds 100..200 x 35..65 (PathfindLayer::allocateCells: (lo - PATHFIND_CELL_SIZE/100) / PATHFIND_CELL_SIZE floored,
+	// the high end ceiled, PATHFIND_CELL_SIZE/100 being the integer 0), padded by one: cells 9..20 x 2..7.
+	BOOST_TEST(deck.x0 == 9);
+	BOOST_TEST(deck.width == 12);
+	BOOST_TEST(deck.y0 == 2);
+	BOOST_TEST(deck.height == 6);
+	// Across the middle row (y 45..55): entry cells half a cell past each end (x 9 and 20), clear from end to end
+	// between (0).
+	BOOST_TEST(DeckRow(river.grid, 1, 5) == "E0000000000E");
+	// Its sides (y 35 and 65, and a cell further out) are bridge impassable (5).
+	BOOST_TEST(DeckRow(river.grid, 1, 3) == "555555555555");
+	// The entry cells link the ground under them to the deck.
+	BOOST_TEST(river.grid.DeckLink(9, 5) == 1u);
+	BOOST_TEST(river.grid.DeckLink(20, 5) == 1u);
+	BOOST_TEST(river.grid.DeckLink(15, 5) == 0u);
+	// The deck is 20 up: the river under it keeps its water; its height there is the deck's, the ground's beyond it.
+	BOOST_TEST(Row(river.grid, 5, 12, 17) == "111111");
+	BOOST_TEST((LayerHeight(DeckSurfaces{{river.deck}}, *river.ground, At(15, 5), 1) == Fixed::FromInt(20)));
+	BOOST_TEST((LayerHeight(DeckSurfaces{{river.deck}}, *river.ground, At(15, 9), 1) == Fixed{}));
+	BOOST_TEST(LayerForDestination(DeckSurfaces{{river.deck}}, *river.ground, {At(15, 5).x, At(15, 5).y, Fixed::FromInt(19)}) == 1u);
+	BOOST_TEST(LayerForDestination(DeckSurfaces{{river.deck}}, *river.ground, {At(15, 5).x, At(15, 5).y, Fixed::FromInt(2)}) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(routes_cross_a_river_on_a_deck_and_not_once_it_is_destroyed)
+{
+	River river;
+	river.Build();
+	RouteScratch scratch;
+	// No deck: the river is in the way (the route ends at the bank).
+	const auto blocked = FindRoute(river.grid, river.Plane(), RouteMover{0}, At(2, 5), At(29, 5), scratch);
+	BOOST_TEST(!blocked.reachedGoal);
+	BOOST_TEST(!QuickPathExists(river.grid, locomotor_surface::Ground, At(2, 5), At(29, 5)));
+	const auto layer = AddDeck(river.grid, *river.ground, {}, river.deck);
+	BOOST_TEST_REQUIRE(layer.has_value());
+	river.Build();
+	const auto crossing = FindRoute(river.grid, river.Plane(), RouteMover{0}, At(2, 5), At(29, 5), scratch);
+	BOOST_TEST(crossing.reachedGoal);
+	BOOST_TEST(QuickPathExists(river.grid, locomotor_surface::Ground, At(2, 5), At(29, 5)));
+	// On the ground to the near entry, up on to the deck there, along it to the far entry, down again, on to the goal.
+	std::vector<std::uint8_t> layers(crossing.layers.begin(), crossing.layers.end());
+	BOOST_TEST_REQUIRE(layers.size() == crossing.points.size());
+	bool onDeck = false;
+	for (std::size_t index = 0; index < layers.size(); ++index)
+		if (layers[index] == 1u)
+		{
+			onDeck = true;
+			// On the deck, over the river's rows.
+			BOOST_TEST((crossing.points[index].y > Fixed::FromInt(35)));
+			BOOST_TEST((crossing.points[index].y < Fixed::FromInt(65)));
+		}
+	BOOST_TEST(onDeck);
+	BOOST_TEST(layers.front() == 0u);
+	BOOST_TEST(layers.back() == 0u);
+	// A goal on the deck over the water is on the deck.
+	BOOST_TEST(RouteGoalLayer(river.grid, river.Plane(), 0, GroundLayer, At(15, 5)) == 1u);
+	BOOST_TEST(RouteGoalLayer(river.grid, river.Plane(), 0, GroundLayer, At(4, 5)) == 0u);
+	// Two clear rows between its sides: a mover reaching a cell or more does not fit on it.
+	BOOST_TEST(!FindRoute(river.grid, river.Plane(), RouteMover{1}, At(2, 5), At(29, 5), scratch).reachedGoal);
+
+	// Destroyed: bridge impassable throughout, linked to nothing; repaired, as it was.
+	BOOST_TEST(SetDeckDestroyed(river.grid, *river.ground, 1, true));
+	BOOST_TEST(!SetDeckDestroyed(river.grid, *river.ground, 1, true));
+	river.Build();
+	BOOST_TEST(river.grid.DeckLink(9, 5) == 0u);
+	BOOST_TEST(DeckRow(river.grid, 1, 5) == "555555555555");
+	BOOST_TEST(!FindRoute(river.grid, river.Plane(), RouteMover{0}, At(2, 5), At(29, 5), scratch).reachedGoal);
+	BOOST_TEST(!QuickPathExists(river.grid, locomotor_surface::Ground, At(2, 5), At(29, 5)));
+	BOOST_TEST(SetDeckDestroyed(river.grid, *river.ground, 1, false));
+	river.Build();
+	BOOST_TEST(DeckRow(river.grid, 1, 5) == "E0000000000E");
+	BOOST_TEST(FindRoute(river.grid, river.Plane(), RouteMover{0}, At(2, 5), At(29, 5), scratch).reachedGoal);
+}
+
+// The ground under a low deck (less than a cell's height below it) is bridge impassable; its room spares its neighbours.
+BOOST_AUTO_TEST_CASE(the_ground_under_a_low_deck_is_bridge_impassable)
+{
+	River river;
+	for (auto *corner : {&river.deck.from, &river.deck.to, &river.deck.fromLeft, &river.deck.fromRight, &river.deck.toLeft, &river.deck.toRight})
+		corner->z = Fixed::FromInt(5);
+	const auto layer = AddDeck(river.grid, *river.ground, {}, river.deck);
+	BOOST_TEST_REQUIRE(layer.has_value());
+	river.Build();
+	// Under its clear cells and its sides (the entries are not): bridge impassable, the water's cells too.
+	BOOST_TEST(Row(river.grid, 5, 8, 21) == "00555555555500");
+	// Not passable itself, but no room taken from beside it: the entry cell (x 9) keeps room for a big mover.
+	BOOST_TEST(!Passable(river.grid, river.Plane(), 12, 5, 0));
+	BOOST_TEST(Passable(river.grid, river.Plane(), 9, 5, 2));
+}
+
+// Pathfinder::iterateCellsAlongLine (EA's GeneralsMD/Code/GameEngine/Source/GameLogic/AI/AIPathfind.cpp, the Bresenham
+// walk): from cell (0, 0) to (4, 2) it visits (0,0) (0,1) (1,1) (2,1) (2,2) (3,2) (4,2) and, as its last minor step
+// comes after the end cell, (4,3) as well; a walk running off the grid stops there unblocked.
+BOOST_AUTO_TEST_CASE(legacy_parity_cells_along_a_line_as_iterate_cells_along_line)
+{
+	NavigationGrid grid(8, 8);
+	std::vector<std::pair<int, int>> visited;
+	const auto record = [&](std::int32_t x, std::int32_t y) -> std::int32_t {
+		visited.emplace_back(x, y);
+		return 0;
+	};
+	BOOST_TEST(VisitCellsAlongLine(grid, 0, 0, 4, 2, record) == 0);
+	const std::vector<std::pair<int, int>> expected{{0, 0}, {0, 1}, {1, 1}, {2, 1}, {2, 2}, {3, 2}, {4, 2}, {4, 3}};
+	BOOST_TEST((visited == expected));
+	visited.clear();
+	BOOST_TEST(VisitCellsAlongLine(grid, 6, 6, 9, 6, record) == 0);
+	const std::vector<std::pair<int, int>> clipped{{6, 6}, {7, 6}};
+	BOOST_TEST((visited == clipped));
+}
+
+// Pathfinder::isAttackViewBlockedByObstacle's obstacle walk (attackBlockedByObstacleCallback): an obstacle cell on the
+// line blocks, unless it is the looker's, the victim's, the victim's slaver's, the looker's container's or slaver's,
+// see-through (CAN_SEE_THROUGH_STRUCTURE), or the obstacle the victim's own cell belongs to; a looker on a bridge or
+// rooftop skips its first three cells.
+BOOST_AUTO_TEST_CASE(legacy_parity_obstacles_block_a_view_as_attack_blocked_by_obstacle_callback)
+{
+	NavigationGrid grid(12, 4);
+	const ecs::Entity wall{5, 1}, glass{6, 1}, self{1, 1}, victim{2, 1};
+	for (std::int32_t y = 0; y < 4; ++y)
+		grid.SetObstacle(5, y, wall, Box(1, 1), false);
+	ObstacleFootprint seeThrough = Box(1, 1);
+	seeThrough.seeThrough = true;
+	for (std::int32_t y = 0; y < 4; ++y)
+		grid.SetObstacle(8, y, glass, seeThrough, false);
+	const FixedVector2 from = At(1, 1), to = At(10, 1);
+	BOOST_TEST(AttackViewBlockedByObstacle(grid, from, to, {self, victim}));
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, At(4, 1), {self, victim})); // short of the wall
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, to, {self, wall}));         // the wall is the victim
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, to, {self, victim, wall})); // the victim's slaver
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, to, {self, victim, {}, wall})); // its container
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, to, {wall, victim}));        // its own
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, At(6, 1), to, {self, victim}));    // past the wall: only glass
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, from, At(5, 2), {self, victim})); // the victim stands in the wall's cells
+	BOOST_TEST(!AttackViewBlockedByObstacle(grid, At(3, 1), to, {self, victim}, 3)); // (3,1) (4,1) (5,1) skipped
+	BOOST_TEST(AttackViewBlockedByObstacle(grid, At(3, 1), to, {self, victim}, 2));
+}
+
+// legacy_parity: the wall layer (AIPathfind.cpp PathfindLayer::allocateCellsForWallLayer, classifyWallCells,
+// classifyWallMapCell, isPointOnWall; Pathfinder::isPointOnWall; TerrainLogic::getLayerForDestination,
+// getHighestLayerForDestination and W3DTerrainLogic::getLayerHeight's LAYER_WALL) on one FortressWallMiddle piece (a box
+// 31 by 58 half sizes) at (200, 200), unturned, WallHeight 43, on a flat 40 x 40 grid: its bounds 169..231 x 142..258
+// rounded out (no slack) and padded by one: cells 15..24 x 13..26. Cells all four of whose corners are on it (x 17..22,
+// y 15..24) are clear, those with some (the ring around) bridge impassable, the rest impassable; tightened by a cell, the
+// clear ring along its edge becomes cliff, 4 x 8 cells clear in the middle. On a clear cell: the wall (43 high, whatever
+// the ground) for a point more than half its height up; over a cliff cell or low down: the ground. Ground movers stand on
+// its clear cells, climbers on its cliff edge too. Fallen to rubble, the piece holds up nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wall_layer_over_its_pieces)
+{
+	engine::level::Heightfield field;
+	field.width = field.height = 41;
+	field.cellSize = Fixed::FromInt(10);
+	field.heights.assign(41 * 41, Fixed{});
+	const GroundHeight ground(field);
+	NavigationGrid grid{40, 40};
+	grid.Clearance().push_back(ClearancePlane{locomotor_surface::Ground});
+	grid.Clearance().push_back(ClearancePlane{locomotor_surface::Cliff});
+	DeckSurfaces surfaces;
+	surfaces.wall.height = Fixed::FromInt(43);
+	surfaces.wall.AddPiece({}, {Fixed::FromInt(200), Fixed::FromInt(200)}, Engine::Math::TurnAngle{}, Fixed::FromInt(31), Fixed::FromInt(58));
+	const std::array<std::uint8_t, 1> boxes{1};
+	const auto layer = AddWallLayer(grid, surfaces.wall, boxes);
+	BOOST_TEST_REQUIRE(layer.has_value());
+	BOOST_TEST(*layer == 1u);
+	surfaces.decks.resize(*layer);
+	const DeckLayer &deck = grid.Decks().front();
+	BOOST_TEST(deck.wall);
+	BOOST_TEST(deck.x0 == 15);
+	BOOST_TEST(deck.width == 10);
+	BOOST_TEST(deck.y0 == 13);
+	BOOST_TEST(deck.height == 14);
+	BOOST_TEST(DeckRow(grid, 1, 13) == "6666666666");
+	BOOST_TEST(DeckRow(grid, 1, 14) == "6555555556");
+	BOOST_TEST(DeckRow(grid, 1, 15) == "6522222256");
+	BOOST_TEST(DeckRow(grid, 1, 20) == "6520000256");
+	BOOST_TEST(std::count(surfaces.wall.clear.begin(), surfaces.wall.clear.end(), std::uint8_t{1}) == 32);
+	BOOST_TEST(grid.DeckLink(20, 20) == 0u);
+	BOOST_TEST(PointOnWall(surfaces, At(20, 20)));
+	BOOST_TEST(!PointOnWall(surfaces, At(17, 20)));
+	BOOST_TEST((LayerHeight(surfaces, ground, At(20, 20), 1) == Fixed::FromInt(43)));
+	BOOST_TEST((LayerHeight(surfaces, ground, At(17, 20), 1) == Fixed{}));
+	BOOST_TEST(LayerForDestination(surfaces, ground, {At(20, 20).x, At(20, 20).y, Fixed::FromInt(43)}) == 1u);
+	BOOST_TEST(LayerForDestination(surfaces, ground, {At(20, 20).x, At(20, 20).y, Fixed::FromInt(21)}) == 0u); // not above half its height
+	BOOST_TEST(HighestLayerForDestination(surfaces, ground, {At(20, 20).x, At(20, 20).y, Fixed::FromInt(50)}) == 1u);
+	BOOST_TEST(HighestLayerForDestination(surfaces, ground, {At(20, 20).x, At(20, 20).y, Fixed::FromInt(40)}) == 0u); // below the wall
+	for (ClearancePlane &plane : grid.Clearance())
+		BuildClearance(grid, plane);
+	const ClearancePlane &walkers = grid.Clearance()[0];
+	const ClearancePlane &climbers = grid.Clearance()[1];
+	BOOST_TEST(DeckPassable(grid, walkers, 1, 19, 20, 0));
+	BOOST_TEST(!DeckPassable(grid, walkers, 1, 17, 20, 0));
+	BOOST_TEST(DeckPassable(grid, climbers, 1, 17, 20, 0));
+	BOOST_TEST(!DeckPassable(grid, climbers, 1, 19, 20, 0));
+	// AIFollowWaypointPathState::computeGoal: a waypoint on the wall keeps a member's offset goal that is on it, and
+	// takes the waypoint itself for one off it; a waypoint off the wall keeps its offset goal wherever it is.
+	BOOST_TEST((WaypointGoalOnWall(surfaces, At(20, 20), At(19, 22)) == At(19, 22)));
+	BOOST_TEST((WaypointGoalOnWall(surfaces, At(20, 20), At(30, 20)) == At(20, 20)));
+	BOOST_TEST((WaypointGoalOnWall(surfaces, At(20, 20), At(17, 20)) == At(20, 20))); // the cliff edge is not on the wall
+	BOOST_TEST((WaypointGoalOnWall(surfaces, At(5, 5), At(20, 20)) == At(20, 20)));
+	BOOST_TEST((WaypointGoalOnWall(surfaces, At(5, 5), At(6, 5)) == At(6, 5)));
+	// Pathfinder::findPath with its destination on the wall (destinationLayer LAYER_WALL) from the ground: no way up (the
+	// wall links to nothing), so findClosestPath's route to the reached cell nearest the goal: the ground under it. With
+	// the goal on the ground, the goal itself.
+	{
+		RouteScratch scratch;
+		const FoundRoute up = FindRoute(grid, walkers, RouteMover{0}, At(5, 20), At(20, 20), scratch, GroundLayer, 1);
+		BOOST_TEST(!up.reachedGoal);
+		BOOST_TEST(!up.exhausted);
+		BOOST_TEST_REQUIRE(!up.points.empty());
+		BOOST_TEST((up.points.back() == At(20, 20)));
+		BOOST_TEST(up.layers.back() == GroundLayer);
+		const FoundRoute along = FindRoute(grid, walkers, RouteMover{0}, At(5, 20), At(20, 20), scratch, GroundLayer, GroundLayer);
+		BOOST_TEST(along.reachedGoal);
+		// On the wall, to a point on it: there.
+		const FoundRoute onTop = FindRoute(grid, walkers, RouteMover{0}, At(19, 17), At(20, 22), scratch, 1, 1);
+		BOOST_TEST(onTop.reachedGoal);
+		BOOST_TEST(onTop.layers.back() == 1u);
+	}
+	// Fallen to rubble.
+	surfaces.wall.valid[0] = 0;
+	ClassifyWall(grid, 1, surfaces.wall);
+	BOOST_TEST(DeckRow(grid, 1, 20) == "6666666666");
+	BOOST_TEST(!PointOnWall(surfaces, At(20, 20)));
+}
+
+BOOST_AUTO_TEST_SUITE(attack_views)
+
+// legacy_parity: Pathfinder::isAttackViewBlockedByObstacle on a deck's layer (iterateCellsAlongLine over that layer's
+// cells, attackBlockedByObstacleCallback): a deck over cells 5..20 x 8..12 with an obstacle cell at (12, 10). A view along
+// row 10 from cell 6 to cell 18 is blocked; from cell 10 off the ground (skipCount 3: cells 10, 11, 12) it is not; one
+// that leaves the deck before the obstacle (from cell 18 to cell 25: getCell null off the deck) is clear, and so is one
+// from cell 14 on to cell 18.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_view_on_a_deck_walks_the_decks_own_cells)
+{
+	NavigationGrid grid(40, 40);
+	DeckLayer deck;
+	deck.x0 = 5;
+	deck.y0 = 8;
+	deck.width = 16;
+	deck.height = 5;
+	deck.type.assign(static_cast<std::size_t>(deck.width * deck.height), PathfindCellType::Clear);
+	deck.toGround.assign(deck.type.size(), 0);
+	deck.type[deck.Index(12, 10)] = PathfindCellType::Obstacle;
+	grid.Decks().push_back(deck);
+	const auto view = [&](int fromCell, int toCell, std::int32_t skip) {
+		return DeckViewBlocked(grid, 1, At(fromCell, 10), At(toCell, 10), skip);
+	};
+	BOOST_TEST(view(6, 18, 0));
+	BOOST_TEST(!view(10, 18, RaisedLookerSkipCells));
+	BOOST_TEST(!view(18, 25, 0));
+	BOOST_TEST(!view(14, 18, 0));
+	BOOST_TEST(!DeckViewBlocked(grid, GroundLayer, At(6, 10), At(18, 10), 0)); // the ground: not this walk
+}
+
+BOOST_AUTO_TEST_SUITE_END()

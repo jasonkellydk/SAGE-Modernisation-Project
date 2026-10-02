@@ -1,0 +1,72 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.flash_phases;
+import games.generalszh.presentation.objects.algorithms.tint_envelope;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(flash_phases)
+
+// SpecialAbilityUpdate::continuePreparation with DoCaptureFX and the Ranger's PreparationTime 20000 ms (600 frames): on
+// its k-th preparing frame (599 left down to 1) the phase grows by (k / 600) / 3, so it stands at k(k+1)/3600, and the
+// target flashes each time it leaves an odd whole number: on frames 85, 120, 147, 170, 190, ..., 582, 588, 594, 49 in
+// all (the floats land where the exact sums do).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_capture_flashes_faster_and_faster)
+{
+	float phase = 0.0f;
+	std::vector<std::uint32_t> flashes;
+	for (std::uint32_t frame = 1; frame < 600; ++frame)
+		if (StepCaptureFlash(phase, 600 - frame, 600))
+			flashes.push_back(frame);
+	BOOST_TEST_REQUIRE(flashes.size() == 49u);
+	const std::vector<std::uint32_t> first{85, 120, 147, 170, 190};
+	const std::vector<std::uint32_t> last{582, 588, 594};
+	BOOST_TEST(std::vector<std::uint32_t>(flashes.begin(), flashes.begin() + 5) == first, boost::test_tools::per_element());
+	BOOST_TEST(std::vector<std::uint32_t>(flashes.end() - 3, flashes.end()) == last, boost::test_tools::per_element());
+	// The phase is kept from one capture to the next: a second capture starts where the first left off (99.83...).
+	BOOST_TEST(phase > 99.8f);
+	BOOST_TEST(phase < 99.9f);
+}
+
+// ObjectDefectionHelper::update with a cover of DEFECTION_DETECTION_TIME_MAX (300 frames): on its t-th frame (299 left
+// down to 1) the phase grows by 0.5 (t / 300), standing at t(t+1)/1200: it flashes on frames 49, 69, 85, 98, 110, ...,
+// 290, 294, 298, 37 in all.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_defectors_cover_flashes_faster_and_faster)
+{
+	float phase = 0.0f;
+	std::vector<std::uint32_t> flashes;
+	for (std::uint32_t frame = 1; frame < 300; ++frame)
+		if (StepDefectorFlash(phase, 300 - frame))
+			flashes.push_back(frame);
+	BOOST_TEST_REQUIRE(flashes.size() == 37u);
+	const std::vector<std::uint32_t> first{49, 69, 85, 98, 110};
+	const std::vector<std::uint32_t> last{290, 294, 298};
+	BOOST_TEST(std::vector<std::uint32_t>(flashes.begin(), flashes.begin() + 5) == first, boost::test_tools::per_element());
+	BOOST_TEST(std::vector<std::uint32_t>(flashes.end() - 3, flashes.end()) == last, boost::test_tools::per_element());
+}
+
+// Drawable::flashAsSelected: TintEnvelope::play(color, 0, 4): no attack (the first frame reaches the colour), no
+// sustain, then a four frame decay of a quarter of the colour a frame, at rest after.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_selection_flash_peaks_then_fades_over_four_frames)
+{
+	TintEnvelope flash;
+	const std::array<float, 3> white{0.25f, 0.25f, 0.25f};
+	PlayTint(flash, white, 0, 4, 0.0f);
+	StepTint(flash, 1.0f);
+	BOOST_TEST(flash.affect == 1u);
+	BOOST_TEST(flash.current[0] == 0.25f);
+	std::vector<float> fade;
+	for (int frame = 0; frame < 6; ++frame)
+	{
+		StepTint(flash, 1.0f);
+		fade.push_back(flash.affect != 0 ? flash.current[0] : 0.0f);
+	}
+	BOOST_TEST(fade.front() <= 0.25f);
+	BOOST_TEST(fade.back() == 0.0f);
+	BOOST_TEST(flash.affect == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

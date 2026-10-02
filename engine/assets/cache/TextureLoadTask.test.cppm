@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module Assets.Tests.TextureLoadTask;
+import std;
 
 import Assets.Cache.TextureLoadTask;
 import Assets.Identity;

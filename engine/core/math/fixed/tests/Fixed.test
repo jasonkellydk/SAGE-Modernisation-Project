@@ -1,0 +1,185 @@
+#define BOOST_TEST_MODULE EngineCoreMathFixed
+#include <boost/test/included/unit_test.hpp>
+
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
+import Engine.Core.Math.UInt128;
+import Engine.Core.Math.Fixed;
+
+using namespace Engine::Math;
+using namespace Engine::Math::Literals;
+
+namespace
+{
+constexpr std::int64_t kOne = Fixed::OneRaw;
+constexpr std::int64_t kMax = (std::numeric_limits<std::int64_t>::max)();
+constexpr std::int64_t kMin = (std::numeric_limits<std::int64_t>::min)();
+}
+
+BOOST_AUTO_TEST_SUITE(wide_arithmetic)
+
+BOOST_AUTO_TEST_CASE(multiply_matches_native_for_small_values_and_known_extremes)
+{
+	for (std::uint64_t a : {0ull, 1ull, 3ull, 0xFFFFFFFFull, 123456789ull})
+		for (std::uint64_t b : {0ull, 7ull, 0xFFFFFFFFull, 987654321ull})
+			if (a <= 0xFFFFFFFFull && b <= 0xFFFFFFFFull)
+				BOOST_TEST((UInt128::Multiply(a, b) == UInt128{0, a * b}));
+	// (2^64-1)^2 = 2^128 - 2^65 + 1
+	const UInt128 square = UInt128::Multiply(~0ull, ~0ull);
+	BOOST_TEST(square.hi == ~0ull - 1u);
+	BOOST_TEST(square.lo == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(division_and_square_root_are_exact)
+{
+	const UInt128 value = UInt128::Multiply(0x123456789ABCDEFull, 0xFEDCBA987ull) + UInt128{0, 12345};
+	const auto division = value.DivideBy(0xFEDCBA987ull);
+	BOOST_TEST(division.quotient.hi == 0u);
+	BOOST_TEST(division.quotient.lo == 0x123456789ABCDEFull);
+	BOOST_TEST(division.remainder == 12345u);
+	BOOST_TEST(UInt128::Multiply(0xFFFFFFFFFFFull, 0xFFFFFFFFFFFull).SquareRoot() == 0xFFFFFFFFFFFull);
+	BOOST_TEST((UInt128::Multiply(1u << 31, 1u << 31) - UInt128{0, 1}).SquareRoot() == (1ull << 31) - 1u);
+	BOOST_TEST(UInt128{}.SquareRoot() == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(fixed_scalar)
+
+BOOST_AUTO_TEST_CASE(construction_and_integer_conversion)
+{
+	BOOST_TEST(Fixed::FromInt(3).Raw() == 3 * kOne);
+	BOOST_TEST(Fixed::FromInt(-2).Raw() == -2 * kOne);
+	BOOST_TEST(Fixed::FromRatio(1, 3).Raw() == 21845);
+	BOOST_TEST(Fixed::FromRatio(-1, 2).Raw() == -kOne / 2);
+	BOOST_TEST((1.5_fx).Floor() == 1);
+	BOOST_TEST((-1.5_fx).Floor() == -2);
+	BOOST_TEST((1.25_fx).Ceil() == 2);
+	BOOST_TEST((-1.25_fx).Ceil() == -1);
+	BOOST_TEST((2.5_fx).Round() == 3);
+	BOOST_TEST((-2.5_fx).Round() == -2);
+	BOOST_TEST((30_fx).Raw() == 30 * kOne);
+}
+
+BOOST_AUTO_TEST_CASE(parse_decimal_is_exact_and_rejects_garbage)
+{
+	BOOST_TEST(Fixed::ParseDecimal("12.5")->Raw() == 12 * kOne + kOne / 2);
+	BOOST_TEST(Fixed::ParseDecimal("-0.25")->Raw() == -kOne / 4);
+	BOOST_TEST(Fixed::ParseDecimal(".5")->Raw() == kOne / 2);
+	BOOST_TEST(Fixed::ParseDecimal("+7")->Raw() == 7 * kOne);
+	// 0.1 rounds to the nearest representable value, 6554/65536.
+	BOOST_TEST(Fixed::ParseDecimal("0.1")->Raw() == 6554);
+	BOOST_TEST(Fixed::ParseDecimal("0.123456789012345678901234")->Raw() == 8091);
+	BOOST_TEST(!Fixed::ParseDecimal(""));
+	BOOST_TEST(!Fixed::ParseDecimal("-"));
+	BOOST_TEST(!Fixed::ParseDecimal("1.2.3"));
+	BOOST_TEST(!Fixed::ParseDecimal("1e3"));
+	BOOST_TEST(!Fixed::ParseDecimal("99999999999999999999"));
+}
+
+BOOST_AUTO_TEST_CASE(arithmetic_rounds_to_nearest)
+{
+	BOOST_TEST((1.5_fx + 2.25_fx).Raw() == (3.75_fx).Raw());
+	BOOST_TEST((1.5_fx - 2.25_fx).Raw() == (-0.75_fx).Raw());
+	BOOST_TEST((1.5_fx * 2.25_fx).Raw() == (3.375_fx).Raw());
+	BOOST_TEST((-1.5_fx * 2.25_fx).Raw() == (-3.375_fx).Raw());
+	BOOST_TEST((7_fx / 2_fx).Raw() == (3.5_fx).Raw());
+	BOOST_TEST((1_fx / 3_fx).Raw() == 21845);
+	BOOST_TEST((2_fx / 3_fx).Raw() == 43691);
+	BOOST_TEST((-2_fx / 3_fx).Raw() == -43691);
+	BOOST_TEST((1.5_fx * std::int64_t{4}).Raw() == (6_fx).Raw());
+	// Half-epsilon products round away from zero.
+	BOOST_TEST((Fixed::Epsilon() * 0.5_fx).Raw() == 1);
+	BOOST_TEST((-Fixed::Epsilon() * 0.5_fx).Raw() == -1);
+}
+
+BOOST_AUTO_TEST_CASE(multiply_and_divide_match_exact_rational_reference)
+{
+	// Deterministic sweep; long double holds these magnitudes exactly enough
+	// to check the half-unit rounding bound.
+	std::uint64_t state = 0x1234567u;
+	for (int i = 0; i < 20000; ++i)
+	{
+		state = state * 6364136223846793005u + 1442695040888963407u;
+		const auto a = static_cast<std::int64_t>(state >> 34) - (std::int64_t{1} << 29);
+		state = state * 6364136223846793005u + 1442695040888963407u;
+		const auto b = static_cast<std::int64_t>(state >> 34) - (std::int64_t{1} << 29);
+		const auto product = Fixed::FromRaw(a) * Fixed::FromRaw(b);
+		const long double exactProduct = static_cast<long double>(a) * static_cast<long double>(b) / kOne;
+		BOOST_TEST(std::fabs(static_cast<long double>(product.Raw()) - exactProduct) <= 0.5L);
+		if (b != 0)
+		{
+			const auto quotient = Fixed::FromRaw(a) / Fixed::FromRaw(b);
+			const long double exactQuotient = static_cast<long double>(a) * kOne / static_cast<long double>(b);
+			BOOST_TEST(std::fabs(static_cast<long double>(quotient.Raw()) - exactQuotient) <= 0.5L);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(overflow_saturates_instead_of_wrapping)
+{
+	BOOST_TEST((Fixed::Max() + Fixed::One()).Raw() == kMax);
+	BOOST_TEST((Fixed::Min() - Fixed::One()).Raw() == kMin);
+	BOOST_TEST((Fixed::Max() * 2_fx).Raw() == kMax);
+	BOOST_TEST((Fixed::Max() * -2_fx).Raw() == kMin);
+	BOOST_TEST((1_fx / Fixed{}).Raw() == kMax);
+	BOOST_TEST((-1_fx / Fixed{}).Raw() == kMin);
+	BOOST_TEST((Fixed{} / Fixed{}).Raw() == 0);
+	BOOST_TEST((-Fixed::Min()).Raw() == kMax);
+	BOOST_TEST(Fixed::FromInt(kMax).Raw() == kMax);
+}
+
+BOOST_AUTO_TEST_CASE(square_root_is_correctly_rounded)
+{
+	BOOST_TEST(Sqrt(4_fx).Raw() == (2_fx).Raw());
+	BOOST_TEST(Sqrt(2.25_fx).Raw() == (1.5_fx).Raw());
+	BOOST_TEST(Sqrt(Fixed{}).Raw() == 0);
+	BOOST_TEST(Sqrt(-4_fx).Raw() == 0);
+	BOOST_TEST(Sqrt(100000000_fx).Raw() == (10000_fx).Raw());
+	for (std::int64_t raw = 1; raw < (std::int64_t{1} << 40); raw = raw * 3 + 7)
+	{
+		const auto root = Sqrt(Fixed::FromRaw(raw)).Raw();
+		const long double exact = std::sqrt(static_cast<long double>(raw) * kOne);
+		BOOST_TEST(std::fabs(static_cast<long double>(root) - exact) <= 0.5L);
+	}
+	BOOST_TEST(Sqrt(Fixed::Max()).Raw() > 0);
+}
+
+BOOST_AUTO_TEST_CASE(binary32_bits_convert_exactly_and_deterministically)
+{
+	const auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(1.5f)).Raw() == (1.5_fx).Raw());
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(-2.25f)).Raw() == (-2.25_fx).Raw());
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(0.0f)).Raw() == 0);
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(-0.0f)).Raw() == 0);
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(1e-30f)).Raw() == 0);
+	BOOST_TEST(Fixed::FromBinary32Bits(0x7F800000u).Raw() == kMax);
+	BOOST_TEST(Fixed::FromBinary32Bits(0xFF800000u).Raw() == kMin);
+	BOOST_TEST(Fixed::FromBinary32Bits(0x7FC00000u).Raw() == 0);
+	BOOST_TEST(Fixed::FromBinary32Bits(bits(3e20f)).Raw() == kMax);
+	// Every float agrees with a correctly rounded reference.
+	std::uint32_t state = 12345u;
+	for (int i = 0; i < 100000; ++i)
+	{
+		state = state * 1664525u + 1013904223u;
+		const float value = std::bit_cast<float>((state & 0x807FFFFFu) | ((100u + (state >> 23) % 60u) << 23));
+		const long double expected = std::roundl(static_cast<long double>(value) * kOne);
+		BOOST_TEST(static_cast<long double>(Fixed::FromBinary32Bits(bits(value)).Raw()) == expected);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(helpers)
+{
+	BOOST_TEST((Abs(-3_fx)).Raw() == (3_fx).Raw());
+	BOOST_TEST((Min(1_fx, 2_fx)).Raw() == (1_fx).Raw());
+	BOOST_TEST((Max(1_fx, 2_fx)).Raw() == (2_fx).Raw());
+	BOOST_TEST((Clamp(5_fx, 0_fx, 2_fx)).Raw() == (2_fx).Raw());
+	BOOST_TEST((Lerp(10_fx, 20_fx, 0.25_fx)).Raw() == (12.5_fx).Raw());
+	static_assert(Fixed::ParseDecimal("1.5")->Raw() == 98304);
+	static_assert((3_fx * 0.5_fx).Raw() == 98304);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

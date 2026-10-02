@@ -1,0 +1,97 @@
+#define BOOST_TEST_MODULE GeneralsZhShellViews
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+
+import games.generalszh.shell.main_menu.main_menu_view;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+import Engine.UI.WND.Document;
+import Engine.UI.WND.Input;
+
+using namespace generalszh::shell;
+using namespace Engine::UI::WND;
+
+namespace
+{
+// The shipped MainMenu.wnd, parsed (no images or fonts needed to route input).
+std::optional<WNDDocument> MainMenuLayout()
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return std::nullopt;
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	const auto text = files.ReadText("Window/Menus/MainMenu.wnd");
+	WNDDocument document;
+	if (!text || !document.Parse(*text))
+		return std::nullopt;
+	return document;
+}
+
+// The middle of a named window, in layout coordinates.
+std::pair<float, float> Centre(const WNDDocument &document, std::string_view name)
+{
+	const WNDWindow *window = const_cast<WNDDocument &>(document).Find_Window(name);
+	BOOST_REQUIRE(window != nullptr);
+	return {(window->screen_region.left + window->screen_region.right) / 2.0f, (window->screen_region.top + window->screen_region.bottom) / 2.0f};
+}
+
+std::optional<std::string> Click(WNDPointer &pointer, WNDDocument &document, std::string_view name)
+{
+	const auto [x, y] = Centre(document, name);
+	pointer.Move(document, x, y);
+	pointer.Press(document, x, y);
+	const auto event = pointer.Release(document, x, y);
+	return event && event->kind == WNDInputEvent::Kind::Clicked ? std::optional(event->window) : std::nullopt;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(main_menu_view)
+
+// The original's main menu, clicked through its own layout: Single Player
+// opens its drop-down, Back closes it, Options asks for the options screen.
+BOOST_AUTO_TEST_CASE(clicking_the_shipped_main_menu_drives_its_view_model)
+{
+	auto layout = MainMenuLayout();
+	if (!layout)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	WNDDocument &document = *layout;
+	ShellModel model;
+	MainMenuViewModel menu(model);
+	WNDBindings bindings(document);
+	BindMainMenuView(bindings, menu);
+	BOOST_TEST(bindings.MissingWindows().empty());
+	WNDPointer pointer;
+	const auto clicked = Click(pointer, document, "MainMenu.wnd:ButtonSinglePlayer");
+	BOOST_TEST_REQUIRE(clicked.has_value());
+	BOOST_TEST(*clicked == "MainMenu.wnd:ButtonSinglePlayer");
+	BOOST_TEST(bindings.Activate(*clicked));
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::SinglePlayer));
+	menu.TransitionsFinished(); // its panel has slid in (MainMenuUpdate)
+	// Its panel now covers the main one: Options cannot be reached until Back.
+	pointer.Reset(document);
+	const auto hidden = Click(pointer, document, "MainMenu.wnd:ButtonOptions");
+	BOOST_TEST((!hidden || *hidden != "MainMenu.wnd:ButtonOptions"));
+	pointer.Reset(document);
+	const auto back = Click(pointer, document, "MainMenu.wnd:ButtonSingleBack");
+	BOOST_TEST_REQUIRE(back.has_value());
+	bindings.Activate(*back);
+	BOOST_TEST((menu.panel.Get() == MainMenuPanel::Main));
+	menu.TransitionsFinished();
+	pointer.Reset(document);
+	const auto options = Click(pointer, document, "MainMenu.wnd:ButtonOptions");
+	BOOST_TEST_REQUIRE(options.has_value());
+	BOOST_TEST(*options == "MainMenu.wnd:ButtonOptions");
+	bindings.Activate(*options);
+	BOOST_TEST(model.optionsOpen.Get());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,695 @@
+#define BOOST_TEST_MODULE EngineGameplayStealth
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.stealth.systems.stealth_system;
+import engine.gameplay.rts.stealth.systems.stealth_detector_system;
+import engine.gameplay.rts.combat.systems.targeting_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Hideout
+{
+	explicit Hideout(std::size_t workers)
+	{
+		Register(world);
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(2u);
+		world.EmplaceResource<TeamRoster>();
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+		world.EmplaceResource<ArmorCatalog>();
+		WeaponDefinition rifle;
+		rifle.primaryDamage = Fixed::FromInt(10);
+		rifle.attackRange = Fixed::FromInt(150);
+		gun = weapons.Add(rifle);
+		registry.Register(stealth);
+		registry.Register(detectors);
+		registry.Register(reveal);
+		registry.Register(grantors);
+		world.EmplaceResource<GrantOffers>();
+		world.EmplaceResource<StealthGrants>();
+		world.EmplaceResource<TemporaryStealthGrants>();
+		world.EmplaceResource<DetectionOffers>();
+		world.EmplaceResource<Detections>();
+		world.EmplaceResource<DetectorPings>();
+		world.EmplaceResource<RevealWakes>();
+		world.EmplaceResource<DetectionWakes>();
+		world.EmplaceResource<StealthDiscoveries>();
+		world.EmplaceResource<DisguiseEvents>();
+		registry.Register(riders);
+		registry.Register(wakeOnReveal);
+		registry.Register(wakeOnDetection);
+		world.EmplaceResource<CargoManifest>();
+		registry.Register(index);
+		registry.Register(targeting);
+		registry.Register(movement);
+		world.EmplaceResource<WaypointGraph>();
+		world.EmplaceResource<RandomSeed>();
+		registry.OrderBefore<StealthSystem, SpatialIndexSystem>();
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Targetable>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<Armament>();
+		target.RegisterComponent<StatusFlags>();
+		target.RegisterComponent<BodyExtent>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<UnderConstruction>();
+		target.RegisterComponent<AttackTarget>();
+		target.RegisterComponent<Aggression>();
+		target.RegisterComponent<DefinitionRef>();
+		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<Collider>();
+		target.RegisterComponent<Squishable>();
+		target.RegisterComponent<Pursuit>();
+		target.RegisterComponent<SightLooker>();
+		target.RegisterComponent<Slaved>();
+		target.RegisterComponent<SurfaceLayer>();
+		target.RegisterComponent<BlockedState>();
+		target.RegisterComponent<MoveOrder>();
+		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
+		target.RegisterComponent<Stealth>();
+		target.RegisterComponent<StealthDetector>();
+		target.RegisterComponent<StealthRider>();
+		target.RegisterComponent<GrantStealth>();
+		target.RegisterComponent<Lifetime>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<DropHoming>();
+		target.RegisterComponent<AiActivity>();
+		target.RegisterComponent<Garrison>();
+		target.RegisterComponent<TeamMember>();
+		target.RegisterComponent<Transport>();
+		target.RegisterComponent<Passenger>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Rebel(std::uint32_t player, int x, std::uint32_t forbidden)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<Stealth>(entity);
+		world.Add<Locomotion>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), target_class::Infantry};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		Stealth stealth;
+		stealth.forbidden = forbidden;
+		stealth.flags = stealth_flag::CanStealth;
+		stealth.delay = 60;
+		stealth.moveThreshold = Fixed::FromRatio(1, 10);
+		*world.Get<Stealth>(entity) = stealth;
+		return entity;
+	}
+
+	ecs::Entity Guard(std::uint32_t player, int x)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Armament>(entity);
+		world.Add<AttackTarget>(entity);
+		world.Add<Aggression>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), target_class::Infantry};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Armament>(entity) = {.weapon = gun, .clip = 0, .turnRate = Engine::Math::TurnFromDegrees(30), .turret = true};
+		Aggression aggression;
+		aggression.autoAcquire = true;
+		aggression.scanRange = Fixed::FromInt(200);
+		aggression.scanInterval = 5;
+		aggression.stance = Stance::Hold;
+		*world.Get<Aggression>(entity) = aggression;
+		return entity;
+	}
+
+	ecs::Entity Detector(std::uint32_t player, int x, std::uint64_t rate, int range, std::uint32_t required = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<StealthDetector>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		StealthDetector detector;
+		detector.rate = rate;
+		detector.range = Fixed::FromInt(range);
+		detector.requiredClasses = required;
+		*world.Get<StealthDetector>(entity) = detector;
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	const Stealth &Of(ecs::Entity entity) const { return *world.Get<Stealth>(entity); }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	StealthSystem stealth;
+	StealthRiderSystem riders;
+	WakeIdleEnemiesSystem<RevealWakes> wakeOnReveal;
+	WakeIdleEnemiesSystem<DetectionWakes> wakeOnDetection;
+	StealthDetectorSystem detectors;
+	StealthRevealSystem reveal;
+	GrantStealthSystem grantors;
+	SpatialIndexSystem index;
+	TargetingSystem targeting;
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint32_t gun{0};
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(stealth)
+
+BOOST_AUTO_TEST_CASE(a_still_rebel_hides_after_its_delay_and_moving_or_being_hit_shows_it)
+{
+	Hideout hideout(2);
+	const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::Moving | stealth_forbidden::TakingDamage);
+	hideout.Step();
+	BOOST_TEST(hideout.Of(rebel).Hidden()); // nothing held it back at the start
+	// Moving shows it, and it waits its delay once still again.
+	hideout.world.Get<Locomotion>(rebel)->speed = Fixed::FromInt(1);
+	hideout.Step();
+	BOOST_TEST(!hideout.Of(rebel).Hidden());
+	hideout.world.Get<Locomotion>(rebel)->speed = Fixed{};
+	const std::uint64_t moved = hideout.tick; // hidden again 60 ticks after the last move
+	while (hideout.tick < moved + 59)
+	{
+		hideout.Step();
+		BOOST_TEST_REQUIRE(!hideout.Of(rebel).Hidden());
+	}
+	hideout.Step();
+	BOOST_TEST(hideout.Of(rebel).Hidden());
+	// A hit shows it.
+	hideout.world.Get<Health>(rebel)->lastDamageTick = hideout.tick + 1;
+	hideout.Step();
+	BOOST_TEST(!hideout.Of(rebel).Hidden());
+}
+
+// Legacy parity (StealthUpdate::receiveGrant and update's temporary stealth, GeneralsMD/Code/GameEngine/Source/GameLogic/
+// Object/Update/StealthUpdate.cpp): a harvester granted 5 frames of stealth (GrantTemporaryStealth) on tick G is
+// stealthed at once; each update after counts one down and the fifth (G+5) takes it back (receiveGrant(FALSE): it may not
+// stealth, its update sleeps). An order from its player (getLastCommandSource() == CMD_FROM_PLAYER) takes it back on the
+// next update.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_temporary_stealth_grant_runs_out_or_ends_on_a_player_order)
+{
+	for (const bool ordered : {false, true})
+	{
+		Hideout hideout(2);
+		const ecs::Entity truck = hideout.Rebel(0, 100, 0);
+		hideout.world.Get<Stealth>(truck)->flags = 0; // no stealth of its own
+		hideout.world.Add<AiActivity>(truck);
+		hideout.Step();
+		BOOST_TEST_REQUIRE(!hideout.Of(truck).Hidden());
+		const std::uint64_t granted = hideout.tick;
+		BOOST_TEST_REQUIRE(ReceiveGrant(*hideout.world.Get<Stealth>(truck), granted, 5));
+		BOOST_TEST(hideout.Of(truck).Hidden());
+		BOOST_TEST(TemporaryGrant(hideout.Of(truck)));
+		if (ordered)
+		{
+			hideout.world.Get<AiActivity>(truck)->fromPlayer = 1;
+			hideout.Step();
+			BOOST_TEST(!hideout.Of(truck).Hidden());
+			BOOST_TEST(!hideout.Of(truck).Has(stealth_flag::CanStealth));
+			BOOST_TEST(hideout.Of(truck).Has(stealth_flag::Asleep));
+			continue;
+		}
+		while (hideout.tick < granted + 4)
+		{
+			hideout.Step();
+			BOOST_TEST_REQUIRE(hideout.Of(truck).Hidden());
+		}
+		hideout.Step(); // G+5: the grant's last frame
+		BOOST_TEST(!hideout.Of(truck).Hidden());
+		BOOST_TEST(!TemporaryGrant(hideout.Of(truck)));
+		BOOST_TEST(hideout.Of(truck).Has(stealth_flag::Asleep));
+	}
+}
+
+// StealthUpdate::update / hintDetectableWhileUnstealthed (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/
+// StealthUpdate.cpp): a rebel whose firing keeps it from stealth (StealthForbiddenConditions FIRING_PRIMARY) and whose
+// HintDetectableConditions name IS_FIRING_WEAPON is flagged to flash for its player on the ticks firing keeps it out;
+// once it may stealth again the flag goes. Firing without the hint condition flags nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_firing_out_of_stealth_hints_its_own_player)
+{
+	for (const bool hinted : {true, false})
+	{
+		Hideout hideout(2);
+		const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::FiringPrimary);
+		hideout.world.Add<Armament>(rebel);
+		*hideout.world.Get<Armament>(rebel) = {.weapon = hideout.gun, .clip = 0, .turnRate = Engine::Math::TurnFromDegrees(30), .turret = true};
+		if (hinted)
+			hideout.world.Get<Stealth>(rebel)->hint = stealth_hint::FiringWeapon;
+		hideout.Step();
+		BOOST_TEST(hideout.Of(rebel).Hidden());
+		hideout.world.Get<Armament>(rebel)->firedTick = hideout.tick + 1;
+		hideout.Step();
+		BOOST_TEST(!hideout.Of(rebel).Hidden());
+		BOOST_TEST(hideout.Of(rebel).Has(stealth_flag::HintDetectable) == hinted);
+		hideout.Step();
+		hideout.Step();
+		BOOST_TEST(!hideout.Of(rebel).Has(stealth_flag::HintDetectable));
+	}
+}
+
+// StealthUpdate::allowedToStealth (STEALTH_NOT_WHILE_USING_ABILITY) and hintDetectableWhileUnstealthed with
+// IS_USING_ABILITY: a Black Lotus-like rebel is shown while it uses an ability (from its preparation on), flagged to
+// flash for its player when the hint names it; free of it, it hides after its delay again.
+BOOST_AUTO_TEST_CASE(legacy_parity_using_an_ability_shows_a_rebel)
+{
+	for (const bool hinted : {true, false})
+	{
+		Hideout hideout(2);
+		const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::UsingAbility);
+		hideout.world.Add<AiActivity>(rebel);
+		if (hinted)
+			hideout.world.Get<Stealth>(rebel)->hint = stealth_hint::UsingAbility;
+		hideout.Step();
+		BOOST_TEST(hideout.Of(rebel).Hidden());
+		// Busy (packing or unpacking) does not show it; using the ability does.
+		hideout.world.Get<AiActivity>(rebel)->busy = 1;
+		hideout.Step();
+		BOOST_TEST(hideout.Of(rebel).Hidden());
+		hideout.world.Get<AiActivity>(rebel)->usingAbility = 1;
+		hideout.Step();
+		BOOST_TEST(!hideout.Of(rebel).Hidden());
+		BOOST_TEST(hideout.Of(rebel).Has(stealth_flag::HintDetectable) == hinted);
+		hideout.world.Get<AiActivity>(rebel)->usingAbility = 0;
+		const std::uint64_t done = hideout.tick;
+		while (hideout.tick < done + 59)
+		{
+			hideout.Step();
+			BOOST_TEST_REQUIRE(!hideout.Of(rebel).Hidden());
+			BOOST_TEST(!hideout.Of(rebel).Has(stealth_flag::HintDetectable));
+		}
+		hideout.Step();
+		BOOST_TEST(hideout.Of(rebel).Hidden());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(enemies_cannot_target_what_hides_and_lose_it_when_it_hides)
+{
+	Hideout hideout(2);
+	const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::Attacking);
+	hideout.world.Get<Stealth>(rebel)->flags = 0; // not yet able to stealth
+	const ecs::Entity guard = hideout.Guard(1, 180);
+	for (int step = 0; step < 10; ++step)
+		hideout.Step();
+	BOOST_TEST((hideout.world.Get<AttackTarget>(guard)->target == rebel)); // seen and targeted
+	hideout.world.Get<Stealth>(rebel)->flags = stealth_flag::CanStealth;
+	for (int step = 0; step < 70; ++step)
+		hideout.Step();
+	BOOST_TEST(hideout.Of(rebel).Hidden());
+	BOOST_TEST(!hideout.world.Get<AttackTarget>(guard)->target.IsValid()); // lost it
+	// Detected, it can be targeted again.
+	hideout.world.Get<Stealth>(rebel)->detectedUntil = hideout.tick + 100;
+	for (int step = 0; step < 10; ++step)
+		hideout.Step();
+	BOOST_TEST(!hideout.Of(rebel).Hidden());
+	BOOST_TEST((hideout.world.Get<AttackTarget>(guard)->target == rebel));
+}
+
+BOOST_AUTO_TEST_CASE(stealth_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto populate = [](Hideout &hideout) {
+		for (int index = 0; index < 200; ++index)
+			hideout.Rebel(index % 2, 3 * index, index % 3 == 0 ? stealth_forbidden::Moving : stealth_forbidden::TakingDamage);
+	};
+	const auto churn = [](Hideout &hideout, int ticks) {
+		for (int step = 0; step < ticks; ++step)
+		{
+			for (std::uint32_t index = 0; index < 200; index += 7)
+				if (Locomotion *motion = hideout.world.Get<Locomotion>(ecs::Entity{index, 1}))
+					motion->speed = (index + step) % 5 == 0 ? Fixed::FromInt(1) : Fixed{};
+			hideout.Step();
+		}
+	};
+	Hideout one(1), four(4);
+	populate(one);
+	populate(four);
+	churn(one, 50);
+	churn(four, 50);
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Hideout loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	churn(one, 80);
+	churn(loaded, 80);
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+BOOST_AUTO_TEST_CASE(a_detector_reveals_hidden_enemies_in_range_until_just_past_its_next_scan)
+{
+	Hideout hideout(2);
+	const ecs::Entity close = hideout.Rebel(0, 100, stealth_forbidden::Moving);
+	const ecs::Entity distant = hideout.Rebel(0, 600, stealth_forbidden::Moving);
+	const ecs::Entity friendly = hideout.Rebel(1, 120, stealth_forbidden::Moving);
+	for (int step = 0; step < 3; ++step)
+		hideout.Step();
+	BOOST_TEST_REQUIRE(hideout.Of(close).Hidden());
+	const ecs::Entity detector = hideout.Detector(1, 150, 15, 200);
+	hideout.Step(); // the next scan is due at once
+	std::vector<DetectorPing> pings;
+	hideout.world.Resource<DetectorPings>().AppendTo(pings);
+	BOOST_TEST_REQUIRE(pings.size() == 1u); // its scan, for the presentation's IR ping
+	BOOST_TEST((pings[0].detector == detector));
+	BOOST_TEST(pings[0].found == 1u);
+	BOOST_TEST(!hideout.Of(close).Hidden()); // enemy, in range: shown
+	BOOST_TEST(hideout.Of(close).Has(stealth_flag::Stealthed));
+	BOOST_TEST((hideout.world.Get<Targetable>(close)->classes & target_class::Hidden) == 0u);
+	BOOST_TEST(hideout.Of(distant).Hidden());      // out of range
+	BOOST_TEST(hideout.Of(friendly).Hidden()); // an ally: its own side knows
+	// Kept revealed between scans.
+	for (int step = 0; step < 30; ++step)
+	{
+		hideout.Step();
+		BOOST_TEST_REQUIRE(!hideout.Of(close).Hidden());
+	}
+	// Without its detector it hides again once the last reveal runs out.
+	hideout.world.Get<Health>(detector)->current = Fixed{};
+	for (int step = 0; step < 17; ++step)
+		hideout.Step();
+	BOOST_TEST(hideout.Of(close).Hidden());
+}
+
+BOOST_AUTO_TEST_CASE(a_mine_detector_reveals_only_mines_and_a_detected_rebel_can_be_shot)
+{
+	Hideout hideout(3);
+	const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::Attacking);
+	const ecs::Entity mine = hideout.Rebel(0, 110, 0);
+	hideout.world.Get<Targetable>(mine)->classes = target_class::Mine;
+	for (int step = 0; step < 3; ++step)
+		hideout.Step();
+	hideout.Detector(1, 150, 15, 200, target_class::Mine);
+	hideout.Step();
+	BOOST_TEST(!hideout.Of(mine).Hidden());
+	BOOST_TEST(hideout.Of(rebel).Hidden());
+	const ecs::Entity guard = hideout.Guard(1, 180);
+	hideout.Detector(1, 160, 15, 200);
+	for (int step = 0; step < 20; ++step)
+		hideout.Step();
+	BOOST_TEST(!hideout.Of(rebel).Hidden());
+	const ecs::Entity target = hideout.world.Get<AttackTarget>(guard)->target;
+	BOOST_TEST((target == rebel || target == mine));
+}
+
+// Legacy parity (GrantStealthBehavior::update, grantStealthToObject; the GPS scrambler's StartRadius 20, RadiusGrowRate 10,
+// FinalRadius 100): each tick its radius grows before it scans (30, 40, 50 ...), taking in its allies of its kinds within
+// it (iterateObjectsInRange FROM_CENTER_2D: at the radius counts); an ally 50 away is granted on the third tick; the
+// eighth tick's scan is at 100, its last, and it is destroyed then.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scrambler_grants_stealth_to_allies_as_its_radius_grows_then_is_removed)
+{
+	Hideout hideout(2);
+	const ecs::Entity ally = hideout.Rebel(0, 150, stealth_forbidden::Moving);
+	const ecs::Entity enemy = hideout.Rebel(1, 140, stealth_forbidden::Moving);
+	const ecs::Entity tank = hideout.Rebel(0, 160, stealth_forbidden::Moving);
+	hideout.world.Get<Targetable>(tank)->classes = target_class::Vehicle;
+	for (const ecs::Entity entity : {ally, enemy, tank})
+		hideout.world.Get<Stealth>(entity)->flags = 0;
+	const ecs::Entity scrambler = hideout.world.Create();
+	hideout.world.Add<Transform>(scrambler);
+	hideout.world.Add<Owner>(scrambler);
+	hideout.world.Add<GrantStealth>(scrambler);
+	hideout.world.Add<Lifetime>(scrambler);
+	hideout.world.Get<Transform>(scrambler)->position = {Fixed::FromInt(100), Fixed::FromInt(500), {}};
+	*hideout.world.Get<GrantStealth>(scrambler) = {Fixed::FromInt(20), Fixed::FromInt(10), Fixed::FromInt(100), target_class::Infantry, 0};
+	hideout.Step(); // radius 30: nobody yet
+	hideout.Step(); // 40
+	BOOST_TEST(!hideout.Of(ally).Has(stealth_flag::CanStealth));
+	hideout.Step(); // 50: the ally at 50
+	BOOST_TEST(hideout.Of(ally).Has(stealth_flag::CanStealth));
+	for (int step = 0; step < 4; ++step)
+		hideout.Step(); // 60 .. 90
+	BOOST_TEST(hideout.world.Get<GrantStealth>(scrambler)->done == 0u);
+	hideout.Step(); // 100: its final scan
+	BOOST_TEST(hideout.world.Get<GrantStealth>(scrambler)->done == 1u);
+	hideout.Step();
+	BOOST_TEST(hideout.Of(ally).Hidden());
+	BOOST_TEST(!hideout.Of(enemy).Has(stealth_flag::CanStealth)); // not an ally
+	BOOST_TEST(!hideout.Of(tank).Has(stealth_flag::CanStealth));  // not a granted kind
+	BOOST_TEST(hideout.world.Get<GrantStealth>(scrambler)->done == 1u);
+	BOOST_TEST(hideout.world.Get<Lifetime>(scrambler)->deletes == 1u); // removed after its final scan
+}
+
+BOOST_AUTO_TEST_CASE(detection_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto populate = [](Hideout &hideout) {
+		for (int index = 0; index < 150; ++index)
+			hideout.Rebel(index % 2, 6 * index, stealth_forbidden::Moving);
+		for (int index = 0; index < 20; ++index)
+			hideout.Detector(index % 2, 45 * index, 10 + index % 7, 120);
+		for (int index = 0; index < 4; ++index)
+		{
+			const ecs::Entity scrambler = hideout.world.Create();
+			hideout.world.Add<Transform>(scrambler);
+			hideout.world.Add<Owner>(scrambler);
+			hideout.world.Add<GrantStealth>(scrambler);
+			hideout.world.Get<Transform>(scrambler)->position = {Fixed::FromInt(200 * index + 50), Fixed::FromInt(500), {}};
+			*hideout.world.Get<Owner>(scrambler) = {static_cast<std::uint32_t>(index % 2)};
+			*hideout.world.Get<GrantStealth>(scrambler) = {Fixed::FromInt(5), Fixed::FromInt(3), Fixed::FromInt(90), 0, 0};
+		}
+	};
+	const auto churn = [](Hideout &hideout, int ticks) {
+		for (int step = 0; step < ticks; ++step)
+		{
+			for (std::uint32_t index = 0; index < 150; index += 11)
+				if (Locomotion *motion = hideout.world.Get<Locomotion>(ecs::Entity{index, 1}))
+					motion->speed = (index + step) % 9 == 0 ? Fixed::FromInt(1) : Fixed{};
+			hideout.Step();
+		}
+	};
+	Hideout one(1), four(4);
+	populate(one);
+	populate(four);
+	churn(one, 60);
+	churn(four, 60);
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Hideout loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	churn(one, 80);
+	churn(loaded, 80);
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+// StealthDetectorUpdate::update with PartitionFilterStealthedOrStealthGarrisoned: a garrisoned building of player 0's
+// in a player-1 detector's range gives away the stealthed rebel of player 0's inside it (markAsDetected(rate + 2)), not
+// one of player 1's own inside another; a detector inside a garrison detects only with CanDetectWhileGarrisoned (not
+// CanDetectWhileContained alone), inside another container only with CanDetectWhileContained.
+BOOST_AUTO_TEST_CASE(legacy_parity_detection_reaches_into_garrisons_and_out_of_them)
+{
+	Hideout hideout(2);
+	auto &world = hideout.world;
+	auto &manifest = world.Resource<CargoManifest>();
+	const auto building = [&](std::uint32_t player, int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<Garrison>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(20), target_class::Structure};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(500), Fixed::FromInt(500), 0};
+		return entity;
+	};
+	const auto inside = [&](ecs::Entity who, ecs::Entity holder) {
+		world.Add<OffMap>(who);
+		*world.Get<OffMap>(who) = OffMap{1, false, {}, holder};
+		manifest.Board(holder, who);
+	};
+	const ecs::Entity house = building(0, 100);
+	const ecs::Entity ownHouse = building(1, 120);
+	const ecs::Entity hider = hideout.Rebel(0, 100, stealth_forbidden::Moving);
+	const ecs::Entity ownHider = hideout.Rebel(1, 120, stealth_forbidden::Moving);
+	inside(hider, house);
+	inside(ownHider, ownHouse);
+	const ecs::Entity detector = hideout.Detector(1, 150, 15, 200);
+	hideout.Step();
+	BOOST_TEST(hideout.Of(hider).Has(stealth_flag::Detected));
+	BOOST_TEST(hideout.Of(hider).detectedUntil == hideout.tick + 15 + 2);
+	BOOST_TEST(!hideout.Of(ownHider).Has(stealth_flag::Detected));
+	std::vector<DetectorPing> pings;
+	world.Resource<DetectorPings>().AppendTo(pings);
+	BOOST_TEST_REQUIRE(pings.size() == 1u);
+	BOOST_TEST(pings[0].found == 1u);
+	(void)detector;
+
+	// Detectors inside things.
+	const auto scansFrom = [&](ecs::Entity holder, std::uint32_t flags) {
+		Hideout inner(2);
+		auto &w = inner.world;
+		const ecs::Entity box = w.Create();
+		w.Add<Transform>(box);
+		w.Add<Owner>(box);
+		if (holder == house)
+			w.Add<Garrison>(box);
+		const ecs::Entity rebel = inner.Rebel(0, 100, stealth_forbidden::Moving);
+		for (int step = 0; step < 3; ++step)
+			inner.Step();
+		const ecs::Entity seer = inner.Detector(1, 150, 15, 200);
+		w.Get<StealthDetector>(seer)->flags = stealth_detector_flag::Enabled | flags;
+		w.Add<OffMap>(seer);
+		*w.Get<OffMap>(seer) = OffMap{1, false, {}, box};
+		inner.Step();
+		return !inner.Of(rebel).Hidden();
+	};
+	BOOST_TEST(!scansFrom(house, stealth_detector_flag::WhileContained));
+	BOOST_TEST(scansFrom(house, stealth_detector_flag::WhileGarrisoned));
+	BOOST_TEST(scansFrom(hider, stealth_detector_flag::WhileContained));
+	BOOST_TEST(!scansFrom(hider, stealth_detector_flag::WhileGarrisoned));
+}
+
+// Legacy parity (StealthDetectorUpdate::update: "if this object was not previously detected it is now being revealed and we
+// want to do some UI feedback"): a detector scanning every 15 ticks finds a hidden rebel once; while each scan keeps it
+// detected (updateRate + 1) nothing more is told; the discovery names the rebel, its finder and where it was found.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_detector_tells_of_a_stealthed_unit_once_as_it_finds_it)
+{
+	Hideout hideout(2);
+	const ecs::Entity rebel = hideout.Rebel(0, 100, stealth_forbidden::Attacking);
+	for (int step = 0; step < 3; ++step)
+		hideout.Step();
+	BOOST_TEST_REQUIRE(hideout.Of(rebel).Hidden());
+	const ecs::Entity detector = hideout.Detector(1, 160, 15, 200);
+	std::vector<StealthDiscovery> told;
+	for (int step = 0; step < 60; ++step)
+	{
+		hideout.Step();
+		hideout.world.Resource<StealthDiscoveries>().ForEach([&](const StealthDiscovery &found) { told.push_back(found); });
+	}
+	BOOST_TEST(!hideout.Of(rebel).Hidden());
+	BOOST_TEST_REQUIRE(told.size() == 1u);
+	BOOST_TEST((told[0].target == rebel));
+	BOOST_TEST((told[0].detector == detector));
+	BOOST_TEST((told[0].position.x == Fixed::FromInt(100)));
+}
+
+// StealthDetectorUpdate::update (StealthDetectorUpdate.cpp): with no DetectionRange a detector looks as far as it sees now
+// (getVisionRange: its vision, raised by veterancy or Search and Destroy), not its template's vision range; with
+// DetectionRange it keeps that range. A rebel 150 away: found by a detector whose sight grew from 100 to 200, not by one
+// whose DetectionRange is 100.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_detector_without_a_range_looks_as_far_as_it_sees)
+{
+	const auto found = [](bool ownRange) {
+		Hideout hideout(1);
+		const ecs::Entity rebel = hideout.Rebel(0, 300, stealth_forbidden::Moving);
+		for (int step = 0; step < 3; ++step)
+			hideout.Step();
+		BOOST_TEST_REQUIRE(hideout.Of(rebel).Hidden());
+		const ecs::Entity detector = hideout.Detector(1, 150, 15, 100);
+		hideout.world.Add<Aggression>(detector);
+		hideout.world.Get<Aggression>(detector)->vision = Fixed::FromInt(200);
+		if (ownRange)
+			hideout.world.Get<StealthDetector>(detector)->flags |= stealth_detector_flag::OwnRange;
+		hideout.Step();
+		return !hideout.Of(rebel).Hidden();
+	};
+	BOOST_TEST(found(false));
+	BOOST_TEST(!found(true));
+}
+
+// StealthUpdate::StealthUpdate (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/StealthUpdate.cpp): a stealth
+// GrantedBySpecialPower (the default template's, on everything without its own) starts with its update asleep for good
+// (setWakeFrame UPDATE_SLEEP_FOREVER): even allowed to stealth it never hides; receiveGrant wakes it and stealths it at
+// once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stealth_granted_by_a_power_sleeps_until_granted)
+{
+	Hideout hideout(1);
+	const ecs::Entity tank = hideout.Rebel(0, 100, stealth_forbidden::FiringAny | stealth_forbidden::RidersAttacking);
+	hideout.world.Get<Stealth>(tank)->flags = stealth_flag::CanStealth | stealth_flag::Asleep;
+	for (int step = 0; step < 100; ++step)
+	{
+		hideout.Step();
+		BOOST_TEST_REQUIRE(!hideout.Of(tank).Hidden());
+	}
+	BOOST_TEST_REQUIRE(ReceiveGrant(*hideout.world.Get<Stealth>(tank), hideout.tick, 0));
+	BOOST_TEST(hideout.Of(tank).Hidden());
+	for (int step = 0; step < 100; ++step)
+		hideout.Step();
+	BOOST_TEST(hideout.Of(tank).Hidden());
+	BOOST_TEST(!hideout.Of(tank).Has(stealth_flag::Asleep));
+}
+
+// StealthUpdate::allowedToStealth, STEALTH_NOT_WHILE_RIDERS_ATTACKING (RIDERS_ATTACKING): a container that lets its
+// passengers fire (isPassengerAllowedToFire) with any rider attacking (isAnyRiderAttacking) may not stealth, and waits
+// its StealthDelay again (60: stealthed on the 60th tick after the last one its rider attacked); a container whose
+// passengers may not fire ignores them.
+BOOST_AUTO_TEST_CASE(legacy_parity_riders_attacking_keep_their_container_out_of_stealth)
+{
+	for (const bool passengersFire : {true, false})
+	{
+		Hideout hideout(1);
+		const ecs::Entity carrier = hideout.Rebel(0, 100, stealth_forbidden::Moving | stealth_forbidden::RidersAttacking);
+		hideout.world.Add<Transport>(carrier);
+		hideout.world.Get<Transport>(carrier)->definition.passengersFire = passengersFire;
+		const ecs::Entity rider = hideout.world.Create();
+		hideout.world.Add<AttackTarget>(rider);
+		hideout.world.Get<AttackTarget>(rider)->target = hideout.Guard(1, 900);
+		hideout.world.Resource<CargoManifest>().Board(carrier, rider);
+		for (int step = 0; step < 100; ++step)
+			hideout.Step();
+		BOOST_TEST(hideout.Of(carrier).Hidden() == !passengersFire);
+		if (!passengersFire)
+			continue;
+		*hideout.world.Get<AttackTarget>(rider) = {};
+		const std::uint64_t last = hideout.tick;
+		while (hideout.tick < last + 59)
+		{
+			hideout.Step();
+			BOOST_TEST_REQUIRE(!hideout.Of(carrier).Hidden());
+		}
+		hideout.Step();
+		BOOST_TEST(hideout.Of(carrier).Hidden());
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstdint>
-
 export module Graphics.Scene.Models.ModelVisibility.Tests;
+import std;
 
 import Graphics.Scene.Models.ModelVisibility;
 

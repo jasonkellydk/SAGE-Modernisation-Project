@@ -1,6 +1,5 @@
-module;
-#include <span>
 export module Graphics.Scene.Shadows.Projected;
+import std;
 export import Graphics.Scene.Props.Renderer;
 
 namespace Graphics

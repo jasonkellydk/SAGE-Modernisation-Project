@@ -1,18 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <memory>
-#include <limits>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
 export module Assets.Cache.TextureLoadTask;
+import std;
 
 import Assets.Adapters.DDS;
 import Assets.Adapters.TGA.Image;

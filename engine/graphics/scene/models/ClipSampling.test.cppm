@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ClipSamplingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
 export module Graphics.Scene.Models.ClipSampling.Tests;
+import std;
 import Graphics.Scene.Models.ClipSampling;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;

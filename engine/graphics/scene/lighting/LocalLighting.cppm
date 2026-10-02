@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-
 export module Graphics.Scene.Lighting.Local;
+import std;
 import engine.profiling;
 import Graphics.Scene.Lighting;
 

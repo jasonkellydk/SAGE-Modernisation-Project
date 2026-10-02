@@ -1,0 +1,126 @@
+#define BOOST_TEST_MODULE EngineGameplayLifetime
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.lifetime.systems.lifetime_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+struct Scene
+{
+	Scene(std::size_t workers, std::size_t count)
+	{
+		Register(world);
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const ecs::Entity entity = world.Create();
+			world.Add<Lifetime>(entity);
+			world.Get<Lifetime>(entity)->expiresTick = 1 + index % 13;
+			entities.push_back(entity);
+		}
+		registry.Register(lifetimes);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Lifetime>();
+		target.FinalizeComponents();
+	}
+
+	// One tick; the entities whose lives ran out, in order.
+	std::vector<ecs::Entity> Step()
+	{
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<ecs::Entity> out;
+		expired.ForEach([&](const Expiration &expiration) { out.push_back(expiration.entity); });
+		return out;
+	}
+
+	ecs::World world{ecs::WorldConfig{4}};
+	Expirations &expired{world.EmplaceResource<Expirations>()};
+	Deletions &deleted{world.EmplaceResource<Deletions>()};
+	LifetimeSystem lifetimes;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::vector<ecs::Entity> entities;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(lifetime)
+
+BOOST_AUTO_TEST_CASE(each_life_runs_out_once_at_its_tick)
+{
+	Scene scene(2, 100);
+	std::size_t total = 0;
+	for (int step = 0; step < 30; ++step)
+	{
+		const auto expired = scene.Step();
+		for (const ecs::Entity entity : expired)
+		{
+			const std::size_t index = static_cast<std::size_t>(std::find(scene.entities.begin(), scene.entities.end(), entity) - scene.entities.begin());
+			BOOST_TEST(1 + index % 13 == scene.tick);
+			BOOST_TEST(scene.world.Get<Lifetime>(entity) == nullptr);
+		}
+		total += expired.size();
+	}
+	BOOST_TEST(total == 100u);
+}
+
+BOOST_AUTO_TEST_CASE(a_deleting_life_is_reported_as_a_deletion)
+{
+	Scene scene(2, 0);
+	const ecs::Entity field = scene.world.Create();
+	scene.world.Add<Lifetime>(field);
+	*scene.world.Get<Lifetime>(field) = {3, 1, 0};
+	const ecs::Entity soldier = scene.world.Create();
+	scene.world.Add<Lifetime>(soldier);
+	*scene.world.Get<Lifetime>(soldier) = {3, 0, 0};
+	for (int step = 0; step < 2; ++step)
+		BOOST_TEST(scene.Step().empty());
+	const auto killed = scene.Step();
+	BOOST_TEST_REQUIRE(killed.size() == 1u);
+	BOOST_TEST((killed[0] == soldier));
+	std::vector<ecs::Entity> gone;
+	scene.deleted.ForEach([&](ecs::Entity entity) { gone.push_back(entity); });
+	BOOST_TEST_REQUIRE(gone.size() == 1u);
+	BOOST_TEST((gone[0] == field));
+}
+
+BOOST_AUTO_TEST_CASE(lives_run_out_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	Scene one(1, 500), four(4, 500);
+	for (int step = 0; step < 5; ++step)
+		BOOST_TEST((one.Step() == four.Step()));
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Scene loaded(3, 0);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 10; ++step)
+	{
+		const auto expected = one.Step();
+		BOOST_TEST((loaded.Step() == expected));
+		BOOST_TEST((four.Step() == expected));
+		BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

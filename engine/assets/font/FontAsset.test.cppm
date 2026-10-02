@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstdint>
-#include <utility>
-#include <vector>
-
 export module Assets.Tests.FontAsset;
+import std;
 
 import Assets.Fonts;
 

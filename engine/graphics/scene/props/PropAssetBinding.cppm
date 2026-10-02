@@ -1,15 +1,10 @@
-module;
-#include <array>
-#include <cstddef>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Props.AssetBinding;
+import Graphics.Resources.MipChain;
+import std;
 export import Graphics.Scene.Props.Submission;
 export import Graphics.Scene.Models.AssetPose;
 import Graphics.Scene.Props.AssetGeometry;
+import Graphics.Scene.Models.PartBones;
 import Assets.Cache;
 import Assets.Models;
 import Assets.Materials;
@@ -30,8 +25,13 @@ public:
         if(m_device) for(const auto& texture:m_textures) m_device->Destroy_Texture(texture.second);
         m_parts.clear(); m_textures.clear(); m_device=nullptr; m_renderer=nullptr; m_rest_pose={};
     }
+    // `base_override`: a texture drawn on every part in place of its own base map (the original's tree buffer draws each
+    // tree type with its TextureName); none: as authored.
+    // `base_replacements`: base maps swapped by name for this binding (the original's replacePrototypeTexture: each
+    // pair's first, wherever a part uses it, drawn as its second).
     bool Load(Device& device,PropRenderer& renderer,Assets::AssetCache& assets,
-        Assets::ModelAssetHandle model_handle,std::string& error) {
+        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={},
+        std::span<const std::pair<Assets::TextureAssetHandle,Assets::TextureAssetHandle>> base_replacements={}) {
         const auto* model=assets.Try_Get_Model(model_handle);
         if(!model) { error="model asset is not ready"; return false; }
         std::vector<PropAssetPart> geometry;
@@ -49,21 +49,16 @@ public:
                 part.bind_vertices=source.vertices; part.indices=source.indices;
             }
             if(next.m_rest_pose.Bone_Count()) {
-                part.bone=0;
-                if(!model->Rig().attachments.empty()) {
-                    bool found=false;
-                    for(const auto& attachment:model->Rig().attachments) {
-                        const auto dot=attachment.object_name.find('.');
-                        const auto name=attachment.object_name.substr(dot==std::string::npos ? 0 : dot+1);
-                        if(name!=source.name || (found && attachment.lod>=part.lod)) continue;
-                        part.bone=attachment.bone; part.lod=attachment.lod; found=true;
-                    }
-                    if(!found) { error="model part has no hierarchy attachment"; return false; }
-                }
+                const auto attached=Model_Part_Bone(model->Rig(),source.name);
+                if(!attached) { error="model part has no hierarchy attachment"; return false; }
+                part.bone=attached->first; part.lod=attached->second;
             }
             part.style.depth_write=material->Depth_Write();
-            part.textured=material->Texturing() && material->Primary_Texture().Is_Valid();
-            if(!next.Upload(assets,material->Primary_Texture(),part.textures[0])) { error="could not upload base map"; return false; }
+            auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
+            for(const auto& [original,replacement]:base_replacements)
+                if(!base_override.Is_Valid() && original==base && replacement.Is_Valid()) { base=replacement; break; }
+            part.textured=material->Texturing() && base.Is_Valid();
+            if(!next.Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
             if(material->Secondary_Texture().Is_Valid()) { error="secondary stage requires an explicit stage binding"; return false; }
             std::uint32_t maps=0;
             for(std::size_t role=0;role<PropSurfaceTextureCount;++role) {
@@ -92,10 +87,19 @@ public:
         error.clear(); return true;
     }
     std::size_t Part_Count() const noexcept { return m_parts.size(); }
+    // Every part's textures sampled clamped at their edges (a sky box's faces meet without seams).
+    void Clamp_Texture_Addressing() noexcept {
+        for(auto& part:m_parts)
+            for(auto& sampler:part.style.samplers) sampler.address.fill(RHISamplerAddress::Clamp);
+    }
     std::size_t Texture_Count() const noexcept { return m_textures.size(); }
     std::string_view Part_Name(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].name : std::string_view{}; }
+    // The bone a part hangs on (Invalid_Bone_Index when it has none).
+    std::uint32_t Part_Bone(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].bone : Invalid_Bone_Index; }
+    // `shroud`: the viewer's shroud image in the shroud slot (parameters.shroud on: the part multiplied by it).
+    // `stencil`: written (or tested) as it says while the part draws (none: as authored, no stencil).
     bool Draw_Part(CommandList& commands,std::size_t index,PropParameters parameters,
-        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0) const {
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={},const RHIStencilDescription* stencil=nullptr) const {
         if(!m_renderer || index>=m_parts.size()) return false;
         const auto& part=m_parts[index];
         if(part.lod!=lod) return true;
@@ -105,7 +109,57 @@ public:
         Prepare(part,parameters);
         MeshVersion mesh{m_renderer,part.mesh,false};
         if(!Mesh_For_Pose(part,pose,mesh)) return false;
-        return m_renderer->Draw(commands,mesh.handle,part.style,parameters,part.textures);
+        if(stencil) {
+            PropStyle style=part.style;
+            style.stencil=*stencil;
+            return m_renderer->Draw(commands,mesh.handle,style,parameters,Textures(part,shroud));
+        }
+        return m_renderer->Draw(commands,mesh.handle,part.style,parameters,Textures(part,shroud));
+    }
+    // A part seen through at `opacity` (the original's opacity override, MeshClass alpha override): as Draw_Part, but
+    // an opaque part blends source alpha over what is behind it and drops texels under 96 x opacity (alpha test).
+    bool Draw_Part_Translucent(CommandList& commands,std::size_t index,PropParameters parameters,float opacity,
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={},const RHIStencilDescription* stencil=nullptr) const {
+        if(!m_renderer || index>=m_parts.size()) return false;
+        const auto& part=m_parts[index];
+        if(part.lod!=lod) return true;
+        bool visible=true;
+        if(!Prepare_Pose(part,pose,parameters,visible)) return false;
+        if(!visible) return true;
+        Prepare(part,parameters);
+        PropStyle style=part.style;
+        if(style.destination_blend==RHIBlendFactor::Zero){
+            style.source_blend=RHIBlendFactor::SourceAlpha;
+            style.destination_blend=RHIBlendFactor::InverseSourceAlpha;
+        }
+        parameters.alpha_cutoff=std::max(parameters.alpha_cutoff,static_cast<float>(static_cast<unsigned>(96*opacity))/255.0f);
+        if(stencil) style.stencil=*stencil;
+        MeshVersion mesh{m_renderer,part.mesh,false};
+        if(!Mesh_For_Pose(part,pose,mesh)) return false;
+        return m_renderer->Draw(commands,mesh.handle,style,parameters,Textures(part,shroud));
+    }
+    // A material pass over a part (the original's Push_Material_Pass): its geometry again, untextured with the
+    // parameters' replacement material, blended and depth-tested as `pass` says.
+    bool Draw_Part_Pass(CommandList& commands,std::size_t index,PropParameters parameters,const PropStyle& pass,
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={}) const {
+        if(!m_renderer || index>=m_parts.size()) return false;
+        const auto& part=m_parts[index];
+        if(part.lod!=lod) return true;
+        bool visible=true;
+        if(!Prepare_Pose(part,pose,parameters,visible)) return false;
+        if(!visible) return true;
+        Prepare(part,parameters);
+        parameters.textured=0;
+        parameters.surface.shading_model=0;
+        parameters.alpha_cutoff=0;
+        PropStyle style=part.style;
+        style.source_blend=pass.source_blend;
+        style.destination_blend=pass.destination_blend;
+        style.depth_write=pass.depth_write;
+        style.depth_comparison=pass.depth_comparison;
+        MeshVersion mesh{m_renderer,part.mesh,false};
+        if(!Mesh_For_Pose(part,pose,mesh)) return false;
+        return m_renderer->Draw(commands,mesh.handle,style,parameters,Textures(part,shroud));
     }
     bool Submit_Part(PropSubmission& submission,std::size_t index,PropParameters parameters,
         PropDrawPhase phase,const std::array<float,4>& camera_depth={},
@@ -129,6 +183,9 @@ public:
         return false;
     }
 private:
+    static constexpr std::size_t Shroud_Texture_Slot=3;
+    struct Part;
+    static std::array<RHITextureHandle,PropTextureCount> Textures(const Part& part,RHITextureHandle shroud) noexcept;
     struct MeshVersion {
         PropRenderer* renderer;
         PropMeshHandle handle;
@@ -186,8 +243,8 @@ private:
         for(const auto& entry:m_textures) if(entry.first==handle) { result=entry.second; return true; }
         const auto* source=assets.Try_Get_Texture(handle);
         if(!source || !source->Has_Pixels()) return false;
-        result=m_device->Create_Texture_Initialized({source->Width(),source->Height(),1,RHITextureFormat::RGBA8_UNorm},
-            {source->Pixels(),source->Row_Pitch()});
+        // W3D's mesh textures load with every mip level (MIP_LEVELS_ALL, box filtered): far off they do not shimmer.
+        result=Create_Mipped_Texture(*m_device,source->Width(),source->Height(),source->Pixels(),source->Row_Pitch());
         if(!result.Is_Valid()) return false;
         m_textures.emplace_back(handle,result); return true;
     }
@@ -197,4 +254,10 @@ private:
     std::vector<Part> m_parts;
     std::vector<std::pair<Assets::TextureAssetHandle,RHITextureHandle>> m_textures;
 };
+inline std::array<RHITextureHandle,PropTextureCount> PropAssetBinding::Textures(const Part& part,RHITextureHandle shroud) noexcept
+{
+    auto textures=part.textures;
+    if(shroud.Is_Valid()) textures[Shroud_Texture_Slot]=shroud;
+    return textures;
+}
 }

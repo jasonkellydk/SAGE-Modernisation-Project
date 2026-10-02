@@ -1,8 +1,5 @@
-module;
-#include <memory>
-#include <cstdint>
-#include <string>
 export module engine.platform.network;
+import std;
 export import engine.platform.network.socket;
 export namespace engine::platform
 {

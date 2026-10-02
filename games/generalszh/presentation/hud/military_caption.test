@@ -1,0 +1,86 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import games.generalszh.presentation.hud.algorithms.military_caption_typing;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(military_caption)
+
+// legacy_parity: InGameUI::militarySubtitle and InGameUI::update (English Language.ini: MilitaryCaptionSpeed 1,
+// MilitaryCaptionDelayMS 750, so 22 ticks). "AB\nC" for 3000 ms from a script on tick 10: its time is up after tick
+// 100; the first letter comes on tick 33 (after 10 + 22), the next a tick later (35), the line break on 37, the next
+// line's letter after the delay (60); the block blinks every ten ticks from tick 20 and shows again on a new line. From
+// tick 101 its alpha drops by a tenth of the ticks since (whole numbers: nothing for nine ticks, 1 a tick for ten,
+// then 2, ...) and it goes on tick 176, when 3 left is less than that tick's 7.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_caption_types_blinks_and_fades_on_the_originals_ticks)
+{
+	MilitaryCaption caption;
+	caption.baseColor = {255, 255, 255, 255};
+	caption.speedTicks = 1;
+	caption.delayTicks = 30 * 750 / 1000;
+	BOOST_TEST(caption.delayTicks == 22u);
+	BOOST_TEST(!ShowCaption(caption, u"", 3000, 10));
+	BOOST_TEST(!ShowCaption(caption, u"AB", 0, 10));
+	BOOST_TEST_REQUIRE(ShowCaption(caption, u"AB\nC", 3000, 10));
+	BOOST_TEST(caption.lifetime == 100u);
+
+	std::vector<std::uint64_t> typed, blinks;
+	std::uint64_t gone = 0;
+	bool block = caption.blockDrawn;
+	for (std::uint64_t tick = 11; tick <= 300 && gone == 0; ++tick)
+	{
+		if (StepCaption(caption, tick))
+			typed.push_back(tick);
+		if (caption.shown && caption.blockDrawn != block)
+			blinks.push_back(tick);
+		block = caption.blockDrawn;
+		if (!caption.shown)
+			gone = tick;
+		if (tick == 36)
+		{
+			BOOST_TEST_REQUIRE(caption.lines.size() == 1u);
+			BOOST_TEST((caption.lines[0] == u"AB"));
+		}
+		if (tick == 37)
+			BOOST_TEST(caption.lines.size() == 2u);
+		if (tick == 100)
+		{
+			BOOST_TEST_REQUIRE(caption.lines.size() == 2u);
+			BOOST_TEST((caption.lines[1] == u"C"));
+			BOOST_TEST(caption.color[3] == 255);
+		}
+		if (tick == 109)
+			BOOST_TEST(caption.color[3] == 255);
+		if (tick == 110)
+			BOOST_TEST(caption.color[3] == 254);
+		if (tick == 175)
+			BOOST_TEST(caption.color[3] == 3);
+	}
+	BOOST_TEST((typed == std::vector<std::uint64_t>{33, 35, 60}));
+	// Blinks: off at 20, on at 30, off at 40 (the line break on 37 set it on without blinking), ...
+	BOOST_TEST_REQUIRE(blinks.size() >= 3u);
+	BOOST_TEST(blinks[0] == 20u);
+	BOOST_TEST(blinks[1] == 30u);
+	BOOST_TEST(blinks[2] == 40u);
+	BOOST_TEST(gone == 176u);
+}
+
+// A new caption replaces the one showing; past four lines the rest is dropped (MAX_SUBTITLE_LINES).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_caption_keeps_at_most_four_lines)
+{
+	MilitaryCaption caption;
+	caption.speedTicks = 0;
+	caption.delayTicks = 0;
+	BOOST_TEST_REQUIRE(ShowCaption(caption, u"old", 10000, 0));
+	BOOST_TEST_REQUIRE(ShowCaption(caption, u"a\nb\nc\nd\ne", 10000, 0));
+	for (std::uint64_t tick = 1; tick <= 40; ++tick)
+		StepCaption(caption, tick);
+	BOOST_TEST_REQUIRE(caption.lines.size() == 4u);
+	BOOST_TEST((caption.lines[3] == u"d"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

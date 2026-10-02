@@ -1,12 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Fonts;
+import std;
 
 import Assets.Identity;
 

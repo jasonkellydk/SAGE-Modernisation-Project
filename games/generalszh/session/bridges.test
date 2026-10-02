@@ -1,0 +1,677 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.death.components.dying;
+import games.generalszh.gameplay.bridges.algorithms.bridges;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.navigation.algorithms.decks;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.commands.game_commands;
+import engine.gameplay.rts.movement.systems.movement_system;
+import engine.gameplay.rts.movement.components.path_completed;
+import engine.gameplay.rts.navigation.definitions.pathfind_cell;
+import engine.level.model.level;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+
+// The terrain's bridges on shipped data: Roads.ini's Bridge blocks and their models' widths, map-drawn bridges made from
+// a shipped map's bridge points, and a landmark bridge's towers, damage states and death.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+namespace ga = generalszh::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// A map as a two-player skirmish (seats 0 and 1 at the map's first two starts).
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell, const std::string &path)
+{
+	const auto bytes = shell.files.Read(path);
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	return match;
+}
+
+std::vector<ecs::Entity> Bridges(session::Session &game)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<ga::Bridge>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			found.push_back(entity);
+	});
+	return found;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(bridges)
+
+// W3DBridgeBuffer::loadBridges / W3DBridge::getBridgeInfo and TerrainLogic.cpp Bridge::Bridge(BridgeInfo) on the
+// shipped skirmish map Winding River: each BRIDGE_POINT1 / BRIDGE_POINT2 pair is a GenericBridge in the middle of its
+// deck, facing from its first point to its second, on the neutral team; its ends BRIDGE_FLOAT_AMT (0.25) above the
+// ground; its left and right edges its Roads.ini model's BRIDGE_LEFT extent times its BridgeScale either side of the
+// line between its points (as wide as that extent's span times the scale); no towers (compiled out for map bridges).
+// GenericBridge's ImmortalBody keeps it from rubble: even killed outright its state stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_map_drawn_bridges)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const std::string path = "Maps/Winding River/Winding River.map";
+	const auto match = Prepare(shell, path);
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::size_t pairs = 0;
+	const auto &placements = match->read->level.placements;
+	for (std::size_t index = 0; index + 1 < placements.size(); ++index)
+		if ((placements[index].flags & 0x10u) != 0 && (placements[index + 1].flags & 0x20u) != 0)
+			++pairs;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto made = Bridges(game);
+	BOOST_TEST(made.size() == pairs);
+	BOOST_TEST_REQUIRE(!made.empty());
+	const std::uint32_t neutral = *game.Teams().FindTeam("team");
+	for (const ecs::Entity entity : made)
+	{
+		const ga::Bridge &bridge = *world.Get<ga::Bridge>(entity);
+		BOOST_TEST(game.Game().templates.DefinitionAt(world.Get<gp::DefinitionRef>(entity)->index).name == "GenericBridge");
+		BOOST_TEST(world.Get<gp::TeamMember>(entity)->team == neutral);
+		BOOST_TEST(bridge.landmark == 0);
+		for (const ecs::Entity tower : bridge.towers)
+			BOOST_TEST((tower == ecs::Entity{}));
+		const content::BridgeContent *kind = ga::BridgeTemplateOf(game.Game(), bridge);
+		BOOST_TEST_REQUIRE(kind != nullptr);
+		BOOST_TEST_REQUIRE(kind->extentY.has_value());
+		BOOST_TEST((bridge.from.z == game.Game().ground.At(bridge.from.XY()) + Fixed::FromRatio(1, 4)));
+		BOOST_TEST((bridge.width == (kind->extentY->second - kind->extentY->first) * kind->scale));
+		// Its edges' span across the deck is its width (fixed-point rounding: within a raw step per coordinate).
+		const Fixed across = Engine::Math::Length(bridge.fromLeft.XY() - bridge.fromRight.XY());
+		BOOST_TEST((Engine::Math::Abs(across - bridge.width) <= Fixed::FromRatio(1, 256)));
+		const auto &at = world.Get<gp::Transform>(entity)->position;
+		BOOST_TEST((at.x == (bridge.fromLeft.x + bridge.toRight.x) / Fixed::FromInt(2)));
+		BOOST_TEST(ga::PointOnBridge(bridge, at.XY()));
+		// A quarter of the way along the deck from its first end.
+		BOOST_TEST(ga::PointOnBridge(bridge, {(bridge.from.x * Fixed::FromInt(3) + bridge.to.x) / Fixed::FromInt(4), (bridge.from.y * Fixed::FromInt(3) + bridge.to.y) / Fixed::FromInt(4)}));
+		BOOST_TEST(bridge.curDamageState == ga::body_state::Pristine);
+	}
+	// Immortal: killed outright it keeps a point of health, and stays pristine.
+	ga::KillNow(game.Game(), made.front());
+	game.Tick();
+	game.Tick();
+	BOOST_TEST(world.Get<ga::Bridge>(made.front())->curDamageState != ga::body_state::Rubble);
+	BOOST_TEST(!ga::BridgeBroken(game.Game(), made.front(), true));
+}
+
+// TerrainRoads.cpp m_terrainBridgeFieldParseTable (parseTransitionToOCL / parseTransitionToFX: EffectNum 1..3 to slots
+// 0..2) and W3DBridge::load's BRIDGE_LEFT extent on the shipped Roads.ini Bridge Concrete; BridgeBehavior's
+// BridgeDieFX / BridgeDieOCL on TsingMaLandmarkBridge (Delay 45000 ms: 1350 ticks rounded up; Bone:ParentObject).
+BOOST_AUTO_TEST_CASE(legacy_parity_roads_ini_bridges)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto found = shell.game.bridges.find("Concrete");
+	BOOST_TEST_REQUIRE((found != shell.game.bridges.end()));
+	const content::BridgeContent &concrete = found->second;
+	BOOST_TEST((concrete.scale == Fixed::FromRatio(85, 100)));
+	BOOST_TEST(concrete.models[0] == "CBBridgeSt");
+	BOOST_TEST(concrete.towers[0] == "BridgeTowerConcreteLeft01");
+	BOOST_TEST(concrete.towers[3] == "BridgeTowerConcreteRight02");
+	BOOST_TEST(concrete.fxPerType == 32u);
+	BOOST_TEST(concrete.damagedSound == "BridgeDamaged");
+	BOOST_TEST(concrete.repairedSound == "BridgeRepaired");
+	BOOST_TEST(concrete.damageOcl[1][0] == "OCL_BridgeDamaged01");
+	BOOST_TEST_REQUIRE(concrete.extentY.has_value());
+	BOOST_TEST_MESSAGE("Concrete BRIDGE_LEFT y from " << Engine::Math::ToFloat(concrete.extentY->first) << " to " << Engine::Math::ToFloat(concrete.extentY->second));
+	BOOST_TEST((concrete.extentY->first < concrete.extentY->second));
+
+	const auto tsingMa = shell.game.bridgeDieEffects.find("TsingMaLandmarkBridge");
+	BOOST_TEST_REQUIRE((tsingMa != shell.game.bridgeDieEffects.end()));
+	const auto &effects = tsingMa->second;
+	BOOST_TEST_REQUIRE(effects.size() >= 4u);
+	// In the order written: the two columns at once from the bridge itself, then the first explosion's FX at 45000 ms.
+	BOOST_TEST(effects[0].creationList);
+	BOOST_TEST(effects[0].name == "OCL_TsingMaTankColumn");
+	BOOST_TEST(effects[0].delayTicks == 0u);
+	BOOST_TEST((effects[0].where == content::BridgeDieEffect::Where::Parent));
+	BOOST_TEST(!effects[2].creationList);
+	BOOST_TEST(effects[2].name == "FX_TsingMaExplosion");
+	BOOST_TEST(effects[2].delayTicks == 1350u);
+	BOOST_TEST((effects[2].where == content::BridgeDieEffect::Where::Bone));
+}
+
+// TerrainLogic.cpp Bridge::Bridge(Object *) / createTower, ActiveBody::calcDamageState and BridgeBehavior with
+// TerrainLogic::updateBridgeDamageStates / isBridgeBroken / isBridgeRepaired, on the shipped EuropeanLandmarkBridge
+// (StructureBody 2000, a 105 by 40 box): its deck the box's corners at its height; its Roads.ini towers at the corners,
+// pushed out across the deck by their major radius, on its team; hurt to really damaged its state is recorded but no
+// script hears of it (not into or out of rubble); killed it is rubble: its towers are killed (GenericBridgeTower's
+// ImmortalBody keeps them), and only the next tick's scripts see it broken.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_landmark_bridge_breaks)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity bridge = game.Place("EuropeanLandmarkBridge", {Fixed::FromInt(1000), Fixed::FromInt(1000)}, {}, *game.Teams().FindTeam("team"));
+	BOOST_TEST_REQUIRE(world.IsAlive(bridge));
+	ga::AddLandmarkBridge(game.Game(), bridge);
+	const auto *state = world.Get<ga::Bridge>(bridge);
+	BOOST_TEST_REQUIRE(state != nullptr);
+	BOOST_TEST(state->landmark == 1);
+	const auto &at = world.Get<gp::Transform>(bridge)->position;
+	// Unturned: from the west end to the east, left to the north.
+	BOOST_TEST((state->fromLeft.x == at.x - Fixed::FromInt(105)));
+	BOOST_TEST((state->fromLeft.y == at.y + Fixed::FromInt(40)));
+	BOOST_TEST((state->toRight.x == at.x + Fixed::FromInt(105)));
+	BOOST_TEST((state->toRight.y == at.y - Fixed::FromInt(40)));
+	BOOST_TEST((state->width == Fixed::FromInt(80)));
+	BOOST_TEST(ga::PointOnBridge(*state, at.XY()));
+	BOOST_TEST(!ga::PointOnBridge(*state, {at.x, at.y + Fixed::FromInt(41)}));
+	BOOST_TEST((ga::BridgeHeight(*state, at.XY()) == at.z));
+	std::size_t towers = 0;
+	for (const ecs::Entity tower : state->towers)
+		if (world.IsAlive(tower))
+		{
+			++towers;
+			BOOST_TEST((world.Get<ga::BridgeTower>(tower)->bridge == bridge));
+			BOOST_TEST(world.Get<gp::TeamMember>(tower)->team == world.Get<gp::TeamMember>(bridge)->team);
+		}
+	BOOST_TEST(towers == 4u);
+
+	// Really damaged (under 35% of 2000): recorded, no script hears of it.
+	world.Get<gp::Health>(bridge)->current = Fixed::FromInt(600);
+	game.Tick();
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->bodyState == ga::body_state::ReallyDamaged);
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->curDamageState == ga::body_state::ReallyDamaged);
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->changed == 0);
+	game.Tick();
+	BOOST_TEST(!ga::BridgeBroken(game.Game(), bridge, true));
+
+	// Killed: rubble, its towers killed; the next tick's scripts see it broken, the one after no more.
+	ga::KillNow(game.Game(), bridge);
+	game.Tick();
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->curDamageState == ga::body_state::Rubble);
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->changed == 1);
+	BOOST_TEST(world.Get<ga::Bridge>(bridge)->deathTick == game.CurrentTick());
+	BOOST_TEST(!ga::BridgeBroken(game.Game(), bridge, true)); // this tick's scripts ran before it broke
+	game.Tick();
+	BOOST_TEST(ga::BridgeBroken(game.Game(), bridge, true)); // what the scripts of this tick saw
+	BOOST_TEST(!ga::BridgeBroken(game.Game(), bridge, false));
+	// Its towers were killed (onDie: tower->kill()), but GenericBridgeTower's ImmortalBody keeps them (kill is damage it
+	// keeps a point of).
+	for (const ecs::Entity tower : world.Get<ga::Bridge>(bridge)->towers)
+		if (tower != ecs::Entity{})
+			BOOST_TEST((world.IsAlive(tower) && !ga::EffectivelyDead(game.Game(), tower)));
+	game.Tick();
+	BOOST_TEST(!ga::BridgeBroken(game.Game(), bridge, true));
+}
+
+// Pathfinder::addBridge / PathfindLayer::classifyCells and the movers' layers (AIUpdate's pathfinder->updateLayer from its
+// path, TerrainLogic::getLayerHeight) on Winding River's map-drawn Kandahar bridges: each has a deck layer of its own,
+// its entries linked to the ground; a Ranger ordered from beyond one end of a bridge to beyond the other walks over the
+// deck (on its layer, at its height, over its middle) and gets there; back on the ground at the far side. The same on 4
+// workers, and a checkpoint taken on the deck carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_units_cross_on_a_bridge_deck)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	const auto &grid = world.Resource<gp::NavigationGrid>();
+	const auto made = Bridges(game);
+	BOOST_TEST_REQUIRE(!made.empty());
+	for (const ecs::Entity entity : made)
+		BOOST_TEST(world.Get<ga::Bridge>(entity)->layer != 0);
+	BOOST_TEST(grid.Decks().size() == made.size());
+	// The first bridge made: its ends and which way it runs.
+	ecs::Entity chosen = made.front();
+	for (const ecs::Entity entity : made)
+		if (world.Get<ga::Bridge>(entity)->layer == 1)
+			chosen = entity;
+	const ga::Bridge bridge = *world.Get<ga::Bridge>(chosen);
+	const Engine::Math::FixedVector2 along = bridge.to.XY() - bridge.from.XY();
+	const Fixed length = Engine::Math::Length(along);
+	const Engine::Math::FixedVector2 unit{along.x / length, along.y / length};
+	const Engine::Math::FixedVector2 start = bridge.from.XY() - unit * Fixed::FromInt(60);
+	const Engine::Math::FixedVector2 goal = bridge.to.XY() + unit * Fixed::FromInt(60);
+	const Engine::Math::FixedVector2 middle{(bridge.from.x + bridge.to.x) / Fixed::FromInt(2), (bridge.from.y + bridge.to.y) / Fixed::FromInt(2)};
+	const std::uint32_t team = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	game.Tick();
+	four.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start, {}, team);
+	const ecs::Entity rangerFour = four.Place("AmericaInfantryRanger", start, {}, *four.Teams().FindTeam(match->skirmish.players[0].team));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	ga::OrderMove(game.Game(), ranger, goal, true);
+	ga::OrderMove(four.Game(), rangerFour, goal, true);
+	bool wasOnDeck = false, overMiddle = false;
+	std::optional<std::vector<std::byte>> checkpoint;
+	int ticks = 0;
+	for (; ticks < 1200 && world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle; ++ticks)
+	{
+		game.Tick();
+		four.Tick();
+		const auto &at = world.Get<gp::Transform>(ranger)->position;
+		if (const auto *layer = world.Get<gp::SurfaceLayer>(ranger); layer != nullptr && layer->layer == bridge.layer)
+		{
+			wasOnDeck = true;
+			if (Engine::Math::DistanceSquared(at.XY(), middle) < Fixed::FromInt(30 * 30))
+			{
+				overMiddle = true;
+				// At the deck's height there (it floats over the river).
+				BOOST_TEST((Engine::Math::Abs(at.z - ga::BridgeHeight(bridge, at.XY())) <= Fixed::FromInt(1)));
+				if (!checkpoint)
+					checkpoint = game.Checkpoint();
+			}
+		}
+	}
+	BOOST_TEST_MESSAGE("crossed in " << ticks << " ticks");
+	BOOST_TEST(wasOnDeck);
+	BOOST_TEST(overMiddle);
+	BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Idle));
+	BOOST_TEST((Engine::Math::DistanceSquared(world.Get<gp::Transform>(ranger)->position.XY(), goal) < Fixed::FromInt(20 * 20)));
+	BOOST_TEST(world.Get<gp::SurfaceLayer>(ranger) == nullptr);
+	BOOST_TEST(game.StateHash() == four.StateHash());
+	BOOST_TEST_REQUIRE(checkpoint.has_value());
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), *checkpoint);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Resource<gp::NavigationGrid>().Decks().size() == grid.Decks().size());
+}
+
+// TerrainRoads.cpp m_terrainBridgeFieldParseTable on the shipped Roads.ini IronSectionalDoublewide: a model and a
+// texture per damage state (W3DBridge::load's choice by BodyDamageType) and its RadarColor (INI::parseRGBColor, R:192
+// G:192 B:192). TerrainRoadCollection::newBridge: a Bridge block written after a DefaultBridge starts from its texture,
+// scale, models, damaged textures, TransitionEffectsHeight and NumFXPerType (not its radar colour or towers); one written
+// before it starts from nothing (BridgeScale 1).
+BOOST_AUTO_TEST_CASE(legacy_parity_bridge_textures_radar_colour_and_defaults)
+{
+	using engine::config::Node;
+	const auto field = [](std::string_view key, std::vector<std::string_view> values) {
+		Node node;
+		node.key = key;
+		node.values = std::move(values);
+		return node;
+	};
+	const auto block = [](std::string_view name, std::vector<Node> children) {
+		Node node;
+		node.key = "Bridge";
+		node.values = {name};
+		node.block = true;
+		node.children = std::move(children);
+		return node;
+	};
+	engine::config::Document document;
+	document.Roots().push_back(block("Early", {field("Texture", {"E.tga"})}));
+	document.Roots().push_back(block("DefaultBridge",
+		{field("Texture", {"Def.tga"}), field("BridgeScale", {"0.5"}), field("BridgeModelName", {"DefModel"}), field("TextureBroken", {"DefBroken.tga"}),
+			field("NumFXPerType", {"7"}), field("TransitionEffectsHeight", {"3"}), field("RadarColor", {"R:1", "G:2", "B:3"}),
+			field("TowerObjectNameFromLeft", {"Tower"})}));
+	document.Roots().push_back(block("Late", {field("Texture", {"L.tga"})}));
+	const content::BridgeCatalog catalog = content::BindBridges(document);
+	const content::BridgeContent &early = catalog.at("Early");
+	BOOST_TEST((early.scale == Fixed::One()));
+	BOOST_TEST(early.models[0].empty());
+	BOOST_TEST(early.textures[0] == "E.tga");
+	const content::BridgeContent &defaults = catalog.at("DefaultBridge");
+	BOOST_TEST((defaults.radarColor == std::array<std::uint8_t, 3>{1, 2, 3}));
+	const content::BridgeContent &late = catalog.at("Late");
+	BOOST_TEST(late.textures[0] == "L.tga");
+	BOOST_TEST(late.textures[3] == "DefBroken.tga");
+	BOOST_TEST(late.models[0] == "DefModel");
+	BOOST_TEST((late.scale == Fixed::FromRatio(1, 2)));
+	BOOST_TEST(late.fxPerType == 7u);
+	BOOST_TEST((late.transitionEffectsHeight == Fixed::FromInt(3)));
+	BOOST_TEST((late.radarColor == std::array<std::uint8_t, 3>{0, 0, 0}));
+	BOOST_TEST(late.towers[0].empty());
+
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const content::BridgeContent &iron = shell.game.bridges.at("IronSectionalDoublewide");
+	BOOST_TEST(iron.models[0] == "TBDoubWide");
+	BOOST_TEST(iron.models[1] == "TBDoubWide_d");
+	BOOST_TEST(iron.models[2] == "TBDoubWide_e");
+	BOOST_TEST(iron.models[3] == "TBDoubWide_r");
+	BOOST_TEST(iron.textures[0] == "TBDoubWide.tga");
+	BOOST_TEST(iron.textures[1] == "TBDoubWide_d.tga");
+	BOOST_TEST(iron.textures[2] == "TBDoubWide_e.tga");
+	BOOST_TEST(iron.textures[3] == "TBDoubWide_r.tga");
+	BOOST_TEST((iron.radarColor == std::array<std::uint8_t, 3>{192, 192, 192}));
+	// A landmark bridge's block has no models (they come from its object) but its radar colour.
+	const content::BridgeContent &tsingMa = shell.game.bridges.at("TsingMaLandmarkBridge");
+	BOOST_TEST(tsingMa.models[0].empty());
+	BOOST_TEST((tsingMa.radarColor == std::array<std::uint8_t, 3>{192, 192, 192}));
+}
+
+// W3DBridgeBuffer::addBridge: the buffer holds MAX_BRIDGES (200); bridge points past that make no bridge (none is given
+// to the terrain logic). Winding River with 205 more copies of its first bridge's points: 200 bridges.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_more_than_two_hundred_map_bridges)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	auto level = match->skirmish.level;
+	std::size_t first = level.placements.size();
+	for (std::size_t index = 0; index + 1 < level.placements.size(); ++index)
+		if ((level.placements[index].flags & 0x10u) != 0 && (level.placements[index + 1].flags & 0x20u) != 0)
+		{
+			first = index;
+			break;
+		}
+	BOOST_TEST_REQUIRE(first < level.placements.size());
+	const auto one = level.placements[first], two = level.placements[first + 1];
+	for (int copy = 0; copy < 205; ++copy)
+	{
+		level.placements.push_back(one);
+		level.placements.push_back(two);
+	}
+	session::Session game(level, shell.game, match->Options(1));
+	BOOST_TEST(Bridges(game).size() == 200u);
+}
+
+// AIUpdate::computePath / Pathfinder::findPath's destinationLayer (TerrainLogic::getLayerForDestination of the goal): a
+// Ranger on the ground past one end of a Winding River bridge sent to the middle of its deck with its goal on the deck's
+// layer walks on at an entry and stops on the deck (on its layer, at its height); sent to the same point with its goal on
+// the ground (a waypoint's: snapped to the ground), it does not go onto the deck (the river under it is no place to
+// stand: it stops on the ground).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_move_order_goes_to_its_goal_layer)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	for (const bool onDeck : {true, false})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		auto &world = game.World();
+		const auto made = Bridges(game);
+		BOOST_TEST_REQUIRE(!made.empty());
+		ecs::Entity chosen = made.front();
+		for (const ecs::Entity entity : made)
+			if (world.Get<ga::Bridge>(entity)->layer == 1)
+				chosen = entity;
+		const ga::Bridge bridge = *world.Get<ga::Bridge>(chosen);
+		BOOST_TEST_REQUIRE(bridge.layer != 0);
+		const Engine::Math::FixedVector2 along = bridge.to.XY() - bridge.from.XY();
+		const Fixed length = Engine::Math::Length(along);
+		const Engine::Math::FixedVector2 unit{along.x / length, along.y / length};
+		const Engine::Math::FixedVector2 start = bridge.from.XY() - unit * Fixed::FromInt(60);
+		const Engine::Math::FixedVector2 middle{(bridge.from.x + bridge.to.x) / Fixed::FromInt(2), (bridge.from.y + bridge.to.y) / Fixed::FromInt(2)};
+		game.Tick();
+		const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start, {}, *game.Teams().FindTeam(match->skirmish.players[0].team));
+		BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+		*world.Get<gp::MoveOrder>(ranger) = gp::MoveToPointOn(middle, onDeck ? bridge.layer : gp::GroundLayer);
+		if (auto *route = world.Get<gp::Route>(ranger))
+			route->planned = false;
+		int ticks = 0;
+		for (; ticks < 900 && world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle; ++ticks)
+			game.Tick();
+		BOOST_TEST_MESSAGE((onDeck ? "deck goal: " : "ground goal: ") << ticks << " ticks");
+		const auto *layer = world.Get<gp::SurfaceLayer>(ranger);
+		const auto &at = world.Get<gp::Transform>(ranger)->position;
+		if (onDeck)
+		{
+			BOOST_TEST_REQUIRE(layer != nullptr);
+			BOOST_TEST(layer->layer == bridge.layer);
+			BOOST_TEST(ga::PointOnBridge(bridge, at.XY()));
+			BOOST_TEST((Engine::Math::Abs(at.z - ga::BridgeHeight(bridge, at.XY())) <= Fixed::FromInt(1)));
+		}
+		else
+			BOOST_TEST((layer == nullptr || layer->layer == gp::GroundLayer));
+	}
+}
+
+// GameLogicDispatch.cpp MSG_DO_MOVETO -> AIGroup::groupMoveToPosition (getLayerForDestination(groupDest); each member's
+// dest.z = getLayerHeight(dest, layer): computeIndividualDestination) -> AIUpdateInterface::computePath
+// (getLayerForDestination(destination)): a player's move to the middle of a Winding River bridge clicked on its deck (the
+// click's height the deck's: W3DView::screenToTerrain's pickBridge) has its goal on the deck's layer and the Ranger stops
+// on the deck; clicked at the same x, y at the ground's height (under the bridge), its goal is on the ground and it stays
+// off the deck. The order's goal layer is set the tick the command applies.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_clicked_height_picks_the_goal_layer)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	for (const bool onDeck : {true, false})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		auto &world = game.World();
+		const auto made = Bridges(game);
+		BOOST_TEST_REQUIRE(!made.empty());
+		ecs::Entity chosen = made.front();
+		for (const ecs::Entity entity : made)
+			if (world.Get<ga::Bridge>(entity)->layer == 1)
+				chosen = entity;
+		const ga::Bridge bridge = *world.Get<ga::Bridge>(chosen);
+		BOOST_TEST_REQUIRE(bridge.layer != 0);
+		const Engine::Math::FixedVector2 along = bridge.to.XY() - bridge.from.XY();
+		const Fixed length = Engine::Math::Length(along);
+		const Engine::Math::FixedVector2 unit{along.x / length, along.y / length};
+		const Engine::Math::FixedVector2 start = bridge.from.XY() - unit * Fixed::FromInt(60);
+		const Engine::Math::FixedVector2 middle{(bridge.from.x + bridge.to.x) / Fixed::FromInt(2), (bridge.from.y + bridge.to.y) / Fixed::FromInt(2)};
+		const Fixed deck = ga::BridgeHeight(bridge, middle);
+		const Fixed ground = game.Game().ground.At(middle);
+		BOOST_TEST_REQUIRE((deck > ground));
+		game.Tick();
+		const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start, {}, *game.Teams().FindTeam(match->skirmish.players[0].team));
+		BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+		const std::uint32_t player = world.Get<gp::Owner>(ranger)->player;
+		gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{{ranger}, middle, onDeck ? deck : ground});
+		BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Point));
+		BOOST_TEST(world.Get<gp::MoveOrder>(ranger)->goalLayer == (onDeck ? bridge.layer : gp::GroundLayer));
+		int ticks = 0;
+		for (; ticks < 900 && world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle; ++ticks)
+			game.Tick();
+		BOOST_TEST_MESSAGE((onDeck ? "deck click: " : "ground click: ") << ticks << " ticks");
+		const auto *layer = world.Get<gp::SurfaceLayer>(ranger);
+		const auto &at = world.Get<gp::Transform>(ranger)->position;
+		if (onDeck)
+		{
+			BOOST_TEST_REQUIRE(layer != nullptr);
+			BOOST_TEST(layer->layer == bridge.layer);
+			BOOST_TEST(ga::PointOnBridge(bridge, at.XY()));
+		}
+		else
+			BOOST_TEST((layer == nullptr || layer->layer == gp::GroundLayer));
+	}
+}
+
+// AIFollowWaypointPathState::onEnter / update (each leg an AIInternalMoveToState: computePath to computeGoal's goal on its
+// m_goalLayer, the ground for a waypoint off the wall; on its success, on to the next waypoint; at the last,
+// setCompletedWaypoint): a Ranger told to follow two waypoints on either bank of a Winding River bridge, the straight line
+// between them over the river under the deck, gets there by a route, which takes it up onto the deck's layer and over it;
+// at the far waypoint the path is completed (PathCompleted for that waypoint) and it stops on the ground.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_waypoint_path_is_routed_leg_by_leg)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::optional<ga::Bridge> found;
+	{
+		session::Session probe(match->skirmish.level, shell.game, match->Options(1));
+		for (const ecs::Entity entity : Bridges(probe))
+			if (probe.World().Get<ga::Bridge>(entity)->layer == 1)
+				found = *probe.World().Get<ga::Bridge>(entity);
+	}
+	BOOST_TEST_REQUIRE(found.has_value());
+	const ga::Bridge bridge = *found;
+	const Engine::Math::FixedVector2 along = bridge.to.XY() - bridge.from.XY();
+	const Fixed length = Engine::Math::Length(along);
+	const Engine::Math::FixedVector2 unit{along.x / length, along.y / length};
+	const Engine::Math::FixedVector2 start = bridge.from.XY() - unit * Fixed::FromInt(100);
+	const Engine::Math::FixedVector2 nearSide = bridge.from.XY() - unit * Fixed::FromInt(60);
+	const Engine::Math::FixedVector2 farSide = bridge.to.XY() + unit * Fixed::FromInt(60);
+	auto level = match->skirmish.level;
+	engine::level::Marker first, second;
+	first.id = 900001;
+	first.name = "ParityLegNear";
+	first.position = {nearSide.x, nearSide.y, Fixed{}};
+	first.links = {900002};
+	second.id = 900002;
+	second.name = "ParityLegFar";
+	second.position = {farSide.x, farSide.y, Fixed{}};
+	level.markers.push_back(first);
+	level.markers.push_back(second);
+	session::Session game(level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start, {}, *game.Teams().FindTeam(match->skirmish.players[0].team));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	const auto &waypoints = game.Game().waypoints;
+	const std::uint32_t legNear = waypoints.Find("ParityLegNear"), legFar = waypoints.Find("ParityLegFar");
+	BOOST_TEST_REQUIRE(legNear != gp::WaypointGraph::None);
+	BOOST_TEST_REQUIRE(legFar != gp::WaypointGraph::None);
+	*world.Get<gp::MoveOrder>(ranger) = gp::FollowPath(waypoints, legNear);
+	world.Get<gp::MoveOrder>(ranger)->goalLayer = gp::GroundLayer;
+	if (auto *route = world.Get<gp::Route>(ranger))
+		route->planned = false;
+	bool onDeck = false, secondLeg = false;
+	int ticks = 0;
+	for (; ticks < 1800 && world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle; ++ticks)
+	{
+		game.Tick();
+		const auto &order = *world.Get<gp::MoveOrder>(ranger);
+		secondLeg = secondLeg || order.waypoint == legFar;
+		if (order.mode == gp::MoveMode::Path)
+			BOOST_TEST(order.goalLayer == gp::GroundLayer); // computeGoal: neither waypoint is on the wall
+		const auto *layer = world.Get<gp::SurfaceLayer>(ranger);
+		onDeck = onDeck || (layer != nullptr && layer->layer == bridge.layer && ga::PointOnBridge(bridge, world.Get<gp::Transform>(ranger)->position.XY()));
+	}
+	BOOST_TEST_MESSAGE("path followed in " << ticks << " ticks");
+	BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(secondLeg);
+	BOOST_TEST(onDeck); // routed over the bridge, not straight through the river under it
+	const auto *completed = world.Get<gp::PathCompleted>(ranger);
+	BOOST_TEST_REQUIRE(completed != nullptr);
+	BOOST_TEST(completed->waypoint == legFar);
+	const auto *layer = world.Get<gp::SurfaceLayer>(ranger);
+	BOOST_TEST((layer == nullptr || layer->layer == gp::GroundLayer));
+	BOOST_TEST((Engine::Math::Distance(world.Get<gp::Transform>(ranger)->position.XY(), farSide) <= Fixed::FromInt(gp::PathfindCellSize)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

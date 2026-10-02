@@ -1,0 +1,355 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.interaction.algorithms.mouse_tooltip;
+import games.generalszh.presentation.interaction.systems.mouse_tooltip_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Mouse.ini's Mouse block as shipped (TooltipDelayTime 800, TooltipFillTime 250, TooltipAnimateBackground No,
+// TooltipWidth 20, UseTooltipAltBackColor and AdjustTooltipAltColor Yes; its colours).
+generalszh::content::MouseTooltipContent ShippedLook()
+{
+	generalszh::content::MouseTooltipContent look;
+	look.fontName = "Arial";
+	look.fontSize = 8;
+	look.animateBackground = false;
+	look.fillTimeMs = 250;
+	look.delayTimeMs = 800;
+	look.borderColor = {60, 60, 155, 255};
+	look.backgroundColor = {20, 20, 20, 255};
+	look.widthText = "20"; // TooltipWidth 20: a 0.2 share (TooltipWidthShare)
+	look.useAltBackColor = true;
+	look.adjustAltColor = true;
+	return look;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(mouse_tooltip)
+
+// Core/GameEngine/Source/GameClient/Input/Mouse.cpp, Mouse::createStreamMessages (the delay test before the frame's
+// events, which restart m_stillTime on a move), Mouse::resetTooltipDelay and Mouse::drawTooltip's last step: with the
+// shipped 800 ms delay a pointer still since 1000 shows its tooltip at 1800, not 1799; its highlight runs from there,
+// (width * elapsed) / 250 in unsigned numbers (a 100 pixel text: 20 at 1850, 99 at 2049, 120 at 2100), and stops once
+// past the text by the highlight's 15 pixels; showing on, it does not start over; a reset hides it until still 800 ms
+// again; a tooltip's own delay (setCursorTooltip's) replaces TooltipDelayTime.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_tooltip_waits_its_delay_then_its_highlight_runs)
+{
+	const auto look = ShippedLook();
+	MouseTooltip tooltip;
+	PointerMoved(tooltip, 1000);
+	UpdateTooltipShowing(tooltip, look, 1799);
+	BOOST_TEST(!tooltip.display);
+	UpdateTooltipShowing(tooltip, look, 1800);
+	BOOST_TEST(tooltip.display);
+	BOOST_TEST(tooltip.highlightPos == 0);
+	BOOST_TEST(tooltip.highlightStart == 1800u);
+	AdvanceTooltipHighlight(tooltip, look, 100, 1850);
+	BOOST_TEST(tooltip.highlightPos == 20);
+	AdvanceTooltipHighlight(tooltip, look, 100, 2049);
+	BOOST_TEST(tooltip.highlightPos == 99);
+	AdvanceTooltipHighlight(tooltip, look, 100, 2100);
+	BOOST_TEST(tooltip.highlightPos == 120);
+	AdvanceTooltipHighlight(tooltip, look, 100, 5000);
+	BOOST_TEST(tooltip.highlightPos == 120); // past 100 + 15: it stays
+	UpdateTooltipShowing(tooltip, look, 5000);
+	BOOST_TEST(tooltip.highlightPos == 120); // still showing: not started over
+	ResetTooltipDelay(tooltip, 5000);
+	BOOST_TEST(!tooltip.display);
+	UpdateTooltipShowing(tooltip, look, 5799);
+	BOOST_TEST(!tooltip.display);
+	UpdateTooltipShowing(tooltip, look, 5800);
+	BOOST_TEST(tooltip.display);
+	BOOST_TEST(tooltip.highlightPos == 0);
+	BOOST_TEST(tooltip.highlightStart == 5800u);
+	// Its own delay (LobbyUtils' 10 ms).
+	SetCursorTooltip(tooltip, look, u"Players", 10, std::nullopt, 1.0f, 800);
+	PointerMoved(tooltip, 6000);
+	UpdateTooltipShowing(tooltip, look, 6009);
+	BOOST_TEST(!tooltip.display);
+	UpdateTooltipShowing(tooltip, look, 6010);
+	BOOST_TEST(tooltip.display);
+}
+
+// Mouse::setCursorTooltip: a new width share rewraps the text at TooltipWidth x the share of the screen's width (800:
+// 160 pixels at 1, 240 at 1.5; under 10 pixels 120, past the screen the screen); an empty tooltip changes neither the
+// text kept nor the wrap. Without a colour the text and back colours are TooltipTextColor and TooltipBackgroundColor;
+// with one (an object's player's, RGBColor 0-1) the shipped UseTooltipAltBackColor + AdjustTooltipAltColor darken the
+// back to half (red 1: 127, REAL_TO_INT truncating) at TooltipBackgroundColor's alpha, the text colour untouched (no
+// UseTooltipAltTextColor); with UseTooltipAltTextColor and adjusting, the text is brightened ((c + 1) * 255 / 2).
+BOOST_AUTO_TEST_CASE(legacy_parity_set_cursor_tooltip_wraps_and_colours_it)
+{
+	auto look = ShippedLook();
+	MouseTooltip tooltip;
+	SetCursorTooltip(tooltip, look, u"", -1, std::nullopt, 1.0f, 800);
+	BOOST_TEST(tooltip.empty);
+	BOOST_TEST(tooltip.wrapWidth == 120); // never set: onResolutionChanged's
+	BOOST_TEST((tooltip.textColor == TooltipColor{220, 220, 220, 255}));
+	BOOST_TEST((tooltip.backColor == TooltipColor{20, 20, 20, 255}));
+	SetCursorTooltip(tooltip, look, u"Crusader Tank", -1, std::array<float, 3>{1.0f, 0.0f, 0.0f}, 1.0f, 800);
+	BOOST_TEST(!tooltip.empty);
+	BOOST_TEST((tooltip.text == u"Crusader Tank"));
+	BOOST_TEST(tooltip.wrapWidth == 160);
+	BOOST_TEST((tooltip.backColor == TooltipColor{127, 0, 0, 255}));
+	BOOST_TEST((tooltip.textColor == TooltipColor{220, 220, 220, 255}));
+	SetCursorTooltip(tooltip, look, u"", -1, std::nullopt, 1.0f, 800);
+	BOOST_TEST(tooltip.empty);
+	BOOST_TEST((tooltip.text == u"Crusader Tank")); // the display string keeps it
+	BOOST_TEST((tooltip.backColor == TooltipColor{20, 20, 20, 255}));
+	SetCursorTooltip(tooltip, look, u"Replay", -1, std::nullopt, 1.5f, 800);
+	BOOST_TEST(tooltip.wrapWidth == 240);
+	SetCursorTooltip(tooltip, look, u"Tiny", -1, std::nullopt, 0.01f, 800);
+	BOOST_TEST(tooltip.wrapWidth == 120);
+	SetCursorTooltip(tooltip, look, u"Huge", -1, std::nullopt, 10.0f, 800);
+	BOOST_TEST(tooltip.wrapWidth == 800);
+	look.useAltTextColor = true;
+	SetCursorTooltip(tooltip, look, u"Blue", -1, std::array<float, 3>{0.0f, 0.0f, 1.0f}, 10.0f, 800);
+	BOOST_TEST((tooltip.textColor == TooltipColor{127, 127, 255, 255}));
+	BOOST_TEST((tooltip.backColor == TooltipColor{0, 0, 127, 255}));
+	look.adjustAltColor = false;
+	SetCursorTooltip(tooltip, look, u"Blue", -1, std::array<float, 3>{0.0f, 0.0f, 1.0f}, 10.0f, 800);
+	BOOST_TEST((tooltip.textColor == TooltipColor{0, 0, 255, 255}));
+	BOOST_TEST((tooltip.backColor == TooltipColor{0, 0, 255, 255}));
+}
+
+// Mouse::drawTooltip: a 100 x 20 text with the pointer at (300, 200) on 800 x 600 sits 20 right of it at its height,
+// its box 102 x 22 (TooltipAnimateBackground No: the whole text's width), the text at (322, 201) clipped to the
+// highlight's run (40: to 362) and the highlight its last 15 pixels (347 to 362); near the corner (700, 590) it flips
+// left of the pointer by 20 and its width (600) and up by its height (570); with TooltipAnimateBackground the box runs
+// with the highlight (42); nothing while a script fade runs, while hidden or with no tooltip set this frame.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_tooltip_box_sits_right_of_the_pointer_or_flips)
+{
+	auto look = ShippedLook();
+	MouseTooltip tooltip;
+	SetCursorTooltip(tooltip, look, u"Crusader Tank", -1, std::array<float, 3>{1.0f, 0.0f, 0.0f}, 1.0f, 800);
+	tooltip.display = true;
+	tooltip.highlightPos = 40;
+	TooltipDraw draw = LayOutTooltip(tooltip, look, 300, 200, 100, 20, 800, 600, false);
+	BOOST_TEST_REQUIRE(draw.shown);
+	BOOST_TEST(draw.x == 320);
+	BOOST_TEST(draw.y == 200);
+	BOOST_TEST(draw.boxWidth == 102);
+	BOOST_TEST(draw.boxHeight == 22);
+	BOOST_TEST(draw.textX == 322);
+	BOOST_TEST(draw.textY == 201);
+	BOOST_TEST(draw.textRight == 362);
+	BOOST_TEST(draw.highlightLeft == 347);
+	BOOST_TEST(draw.highlightRight == 362);
+	BOOST_TEST(draw.clipBottom == 221);
+	BOOST_TEST((draw.back == TooltipColor{127, 0, 0, 255}));
+	BOOST_TEST((draw.border == TooltipColor{60, 60, 155, 255}));
+	BOOST_TEST((draw.highlight == TooltipColor{255, 255, 0, 255}));
+	draw = LayOutTooltip(tooltip, look, 700, 590, 100, 20, 800, 600, false);
+	BOOST_TEST(draw.x == 600);
+	BOOST_TEST(draw.y == 570);
+	look.animateBackground = true;
+	draw = LayOutTooltip(tooltip, look, 300, 200, 100, 20, 800, 600, false);
+	BOOST_TEST(draw.boxWidth == 42);
+	BOOST_TEST(!LayOutTooltip(tooltip, look, 300, 200, 100, 20, 800, 600, true).shown);
+	tooltip.display = false;
+	BOOST_TEST(!LayOutTooltip(tooltip, look, 300, 200, 100, 20, 800, 600, false).shown);
+	tooltip.display = true;
+	SetCursorTooltip(tooltip, look, u"", -1, std::nullopt, 1.0f, 800);
+	BOOST_TEST(!LayOutTooltip(tooltip, look, 300, 200, 100, 20, 800, 600, false).shown);
+}
+
+// Mouse::setCursor (only on a change of cursor; the mouse starts on ARROW: Mouse::init) and setMouseText: a cursor with
+// CursorText shows it fetched in its CursorTextColor / CursorTextDropColor, one without clears the text and keeps the
+// colours; Mouse::drawCursorText centres it on the pointer (half its size, whole pixels).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cursor_change_sets_its_cursor_text)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	MouseTooltipSettings settings;
+	const auto move = static_cast<std::size_t>(Cursor::Move);
+	settings.cursorTexts[move] = u"GO";
+	settings.cursorTextColors[move] = {255, 255, 0, 255};
+	settings.cursorTextDropColors[move] = {0, 0, 0, 255};
+	MouseTooltip tooltip;
+	SetCursorText(tooltip, settings, Cursor::Arrow);
+	BOOST_TEST(tooltip.cursorText.empty());
+	BOOST_TEST((tooltip.cursorTextColor == TooltipColor{255, 255, 255, 255})); // the constructor's
+	SetCursorText(tooltip, settings, Cursor::Move);
+	BOOST_TEST((tooltip.cursorText == u"GO"));
+	BOOST_TEST((tooltip.cursorTextColor == TooltipColor{255, 255, 0, 255}));
+	BOOST_TEST((tooltip.cursorTextDropColor == TooltipColor{0, 0, 0, 255}));
+	tooltip.cursorText = u"kept";
+	SetCursorText(tooltip, settings, Cursor::Move); // no change of cursor: nothing set
+	BOOST_TEST((tooltip.cursorText == u"kept"));
+	SetCursorText(tooltip, settings, Cursor::Select);
+	BOOST_TEST(tooltip.cursorText.empty());
+	BOOST_TEST((tooltip.cursorTextColor == TooltipColor{255, 255, 0, 255}));
+	BOOST_TEST((CursorTextAt(400, 300, 31, 15) == std::array<int, 2>{385, 293}));
+}
+
+// GeneralsMD/Code/GameEngine/Source/GameClient/InGameUI.cpp, InGameUI::createMouseoverHint: the object's DisplayName
+// (none: "ThingTemplate:<name>" fetched), a warehouse's worth after it (TOOLTIP:SupplyWarehouse, boxes x
+// ValuePerSupplyBox), in a multiplayer game a playable side's player's name on the next line; only where the observing
+// player's view of it is clear and not for one named OBJECT:Prop (a blank string: those without a DisplayName); in its
+// colour (RGBColor::setFromInt).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_object_tooltip_names_it_and_its_player)
+{
+	MouseoverNames names;
+	names.multiplayer = true;
+	names.propText = u"";
+	names.warehouseText = u"\nSupplies: $%d";
+	names.valuePerSupplyBox = 100;
+	MouseoverSubject tank;
+	tank.displayName = u"Crusader Tank";
+	tank.hasPlayer = true;
+	tank.playerName = u"Jason";
+	tank.playableSide = true;
+	tank.clear = true;
+	tank.color = 0xFF0000u;
+	auto shown = MouseoverTooltip(tank, names);
+	BOOST_TEST_REQUIRE(shown.has_value());
+	BOOST_TEST((shown->first == u"Crusader Tank\nJason"));
+	BOOST_TEST((shown->second == std::array<float, 3>{1.0f, 0.0f, 0.0f}));
+	names.multiplayer = false; // a campaign mission
+	BOOST_TEST((MouseoverTooltip(tank, names)->first == u"Crusader Tank"));
+	names.multiplayer = true;
+	tank.playableSide = false; // the neutral or civilian player
+	BOOST_TEST((MouseoverTooltip(tank, names)->first == u"Crusader Tank"));
+	tank.playableSide = true;
+	tank.clear = false; // fogged or shrouded
+	BOOST_TEST(!MouseoverTooltip(tank, names).has_value());
+	tank.clear = true;
+	tank.hasPlayer = false;
+	BOOST_TEST(!MouseoverTooltip(tank, names).has_value());
+	MouseoverSubject dock;
+	dock.displayName = u"Supply Dock";
+	dock.warehouse = true;
+	dock.boxes = 30;
+	dock.hasPlayer = true;
+	dock.playerName = u"Neutral";
+	dock.clear = true;
+	BOOST_TEST((MouseoverTooltip(dock, names)->first == u"Supply Dock\nSupplies: $3000"));
+	MouseoverSubject prop;
+	prop.templateName = u"MISSING: 'ThingTemplate:Barrel'";
+	prop.hasPlayer = true;
+	prop.clear = true;
+	BOOST_TEST(!MouseoverTooltip(prop, names).has_value());
+}
+
+// SelectionTranslator's mouse-over hint and InGameUI::createMouseoverHint each frame (MouseTooltipSystem): the pointer
+// arriving over a tank at 1000 ms names it (its tooltip set, the tank moused over, the delay restarted); still, it shows
+// at 1800 ms and not before; with the left button held there is no hint (the tooltip cleared, the tank still moused
+// over); off it onto the ground the tank is no longer moused over and the delay starts over; the tooltip's colour is
+// its player's (shipped look: the back half of red).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_pointer_over_an_object_shows_its_tooltip_after_the_delay)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Garrison>();
+	world.RegisterComponent<gp::Stealth>();
+	world.RegisterComponent<gp::ResourceStore>();
+	world.RegisterComponent<gp::IndicatorColor>();
+	world.RegisterComponent<generalszh::gameplay::MobMember>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PointerInput>();
+	world.EmplaceResource<PointerHits>();
+	world.EmplaceResource<InteractionState>();
+	world.EmplaceResource<InteractionView>().width = 800;
+	world.EmplaceResource<CursorState>();
+	world.EmplaceResource<LocalPlayer>(LocalPlayer{0, true});
+	world.EmplaceResource<gp::Relationships>(2u);
+	world.EmplaceResource<gp::ShroudMap>().Init(Fixed::FromInt(2000), Fixed::FromInt(2000), Fixed::FromInt(10), 2, 0);
+	world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	gp::TeamRoster &roster = world.EmplaceResource<gp::TeamRoster>();
+	gp::Player me;
+	me.name = "Jason";
+	me.playable = true;
+	roster.AddPlayer(me);
+	SelectionCatalog &catalog = world.EmplaceResource<SelectionCatalog>();
+	catalog.byDefinition = {SelectionLook{select_kind::Selectable, 8.0f, 4.0f}};
+	catalog.kinds.resize(1);
+	MouseTooltipSettings &settings = world.EmplaceResource<MouseTooltipSettings>();
+	settings.look = ShippedLook();
+	MouseoverNames &names = world.EmplaceResource<MouseoverNames>();
+	names.displayNames = {u"Crusader Tank"};
+	names.templateNames = {u""};
+	names.playerNames = {u"Jason"};
+	names.playerColors = {0xFF0000u};
+	names.multiplayer = true;
+	world.EmplaceResource<MouseTooltip>();
+
+	const ecs::Entity tank = world.Create();
+	world.Add<gp::Transform>(tank);
+	world.Get<gp::Transform>(tank)->position = {Fixed::FromInt(100), Fixed::FromInt(100), {}};
+	world.Add<gp::DefinitionRef>(tank);
+	world.Add<gp::Owner>(tank);
+	world.Add<gp::Health>(tank);
+	*world.Get<gp::Health>(tank) = {Fixed::FromInt(100), Fixed::FromInt(100)};
+
+	MouseTooltipSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t count = 0;
+	const auto frame = [&](float x, std::uint32_t timeMs, bool overTank, std::uint8_t down = 0) {
+		PointerInput &pointer = world.Resource<PointerInput>();
+		pointer.x = x;
+		pointer.y = 50;
+		pointer.timeMs = timeMs;
+		pointer.down = down;
+		PointerHits &hits = world.Resource<PointerHits>();
+		hits.x = x;
+		hits.y = 50;
+		hits.hits.clear();
+		if (overTank)
+			hits.hits.push_back({(static_cast<std::uint64_t>(tank.index) << 32) | tank.generation, 0.5f});
+		scheduler.Execute(engine::time::SimulationTime{++count, engine::time::FixedStep{30}});
+	};
+	const MouseTooltip &tooltip = world.Resource<MouseTooltip>();
+	frame(400, 1000, true);
+	BOOST_TEST((tooltip.mousedOver == tank));
+	BOOST_TEST(!tooltip.empty);
+	BOOST_TEST((tooltip.text == u"Crusader Tank\nJason"));
+	BOOST_TEST((tooltip.backColor == TooltipColor{127, 0, 0, 255}));
+	BOOST_TEST(tooltip.stillTime == 1000u);
+	BOOST_TEST(!tooltip.display);
+	frame(400, 1799, true);
+	BOOST_TEST(!tooltip.display);
+	frame(400, 1800, true);
+	BOOST_TEST(tooltip.display);
+	BOOST_TEST(tooltip.highlightStart == 1800u);
+	frame(400, 1900, true, pointer_button::Left);
+	BOOST_TEST(tooltip.empty);
+	BOOST_TEST((tooltip.mousedOver == tank));
+	frame(400, 2000, false);
+	BOOST_TEST(tooltip.empty);
+	BOOST_TEST((tooltip.mousedOver == ecs::Entity{}));
+	BOOST_TEST(tooltip.stillTime == 2000u);
+	BOOST_TEST(!tooltip.display);
+
+	// GameWindowManager::winProcessMouseEvent: over a window (the General's Powers screen's exit button: TOOLTIPTEXT,
+	// its TOOLTIPDELAY) its tooltip, with its own delay; no mouse-over hint under it (the tank keeps no tooltip).
+	world.Resource<PointerInput>().overInterface = true;
+	world.Resource<PointerInput>().windowTooltip = std::pair{std::u16string(u"Close"), 10};
+	frame(400, 2100, true);
+	BOOST_TEST(!tooltip.empty);
+	BOOST_TEST((tooltip.text == u"Close"));
+	BOOST_TEST(tooltip.delay == 10);
+	BOOST_TEST((tooltip.backColor == TooltipColor{20, 20, 20, 255})); // no colour given: TooltipBackgroundColor
+	BOOST_TEST((tooltip.mousedOver == ecs::Entity{}));
+	world.Resource<PointerInput>().windowTooltip.reset();
+	frame(400, 2200, true);
+	BOOST_TEST(tooltip.empty);
+	BOOST_TEST(tooltip.delay == -1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

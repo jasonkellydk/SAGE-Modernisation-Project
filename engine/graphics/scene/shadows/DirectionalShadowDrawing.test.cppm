@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DirectionalShadowDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Shadows.DirectionalDrawing.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Graphics.Scene.Props.Renderer;

@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module Graphics.Materials.W3DMeshMaterial;
+import std;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.TextureMapping;
 import Graphics.Materials.State;

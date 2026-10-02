@@ -1,25 +1,5 @@
-module;
-
-#include <algorithm>
-#include <concepts>
-#include <cstddef>
-#include <cstdint>
-#include <deque>
-#include <limits>
-#include <memory>
-#include <new>
-#include <span>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <typeindex>
-#include <typeinfo>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.system.system;
+import std;
 
 export import engine.ecs.commands.command_buffer;
 export import engine.ecs.query.query;
@@ -66,6 +46,19 @@ struct SystemTypeList
 template<typename T>
 struct SystemTraits;
 
+// System groups: a named umbrella over systems and nested groups (e.g.
+// Rendering > Models, Particles, Terrain). A system joins one with
+// `using Group = G;` in its SystemTraits; a group may sit in a parent group
+// (`using Parent = P;`) and orders against other groups with Before / After
+// (SystemTypeList of groups). Group ordering applies to every member of the
+// groups (within a phase) and is soft: a group with no registered members
+// orders nothing, so a whole group can be left out (or rewritten) without
+// touching anything that orders against it.
+template<typename G>
+struct SystemGroupTraits;
+
+using SystemGroupKey = std::uint64_t;
+
 struct SystemDependency
 {
 	const std::type_info *type{&typeid(void)};
@@ -75,15 +68,118 @@ struct SystemDependency
 
 class SystemContext;
 
+// Shared per-world state that is not per-entity (terrain grid, spatial index,
+// player ledgers, settings, seeds) is owned by the world (resource_store).
+// Systems hold no data: they DECLARE the access they need, the scheduler
+// orders conflicting writers deterministically, and the context hands the
+// resources out, checked against the declaration:
+//   using Resources = ecs::Resources<ecs::Read<TerrainGrid>, ecs::Write<PowerLedger>>;
+//   const TerrainGrid &grid = context.Read<TerrainGrid>();
+//   PowerLedger &ledger = context.Write<PowerLedger>();
+
+struct ResourceAccessDescriptor
+{
+	ResourceKey key{};
+	std::string_view stableName{};
+	AccessMode mode{AccessMode::None};
+};
+
+template<typename... Accesses>
+struct Resources
+{
+	static void Append(std::vector<ResourceAccessDescriptor> &out)
+	{
+		(AppendOne<Accesses>(out), ...);
+	}
+
+private:
+	template<typename Access>
+	static void AppendOne(std::vector<ResourceAccessDescriptor> &out)
+	{
+		using T = typename Access::ComponentType;
+		static_assert(!Access::IsOptional && !Access::IsExcluded, "Resource access must be Read<T> or Write<T>");
+		static_assert(requires { { ResourceTraits<T>::StableName } -> std::convertible_to<std::string_view>; },
+			"Resource types must specialize ecs::ResourceTraits with a StableName");
+		out.push_back({ResourceKeyOf<T>(), ResourceTraits<T>::StableName, Access::Mode});
+	}
+};
+
+// Read-only random access to other entities (targets, owners, containers),
+// declared up front so the scheduler orders it against writers:
+//   using Lookup = ecs::Lookup<ecs::Read<Health>, ecs::Read<Transform>>;
+//   const auto lookup = context.Lookup<Lookup>();
+//   if (const Health *health = lookup.Get<Health>(target)) ...
+// Writes to other entities go through context.Commands(), never a lookup.
+template<typename... Accesses>
+struct Lookup
+{
+	static_assert(((Accesses::Mode == AccessMode::Read && !Accesses::IsOptional && !Accesses::IsExcluded) && ...),
+		"ecs::Lookup only grants read access: use ecs::Read<T>");
+
+	template<typename T>
+	static constexpr bool Allows = (std::is_same_v<T, typename Accesses::ComponentType> || ...);
+
+	static std::vector<AccessDescriptor> ResolveAccesses(const ComponentRegistry &components)
+	{
+		return {AccessDescriptor{components.TryGet<typename Accesses::ComponentType>(), AccessMode::Read, false, false}...};
+	}
+};
+
+// Side-table components a system reads or writes, declared up front so the
+// scheduler orders it against other users of the same tables:
+//   using SideTables = ecs::SideTables<ecs::Write<Look>, ecs::Read<Clock>>;
+//   auto &looks = context.Side<SideTables, Look>();
+// Chunk systems may change the values of the entities in their chunk;
+// adding and removing entries goes through context.Commands().
+template<typename... Accesses>
+struct SideTables
+{
+	static_assert(((!Accesses::IsOptional && !Accesses::IsExcluded) && ...), "ecs::SideTables takes ecs::Read<T> or ecs::Write<T>");
+
+	template<typename T>
+	static constexpr bool Allows = (std::is_same_v<T, typename Accesses::ComponentType> || ...);
+	template<typename T>
+	static constexpr bool AllowsWrite = ((std::is_same_v<T, typename Accesses::ComponentType> && Accesses::Mode == AccessMode::Write) || ...);
+
+	static std::vector<AccessDescriptor> ResolveAccesses(const ComponentRegistry &components)
+	{
+		return {AccessDescriptor{components.TryGet<typename Accesses::ComponentType>(), Accesses::Mode, false, false}...};
+	}
+};
+
+template<typename Spec>
+class EntityLookup
+{
+public:
+	explicit EntityLookup(const World &world) noexcept : m_world(&world) {}
+
+	template<typename T>
+	const T *Get(Entity entity) const
+	{
+		static_assert(Spec::template Allows<T>, "Component is not declared in this system's ecs::Lookup");
+		return m_world->Get<T>(entity);
+	}
+
+	bool IsAlive(Entity entity) const noexcept { return m_world->IsAlive(entity); }
+
+private:
+	const World *m_world;
+};
+
 struct SystemAccess
 {
 	const std::vector<ComponentId> &ReadComponents() const noexcept { return readComponents; }
 	const std::vector<ComponentId> &WriteComponents() const noexcept { return writeComponents; }
 	const std::vector<std::uint64_t> &ReadMask() const noexcept { return readMask; }
 	const std::vector<std::uint64_t> &WriteMask() const noexcept { return writeMask; }
+	const std::vector<ResourceAccessDescriptor> &Resources() const noexcept { return resources; }
 
 	bool ConflictsWith(const SystemAccess &other) const noexcept
 	{
+		for (const ResourceAccessDescriptor &mine : resources)
+			for (const ResourceAccessDescriptor &theirs : other.resources)
+				if (mine.key == theirs.key && (mine.mode == AccessMode::Write || theirs.mode == AccessMode::Write))
+					return true;
 		const std::size_t words = (std::max)({readMask.size(), writeMask.size(), other.readMask.size(), other.writeMask.size()});
 		for (std::size_t index = 0; index < words; ++index)
 		{
@@ -101,6 +197,7 @@ struct SystemAccess
 private:
 	void Initialize(std::size_t componentCount)
 	{
+		resources.clear();
 		readComponents.clear();
 		writeComponents.clear();
 		const std::size_t words = (componentCount + 63) / 64;
@@ -138,12 +235,21 @@ private:
 		std::erase_if(readComponents, [&](ComponentId id) { return std::binary_search(writeComponents.begin(), writeComponents.end(), id); });
 		for (ComponentId id : writeComponents)
 			readMask[id / 64] &= ~(std::uint64_t{1} << (id % 64));
+		// One entry per resource; a write subsumes a read.
+		std::sort(resources.begin(), resources.end(), [](const auto &left, const auto &right) {
+			if (left.key != right.key)
+				return left.key < right.key;
+			return left.mode == AccessMode::Write && right.mode != AccessMode::Write;
+		});
+		resources.erase(std::unique(resources.begin(), resources.end(),
+			[](const auto &left, const auto &right) { return left.key == right.key; }), resources.end());
 	}
 
 	std::vector<ComponentId> readComponents;
 	std::vector<ComponentId> writeComponents;
 	std::vector<std::uint64_t> readMask;
 	std::vector<std::uint64_t> writeMask;
+	std::vector<ResourceAccessDescriptor> resources;
 
 	friend class SystemRegistry;
 };
@@ -156,6 +262,7 @@ struct SystemInfo
 	using ExecuteFunction = void (*)(void *, void *, SystemContext &);
 	using PrepareQueryFunction = std::size_t (*)(void *);
 	using ExecuteChunkFunction = void (*)(void *, void *, std::size_t, SystemContext &);
+	using PreparedChunkRowsFunction = std::size_t (*)(void *, std::size_t);
 
 	SystemId id{InvalidSystemId};
 	SystemKey stableKey{};
@@ -166,20 +273,31 @@ struct SystemInfo
 	SystemAccess access{};
 	std::vector<SystemDependency> before;
 	std::vector<SystemDependency> after;
+	// The groups it belongs to, innermost first (empty: none).
+	std::vector<SystemGroupKey> groups;
 	ResolveAccessFunction resolveAccess{nullptr};
 	CreateQueryFunction createQuery{nullptr};
 	DestroyQueryFunction destroyQuery{nullptr};
 	ExecuteFunction execute{nullptr};
 	PrepareQueryFunction prepareQuery{nullptr};
 	ExecuteChunkFunction executeChunk{nullptr};
+	// Rows of a prepared chunk (1 for a batch system): what the scheduler balances its jobs by.
+	PreparedChunkRowsFunction preparedChunkRows{nullptr};
 	// Optional lifecycle of ONE cohesive chunk system, not extra graph nodes.
 	// Uses Query plus AuxiliaryAccess metadata and the same deferred wave commit.
 	ExecuteFunction beforeChunks{nullptr};
 	ExecuteFunction afterChunks{nullptr};
 	// Explicit joined reduction/preparation node, not ordinary chunk iteration.
-	// Runs once exclusively on the caller; shares its wave's final commit.
+	// Runs once, as one job beside its wave's chunk jobs; shares its wave's final commit.
 	// Query declares its full access.
 	bool batch{false};
+	// A batch node that dispatches pool work of its own (SystemTraits BorrowsJobs): it runs alone on the caller, the
+	// wave's other work joined first, so the pool is free for it.
+	bool borrowsJobs{false};
+	// The system's declared ecs::Lookup type, or null when it declares none.
+	const std::type_info *lookupType{nullptr};
+	// The system's declared ecs::SideTables type, or null when it declares none.
+	const std::type_info *sideTablesType{nullptr};
 
 	const SystemAccess &Access() const noexcept { return access; }
 	std::span<const SystemDependency> Before() const noexcept { return before; }
@@ -200,6 +318,79 @@ public:
 	std::uint32_t JobOrder() const noexcept { return m_jobOrder; }
 	std::uint32_t ChunkOrder() const noexcept { return m_chunkOrder; }
 
+	// Checked read-only access to other entities. Spec must be the system's
+	// declared `using Lookup = ecs::Lookup<...>`, so the access is scheduled.
+	template<typename Spec>
+	EntityLookup<Spec> Lookup() const
+	{
+		if (m_info != nullptr && (m_info->lookupType == nullptr || *m_info->lookupType != typeid(Spec)))
+			throw std::logic_error("ECS system '" + std::string(m_info->stableName) +
+				"' used an ecs::Lookup it did not declare as `using Lookup`");
+		return EntityLookup<Spec>(*m_world);
+	}
+
+	// A side table the system declared in `using SideTables = ecs::SideTables<...>`.
+	template<typename Spec, typename T>
+	SideTable<T> &Side() const
+	{
+		static_assert(Spec::template AllowsWrite<T>, "Writing a side table needs ecs::Write<T> in the system's SideTables");
+		RequireSideTables(typeid(Spec));
+		return m_world->template Side<T>();
+	}
+
+	// A world resource the system declared with ecs::Write<T>.
+	template<ResourceType T>
+	T &Write() const
+	{
+		RequireResource(ResourceKeyOf<T>(), ResourceTraits<T>::StableName, true);
+		return m_world->template Resource<T>();
+	}
+
+	// A world resource the system declared with ecs::Read<T> (or Write).
+	template<ResourceType T>
+	const T &Read() const
+	{
+		RequireResource(ResourceKeyOf<T>(), ResourceTraits<T>::StableName, false);
+		return static_cast<const World &>(*m_world).template Resource<T>();
+	}
+
+	// A world resource the system declared with ecs::Read<T> (or Write) that the world may not hold (none: null).
+	template<ResourceType T>
+	const T *Find() const
+	{
+		RequireResource(ResourceKeyOf<T>(), ResourceTraits<T>::StableName, false);
+		return static_cast<const World &>(*m_world).template FindResource<T>();
+	}
+
+	template<typename Spec, typename T>
+	const SideTable<T> &SideRead() const
+	{
+		static_assert(Spec::template Allows<T>, "Reading a side table needs it in the system's SideTables");
+		RequireSideTables(typeid(Spec));
+		return static_cast<const World &>(*m_world).template Side<T>();
+	}
+
+private:
+	void RequireResource(ResourceKey key, std::string_view name, bool write) const
+	{
+		if (m_info == nullptr)
+			return;
+		for (const ResourceAccessDescriptor &access : m_info->access.Resources())
+			if (access.key == key && (!write || access.mode == AccessMode::Write))
+				return;
+		throw std::logic_error("ECS system '" + std::string(m_info->stableName) + "' used resource '" + std::string(name) +
+			(write ? "' for writing" : "'") + " without declaring it in `using Resources`");
+	}
+
+	void RequireSideTables(const std::type_info &spec) const
+	{
+		if (m_info != nullptr && (m_info->sideTablesType == nullptr || *m_info->sideTablesType != spec))
+			throw std::logic_error("ECS system '" + std::string(m_info->stableName) +
+				"' used ecs::SideTables it did not declare as `using SideTables`");
+	}
+
+public:
+
 	// The scheduler supplies the command buffer and deterministic logical
 	// ordering fields for each chunk job.
 	SystemContext(World &world,
@@ -208,14 +399,16 @@ public:
 		SystemId system,
 		SystemPhase phase,
 		std::uint32_t jobOrder = 0,
-		std::uint32_t chunkOrder = 0) noexcept :
+		std::uint32_t chunkOrder = 0,
+		const SystemInfo *info = nullptr) noexcept :
 		m_world(&world),
 		m_commands(&commands),
 		m_time(time),
 		m_system(system),
 		m_phase(phase),
 		m_jobOrder(jobOrder),
-		m_chunkOrder(chunkOrder)
+		m_chunkOrder(chunkOrder),
+		m_info(info)
 	{
 	}
 
@@ -227,6 +420,7 @@ private:
 	SystemPhase m_phase;
 	std::uint32_t m_jobOrder;
 	std::uint32_t m_chunkOrder;
+	const SystemInfo *m_info;
 
 	friend class Scheduler;
 };
@@ -252,14 +446,23 @@ inline constexpr bool IsBatchSystem = [] {
 }();
 
 template<typename T>
+inline constexpr bool BorrowsJobs = [] {
+	if constexpr (requires { SystemTraits<T>::BorrowsJobs; })
+		return bool(SystemTraits<T>::BorrowsJobs);
+	return false;
+}();
+
+template<typename T>
 concept SystemDefinition = HasSystemTraits<T> && ((!IsBatchSystem<T> && requires(T &system,
 	typename T::Query::Chunk chunk,
 	SystemContext &context)
 {
 	system.Execute(chunk, context);
-}) || (IsBatchSystem<T> && requires(T &system, SystemContext &context) {
+}) || (IsBatchSystem<T> && (requires(T &system, SystemContext &context) {
 	system.Execute(context);
-}));
+} || requires(T &system, typename T::Query &query, SystemContext &context) {
+	system.Execute(query, context);
+})));
 
 template<typename T>
 SystemDependency MakeSystemDependency()
@@ -280,6 +483,22 @@ void AppendDependencies(std::vector<SystemDependency> &dependencies, SystemTypeL
 	(dependencies.push_back(MakeSystemDependency<Systems>()), ...);
 }
 
+template<typename G>
+concept SystemGroupDefinition = requires { { SystemGroupTraits<G>::StableName } -> std::convertible_to<std::string_view>; };
+
+template<typename G>
+SystemGroupKey GroupKeyOf()
+{
+	static_assert(SystemGroupDefinition<G>, "System groups must specialize ecs::SystemGroupTraits with a StableName");
+	return HashSystemKey(SystemGroupTraits<G>::StableName);
+}
+
+template<typename... Groups>
+void AppendGroupKeys(std::vector<SystemGroupKey> &keys, SystemTypeList<Groups...>)
+{
+	(keys.push_back(GroupKeyOf<Groups>()), ...);
+}
+
 } // namespace detail
 
 class SystemRegistry
@@ -292,6 +511,22 @@ public:
 	// depend on game types. Like registration, this is startup-only metadata.
 	template<typename Before, typename After>
 	void OrderBefore();
+
+	// Registers a group object: anything with `void Register(SystemRegistry &)`
+	// that registers its member systems and nested groups.
+	template<typename Group>
+	void RegisterGroup(Group &group)
+	{
+		group.Register(*this);
+	}
+
+	// A group's name, if any member of it was registered.
+	std::string_view GroupName(SystemGroupKey key) const
+	{
+		const auto found = m_groupNames.find(key);
+		return found == m_groupNames.end() ? std::string_view{} : found->second;
+	}
+	const std::vector<std::pair<SystemGroupKey, SystemGroupKey>> &GroupOrdering() const noexcept { return m_groupOrdering; }
 
 	template<typename T>
 	SystemId TryGet() const noexcept;
@@ -311,6 +546,28 @@ private:
 	template<typename T>
 	static void ResolveAccess(SystemAccess &access, const ComponentRegistry &components);
 
+	// Records `G` and its ancestors (innermost first) and their ordering.
+	template<typename G>
+	void NoteGroup(std::vector<SystemGroupKey> &chain)
+	{
+		const SystemGroupKey key = detail::GroupKeyOf<G>();
+		chain.push_back(key);
+		if (m_groupNames.emplace(key, SystemGroupTraits<G>::StableName).second)
+		{
+			std::vector<SystemGroupKey> before, after;
+			if constexpr (requires { typename SystemGroupTraits<G>::Before; })
+				detail::AppendGroupKeys(before, typename SystemGroupTraits<G>::Before{});
+			if constexpr (requires { typename SystemGroupTraits<G>::After; })
+				detail::AppendGroupKeys(after, typename SystemGroupTraits<G>::After{});
+			for (const SystemGroupKey other : before)
+				m_groupOrdering.emplace_back(key, other);
+			for (const SystemGroupKey other : after)
+				m_groupOrdering.emplace_back(other, key);
+		}
+		if constexpr (requires { typename SystemGroupTraits<G>::Parent; })
+			NoteGroup<typename SystemGroupTraits<G>::Parent>(chain);
+	}
+
 	template<typename T>
 	static void *CreateQuery(World &world);
 
@@ -320,8 +577,22 @@ private:
 	template<typename T>
 	static void ExecuteSystem(void *instance, void *query, SystemContext &context);
 
+	// A batch system runs once, on the caller; it may take its query to walk
+	// the chunks itself (systems driving single-threaded services).
+	template<typename T>
+	static void ExecuteBatch(T &system, void *query, SystemContext &context)
+	{
+		if constexpr (requires(typename T::Query &typed) { system.Execute(typed, context); })
+			system.Execute(*static_cast<typename T::Query *>(query), context);
+		else
+			system.Execute(context);
+	}
+
 	template<typename T>
 	static std::size_t PrepareQuery(void *query);
+
+	template<typename T>
+	static std::size_t PreparedChunkRows(void *query, std::size_t chunkIndex) noexcept;
 
 	template<typename T>
 	static void ExecuteSystemChunk(void *instance, void *query, std::size_t chunkIndex, SystemContext &context);
@@ -331,6 +602,8 @@ private:
 	std::unordered_map<SystemKey, SystemInfo *> m_keyToInfo;
 	std::vector<const SystemInfo *> m_idToInfo;
 	std::vector<std::pair<SystemDependency, SystemDependency>> m_ordering;
+	std::unordered_map<SystemGroupKey, std::string_view> m_groupNames;
+	std::vector<std::pair<SystemGroupKey, SystemGroupKey>> m_groupOrdering;
 	bool m_frozen{false};
 	ComponentSchemaHash m_componentSchemaHash{UnfinalizedSchemaHash};
 
@@ -343,6 +616,9 @@ SystemId SystemRegistry::Register(T &system, const SystemPhase phase)
 	static_assert(std::is_object_v<T>, "ECS systems must be object types");
 	static_assert(detail::SystemDefinition<T>,
 		"ECS systems must provide Query, Execute, and ecs::SystemTraits");
+	// Systems are code, never storage: per-entity data lives in components,
+	// shared data in world resources reached through the SystemContext.
+	static_assert(std::is_empty_v<T>, "ECS systems hold no data: move it into components or world resources");
 	if (m_frozen)
 		throw std::logic_error("Cannot register an ECS system after system finalization");
 
@@ -382,7 +658,9 @@ SystemId SystemRegistry::Register(T &system, const SystemPhase phase)
 	info.execute = &ExecuteSystem<T>;
 	info.prepareQuery = &PrepareQuery<T>;
 	info.executeChunk = &ExecuteSystemChunk<T>;
+	info.preparedChunkRows = &PreparedChunkRows<T>;
 	info.batch = detail::IsBatchSystem<T>;
+	info.borrowsJobs = detail::IsBatchSystem<T> && detail::BorrowsJobs<T>;
 	if constexpr (requires(T &value, typename T::Query &query, SystemContext &context) { value.BeforeChunks(query, context); })
 	{
 		static_assert(!detail::IsBatchSystem<T>, "Batch systems already execute once; chunk lifecycle hooks are unnecessary");
@@ -397,8 +675,14 @@ SystemId SystemRegistry::Register(T &system, const SystemPhase phase)
 			static_cast<T *>(instance)->AfterChunks(*static_cast<typename T::Query *>(query), context);
 		};
 	}
+	if constexpr (requires { typename T::Lookup; })
+		info.lookupType = &typeid(typename T::Lookup);
+	if constexpr (requires { typename T::SideTables; })
+		info.sideTablesType = &typeid(typename T::SideTables);
 	detail::AppendDependencies(info.before, typename SystemTraits<T>::Before{});
 	detail::AppendDependencies(info.after, typename SystemTraits<T>::After{});
+	if constexpr (requires { typename SystemTraits<T>::Group; })
+		NoteGroup<typename SystemTraits<T>::Group>(info.groups);
 
 	m_infos.push_back(std::move(info));
 	try
@@ -441,13 +725,36 @@ void SystemRegistry::ResolveAccess(SystemAccess &access, const ComponentRegistry
 	if constexpr (requires { typename T::AuxiliaryAccess; })
 		for (const AccessDescriptor descriptor : T::AuxiliaryAccess::ResolveAccesses(components))
 			access.Add(descriptor);
+	if constexpr (requires { typename T::SideTables; })
+		for (const AccessDescriptor descriptor : T::SideTables::ResolveAccesses(components))
+		{
+			const ComponentInfo *info = components.TryGet(descriptor.component);
+			if (info == nullptr || info->storage != ComponentStorage::SideTable)
+				throw std::logic_error("ECS system '" + std::string(SystemTraits<T>::StableName) +
+					"' declares a SideTables entry that is not a registered side-table component");
+			access.Add(descriptor);
+		}
+	if constexpr (requires { typename T::Lookup; })
+	{
+		for (const AccessDescriptor descriptor : T::Lookup::ResolveAccesses(components))
+		{
+			if (descriptor.component == InvalidComponentId)
+				throw std::logic_error("ECS system '" + std::string(SystemTraits<T>::StableName) +
+					"' declares a Lookup of an unregistered component");
+			access.Add(descriptor);
+		}
+	}
+	if constexpr (requires { typename T::Resources; })
+		T::Resources::Append(access.resources);
 	access.SortComponents();
 }
 
 template<typename T>
 void *SystemRegistry::CreateQuery(World &world)
 {
-	if constexpr (detail::IsBatchSystem<T>) return nullptr;
+	// Batch systems get their query only when they iterate it.
+	if constexpr (detail::IsBatchSystem<T> && !requires(T &system, typename T::Query &query, SystemContext &context) { system.Execute(query, context); })
+		return nullptr;
 	using QueryType = typename T::Query;
 	void *memory = ::operator new(sizeof(QueryType), std::align_val_t(alignof(QueryType)));
 	try
@@ -475,7 +782,7 @@ void SystemRegistry::ExecuteSystem(void *instance, void *query, SystemContext &c
 {
 	T &system = *static_cast<T *>(instance);
 	if constexpr (detail::IsBatchSystem<T>)
-		system.Execute(context);
+		ExecuteBatch(system, query, context);
 	else
 	{
 	using QueryType = typename T::Query;
@@ -495,8 +802,18 @@ std::size_t SystemRegistry::PrepareQuery(void *query)
 	else
 	{
 	using QueryType = typename T::Query;
-	return static_cast<QueryType *>(query)->PrepareChunks();
+	if constexpr (requires { SystemTraits<T>::PieceRows; })
+		return static_cast<QueryType *>(query)->PrepareChunks(SystemTraits<T>::PieceRows);
+	else
+		return static_cast<QueryType *>(query)->PrepareChunks();
 	}
+}
+
+template<typename T>
+std::size_t SystemRegistry::PreparedChunkRows(void *query, const std::size_t chunkIndex) noexcept
+{
+	if constexpr (detail::IsBatchSystem<T>) return 1;
+	else return static_cast<typename T::Query *>(query)->PreparedChunkRows(chunkIndex);
 }
 
 template<typename T>
@@ -507,7 +824,7 @@ void SystemRegistry::ExecuteSystemChunk(void *instance,
 {
 	T &system = *static_cast<T *>(instance);
 	if constexpr (detail::IsBatchSystem<T>)
-		system.Execute(context);
+		ExecuteBatch(system, query, context);
 	else
 	{
 	using QueryType = typename T::Query;

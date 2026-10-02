@@ -1,9 +1,5 @@
-module;
-
-#include <array>
-#include <cstdint>
-
 export module Graphics.Scene.Pass;
+import std;
 
 export import Graphics.Materials.Fog;
 export import Graphics.Scene.DrawParameters;

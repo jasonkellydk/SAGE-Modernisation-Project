@@ -1,14 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <string_view>
-#include <vector>
-
 export module Graphics.Scene.Models.ModelAssetGeometry;
+import std;
 
 export import Graphics.Scene.StaticMeshes;
 

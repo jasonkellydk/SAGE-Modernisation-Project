@@ -1,14 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module Assets.Adapters.W3D.Box;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Math;

@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Assets.Adapters.DDS;
+import std;
 import Assets.Math;
 export import Assets.Images.PixelEncoding;
 

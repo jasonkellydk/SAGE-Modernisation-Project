@@ -1,4 +1,5 @@
 export module engine.platform.crash_reporting;
+import std;
 export namespace engine::platform
 {
 using CrashHandler = void(*)(void* native_context, void* user_data);

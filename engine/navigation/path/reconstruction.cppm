@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module engine.navigation.path.reconstruction;
+import std;
 
 export namespace navigation {
 // DX9 8fd97e8e, Pathfinder::prependCells. Walk goal-to-start, excluding

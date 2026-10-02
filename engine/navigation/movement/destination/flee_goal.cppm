@@ -1,8 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-
 export module engine.navigation.movement.destination.flee_goal;
+import std;
 
 export namespace navigation {
 struct FleeQuery {

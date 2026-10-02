@@ -1,0 +1,60 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <string_view>
+
+import games.generalszh.shell.credits.credits_view_model;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(credits_view_model)
+
+// Legacy parity (Core CreditsManager::parseText / addText / getUnicodeString).
+BOOST_AUTO_TEST_CASE(legacy_parity_credits_read_their_styles_labels_and_columns)
+{
+	const CreditsSettings credits = ReadCredits(
+		"; comment\nCredits\n  ScrollRate = 2\n  ScrollRateEveryFrames = 1\n  ScrollDown = NO\n"
+		"  TitleColor = R:161 G:179 B:255 A:255\n  Style = TITLE\n  Text = GUI:Credits\n  Blank\n"
+		"  Style = COLUMN\n  Text = \"John Doe\"\n  Text = <BLANK>\n  Text = \"Jane Doe\"\nEnd\n",
+		[](std::string_view label) { return u"[" + std::u16string(label.begin(), label.end()) + u"]"; });
+	BOOST_TEST(credits.scrollRate == 2);
+	BOOST_TEST(credits.colors[0] == 0xFFA1B3FFu);
+	BOOST_TEST_REQUIRE(credits.lines.size() == 4u);
+	BOOST_TEST((credits.lines[0].text == u"[GUI:Credits]"));
+	BOOST_TEST((credits.lines[1].style == CreditStyle::Blank));
+	BOOST_TEST((credits.lines[2].text == u"John Doe"));
+	BOOST_TEST(credits.lines[2].second.empty()); // <BLANK> as its right text
+	BOOST_TEST((credits.lines[3].text == u"Jane Doe"));
+}
+
+// Legacy parity (CreditsManager::update / draw, CREDIT_SPACE_OFFSET 2): scrolling up 2 pixels
+// a frame on a 600-pixel screen, a line enters once the one before has cleared the bottom by
+// its height plus 2; lines fade in the bottom third.
+BOOST_AUTO_TEST_CASE(legacy_parity_lines_enter_scroll_fade_and_the_menu_closes_at_the_end)
+{
+	ShellModel model;
+	model.Push(Screen::Credits);
+	CreditsSettings credits;
+	credits.scrollRate = 2;
+	credits.lines = {{CreditStyle::Title, u"Title"}, {CreditStyle::Normal, u"Name"}};
+	CreditsViewModel menu(model, credits, {40, 30, 20}, 600);
+	menu.Step(); // frame 1: the title enters at the bottom edge
+	BOOST_TEST_REQUIRE(menu.Shown().size() == 1u);
+	BOOST_TEST(menu.Shown()[0].y == 600);
+	BOOST_TEST(menu.Shown()[0].fade == 0);
+	for (int frame = 2; frame <= 21; ++frame)
+		menu.Step();
+	BOOST_TEST(menu.Shown().size() == 1u); // at 560 it has not cleared 600 by 42 yet
+	menu.Step();                           // frame 22: 558 + 42 = 600
+	BOOST_TEST_REQUIRE(menu.Shown().size() == 2u);
+	BOOST_TEST(menu.Shown()[1].y == 600);
+	BOOST_TEST(menu.Shown()[0].fade == 200 - (558 - 400)); // 1 - (y - 2 chunk) / chunk, over 200
+	BOOST_TEST(menu.Shown()[0].of == 200);
+	// Both scroll away past the top, then the credits close.
+	for (int frame = 0; frame < 400 && !menu.Finished(); ++frame)
+		menu.Step();
+	BOOST_TEST(menu.Finished());
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,21 +1,6 @@
-module;
-
-#include <algorithm>
-#include <atomic>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <new>
-#include <span>
-#include <stdexcept>
-#include <type_traits>
-#include <typeinfo>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.commands.command_buffer;
+import std;
+import engine.core.contracts;
 
 export import engine.ecs.core.world;
 
@@ -52,7 +37,9 @@ enum class StructuralCommandType : std::uint8_t
 	CreateEntity,
 	DestroyEntity,
 	AddComponent,
-	RemoveComponent
+	RemoveComponent,
+	// Writes a component's value: replaced in place when present, added otherwise.
+	SetComponent
 };
 
 enum class CommandBufferState : std::uint8_t
@@ -122,6 +109,14 @@ public:
 	void Add(DeferredEntity entity, Value &&value)
 	{
 		RecordAdd<T>(MakeTarget(entity), std::forward<Value>(value));
+	}
+
+	// Writes `value` into the entity's T at playback (adding T if it is missing):
+	// how a system changes components of entities other than the ones it iterates.
+	template<typename T, typename Value>
+	void Set(Entity entity, Value &&value)
+	{
+		RecordAdd<T>(MakeTarget(entity), std::forward<Value>(value), StructuralCommandType::SetComponent);
 	}
 
 	template<typename T>
@@ -296,7 +291,7 @@ private:
 	}
 
 	template<typename T, typename Value>
-	void RecordAdd(CommandTarget target, Value &&value)
+	void RecordAdd(CommandTarget target, Value &&value, StructuralCommandType type = StructuralCommandType::AddComponent)
 	{
 		EnsureRecording();
 		static_assert(detail::HasComponentTraits<T>,
@@ -320,7 +315,7 @@ private:
 		}
 
 		StructuralCommand command;
-		command.type = StructuralCommandType::AddComponent;
+		command.type = type;
 		command.target = target;
 		command.componentKey = ComponentKeyFor<T>();
 		command.componentType = &typeid(T);
@@ -424,7 +419,7 @@ CommandBuffer::PayloadAllocation CommandBuffer::PayloadArena::Allocate(
 	AddBlock(size, alignment);
 	Block &block = m_blocks.back();
 	const std::size_t offset = AlignUp(block.used, alignment);
-	assert(offset <= block.capacity && size <= block.capacity - offset);
+	engine::core::Assert(offset <= block.capacity && size <= block.capacity - offset);
 	block.used = offset + size;
 	return PayloadAllocation{
 		static_cast<std::byte *>(block.data) + offset,
@@ -434,7 +429,7 @@ CommandBuffer::PayloadAllocation CommandBuffer::PayloadArena::Allocate(
 
 void CommandBuffer::PayloadArena::Rewind(const PayloadAllocation allocation) noexcept
 {
-	assert(allocation.blockIndex < m_blocks.size());
+	engine::core::Assert(allocation.blockIndex < m_blocks.size());
 	Block &block = m_blocks[allocation.blockIndex];
 	block.used = allocation.previousUsed;
 }
@@ -635,11 +630,12 @@ void CommandBuffer::Validate(const World &world) const
 			ValidateDeferredTarget(command.target.deferred);
 
 		if (command.type == StructuralCommandType::AddComponent ||
-			command.type == StructuralCommandType::RemoveComponent)
+			command.type == StructuralCommandType::RemoveComponent ||
+			command.type == StructuralCommandType::SetComponent)
 		{
 			const ComponentId component = ResolveComponent(command, world);
 			const ComponentInfo &info = world.Components().Get(component);
-			if (command.type == StructuralCommandType::AddComponent)
+			if (command.type != StructuralCommandType::RemoveComponent)
 			{
 				if (command.payload == nullptr && info.constructDefault == nullptr)
 					throw std::logic_error("ECS command requests default construction for a component without that operation");
@@ -710,6 +706,9 @@ void CommandBuffer::Playback(World &world)
 				}
 			case StructuralCommandType::RemoveComponent:
 				world.RemoveComponent(ResolveTarget(command.target, resolved), ResolveComponent(command, world));
+				break;
+			case StructuralCommandType::SetComponent:
+				world.SetComponent(ResolveTarget(command.target, resolved), ResolveComponent(command, world), command.payload);
 				break;
 			}
 		}

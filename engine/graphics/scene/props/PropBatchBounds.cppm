@@ -1,9 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <limits>
 export module Graphics.Scene.Props.BatchBounds;
+import std;
 import Graphics.RHI;
 import Graphics.Scene.Props.Geometry;
 

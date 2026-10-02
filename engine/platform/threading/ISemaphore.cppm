@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module engine.platform.threading.semaphore;
+import std;
 export namespace engine::platform
 {
 class ISemaphore

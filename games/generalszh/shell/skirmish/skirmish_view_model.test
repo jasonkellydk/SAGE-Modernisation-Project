@@ -1,0 +1,185 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.shell.skirmish.skirmish_view_model;
+
+using namespace generalszh::shell;
+namespace setup = generalszh::session::setup;
+
+namespace
+{
+// A catalog shaped as the shipped content's: eight colours, the playable factions, four money choices.
+SetupCatalog Catalog()
+{
+	SetupCatalog catalog;
+	for (const char16_t *name : {u"Gold", u"Red", u"Blue", u"Green", u"Orange", u"Sky Blue", u"Purple", u"Pink"})
+		catalog.colors.push_back({name, 0xFF0000FF});
+	catalog.factions = {{2, u"USA"}, {3, u"China"}, {4, u"GLA"}, {13, u"Stealth General"}};
+	catalog.playerTemplateCount = 15;
+	catalog.startingMoney = {5000, 10000, 20000, 50000};
+	catalog.defaultStartingMoney = 10000;
+	SetupMap continent;
+	continent.file = "maps\\tournament continent\\tournament continent.map";
+	continent.name = u"Tournament Continent (4)";
+	continent.players = 4;
+	continent.multiplayer = continent.official = true;
+	continent.crc = 0x7D024EDA;
+	continent.size = 639753;
+	continent.starts = {{6000, 8641}, {1819, 5804}, {8000, 2000}, {2000, 2000}};
+	SetupMap alpine = continent;
+	alpine.file = "maps\\alpine assault\\alpine assault.map";
+	alpine.name = u"Alpine Assault (2)";
+	alpine.players = 2;
+	alpine.starts.resize(2);
+	SetupMap solo = alpine;
+	solo.file = "maps\\md_usa01\\md_usa01.map";
+	solo.name = u"USA 1";
+	solo.multiplayer = false;
+	catalog.maps = {alpine, solo, continent}; // sorted by file
+	return catalog;
+}
+
+// A real Skirmish.ini (Documents\Command and Conquer Generals Zero Hour Data).
+engine::config::Preferences RealPreferences()
+{
+	return engine::config::Preferences::Parse("Color = 1\nFPS = 30\nMap = maps\\tournament continent\\tournament continent.map\nPlayerTemplate = 13\n"
+		"SlotList = US=1;M=03maps/tournament continent;MC=7D024EDA;MS=639753;SD=226989;C=100;SR=0;SC=50000;O=N;"
+		"S=HJason,0,0,TT,1,13,2,0,1:CH,-1,-1,-1,0:CH,-1,-1,-1,1:CH,-1,3,-1,1:X:X:X:X:;\n"
+		"StartingCash = 50000\nSuperweaponRestrict = No\nUserName = J_00a_00s_00o_00n_00\n");
+}
+}
+
+BOOST_AUTO_TEST_SUITE(skirmish_view_model)
+
+// Legacy parity (SkirmishGameOptionsMenuInit, UpdateSlotList, PopulateColorComboBox,
+// PopulatePlayerTemplateComboBox, EnableAcceptControls): the screen opens with the last setup.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_screen_opens_with_skirmish_ini_s_last_setup)
+{
+	const SetupCatalog catalog = Catalog();
+	engine::config::Preferences preferences = RealPreferences();
+	ShellModel model;
+	model.Push(Screen::Skirmish);
+	MessageBoxViewModel messages;
+	SkirmishViewModel menu(model, messages, catalog, preferences, {});
+	menu.Open();
+	const setup::GameSetup &game = menu.Setup();
+	BOOST_TEST((game.slots[0].name == u"Jason"));
+	BOOST_TEST(game.Players() == 4);
+	BOOST_TEST(game.startingCash == 50000u);
+	BOOST_TEST((menu.playerName.Get() == u"Jason"));
+	BOOST_TEST((menu.mapName.Get() == u"Tournament Continent (4)"));
+	BOOST_TEST(menu.player[1].Get() == static_cast<int>(setup::SlotState::HardAI));
+	BOOST_TEST(menu.player[4].Get() == static_cast<int>(setup::SlotState::Closed));
+	// Slot 0's colour box: "???" then every colour but those others hold (none here); it shows Red.
+	BOOST_TEST(menu.colorItems[0].Get().size() == 9u);
+	BOOST_TEST((menu.colorItems[0].Get()[menu.color[0].Get()] == u"Red"));
+	// The other slots' boxes leave Red out.
+	BOOST_TEST(menu.colorItems[1].Get().size() == 8u);
+	for (const std::u16string &name : menu.colorItems[1].Get())
+		BOOST_TEST((name != u"Red"));
+	BOOST_TEST((menu.factionItems[0].Get()[menu.faction[0].Get()] == u"Stealth General"));
+	BOOST_TEST((menu.factionItems[3].Get()[menu.faction[3].Get()] == u"China"));
+	BOOST_TEST(menu.team[2].Get() == 2); // team 1, after "no team"
+	BOOST_TEST(menu.slotEnabled[0].Get());
+	BOOST_TEST(menu.slotEnabled[1].Get());  // an AI
+	BOOST_TEST(!menu.slotEnabled[4].Get()); // closed
+	BOOST_TEST(menu.money.Get() == 3);      // $50000
+	// Start spots: 4 on the map, slot 0 (player 1) on spot 2.
+	BOOST_TEST(menu.startShown[3].Get());
+	BOOST_TEST(!menu.startShown[4].Get());
+	BOOST_TEST((menu.startText[2].Get() == u"NUMBER:1"));
+	BOOST_TEST(menu.startText[0].Get().empty());
+}
+
+// Legacy parity (handleColorSelection, handlePlayerSelection, GBM_SELECTED on a start spot).
+BOOST_AUTO_TEST_CASE(legacy_parity_slots_change_as_the_originals_handlers_change_them)
+{
+	const SetupCatalog catalog = Catalog();
+	engine::config::Preferences preferences = RealPreferences();
+	ShellModel model;
+	MessageBoxViewModel messages;
+	SkirmishViewModel menu(model, messages, catalog, preferences, {});
+	menu.Open();
+	// Slot 1 takes Blue: slot 0's list loses it.
+	const auto &slotOne = menu.colorItems[1].Get();
+	int blue = -1;
+	for (std::size_t row = 0; row < slotOne.size(); ++row)
+		if (slotOne[row] == u"Blue")
+			blue = static_cast<int>(row);
+	menu.color[1].Set(blue);
+	BOOST_TEST(menu.Setup().slots[1].color == 2);
+	for (const std::u16string &name : menu.colorItems[0].Get())
+		BOOST_TEST((name != u"Blue"));
+	// An AI changing level keeps its colour; opening the slot drops everything.
+	menu.player[1].Set(static_cast<int>(setup::SlotState::EasyAI));
+	BOOST_TEST(menu.Setup().slots[1].color == 2);
+	menu.player[1].Set(static_cast<int>(setup::SlotState::Open));
+	BOOST_TEST(menu.Setup().slots[1].color == setup::Random);
+	BOOST_TEST(!menu.slotEnabled[1].Get());
+	// A free spot goes to the next player without one (slot 2, an AI); clicking it again passes it on.
+	menu.startPosition[0].Execute();
+	BOOST_TEST(menu.Setup().slots[2].startPos == 0);
+	BOOST_TEST((menu.startText[0].Get() == u"NUMBER:3"));
+	menu.startPosition[0].Execute();
+	BOOST_TEST(menu.Setup().slots[2].startPos == setup::Random);
+	BOOST_TEST(menu.Setup().slots[3].startPos == 0);
+	// GBM_SELECTED_RIGHT: the spot's AI gives it up; a spot no one holds stays free.
+	menu.startPositionClear[0].Execute();
+	BOOST_TEST(menu.Setup().slots[3].startPos == setup::Random);
+	BOOST_TEST(menu.startText[0].Get().empty());
+}
+
+// Legacy parity (populateMapListbox, SkirmishMapSelectMenu's OK, startPressed).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_map_list_the_map_and_starting)
+{
+	const SetupCatalog catalog = Catalog();
+	engine::config::Preferences preferences = RealPreferences();
+	ShellModel model;
+	model.Push(Screen::Skirmish);
+	MessageBoxViewModel messages;
+	std::optional<setup::GameSetup> started;
+	int startedFps = 0;
+	bool saved = false;
+	SkirmishServices services;
+	services.start = [&](const setup::GameSetup &game, int fps) { started = game, startedFps = fps; };
+	services.savePreferences = [&] { saved = true; };
+	SkirmishViewModel menu(model, messages, catalog, preferences, services);
+	menu.Open();
+	// Four players will not fit on a two-player map.
+	menu.selectMap.Execute();
+	BOOST_TEST(menu.mapSelectOpen.Get());
+	BOOST_TEST(!menu.mainButtonsEnabled.Get());
+	const auto &maps = menu.mapItems.Get();
+	BOOST_TEST_REQUIRE(maps.size() == 2u); // multiplayer maps only, two-player first
+	BOOST_TEST((maps[0] == u"\tAlpine Assault (2)"));
+	BOOST_TEST(menu.mapSelected.Get() == 1); // the current map
+	menu.mapSelected.Set(0);
+	BOOST_TEST(menu.mapListStartSpots.Get().size() == 2u);
+	menu.mapOk.Execute();
+	BOOST_TEST(!menu.mapSelectOpen.Get());
+	BOOST_TEST(menu.Setup().map == "maps\\alpine assault\\alpine assault.map");
+	BOOST_TEST(menu.Setup().slots[0].startPos == setup::Random); // every spot free again
+	menu.start.Execute();
+	BOOST_TEST(messages.open.Get()); // GUI:TooManyPlayers
+	BOOST_TEST(!started.has_value());
+	messages.ok.Execute();
+	// Close two AIs: it starts, at the slider's speed, and Skirmish.ini keeps the setup.
+	menu.player[2].Set(static_cast<int>(setup::SlotState::Closed));
+	menu.player[3].Set(static_cast<int>(setup::SlotState::Closed));
+	menu.gameSpeed.Set(61);
+	menu.start.Execute();
+	BOOST_TEST_REQUIRE(started.has_value());
+	BOOST_TEST(started->Players() == 2);
+	BOOST_TEST(startedFps == 1000); // past 60: no limit
+	BOOST_TEST(saved);
+	BOOST_TEST(preferences.Find("Map").value_or("") == "maps\\alpine assault\\alpine assault.map");
+	BOOST_TEST(preferences.Find("UserName").value_or("") == "J_00a_00s_00o_00n_00");
+	BOOST_TEST(preferences.Find("SlotList").value_or("").find("S=HJason,0,0,TT,1,13,-1,0,1:CH,-1,-1,-1,0:X:X:X:X:X:X:;") != std::string_view::npos);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

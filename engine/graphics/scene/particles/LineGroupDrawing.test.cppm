@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE LineGroupDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Particles.LineGroupDrawing.Tests;
+import std;
 import Graphics.Scene.Particles.LineGroupGeometry;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;

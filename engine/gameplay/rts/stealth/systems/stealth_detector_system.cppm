@@ -1,0 +1,288 @@
+export module engine.gameplay.rts.stealth.systems.stealth_detector_system;
+import std;
+
+export import engine.gameplay.common.status.components.disabled;
+export import engine.ecs.system.system;
+export import engine.gameplay.rts.stealth.components.stealth;
+export import engine.gameplay.rts.stealth.components.stealth_detector;
+export import engine.gameplay.rts.stealth.components.grant_stealth;
+export import engine.gameplay.common.lifetime.components.lifetime;
+export import engine.gameplay.rts.stealth.resources.detections;
+export import engine.gameplay.common.identity.components.owner;
+export import engine.gameplay.common.identity.components.team_member;
+export import engine.gameplay.common.identity.resources.relationships;
+export import engine.gameplay.common.spatial.components.transform;
+export import engine.gameplay.common.spatial.components.targetable;
+export import engine.gameplay.common.spatial.components.off_map;
+export import engine.gameplay.common.spatial.resources.spatial_index;
+export import engine.gameplay.common.health.components.health;
+export import engine.gameplay.rts.movement.systems.movement_system;
+export import engine.gameplay.rts.containment.components.garrison;
+export import engine.gameplay.rts.combat.components.aggression;
+export import engine.gameplay.rts.containment.resources.cargo_manifest;
+export import engine.gameplay.rts.stealth.systems.stealth_system;
+
+// Stealth detectors, in parallel per chunk: on its scan tick a live, enabled
+// detector (inside a garrison only if CanDetectWhileGarrisoned, inside any
+// other container only if CanDetectWhileContained) reveals every stealthed
+// thing of an enemy or neutral within its range whose classes it may detect,
+// found in this tick's spatial index, until just past its next scan; and a
+// garrisoned building so found (PartitionFilterStealthedOrStealthGarrisoned:
+// the building's classes and side count) gives away those inside it with
+// stealth that are not its player's or allies (markAsDetected(rate + 2)). The reveals are gathered by target, and the reveal pass
+// marks them detected: shown to their enemies, targetable again. Stealth
+// grantors (the GPS scrambler) give allies stealth the same way.
+export namespace engine::gameplay
+{
+struct StealthDetectorSystem
+{
+	using Query = ecs::Query<ecs::Optional<TeamMember>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Write<StealthDetector>, ecs::Optional<Health>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
+		ecs::Optional<Aggression>>;
+	using Lookup = ecs::Lookup<ecs::Read<Garrison>, ecs::Read<Stealth>, ecs::Read<Owner>, ecs::Read<TeamMember>, ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Write<DetectionOffers>, ecs::Write<Detections>,
+		ecs::Write<DetectorPings>, ecs::Read<CargoManifest>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const
+	{
+		context.Write<DetectionOffers>().Reset(query.PreparedChunkCount());
+		context.Write<DetectorPings>().Reset(query.PreparedChunkCount());
+	}
+
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const SpatialIndex &spatial = context.Read<SpatialIndex>();
+		const Relationships &relationships = context.Read<Relationships>();
+		auto &offers = context.Write<DetectionOffers>().Slot(context);
+		auto &pings = context.Write<DetectorPings>().Slot(context);
+		const std::uint64_t tick = context.Tick();
+		const auto transforms = chunk.Get<Transform>();
+		const auto owners = chunk.Get<Owner>();
+		const auto teamRows = chunk.Get<TeamMember>();
+		auto detectors = chunk.Get<StealthDetector>();
+		const auto healths = chunk.Get<Health>();
+		const auto offMap = chunk.Get<OffMap>();
+		const auto lookup = context.Lookup<Lookup>();
+		const CargoManifest &manifest = context.Read<CargoManifest>();
+		const auto entities = chunk.Entities();
+		const auto disabledRows = chunk.Get<Disabled>();
+		const auto aggressions = chunk.Get<Aggression>();
+		for (std::size_t row = 0; row < detectors.size(); ++row)
+		{
+			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], disabled_type::Held))
+				continue;
+			StealthDetector &detector = detectors[row];
+			if (!detector.Has(stealth_detector_flag::Enabled) || tick < detector.nextScan || (!healths.empty() && IsDead(healths[row])))
+				continue;
+			detector.nextScan = tick + detector.rate;
+			if (!offMap.empty())
+			{
+				// Inside something: a garrisonable building (GarrisonContain) or any other container.
+				const bool garrisoned = lookup.IsAlive(offMap[row].holder) && lookup.Get<Garrison>(offMap[row].holder) != nullptr;
+				if (!detector.Has(garrisoned ? stealth_detector_flag::WhileGarrisoned : stealth_detector_flag::WhileContained))
+					continue;
+			}
+			const std::uint32_t player = owners[row].player;
+			const std::uint32_t team = teamRows.empty() ? Relationships::NoTeam : teamRows[row].team;
+			const std::size_t before = offers.size();
+			bool foundInside = false; // a stealthed occupant found, revealed or not (foundSomeone)
+			// Revealed until just past the next scan.
+			const std::uint64_t until = tick + detector.rate + 1;
+			// StealthDetectorUpdate::update: DetectionRange when given, else its vision range as it is now (getVisionRange:
+			// veterancy and Search and Destroy change it).
+			const Engine::Math::Fixed range = detector.Has(stealth_detector_flag::OwnRange) || aggressions.empty() ? detector.range : aggressions[row].vision;
+			spatial.ForEachWithin(transforms[row].position.XY(), range, [&](const SpatialEntry &entry) {
+				if ((entry.classes & detector.forbiddenClasses) != 0)
+					return;
+				if ((entry.classes & target_class::Stealthed) == 0)
+				{
+					// Perhaps garrisoning something stealthy.
+					if ((entry.classes & target_class::Structure) == 0 || lookup.Get<Garrison>(entry.entity) == nullptr)
+						return;
+					if (detector.requiredClasses != 0 && (entry.classes & detector.requiredClasses) == 0)
+						return;
+					if (relationships.Between(team, player, entry.team, entry.player) == Relationship::Allies)
+						return;
+					if (const Health *health = lookup.Get<Health>(entry.entity); health != nullptr && IsDead(*health))
+						return;
+					for (const ecs::Entity rider : manifest.Aboard(entry.entity))
+					{
+						if (lookup.Get<Stealth>(rider) == nullptr)
+							continue;
+						foundInside = true;
+						const Owner *theirs = lookup.Get<Owner>(rider);
+						const TeamMember *theirTeam = lookup.Get<TeamMember>(rider);
+						if (theirs == nullptr || theirs->player == player ||
+							relationships.Between(team, player, theirTeam != nullptr ? theirTeam->team : Relationships::NoTeam, theirs->player) == Relationship::Allies)
+							continue;
+						offers.push_back({rider, tick + detector.rate + 2, entities[row], entry.position, theirs->player});
+					}
+					return;
+				}
+				if (detector.requiredClasses != 0 && (entry.classes & detector.requiredClasses) == 0)
+					return;
+				if (relationships.Between(team, player, entry.team, entry.player) == Relationship::Allies)
+					return;
+				offers.push_back({entry.entity, until, entities[row], entry.position, entry.player});
+			});
+			pings.push_back({entities[row], offers.size() > before || foundInside ? 1u : 0u, 0});
+		}
+	}
+
+	void AfterChunks(Query &, ecs::SystemContext &context) const { context.Write<Detections>().Gather(context.Write<DetectionOffers>()); }
+};
+
+// Stealth grantors, in parallel per chunk: each grows its radius and grants
+// stealth to its allies of its classes within it (found in this tick's
+// spatial index); after its final scan it is removed.
+struct GrantStealthSystem
+{
+	using Query = ecs::Query<ecs::Optional<TeamMember>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Write<GrantStealth>, ecs::OptionalWrite<Lifetime>, ecs::Exclude<OffMap>>;
+	using Lookup = ecs::Lookup<ecs::Read<StealthRider>>;
+	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Write<GrantOffers>, ecs::Write<StealthGrants>, ecs::Read<CargoManifest>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<GrantOffers>().Reset(query.PreparedChunkCount()); }
+
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const SpatialIndex &spatial = context.Read<SpatialIndex>();
+		const Relationships &relationships = context.Read<Relationships>();
+		auto &offers = context.Write<GrantOffers>().Slot(context);
+		const auto transforms = chunk.Get<Transform>();
+		const auto owners = chunk.Get<Owner>();
+		const auto teamRows = chunk.Get<TeamMember>();
+		auto grants = chunk.Get<GrantStealth>();
+		auto lifetimes = chunk.Get<Lifetime>();
+		const auto entities = chunk.Entities();
+		const auto lookup = context.Lookup<Lookup>();
+		const CargoManifest &manifest = context.Read<CargoManifest>();
+		for (std::size_t row = 0; row < grants.size(); ++row)
+		{
+			GrantStealth &grant = grants[row];
+			if (grant.done != 0)
+				continue;
+			grant.radius = grant.radius + grant.growRate;
+			const bool last = grant.radius >= grant.finalRadius;
+			if (last)
+				grant.radius = grant.finalRadius;
+			const std::uint32_t player = owners[row].player;
+			const std::uint32_t team = teamRows.empty() ? Relationships::NoTeam : teamRows[row].team;
+			spatial.ForEachWithin(transforms[row].position.XY(), grant.radius, [&](const SpatialEntry &entry) {
+				if (entry.entity == entities[row] || (grant.classes != 0 && (entry.classes & grant.classes) == 0))
+					return;
+				if (relationships.Between(team, player, entry.team, entry.player) != Relationship::Allies)
+					return;
+				offers.push_back(entry.entity);
+				// receiveGrant passes on to a rider-change container's rider (the combat bike's: UseRiderStealth).
+				if (lookup.Get<StealthRider>(entry.entity) != nullptr)
+					if (const auto aboard = manifest.Aboard(entry.entity); !aboard.empty())
+						offers.push_back(aboard.front());
+			});
+			if (last)
+			{
+				grant.done = 1;
+				if (!lifetimes.empty())
+					lifetimes[row] = {context.Tick() + 1, 1, lifetimes[row].deathType};
+			}
+		}
+	}
+
+	void AfterChunks(Query &, ecs::SystemContext &context) const { context.Write<StealthGrants>().Gather(context.Write<GrantOffers>()); }
+};
+
+// The tick's reveals and grants, in parallel per chunk: granted ones (StealthUpdate::receiveGrant, on each grantor scan
+// that finds them; never a disguiser) may stealth from now on and are stealthed at once, their update woken; detected
+// ones are marked detected (markAsDetected(numFrames): a disguise dropped, never shortened, idle enemies woken by its
+// owner's OrderIdleEnemiesToAttackMeUponReveal) and show (no longer hidden in their target classes).
+struct StealthRevealSystem
+{
+	using Query = ecs::Query<ecs::Write<Stealth>, ecs::OptionalWrite<Targetable>, ecs::Optional<StealthRider>>;
+	using Resources = ecs::Resources<ecs::Read<Detections>, ecs::Read<StealthGrants>, ecs::Read<TemporaryStealthGrants>, ecs::Write<DetectionWakes>,
+		ecs::Read<TeamRoster>, ecs::Write<StealthDiscoveries>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const
+	{
+		context.Write<DetectionWakes>().Reset(query.PreparedChunkCount());
+		context.Write<StealthDiscoveries>().Reset(query.PreparedChunkCount());
+	}
+
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const Detections &detections = context.Read<Detections>();
+		const StealthGrants &grants = context.Read<StealthGrants>();
+		const TemporaryStealthGrants &temporary = context.Read<TemporaryStealthGrants>();
+		if (detections.Count() == 0 && grants.Count() == 0 && temporary.list.empty())
+			return;
+		const std::uint64_t tick = context.Tick();
+		auto stealths = chunk.Get<Stealth>();
+		auto targetables = chunk.Get<Targetable>();
+		const auto riders = chunk.Get<StealthRider>();
+		const auto entities = chunk.Entities();
+		auto &wakes = context.Write<DetectionWakes>().Slot(context);
+		auto &discoveries = context.Write<StealthDiscoveries>().Slot(context);
+		const TeamRoster &roster = context.Read<TeamRoster>();
+		for (std::size_t row = 0; row < stealths.size(); ++row)
+		{
+			Stealth &stealth = stealths[row];
+			if (grants.Count() != 0 && grants.Contains(entities[row]) && ReceiveGrant(stealth, tick, 0))
+				if (!targetables.empty())
+					stealth_detail::MarkClasses(stealth, targetables[row]);
+			if (const TemporaryStealthGrant *grant = temporary.list.empty() ? nullptr : temporary.Find(entities[row]);
+				grant != nullptr && ReceiveGrant(stealth, tick, grant->frames))
+				if (!targetables.empty())
+					stealth_detail::MarkClasses(stealth, targetables[row]);
+			const Detection *detection = detections.Count() != 0 ? detections.Find(entities[row]) : nullptr;
+			if (detection == nullptr)
+				continue;
+			const std::uint64_t until = detection->until;
+			const StealthRules rules = stealth_detail::RulesOf(stealth, riders.empty() ? nullptr : &riders[row]);
+			// Not detected before this scan: the detector's and the victim's sides hear of it.
+			if (!stealth.Has(stealth_flag::Detected))
+				discoveries.push_back({entities[row], detection->detector, detection->position});
+			if (MarkAsDetected(stealth, rules, tick, until > tick ? until - tick : 0))
+				wakes.push_back({entities[row], detection->position, detection->player, stealth_detail::DefaultTeamOf(roster, detection->player)});
+			stealth.Set(stealth_flag::Detected, stealth.detectedUntil > tick);
+			if (!targetables.empty())
+				stealth_detail::MarkClasses(stealth, targetables[row]);
+		}
+	}
+};
+}
+
+export namespace ecs
+{
+template<>
+struct SystemTraits<engine::gameplay::StealthDetectorSystem>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.stealth_detectors";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	// After movement: it scans from where the detector ended up this tick.
+	using Before = SystemTypeList<engine::gameplay::StealthRevealSystem>;
+	using After = SystemTypeList<engine::gameplay::MovementSystem>;
+};
+template<>
+struct SystemTraits<engine::gameplay::StealthRevealSystem>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.stealth_reveal";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<engine::gameplay::StealthDetectorSystem, engine::gameplay::GrantStealthSystem>;
+};
+template<>
+struct SystemTraits<engine::gameplay::WakeIdleEnemiesSystem<engine::gameplay::DetectionWakes>>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.wake_idle_enemies_on_detection";
+	static constexpr bool Batch = true;
+	// After the tick's detections (the reveal pass is in the simulation phase): the woken look from the next tick on.
+	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<engine::gameplay::GrantStealthSystem>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.grant_stealth";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<engine::gameplay::StealthRevealSystem>;
+	using After = SystemTypeList<engine::gameplay::MovementSystem>;
+};
+}

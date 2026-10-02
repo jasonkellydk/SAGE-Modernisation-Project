@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ImagePreparationTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <vector>
 export module Assets.Images.Preparation.Tests;
+import std;
 import Assets.Images.Preparation;
 using namespace Assets;
 

@@ -1,17 +1,9 @@
 module;
 #define BOOST_TEST_MODULE W3DShaderMaterialTests
 #include <boost/test/included/unit_test.hpp>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <string_view>
-#include <vector>
 
 export module Assets.Tests.W3DShaderMaterials;
+import std;
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.ShaderMaterials;
 

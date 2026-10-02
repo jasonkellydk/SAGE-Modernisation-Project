@@ -13,9 +13,8 @@ module;
 #include "W3DDevice/GameClient/W3DGadget.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 
-#include <algorithm>
-
 export module Engine.UI.WND.Runtime.Renderer.Gadget.HorizontalSlider;
+import std;
 import Engine.UI.WND;
 
 namespace

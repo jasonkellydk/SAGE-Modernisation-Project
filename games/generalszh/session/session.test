@@ -1,0 +1,749 @@
+#define BOOST_TEST_MODULE GeneralsZhSession
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
+#include <chrono>
+#include <type_traits>
+#include <algorithm>
+#include <cstdint>
+#include <variant>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <set>
+#include <memory>
+#include <span>
+#include <vector>
+#include <string>
+
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.common.weapons.components.armament;
+import Engine.Core.Math.FixedPresentation;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.movement.components.move_goal;
+import engine.gameplay.rts.stealth.resources.detections;
+import engine.gameplay.rts.stealth.components.stealth_detector;
+import games.generalszh.gameplay.production.algorithms.team_building;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.session.session;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.combat.components.projectile;
+import engine.gameplay.rts.combat.components.missile;
+import engine.gameplay.rts.combat.systems.point_defense_system;
+import engine.gameplay.rts.veterancy.components.experience;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.vision.systems.object_shroud_system;
+
+using namespace generalszh;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shell_map_session)
+
+// The shell map's opening script reveals the map for good (MAP_REVEAL_ALL_PERM for UncloakedGLA, its first human
+// player: PartitionManager::revealMapForPlayerPermanently): every cell is clear to that player, so every object on the
+// map is clear to the eyes the shell is watched through, while the computer players still see only around their own.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shell_map_is_revealed_to_its_human_player)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	const std::uint32_t eyes = *game.Teams().FindPlayer("UncloakedGLA");
+	const std::uint32_t gla = *game.Teams().FindPlayer("PlyrGLA");
+	const auto &shroud = game.World().Resource<engine::gameplay::ShroudMap>();
+	std::uint32_t unclear = 0, glaClear = 0, cells = 0;
+	for (std::int32_t y = 0; y < shroud.CellsY(); ++y)
+		for (std::int32_t x = 0; x < shroud.CellsX(); ++x)
+		{
+			++cells;
+			unclear += shroud.Status(eyes, x, y) != engine::gameplay::CellShroud::Clear ? 1u : 0u;
+			glaClear += shroud.Status(gla, x, y) == engine::gameplay::CellShroud::Clear ? 1u : 0u;
+		}
+	BOOST_TEST(unclear == 0u);
+	BOOST_TEST(glaClear > 0u);
+	BOOST_TEST(glaClear < cells);
+	std::uint32_t hidden = 0;
+	ecs::Query<ecs::Read<engine::gameplay::ObjectShroud>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto objects = chunk.template Get<engine::gameplay::ObjectShroud>();
+		const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+		const auto refs = chunk.template Get<engine::gameplay::DefinitionRef>();
+		for (std::size_t row = 0; row < objects.size(); ++row)
+			if (!objects[row].SeenBy(eyes))
+			{
+				++hidden;
+				// Only what stands off the map (no partition cells: shrouded to all), such as the command centres out in
+				// its border.
+				const auto cell = shroud.CellOf(transforms[row].position.x, transforms[row].position.y);
+				BOOST_TEST((cell[0] < 0 || cell[1] < 0 || cell[0] >= shroud.CellsX() || cell[1] >= shroud.CellsY()),
+					game.Definition(refs[row].index).name << " hidden on the map");
+			}
+	});
+	BOOST_TEST(hidden == 11u); // the 2 command centres and 9 vehicles waiting in the border
+}
+
+// Barrel counts come from each armed object's model, as the original's
+// validateWeaponBarrelInfo counts NAME01, NAME02... bones.
+BOOST_AUTO_TEST_CASE(legacy_parity_armed_objects_know_their_barrels_from_their_models)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto &barrels = shell.game.barrels;
+	BOOST_TEST_MESSAGE("objects with several barrels: " << barrels.size());
+	BOOST_TEST(barrels.size() > 20u);
+	for (const auto &[name, count] : barrels)
+		BOOST_TEST((count >= 2u && count <= 99u), name << " has " << count);
+	BOOST_TEST_REQUIRE(barrels.contains("ChinaTankOverlord"));
+	BOOST_TEST(barrels.at("ChinaTankOverlord") == 2u);
+	BOOST_TEST(!barrels.contains("AmericaTankCrusader")); // one barrel
+}
+
+// Weapon::fireWeaponTemplate with a DumbProjectileBehavior projectile (GenericTankShell: FirstHeight 10,
+// SecondHeight 10, indents 50% / 90%): the shell flies as an object from the barrel's launch bone, a point
+// a tick, and is gone the tick after its last point (the tick its shot lands).
+BOOST_AUTO_TEST_CASE(legacy_parity_tank_shells_fly_their_arcs_on_the_shell_map)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto &arcs = shell.game.projectileArcs;
+	BOOST_TEST_REQUIRE(arcs.contains("GenericTankShell"));
+	const auto &arc = arcs.at("GenericTankShell");
+	BOOST_TEST((arc.firstHeight == Engine::Math::Fixed::FromInt(10)));
+	BOOST_TEST((arc.secondHeight == Engine::Math::Fixed::FromInt(10)));
+	BOOST_TEST((arc.firstIndent == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((arc.secondIndent == Engine::Math::Fixed::FromRatio(9, 10)));
+	// No MaxLifespan: DEFAULT_MAX_LIFESPAN, 10 s; the angry mob's rocks and molotovs TumbleRandomly, never facing their path.
+	BOOST_TEST(arc.maxLifespan == 300u);
+	BOOST_TEST(!arc.tumble);
+	BOOST_TEST(arc.orientToPath); // no OrientToFlightPath: DumbProjectileBehaviorModuleData's TRUE
+	BOOST_TEST_REQUIRE(arcs.contains("GLAAngryMobRockProjectileObject"));
+	BOOST_TEST(arcs.at("GLAAngryMobRockProjectileObject").tumble);
+	BOOST_TEST(!arcs.at("GLAAngryMobRockProjectileObject").orientToPath);
+	// The Crusader's launch point is up at its gun, off its origin.
+	BOOST_TEST_REQUIRE(shell.game.launchLayouts.contains("AmericaTankCrusader"));
+	const auto &crusader = shell.game.launchLayouts.at("AmericaTankCrusader");
+	BOOST_TEST_REQUIRE(!crusader.barrels[0].empty());
+	BOOST_TEST((crusader.barrels[0].front().z > Engine::Math::Fixed::FromInt(5)));
+	BOOST_TEST((crusader.barrels[0].front().x > Engine::Math::Fixed::FromInt(10)));
+	// W3DModelDrawModuleData::validateWeaponBarrelInfo runs per weapon slot: the battleship's SECONDARY gun has its own
+	// three barrels (Tur2Muzzle01..03 on the AltTurret), and like its PRIMARY names no launch bone, so both fire from the
+	// ship's origin (an identity projectile_offset_transform); its alt turret pivots where the AltTurret bone sits.
+	// HelicopterSlowDeathBehavior BladeBoneName: the Comanche's blades come off at Propeller01, up on its rotor mast.
+	BOOST_TEST_REQUIRE(shell.game.bladeBones.contains("AmericaVehicleComanche"));
+	BOOST_TEST((shell.game.bladeBones.at("AmericaVehicleComanche").z > Engine::Math::Fixed::FromInt(5)));
+	BOOST_TEST_REQUIRE(shell.game.launchLayouts.contains("AmericaVehicleBattleShip"));
+	const auto &ship = shell.game.launchLayouts.at("AmericaVehicleBattleShip");
+	BOOST_TEST(ship.barrels[0].size() == 3u);
+	BOOST_TEST(ship.barrels[1].size() == 3u);
+	BOOST_TEST(ship.barrels[2].empty());
+	BOOST_TEST((ship.barrels[1].front() == Engine::Math::FixedVector3{}));
+	BOOST_TEST((ship.altTurretPivot.x > Engine::Math::Fixed::FromInt(60)));
+	BOOST_TEST((ship.turretPivot.x < Engine::Math::Fixed::FromInt(-60)));
+
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	struct Seen
+	{
+		std::uint32_t segments{0};
+		std::uint32_t step{0};
+		ecs::Entity entity;
+	};
+	std::map<std::uint64_t, Seen> seen;
+	std::size_t most = 0;
+	for (int tick = 0; tick < 30 * 90; ++tick)
+	{
+		game.Tick();
+		std::size_t flying = 0;
+		game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			if (const auto *flight = game.World().Get<engine::gameplay::ProjectileFlight>(object.entity))
+			{
+				++flying;
+				BOOST_TEST(flight->step <= flight->segments);
+				seen[(std::uint64_t{object.entity.index} << 32) | object.entity.generation] = {flight->segments, flight->step, object.entity};
+			}
+		});
+		if (flying > 0 && most == 0)
+			BOOST_TEST_MESSAGE("first shell in flight on tick " << game.CurrentTick());
+		most = (std::max)(most, flying);
+	}
+	BOOST_TEST_MESSAGE("shells flown: " << seen.size() << ", at most " << most << " at once");
+	BOOST_TEST(seen.size() > 0u); // how many is the battle's; each one is checked above and below
+	std::size_t landed = 0, ranInto = 0;
+	for (const auto &[key, shot] : seen)
+		if (!game.World().IsAlive(shot.entity))
+		{
+			// Gone the tick after its last point, or earlier where it ran into its victim or a structure.
+			BOOST_TEST(shot.step <= shot.segments);
+			ranInto += shot.step < shot.segments ? 1u : 0u;
+			++landed;
+		}
+	BOOST_TEST_MESSAGE("shells that ran into something before their last point: " << ranInto);
+	BOOST_TEST(landed > 0u);
+}
+
+// Guided missiles on the shell map (MissileAIUpdate): what each weapon launched, and how its missiles ended;
+// most go off by their victims. Shot-down aircraft fall and crash (JetSlowDeathBehavior): with missiles flying
+// as the original's (chasing jets that can outrun them, burning out when their victim lands or dies), the first
+// crash comes after the first 90 s, so it is checked over 180 s here.
+BOOST_AUTO_TEST_CASE(missiles_fly_and_detonate_on_the_shell_map)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	struct Tally
+	{
+		std::size_t launched{0}, detonated{0}, burnedOut{0}, flying{0}, locked{0}, victimGone{0}, victimFound{0}, hits{0}, airborne{0};
+	};
+	std::map<std::string, Tally> byWeapon;
+	std::map<std::uint64_t, std::pair<std::string, engine::gameplay::MissileState>> alive;
+	std::size_t crashes = 0, lasered = 0, laserMisses = 0, lasers = 0, laserShots = 0;
+	std::string firstLaser;
+	double closestMissile = 1e9;
+	int firstCrash = 0;
+	for (int tick = 0; tick < 30 * 180; ++tick)
+	{
+		game.Tick();
+		for (const auto &event : game.DeathEvents())
+			if (event.kind == engine::gameplay::DeathEffectKind::Effect && game.DeathEffectName(event.kind, event.id).find("HitGround") != std::string_view::npos)
+			{
+				++crashes;
+				if (firstCrash == 0)
+					firstCrash = tick;
+			}
+		game.Fired().ForEach([&](const engine::gameplay::Shot &shot) {
+			if (const auto *weapon = game.WeaponContentOf(shot.weapon); weapon != nullptr && !weapon->laser.empty())
+			{
+				if (laserShots++ == 0)
+					firstLaser = weapon->laser + " on tick " + std::to_string(game.CurrentTick()) + " from " + std::to_string(shot.origin.x.Floor()) + "," +
+						std::to_string(shot.origin.y.Floor());
+			}
+		});
+		game.World().Resource<engine::gameplay::PointDefenseShots>().ForEach([&](const engine::gameplay::Shot &shot) {
+			++(game.World().Get<engine::gameplay::MissileFlight>(shot.target) != nullptr ? lasered : laserMisses);
+		});
+		game.World().Resource<engine::gameplay::MissileDetonations>().ForEach([&](const engine::gameplay::Shot &shot) {
+			if (const auto *weapon = game.WeaponContentOf(shot.weapon))
+			{
+				Tally &tally = byWeapon[weapon->projectileObject];
+				++tally.detonated;
+				const auto *victim = game.World().Get<engine::gameplay::Transform>(shot.target);
+				const auto *targetable = game.World().Get<engine::gameplay::Targetable>(shot.target);
+				if (victim != nullptr && targetable != nullptr)
+				{
+					const auto reach = weapon->simulation.primaryRadius + targetable->radius;
+					if (Engine::Math::DistanceSquared(victim->position.XY(), shot.aim.XY()) <= reach * reach)
+						++tally.hits;
+					tally.airborne += victim->position.z > Engine::Math::Fixed::FromInt(200) ? 1u : 0u;
+				}
+			}
+		});
+		std::map<std::uint64_t, std::pair<std::string, engine::gameplay::MissileState>> now;
+		lasers = 0;
+		std::vector<Engine::Math::FixedVector3> laserAt, missileAt;
+		game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			if (game.World().Get<engine::gameplay::PointDefense>(object.entity) != nullptr)
+			{
+				++lasers;
+				laserAt.push_back(object.transform.position);
+			}
+			if (game.World().Get<engine::gameplay::MissileFlight>(object.entity) != nullptr && game.World().Get<engine::gameplay::Targetable>(object.entity) != nullptr)
+				missileAt.push_back(object.transform.position);
+		});
+		for (const auto &l : laserAt)
+			for (const auto &m : missileAt)
+				closestMissile = (std::min)(closestMissile, Engine::Math::Distance(l.XY(), m.XY()).Raw() / 65536.0);
+		game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			const auto *flight = game.World().Get<engine::gameplay::MissileFlight>(object.entity);
+			if (flight == nullptr)
+				return;
+			const auto *weapon = game.WeaponContentOf(flight->shot.weapon);
+			const std::string name = weapon != nullptr ? weapon->projectileObject : std::string("?");
+			const std::uint64_t key = (std::uint64_t{object.entity.index} << 32) | object.entity.generation;
+			if (!alive.contains(key))
+				++byWeapon[name].launched;
+			if (flight->state == engine::gameplay::MissileState::KillSelf && alive.contains(key) && alive[key].second != engine::gameplay::MissileState::KillSelf)
+			{
+				const bool there = game.World().IsAlive(flight->shot.target);
+				++(there ? byWeapon[name].victimFound : byWeapon[name].victimGone);
+			}
+			if (flight->state == engine::gameplay::MissileState::Kill && (!alive.contains(key) || alive[key].second != engine::gameplay::MissileState::Kill))
+				++byWeapon[name].locked;
+			now[key] = {name, flight->state};
+		});
+		for (const auto &[key, was] : alive)
+			if (!now.contains(key) && was.second == engine::gameplay::MissileState::KillSelf)
+				++byWeapon[was.first].burnedOut;
+		alive = std::move(now);
+	}
+	for (const auto &[key, was] : alive)
+		++byWeapon[was.first].flying;
+	std::size_t launched = 0, detonated = 0;
+	for (const auto &[name, tally] : byWeapon)
+	{
+		BOOST_TEST_MESSAGE("  " << name << ": " << tally.launched << " launched, " << tally.locked << " locked on, " << tally.detonated << " detonated (" << tally.hits << " by their victim), "
+								<< tally.burnedOut << " burned out (" << tally.victimGone << " victim dead, " << tally.victimFound << " victim alive), " << tally.flying
+								<< " still flying");
+		launched += tally.launched;
+		detonated += tally.detonated;
+	}
+	BOOST_TEST_MESSAGE("aircraft crashes in 180 s: " << crashes << ", first on tick " << firstCrash);
+	BOOST_TEST_MESSAGE("point defense lasers alive at the end: " << lasers << ", closest missile ever " << closestMissile);
+	BOOST_TEST_MESSAGE("laser weapon shots: " << laserShots << " (first: " << firstLaser << ")");
+	BOOST_TEST_MESSAGE("point defense lasers: " << lasered << " shots at missiles, " << laserMisses << " at other things");
+	// Whether an aircraft comes down within the window is the battle's emergent course (it moved to near its
+	// end once ground units route around obstacles); crashes themselves are pinned by the death tests.
+	BOOST_TEST(launched > 10u);
+	BOOST_TEST(detonated > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(runs_the_shell_map_and_moves_its_units)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	const std::size_t placed = game.EntityCount();
+	BOOST_TEST_MESSAGE("placed entities: " << placed << " on " << game.WorkerCount() << " workers");
+	BOOST_TEST(placed > 300u);
+
+	std::map<std::uint64_t, engine::gameplay::Transform> start;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) { start[object.entity.index] = object.transform; });
+	const auto begin = std::chrono::steady_clock::now();
+	auto lap = std::chrono::steady_clock::now();
+	for (int tick = 0; tick < 30 * 60; ++tick)
+	{
+		game.Tick();
+		if ((tick + 1) % 300 == 0)
+		{
+			const auto now = std::chrono::steady_clock::now();
+			const double lapMs = std::chrono::duration<double, std::milli>(now - lap).count();
+			BOOST_TEST_MESSAGE("  " << (tick + 1) / 30 << " s: " << game.EntityCount() << " entities, " << lapMs << " ms for the last 10 s");
+			lap = now;
+		}
+	}
+	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+	BOOST_TEST_MESSAGE("60 s of logic in " << ms << " ms (" << ms / (30 * 60) << " ms per tick), entities now " << game.EntityCount());
+	BOOST_TEST_MESSAGE("scripts: " << game.UnportedSummary());
+
+	std::size_t moved = 0;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto found = start.find(object.entity.index);
+		if (found != start.end() && Engine::Math::Distance(found->second.position.XY(), object.transform.position.XY()) > Engine::Math::Fixed::FromInt(50))
+			++moved;
+	});
+	BOOST_TEST_MESSAGE("placed units that moved over 50 units: " << moved);
+	BOOST_TEST(moved >= 4u); // Comanches, hovercraft, Chinooks at least
+
+	// The camera script's 110 s beat fires the command center's paradrop: a
+	// cargo plane flies in and the rangers come down under parachutes.
+	BOOST_TEST(game.PlayerObjectCount("Paradrops", "AmericaInfantryRanger") == 0);
+	// Reinforcements and scripted units were created (a reinforcement is a new instance of its team, made active; once
+	// emptied it is deleted).
+	const auto &roster = game.Teams();
+	bool reinforced = false;
+	for (int tick = 30 * 60; tick < 30 * 125; ++tick)
+	{
+		game.Tick();
+		const auto instances = roster.Instances(*roster.FindTeam("GLA_Infantry_One"));
+		reinforced = reinforced || std::any_of(instances.begin(), instances.end(), [&](std::uint32_t team) {
+			return roster.TeamAt(team).active && !roster.TeamAt(team).members.empty();
+		});
+	}
+	BOOST_TEST(game.PlayerObjectCount("Paradrops", "AmericaInfantryRanger") > 0);
+	BOOST_TEST(reinforced);
+}
+
+BOOST_AUTO_TEST_CASE(units_wait_for_their_tech)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto &overlord = *shell.game.objects.Find("ChinaTankOverlord");
+	std::set<std::pair<std::uint32_t, std::string_view>> owned{{0u, "ChinaWarFactory"}, {1u, "ChinaPropagandaCenter"}};
+	BOOST_TEST(!generalszh::gameplay::PrerequisitesMet(owned, 0, overlord)); // no propaganda center yet
+	owned.emplace(0u, "ChinaPropagandaCenter");
+	BOOST_TEST(generalszh::gameplay::PrerequisitesMet(owned, 0, overlord));
+	BOOST_TEST(!generalszh::gameplay::PrerequisitesMet(owned, 1, overlord)); // another player's factory does not count
+	BOOST_TEST(generalszh::gameplay::PrerequisitesMet(owned, 1, *shell.game.objects.Find("ChinaInfantryRedguard")) ==
+		shell.game.objects.Find("ChinaInfantryRedguard")->prerequisiteObjects.empty());
+}
+
+BOOST_AUTO_TEST_CASE(the_simulation_does_not_depend_on_worker_count)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	// A full minute of the shell map's battle (spawns, deaths, removals) on one
+	// worker and twice on all of them: every tick's state must match.
+	session::Session serial(shell.map->level, shell.game, {7, 1, {}});
+	session::Session parallel(shell.map->level, shell.game, {7, 0, {}});
+	session::Session again(shell.map->level, shell.game, {7, 0, {}});
+	for (int tick = 0; tick < 30 * 60; ++tick)
+	{
+		serial.Tick();
+		parallel.Tick();
+		again.Tick();
+		if (tick % 15 == 0)
+		{
+			BOOST_TEST_REQUIRE(serial.StateHash() == parallel.StateHash(), "diverged at tick " << tick);
+			BOOST_TEST_REQUIRE(parallel.StateHash() == again.StateHash(), "parallel runs diverged at tick " << tick);
+		}
+	}
+	BOOST_TEST(serial.StateHash() == parallel.StateHash());
+	BOOST_TEST(serial.EntityCount() == again.EntityCount());
+}
+
+BOOST_AUTO_TEST_CASE(a_restored_checkpoint_continues_exactly)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	// Checkpoint mid-battle, while the paradrop plane is inbound (transports,
+	// passengers off the map, scripted state), then run both on: a rejoining
+	// peer or a repaired one must be indistinguishable from the original.
+	session::Session original(shell.map->level, shell.game, {5, 0, {}});
+	for (int tick = 0; tick < 30 * 112; ++tick)
+		original.Tick();
+	const std::vector<std::byte> checkpoint = original.Checkpoint();
+	BOOST_TEST_MESSAGE("checkpoint at tick " << original.CurrentTick() << ": " << checkpoint.size() << " bytes");
+	const auto restored = session::Session::Restore(shell.map->level, shell.game, {5, 0, {}}, checkpoint);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->CurrentTick() == original.CurrentTick());
+	BOOST_TEST(restored->StateHash() == original.StateHash());
+	BOOST_TEST((restored->Checkpoint() == checkpoint));
+	BOOST_TEST(restored->PlayerObjectCount("Paradrops", "AmericaInfantryRanger") > 0); // aboard, restored with it
+	for (int tick = 0; tick < 30 * 20; ++tick)
+	{
+		original.Tick();
+		restored->Tick();
+		BOOST_TEST_REQUIRE(restored->StateHash() == original.StateHash(), "diverged " << tick << " ticks after restoring");
+	}
+	BOOST_TEST(restored->PlayerObjectCount("Paradrops", "AmericaInfantryRanger") ==
+		original.PlayerObjectCount("Paradrops", "AmericaInfantryRanger"));
+
+	// Another seed, or a damaged checkpoint, does not restore.
+	BOOST_TEST(session::Session::Restore(shell.map->level, shell.game, {6, 0, {}}, checkpoint) == nullptr);
+	BOOST_TEST(session::Session::Restore(shell.map->level, shell.game, {5, 0, {}}, std::span(checkpoint).first(checkpoint.size() / 2)) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(players_order_their_own_units_through_the_command_bus)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	// Seat 0 plays America, seat 1 the GLA.
+	session::Session game(shell.map->level, shell.game, {11, 1, {}, {"PlyrAmerica", "PlyrGLA"}});
+	const ecs::Entity launcher = game.Named("Tom1"); // an American Tomahawk
+	BOOST_TEST_REQUIRE(game.TransformOf(launcher).has_value());
+	const auto start = game.TransformOf(launcher)->position.XY();
+	// North-west along the strip it stands on (east is cliff: ground vehicles route around what they cannot cross).
+	const Engine::Math::FixedVector2 destination{start.x - Engine::Math::Fixed::FromInt(20), start.y + Engine::Math::Fixed::FromInt(30)};
+
+	// The GLA may not order an American unit.
+	auto order = commands::Encode(commands::MoveTo{{launcher}, destination});
+	order.player = 1;
+	game.Tick(std::span(&order, 1));
+	// It keeps to what the map's scripts have it do: guarding where it stands (its return settles it in the middle of its
+	// pathfinding cell), never heading for the GLA's destination.
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game.Tick();
+		BOOST_TEST_REQUIRE((game.World().Get<engine::gameplay::MoveOrder>(launcher)->destination != destination));
+	}
+	BOOST_TEST((Engine::Math::Distance(game.TransformOf(launcher)->position.XY(), start) < Engine::Math::Fixed::FromInt(10)));
+
+	order.player = 0;
+	game.Tick(std::span(&order, 1));
+	for (int tick = 0; tick < 300; ++tick)
+		game.Tick();
+	// Pathfinder::adjustDestination (AIInternalMoveToState::onEnter): the ordered point's cell will not do, as the
+	// launcher's footprint there (the 3 x 3 cells about it) takes in a row the allied unit beside it has claimed; the
+	// spiral's first step (one cell east) takes it in too, its second (then one north) is free. The goal is that cell's
+	// centre, and the launcher stops there.
+	const auto *goal = game.World().Get<engine::gameplay::MoveGoal>(launcher);
+	BOOST_TEST_REQUIRE(goal != nullptr);
+	BOOST_TEST((goal->ordered == destination));
+	const Engine::Math::FixedVector2 adjusted{destination.x + Engine::Math::Fixed::FromInt(10), destination.y + Engine::Math::Fixed::FromInt(10)};
+	BOOST_TEST((goal->goal == adjusted));
+	BOOST_TEST((Engine::Math::Distance(game.TransformOf(launcher)->position.XY(), adjusted) < Engine::Math::Fixed::One()));
+}
+
+
+// Kills on the shell map earn experience (Object::scoreTheKill): its playable sides' units rank up as they fight.
+BOOST_AUTO_TEST_CASE(the_shell_map_battle_promotes_its_killers)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	std::array<std::size_t, 4> levels{};
+	std::size_t scored = 0;
+	for (int tick = 0; tick < 30 * 90; ++tick)
+		game.Tick();
+	ecs::Query<ecs::Read<engine::gameplay::Experience>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		for (const auto &experience : chunk.template Get<engine::gameplay::Experience>())
+		{
+			++levels[experience.level];
+			scored += experience.points > 0 ? 1u : 0u;
+		}
+	});
+	BOOST_TEST_MESSAGE("levels: " << levels[0] << " " << levels[1] << " " << levels[2] << " " << levels[3] << ", with experience: " << scored);
+	BOOST_TEST(scored > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(the_shell_map_battle_dies_by_its_die_modules)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	std::size_t killed = 0, effects = 0, unnamed = 0, objects = 0, mostDebris = 0, tumbling = 0;
+	std::set<std::string> debrisModels;
+	std::set<std::uint64_t> burning;
+	std::size_t damagedSeen = 0, reallyDamagedSeen = 0, rubbleSeen = 0;
+	std::set<std::uint64_t> stealthed;
+	std::set<std::uint64_t> detected;
+	std::size_t toppled = 0;
+	std::int64_t mostMigs = 0;
+	std::array<std::size_t, 12> jetStatesSeen{};
+	const auto started = std::chrono::steady_clock::now();
+	std::set<std::string> played;
+	std::size_t crashes = 0; // aircraft shot down that hit the ground
+	std::set<std::uint64_t> flailing, bouncing; // infantry flung by their deaths
+	std::size_t hits = 0, deathWeapons = 0;
+	std::size_t rubble = 0;  // crashed helicopters leave their hulls
+	// A minute and a half: aircraft losses here are emergent (no script kills them), so the
+	// window is loose; exact timings are pinned by the legacy-parity unit tests instead.
+	for (int tick = 0; tick < 30 * 90; ++tick)
+	{
+		game.Tick();
+		for (const auto &casualty : game.Casualties())
+			killed += casualty.departure == engine::gameplay::Departure::Killed ? 1u : 0u;
+		for (const auto &event : game.DeathEvents())
+		{
+			const std::string_view name = game.DeathEffectName(event.kind, event.id);
+			unnamed += name.empty() ? 1u : 0u;
+			if (event.kind == engine::gameplay::DeathEffectKind::Effect)
+			{
+				++effects;
+				played.emplace(name);
+			}
+			objects += event.kind == engine::gameplay::DeathEffectKind::Objects ? 1u : 0u;
+			crashes += event.kind == engine::gameplay::DeathEffectKind::Effect && name.find("HitGround") != std::string_view::npos ? 1u : 0u;
+			rubble += event.kind == engine::gameplay::DeathEffectKind::Spawn ? 1u : 0u;
+			deathWeapons += event.kind == engine::gameplay::DeathEffectKind::Weapon ? 1u : 0u;
+		}
+		hits += game.World().Resource<engine::gameplay::Hits>().Size();
+		mostMigs = (std::max)(mostMigs, game.PlayerObjectCount("PlyrChina", "ChinaJetMIG"));
+		const auto jets = game.JetStateCounts();
+		for (std::size_t state = 0; state < jets.size(); ++state)
+			jetStatesSeen[state] += jets[state];
+		for (const auto &event : game.ToppleEvents())
+			toppled += event.kind == std::remove_cvref_t<decltype(event)>::Kind::Started ? 1u : 0u;
+		// What the creation lists left: debris pieces showing their own models, thrown and tumbling.
+		std::size_t debris = 0;
+		game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			if (object.appearance.Test(generalszh::content::model_condition::StealthedLook))
+				stealthed.insert((std::uint64_t{object.entity.index} << 32) | object.entity.generation);
+			if (object.appearance.Test(generalszh::content::model_condition::DetectedLook))
+				detected.insert((std::uint64_t{object.entity.index} << 32) | object.entity.generation);
+			damagedSeen += object.appearance.Test(generalszh::content::model_condition::Damaged) ? 1u : 0u;
+			reallyDamagedSeen += object.appearance.Test(generalszh::content::model_condition::ReallyDamaged) ? 1u : 0u;
+			rubbleSeen += object.appearance.Test(generalszh::content::model_condition::Rubble) ? 1u : 0u;
+			if (object.appearance.Test(generalszh::content::model_condition::ExplodedFlailing))
+				flailing.insert((std::uint64_t{object.entity.index} << 32) | object.entity.generation);
+			if (object.appearance.Test(generalszh::content::model_condition::ExplodedBouncing))
+				bouncing.insert((std::uint64_t{object.entity.index} << 32) | object.entity.generation);
+			if (object.appearance.Test(generalszh::content::model_condition::Aflame))
+				burning.insert((std::uint64_t{object.entity.index} << 32) | object.entity.generation);
+			if (object.model == 0)
+				return;
+			++debris;
+			debrisModels.emplace(game.ModelName(object.model));
+			tumbling += object.attitude.pitch.units != 0 || object.attitude.roll.units != 0 ? 1u : 0u;
+		});
+		mostDebris = (std::max)(mostDebris, debris);
+	}
+	BOOST_TEST_MESSAGE("fire: " << burning.size() << " things caught fire");
+	BOOST_TEST_MESSAGE("stealth: " << stealthed.size() << " things hid, " << detected.size() << " were detected");
+	const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	BOOST_TEST_MESSAGE("production: up to " << mostMigs << " MiGs");
+	std::string jetText;
+	for (std::size_t state = 0; state < jetStatesSeen.size(); ++state)
+		jetText += std::to_string(jetStatesSeen[state]) + " ";
+	BOOST_TEST_MESSAGE("jet-ticks per state (parked, taxi to prep, await runway, taxi to start, roll, flying, returning, await landing, landing, taxi in, reloading): " << jetText);
+	BOOST_TEST(jetStatesSeen[5] > 0u); // the placed MiGs fly
+	BOOST_TEST(jetStatesSeen[6] + jetStatesSeen[7] + jetStatesSeen[8] > 0u); // and, out of napalm, head for the airfield
+	BOOST_TEST(jetStatesSeen[10] > 0u); // reload there
+	BOOST_TEST(jetStatesSeen[11] > 0u); // pausing at its start, afterburners lit (JetPauseBeforeTakeoffState)
+	BOOST_TEST(jetStatesSeen[4] > 0u); // and roll down its runway to go again
+	BOOST_TEST(mostMigs > 0); // built at the airfield (BUILD_TEAM)
+	BOOST_TEST_MESSAGE("topple: " << toppled << " things fell; " << milliseconds / (30 * 60) << " ms a tick (with the test's own reading)");
+	BOOST_TEST(stealthed.size() > 0u);
+	// No detection is asserted: the only thing that hides here is Jarmen Kell, who stays put 294 from the nearest
+	// detector (range 200). The Combat Bikes stealth only by their riders' rules (StealthUpdate::calcStealthOwner with
+	// UseRiderStealth, pinned by legacy_parity_a_combat_bike_stealths_only_by_its_riders_rules in attacks.test), so
+	// none hides on its own to be seen through; detection itself is pinned by engine/gameplay/rts/stealth/stealth.test.
+	BOOST_TEST(burning.size() > 0u); // napalm fire fields set things alight
+	BOOST_TEST_MESSAGE("damage states seen (object-ticks): " << damagedSeen << " damaged, " << reallyDamagedSeen << " really damaged, " << rubbleSeen << " rubble");
+	BOOST_TEST(damagedSeen + reallyDamagedSeen > 0u);
+	BOOST_TEST_MESSAGE("debris: up to " << mostDebris << " pieces at once, " << debrisModels.size() << " models");
+	BOOST_TEST(mostDebris > 0u);
+	BOOST_TEST(tumbling > 0u);
+	BOOST_TEST(!debrisModels.contains(std::string{}));
+	BOOST_TEST_MESSAGE("crashes: " << crashes << " aircraft hit the ground, " << rubble << " rubble hulls");
+	// (shot-down aircraft crashing is checked over a longer run: missiles_fly_and_detonate_on_the_shell_map)
+	BOOST_TEST_MESSAGE("shell map, first 90 s: " << killed << " killed, " << effects << " death FX (" << played.size() << " kinds), "
+													<< objects << " object creation lists");
+	BOOST_TEST(killed > 0u);
+	BOOST_TEST(effects > 0u);
+	BOOST_TEST(unnamed == 0u);
+	// Hits the battle shows (DamageFX). Infantry are flung only by EXPLODED deaths, which are rare here (about one in
+	// the first seven minutes; the fling itself is pinned by the death legacy-parity tests): reported, not asserted.
+	BOOST_TEST_MESSAGE("flung: " << flailing.size() << " flailing, " << bouncing.size() << " bounced; " << hits << " hits; " << deathWeapons << " death weapons");
+	BOOST_TEST(hits > 0u);
+}
+
+// Where 60 s of the shell map's ticks go, per system (a benchmark: prints, asserts only that it ran).
+BOOST_AUTO_TEST_CASE(profile_the_shell_map_ticks)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	for (int tick = 0; tick < 30 * 5; ++tick)
+		game.Tick();
+	game.EnableProfiling(true);
+	const auto start = std::chrono::steady_clock::now();
+	constexpr int ticks = 30 * 60;
+	for (int tick = 0; tick < ticks; ++tick)
+		game.Tick();
+	const double total = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count() / ticks;
+	auto profile = game.Profile();
+	std::sort(profile.begin(), profile.end(), [](const auto &a, const auto &b) { return a.cpuNanos > b.cpuNanos; });
+	double systems = 0;
+	for (const auto &entry : profile)
+		systems += static_cast<double>(entry.cpuNanos) / 1000.0 / ticks;
+	BOOST_TEST_MESSAGE("per tick: " << total << " us total, " << static_cast<double>(game.WaveNanos()) / 1000.0 / ticks << " us in waves, "
+		<< systems << " us in systems (cpu)");
+	double serial = 0;
+	for (const auto &entry : profile)
+		if (game.IsBatchSystem(entry.name))
+			serial += static_cast<double>(entry.cpuNanos) / 1000.0 / ticks;
+	BOOST_TEST_MESSAGE("  " << game.WaveCount() << " waves a tick; batch systems (serial on the caller): " << serial << " us");
+	for (std::size_t index = 0; index < profile.size() && index < 15; ++index)
+		BOOST_TEST_MESSAGE("  " << static_cast<double>(profile[index].cpuNanos) / 1000.0 / ticks << " us  " << profile[index].name
+			<< (game.IsBatchSystem(profile[index].name) ? " (batch)" : ""));
+	// The wave plan: each wave's systems and their summed CPU (a wave of little work is a barrier to fold away).
+	std::size_t index = 0;
+	for (const auto &wave : game.WavePlan())
+	{
+		double cpu = 0;
+		std::string names;
+		for (const std::string_view name : wave)
+		{
+			for (const auto &entry : profile)
+				if (entry.name == name)
+					cpu += static_cast<double>(entry.cpuNanos) / 1000.0 / ticks;
+			names += " ";
+			names += name;
+		}
+		BOOST_TEST_MESSAGE("  wave " << index++ << " (" << cpu << " us):" << names);
+	}
+	BOOST_TEST(total > 0.0);
+}
+
+
+// Legacy parity (Object::kill: unresistable damage of the whole health with m_kill; ImmortalBody::internalChangeHealth
+// keeps a point; FireWeaponWhenDamagedBehavior::onDamage on the post-armor damage, DamageAmount 1): the shell map's
+// "Fire Spot" scripts kill the last bogus target (NAMED_KILL) as they make the next one; each killed target survives at
+// 1 health and fires BattleshipTargetDamagedWeapon where it stands: the battleship's shells land. The scripts kill on
+// ticks 121, 181, 226, 241, 301, 331 and 361 (the first spot's kill at 91 finds no target yet); the blasts land the tick
+// after (here the kill's damage is dealt with the next tick's damage; the original deals it on the spot, a tick sooner).
+// One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shell_maps_battleship_targets_explode_as_scripts_kill_them)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	session::Session four(shell.map->level, shell.game, session::SessionOptions{42, 4, {}});
+	const auto *blast = shell.game.weapons.Find("BattleshipTargetDamagedWeapon");
+	BOOST_TEST_REQUIRE(blast != nullptr);
+	std::vector<std::uint64_t> blasts;
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+		for (const auto &impact : game.Impacts())
+			if (game.WeaponContentOf(impact.weapon) == blast)
+				blasts.push_back(game.CurrentTick());
+	}
+	const std::vector<std::uint64_t> expected{122, 182, 227, 242, 302, 332, 362};
+	BOOST_TEST(blasts == expected, boost::test_tools::per_element());
+	const ecs::Entity target = game.Named("Target1");
+	BOOST_TEST_REQUIRE(game.World().IsAlive(target));
+	BOOST_TEST((game.World().Get<engine::gameplay::Health>(target)->current == Engine::Math::Fixed::One()));
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

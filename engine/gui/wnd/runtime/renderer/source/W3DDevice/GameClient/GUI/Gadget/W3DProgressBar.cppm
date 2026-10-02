@@ -11,9 +11,8 @@ module;
 #include "GameClient/GameWindowGlobal.h"
 #include "W3DDevice/GameClient/W3DGadget.h"
 
-#include <cstdint>
-
 export module Engine.UI.WND.Runtime.Renderer.Gadget.ProgressBar;
+import std;
 import Engine.UI.WND;
 
 namespace

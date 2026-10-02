@@ -4,14 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.Ring.Runtime.Tests;
+import std;
 
 import Assets.Math;
 import Assets.Rings;

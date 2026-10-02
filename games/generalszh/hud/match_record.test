@@ -1,0 +1,127 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.match_record;
+import games.generalszh.gameplay.score.resources.score_keepers;
+import engine.gameplay.rts.match.resources.match_outcome;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+
+// The score screen's record of a skirmish just played (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+}
+
+BOOST_AUTO_TEST_SUITE(match_record)
+
+// ScoreScreen updateSkirmishBattleHonors' reads (ScoreKeeper::getTotalObjectsBuilt, getTotalUnitsBuilt): a Scud Storm
+// in the player's built objects (even back at 0: the entry still counts) is a Scud built; no uplink nor silo; vehicles
+// and aircraft counted apart by their kinds (an aircraft is a vehicle too, and counts only as an aircraft); the side,
+// the tick; the alliance's victory once one alliance is left, the player's own defeat.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_score_screen_reads_what_the_player_built_and_how_it_ended)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	game.Tick();
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	auto &keeper = game.World().Resource<generalszh::gameplay::ScoreKeepers>().Of(gla);
+	const auto index = [&](std::string_view name) { return *game.DefinitionIndex(name); };
+	keeper.objectsBuilt[index("GLAScudStorm")] = 0; // built, then unbuilt: still an entry
+	keeper.objectsBuilt[index("GLATankScorpion")] += 3;
+	keeper.objectsBuilt[index("AmericaJetRaptor")] += 2;
+	auto record = hud::ReadGameRecord(game, gla);
+	BOOST_TEST(record.builtScud);
+	BOOST_TEST(!record.builtParticleCannon);
+	BOOST_TEST(!record.builtNuke);
+	BOOST_TEST(record.aircraftBuilt == 2);
+	BOOST_TEST(record.vehiclesBuilt >= 3); // the start's own vehicles (none but the worker is one) and the Scorpions
+	BOOST_TEST(record.side == "GLA");
+	BOOST_TEST(record.ticks == game.CurrentTick());
+	BOOST_TEST(!record.won);
+	BOOST_TEST(!record.lost);
+	BOOST_TEST(record.active);
+	auto &outcome = game.World().Resource<engine::gameplay::MatchOutcome>();
+	outcome.singleAllianceRemaining = true;
+	for (auto &standing : outcome.players)
+		(standing.player == gla ? standing.victorious : standing.defeated) = true;
+	record = hud::ReadGameRecord(game, gla);
+	BOOST_TEST(record.won);
+	BOOST_TEST(!record.lost);
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	record = hud::ReadGameRecord(game, china);
+	BOOST_TEST(record.lost);
+	BOOST_TEST(!record.active);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

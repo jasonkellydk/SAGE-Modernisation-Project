@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <optional>
-
 export module Engine.Core.Math.BoundsQueries3;
+import std;
 
 export import Engine.Core.Math.AxisAlignedBox3;
 export import Engine.Core.Math.AffineTransform3;

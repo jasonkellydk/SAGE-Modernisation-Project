@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <cstring>
-#include <span>
-
 export module Graphics.Passes.Opaque.Tests;
+import std;
 
 #ifndef GRAPHICS_TEST_SHADER_DIRECTORY
 #define GRAPHICS_TEST_SHADER_DIRECTORY "."

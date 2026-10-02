@@ -1,9 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <cstdint>
-#include <optional>
-#include <string>
 export module engine.platform.adapters.sdl3.window.native;
+import std;
 import engine.platform.window.interface;
 import engine.platform.core.types;
 export namespace engine::platform::sdl3

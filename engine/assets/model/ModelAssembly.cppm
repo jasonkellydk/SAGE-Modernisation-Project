@@ -1,11 +1,5 @@
-module;
-#include <cmath>
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <vector>
 export module Assets.ModelAssembly;
+import std;
 export import Assets.ModelRig;
 export import Assets.Math;
 namespace Assets {

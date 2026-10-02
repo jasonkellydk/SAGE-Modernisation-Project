@@ -1,0 +1,220 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.control_bar_portrait;
+import games.generalszh.hud.control_bar_state;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.teams.resources.team_roster;
+
+// The right HUD's portrait as the control bar chooses and fills it (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(control_bar_portrait)
+
+// Legacy parity (ControlBar::evaluateContextUI, switchToContext, populateMultiSelect, the build queue's
+// setPortraitByObject(nullptr), and setPortraitByObject itself): nothing selected shows no portrait (the right HUD's own
+// image); the player's command centre shows its SelectPortrait; queueing at it hides the portrait (the queue in its
+// place); an enemy's command centre shows the enemy's portrait (CB_CONTEXT_NONE with its drawable); several show the
+// first one's; a Humvee shows the upgrade cameos it names (UpgradeCameo1..5: the upgrades' ButtonImage; unnamed ones
+// hidden), each enabled once its player has the upgrade.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_portrait_follows_the_selection)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	game.Tick();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	auto &world = game.World();
+	const auto find = [&](std::uint32_t player, std::string_view name) {
+		ecs::Entity found{};
+		for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+			if (game.Teams().TeamAt(team).owner == player)
+				for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+					if (const auto *ref = world.Get<gp::DefinitionRef>(member); ref != nullptr && game.DefinitionName(ref->index) == name)
+						found = member;
+		return found;
+	};
+	const ecs::Entity centre = find(america, "AmericaCommandCenter");
+	const ecs::Entity dozer = find(america, "AmericaVehicleDozer");
+	const ecs::Entity enemyCentre = find(china, "ChinaCommandCenter");
+	BOOST_TEST_REQUIRE((centre != ecs::Entity{} && dozer != ecs::Entity{} && enemyCentre != ecs::Entity{}));
+
+	BOOST_TEST(!hud::ReadPortrait(game, america, {}).shown);
+	const auto own = hud::ReadPortrait(game, america, std::array{centre});
+	BOOST_TEST(own.shown);
+	BOOST_TEST(own.image == "SAComCentr_L");
+	BOOST_TEST(own.overlay.empty());
+	for (const auto &cameo : own.upgrades)
+		BOOST_TEST(!cameo.shown);
+	const auto enemy = hud::ReadPortrait(game, america, std::array{enemyCentre});
+	BOOST_TEST(enemy.shown);
+	BOOST_TEST(enemy.image == game.Definition(*game.DefinitionOf(enemyCentre)).selectPortrait);
+	const auto several = hud::ReadPortrait(game, america, std::array{dozer, centre});
+	BOOST_TEST(several.shown);
+	BOOST_TEST(several.image == "SACDozer_L");
+
+	auto queue = commands::Encode(commands::QueueUnit{centre, "AmericaVehicleDozer"});
+	queue.player = 0;
+	game.Tick(std::span(&queue, 1));
+	BOOST_TEST(!hud::ReadPortrait(game, america, std::array{centre}).shown);
+
+	const auto *at = world.Get<gp::Transform>(centre);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at->position.XY(), {}, *game.Teams().DefaultTeam(america));
+	const auto upgradeImage = [&](std::string_view name) { return shell.game.upgrades.upgrades[*shell.game.upgrades.Find(name)].buttonImage; };
+	auto humveePortrait = hud::ReadPortrait(game, america, std::array{humvee});
+	BOOST_TEST(humveePortrait.shown);
+	// The cameos its definition names (UpgradeCameo1..5 as the install's data has them), each with its upgrade's art.
+	const auto &names = game.Definition(*game.DefinitionOf(humvee)).upgradeCameos;
+	std::optional<std::size_t> named;
+	for (std::size_t slot = 0; slot < names.size(); ++slot)
+	{
+		const bool known = !names[slot].empty() && shell.game.upgrades.Find(names[slot]).has_value();
+		BOOST_TEST(humveePortrait.upgrades[slot].shown == known);
+		if (!known)
+			continue;
+		named = named.value_or(slot);
+		BOOST_TEST(humveePortrait.upgrades[slot].image == upgradeImage(names[slot]));
+		BOOST_TEST(!humveePortrait.upgrades[slot].enabled);
+	}
+	BOOST_TEST_REQUIRE(named.has_value()); // the Humvee names its drones and missiles
+	world.Resource<gp::PlayerUpgrades>().Grant(america, *shell.game.upgrades.Find(names[*named]));
+	humveePortrait = hud::ReadPortrait(game, america, std::array{humvee});
+	BOOST_TEST(humveePortrait.upgrades[*named].enabled);
+	for (std::size_t slot = 0; slot < names.size(); ++slot)
+		if (slot != *named && names[slot] != names[*named])
+			BOOST_TEST(!humveePortrait.upgrades[slot].enabled);
+}
+
+// Legacy parity (ControlBar::populateCommand, NEED_SPECIAL_POWER_SCIENCE): the command centre's general's power buttons
+// whose power needs a science the player has not earned are hidden; earned (here granted), the button shows, in the art
+// of the best science of its Science list the player has.
+BOOST_AUTO_TEST_CASE(legacy_parity_unearned_generals_powers_are_hidden)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int america = -1;
+	for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+		if (shell.game.playerTemplates.templates[index].name == "FactionAmerica")
+			america = static_cast<int>(index);
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = america;
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = america;
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t player = *game.Teams().FindPlayer("player0");
+	ecs::Entity centre{};
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (game.Teams().TeamAt(team).owner == player)
+			for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+				if (const auto *ref = game.World().Get<gp::DefinitionRef>(member); ref != nullptr && game.DefinitionName(ref->index) == "AmericaCommandCenter")
+					centre = member;
+	BOOST_TEST_REQUIRE((centre != ecs::Entity{}));
+	// The science-gated power buttons on its command set.
+	std::vector<std::pair<std::size_t, std::string>> gated; // slot, the science its power needs
+	auto state = hud::ReadControlBar(game, player, std::array{centre});
+	for (std::size_t slot = 0; slot < hud::CommandButtons; ++slot)
+		if (const auto *button = state.slots[slot].button; button != nullptr && (button->options & content::button_option::NeedScience) != 0)
+			if (const auto index = shell.game.powers.Template(button->specialPower); index && !shell.game.powers.templates[*index].requiredScience.empty())
+				gated.emplace_back(slot, shell.game.powers.templates[*index].requiredScience);
+	BOOST_TEST_REQUIRE(!gated.empty());
+	for (const auto &[slot, science] : gated)
+		BOOST_TEST((state.slots[slot].state == gameplay::ButtonState::Hidden), "slot " << slot << " needs " << science);
+	const auto &[slot, science] = gated.front();
+	game.World().Resource<gp::PlayerSciences>().Grant(player, *shell.game.Science(science));
+	state = hud::ReadControlBar(game, player, std::array{centre});
+	BOOST_TEST((state.slots[slot].state != gameplay::ButtonState::Hidden));
+	BOOST_TEST(!state.slots[slot].image.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

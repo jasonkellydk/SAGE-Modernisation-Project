@@ -4,17 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <filesystem>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Sphere.Tests;
+import std;
 
 import Assets.Math;
 import Assets.Spheres;

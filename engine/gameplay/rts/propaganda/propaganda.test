@@ -1,0 +1,226 @@
+#define BOOST_TEST_MODULE EngineGameplayPropaganda
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.propaganda.systems.propaganda_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Enthusiastic = 1u << 8, Subliminal = 1u << 15, Paused = 1u << 2, Upgrade = 3;
+
+// A propaganda tower of player 0 at (500, 500): Radius 100, DelayBetweenUpdates 10 ticks, HealPercentEachSecond 3%
+// (6% upgraded by upgrade 3); players 0 and 1 allied, 2 their enemy.
+struct Square
+{
+	explicit Square(std::size_t workers, bool build = true)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<ObjectShroud>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<Sale>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<PropagandaTower>();
+		world.RegisterComponent<PropagandaInfluence>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(100));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(3u);
+		relationships.Set(0, 1, Relationship::Allies);
+		relationships.Set(1, 0, Relationship::Allies);
+		relationships.Set(0, 2, Relationship::Enemies);
+		relationships.Set(2, 0, Relationship::Enemies);
+		world.EmplaceResource<PlayerUpgrades>().Resize(3);
+		world.EmplaceResource<PropagandaScans>();
+		world.EmplaceResource<PropagandaHeals>();
+		world.EmplaceResource<HealPulses>();
+		if (build)
+		{
+			tower = Unit(0, 500, false);
+			world.Add<PropagandaTower>(tower);
+			PropagandaTower &data = *world.Get<PropagandaTower>(tower);
+			data.radius = Fixed::FromInt(100);
+			data.delay = 10;
+			data.heal = Fixed::FromRatio(3, 100);
+			data.upgradedHeal = Fixed::FromRatio(6, 100);
+			data.upgrade = Upgrade;
+			data.bonus = Enthusiastic;
+			data.upgradedBonus = Subliminal;
+			data.pausedStatus = Paused;
+			world.Get<Targetable>(tower)->classes = target_class::Structure;
+		}
+		registry.Register(index);
+		registry.Register(scan);
+		registry.Register(influence);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Unit(std::uint32_t player, int x, bool influenced = true)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<WeaponBonusConditions>(entity);
+		world.Add<Armament>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), target_class::Infantry};
+		world.Get<Owner>(entity)->player = player;
+		*world.Get<Health>(entity) = {Fixed::FromInt(300), Fixed::FromInt(300), 0};
+		world.Get<Armament>(entity)->weapon = 1;
+		if (influenced)
+			world.Add<PropagandaInfluence>(entity);
+		return entity;
+	}
+
+	// One tick; the heals the propaganda gave this tick.
+	std::vector<HealPulse> Step()
+	{
+		world.Resource<HealPulses>().Gather(HealOffers{});
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<HealPulse> out;
+		for (const ecs::Entity entity : {a, b, c})
+			if (entity.IsValid())
+				for (const HealPulse &pulse : world.Resource<HealPulses>().For(entity))
+					out.push_back(pulse);
+		return out;
+	}
+
+	std::uint32_t Bonus(ecs::Entity entity) { return world.Get<WeaponBonusConditions>(entity)->flags; }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::Entity tower, a, b, c;
+	SpatialIndexSystem index;
+	PropagandaScanSystem scan;
+	PropagandaInfluenceSystem influence;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(propaganda)
+
+// PropagandaTowerBehavior::update, doScan and effectLogic (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/
+// PropagandaTowerBehavior.cpp): its first scan comes DelayBetweenUpdates after frame 0 (tick 10), taking in the ally
+// within its radius (not the enemy, not the one beyond it, not itself: a structure); from then on each tick it is
+// ENTHUSIASTIC and healed 300 * 3% / 30 = 0.3 a tick with a 10-tick sole-benefactor lock. Its player's upgrade makes
+// it SUBLIMINAL too and doubles the heal. It walks out after tick 12 and is let go at the next scan (tick 20), not
+// before. Taken in again, it is let go the tick its tower is disabled (EMP) or paused (under construction).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_propaganda_tower_rouses_and_heals_its_allies)
+{
+	Square square(2);
+	square.a = square.Unit(1, 550);
+	square.b = square.Unit(2, 540);
+	square.c = square.Unit(1, 650);
+	for (int step = 0; step < 9; ++step)
+		BOOST_TEST(square.Step().empty());
+	BOOST_TEST(square.Bonus(square.a) == 0u);
+	const auto first = square.Step(); // tick 10: the first scan
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((first[0].target == square.a));
+	BOOST_TEST((first[0].healer == square.tower));
+	BOOST_TEST(first[0].lockTicks == 10u);
+	BOOST_TEST(std::abs(static_cast<double>(first[0].amount.Raw()) / 65536.0 - 0.3) < 0.0001); // 3% in 16-bit fixed point
+	BOOST_TEST(square.Bonus(square.a) == Enthusiastic);
+	BOOST_TEST(square.Bonus(square.b) == 0u);
+	BOOST_TEST(square.Bonus(square.c) == 0u);
+	BOOST_TEST(square.Step().size() == 1u); // every tick
+	square.world.Resource<PlayerUpgrades>().Grant(0, Upgrade);
+	const auto upgraded = square.Step();
+	BOOST_TEST_REQUIRE(upgraded.size() == 1u);
+	BOOST_TEST(std::abs(static_cast<double>(upgraded[0].amount.Raw()) / 65536.0 - 0.6) < 0.0001);
+	BOOST_TEST(square.Bonus(square.a) == (Enthusiastic | Subliminal));
+	square.world.Get<Transform>(square.a)->position.x = Fixed::FromInt(700); // after tick 12
+	while (square.tick < 19)
+		square.Step();
+	BOOST_TEST(square.Bonus(square.a) == (Enthusiastic | Subliminal)); // still, until the next scan
+	square.Step(); // tick 20
+	BOOST_TEST(square.Bonus(square.a) == 0u);
+	BOOST_TEST(!square.world.Get<PropagandaInfluence>(square.a)->tower.IsValid());
+	square.world.Get<Transform>(square.a)->position.x = Fixed::FromInt(550);
+	while (square.tick < 30)
+		square.Step();
+	BOOST_TEST(square.Bonus(square.a) == (Enthusiastic | Subliminal));
+	square.world.Add<Disabled>(square.tower);
+	square.world.Get<Disabled>(square.tower)->mask = disabled_type::Emp;
+	BOOST_TEST(square.Step().empty());
+	BOOST_TEST(square.Bonus(square.a) == 0u);
+	square.world.Get<Disabled>(square.tower)->mask = disabled_type::Held; // held still works
+	while (square.tick < 40)
+		square.Step();
+	BOOST_TEST(square.Bonus(square.a) == (Enthusiastic | Subliminal));
+	square.world.Add<StatusFlags>(square.tower);
+	square.world.Get<StatusFlags>(square.tower)->bits = Paused;
+	square.Step();
+	BOOST_TEST(square.Bonus(square.a) == 0u);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(propaganda_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Square square(workers);
+		std::vector<ecs::Entity> units;
+		for (int index = 0; index < 40; ++index)
+			units.push_back(square.Unit(static_cast<std::uint32_t>(index % 3), 420 + index * 5));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 60; ++step)
+		{
+			for (std::size_t index = 0; index < units.size(); index += 7)
+				square.world.Get<Transform>(units[index])->position.x += Fixed::FromInt(3);
+			square.Step();
+			hashes.push_back(square.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Square saved(2);
+	saved.a = saved.Unit(1, 550);
+	for (int step = 0; step < 15; ++step)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Square loaded(3, false);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	loaded.a = saved.a;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	for (int step = 0; step < 20; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

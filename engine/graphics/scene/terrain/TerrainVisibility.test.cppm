@@ -1,8 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TerrainVisibilityTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
 export module Graphics.Scene.Terrain.Visibility.Tests;
+import std;
 import Graphics.Scene.Terrain.Visibility;
 using namespace Graphics;
 BOOST_AUTO_TEST_CASE(batch_bounds_are_conservative_at_clip_planes)

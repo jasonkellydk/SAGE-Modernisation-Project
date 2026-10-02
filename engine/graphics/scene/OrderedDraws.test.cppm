@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE OrderedDrawTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <stdexcept>
-#include <vector>
 export module Graphics.Scene.OrderedDraws.Tests;
+import std;
 import Graphics.Scene.OrderedDraws;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;

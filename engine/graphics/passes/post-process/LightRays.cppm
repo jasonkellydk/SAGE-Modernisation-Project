@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-
 export module Graphics.Passes.LightRays;
+import std;
 import Graphics.RHI;
 import Graphics.FrameTargets;
 import Graphics.Resources.Textures.Snapshot;

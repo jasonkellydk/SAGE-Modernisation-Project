@@ -14,6 +14,7 @@ target_sources(generals_graphics
             diagnostics/RenderDiagnostics.cppm
             cursors/CursorLoad.cppm
             cursors/Cursor.cppm
+            cursors/AniCursor.cppm
             presentation/DisplayModes.cppm
             resources/handles/ResourceHandle.cppm
             memory/AlignedAllocator.cppm
@@ -23,6 +24,7 @@ target_sources(generals_graphics
             resources/textures/TextureCachePolicy.cppm
             resources/textures/TextureResidency.cppm
             resources/loading/ResourceLoadQueue.cppm
+            resources/loading/MipChain.cppm
             resources/textures/TextureUpload.cppm
             resources/textures/TextureLoad.cppm
             resources/textures/TextureAtlas.cppm
@@ -151,6 +153,7 @@ target_sources(generals_graphics
             scene/particles/ParticleRenderer.cppm
             scene/weather/WeatherParticles.cppm
             scene/screen/ScreenDistortion.cppm
+            scene/screen/ScreenFilterPass.cppm
             scene/screen/FullscreenOverlay.cppm
             scene/ring/Ring.cppm
             scene/ring/RingRuntime.cppm
@@ -172,6 +175,9 @@ target_sources(generals_graphics
             scene/models/ModelDeformation.cppm
             scene/models/ModelGeometryMath.cppm
             scene/models/ModelGeometryQueries.cppm
+            scene/models/ModelRayCast.cppm
+            scene/models/ModelPartBones.cppm
+            scene/models/ModelCollisionBuild.cppm
             scene/models/ModelMeshDrawing.cppm
             scene/dazzles/DazzleState.cppm
             scene/dazzles/DazzleLayer.cppm
@@ -689,8 +695,10 @@ if(RTS_BUILD_GRAPHICS_TESTS)
     target_link_libraries(generals_graphics_cursor_test PRIVATE SDL3::SDL3)
     add_graphics_test(generals_graphics_cursor_load_test cursors/CursorLoad.test.cppm)
     target_link_libraries(generals_graphics_cursor_load_test PRIVATE SDL3::SDL3)
+    add_graphics_test(generals_graphics_ani_cursor_test cursors/AniCursor.test.cppm)
+    target_link_libraries(generals_graphics_ani_cursor_test PRIVATE SDL3::SDL3)
     if(WIN32)
-        foreach(cursor_test generals_graphics_cursor_test generals_graphics_cursor_load_test generals_graphics_display_modes_test)
+        foreach(cursor_test generals_graphics_cursor_test generals_graphics_cursor_load_test generals_graphics_ani_cursor_test generals_graphics_display_modes_test)
             add_custom_command(TARGET ${cursor_test} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:${cursor_test}>)
@@ -1852,4 +1860,21 @@ if(WIN32 AND TARGET slang-bootstrap)
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/resource_access.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/environment_lighting.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop_surface.slangh" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/source/prop.slang" slang-bootstrap VERBATIM)
     add_custom_target(generals_graphics_prop_shaders DEPENDS "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth_records.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_depth.pso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_records.pso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop_instanced.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.vso" "${GRAPHICS_SHADER_ASSET_DIRECTORY}/prop.pso")
     add_dependencies(generals_graphics generals_graphics_prop_shaders)
+endif()
+
+# CPU-only picking math (the original's W3D ray cast): always built and run with the other suites.
+if(BUILD_TESTING)
+    find_package(Boost CONFIG REQUIRED)
+    add_executable(generals_graphics_model_ray_cast_tests)
+    target_sources(generals_graphics_model_ray_cast_tests
+        PRIVATE
+            FILE_SET CXX_MODULES
+            BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}"
+            FILES
+                scene/models/ModelRayCast.test.cppm
+    )
+    target_compile_features(generals_graphics_model_ray_cast_tests PRIVATE cxx_std_23)
+    target_include_directories(generals_graphics_model_ray_cast_tests PRIVATE ${Boost_INCLUDE_DIRS})
+    target_link_libraries(generals_graphics_model_ray_cast_tests PRIVATE generals_graphics)
+    add_test(NAME generals_graphics_model_ray_cast_tests COMMAND generals_graphics_model_ray_cast_tests)
 endif()

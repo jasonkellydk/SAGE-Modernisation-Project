@@ -2,13 +2,10 @@ module;
 #define BOOST_TEST_MODULE ToolFrameTests
 #define NOMINMAX
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <filesystem>
-#include <vector>
 #include <windows.h>
 
 export module Graphics.Frame.ToolFrame.Tests;
+import std;
 import Graphics.Frame.ToolFrame;
 import Graphics.Frame.Runtime;
 import Graphics.Frame.AttachmentBindings;

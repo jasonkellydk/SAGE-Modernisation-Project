@@ -1,14 +1,5 @@
-module;
-
-#include <algorithm>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.Transparency;
+import std;
 
 export import Graphics.Resources.Materials.Material;
 export import Graphics.Scene.DrawGeneration;

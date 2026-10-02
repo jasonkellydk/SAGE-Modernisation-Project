@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.RenderObjectLOD;
+import std;
 
 namespace Graphics
 {

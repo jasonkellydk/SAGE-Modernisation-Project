@@ -1,0 +1,141 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.hud.algorithms.cameo_flash_steps;
+import games.generalszh.presentation.hud.algorithms.cinematic_text_layout;
+import games.generalszh.presentation.hud.algorithms.popup_message_layout;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(script_interface)
+
+// legacy_parity: ScriptActions::doCameoFlash: LOGICFRAMES_PER_SECOND (30) x seconds / DRAWABLE_FRAMES_PER_FLASH (15),
+// made even: 3 seconds give 6. ControlBar::update: on every tenth client frame a command window showing the button
+// spends one: an even count lights it (WIN_STATUS_FLASHING), an odd one darkens it, and the check stops (m_flash) as
+// the count runs out: lit on frames 10, 30 and 50, dark on 20, 40 and 60, and nothing after. An unknown button
+// (findCommandButton: none) starts nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cameo_flashes_on_the_originals_frames)
+{
+	BOOST_TEST(CameoFlashCount(3) == 6);
+	BOOST_TEST(CameoFlashCount(1) == 2);
+	BOOST_TEST(CameoFlashCount(0) == 0);
+	CameoFlashes flashes;
+	StartCameoFlash(flashes, "Command_Nothing", 3, false);
+	BOOST_TEST(!flashes.flash);
+	StartCameoFlash(flashes, "Command_Build", 3, true);
+	BOOST_TEST(flashes.flash);
+	std::array<std::string_view, 14> windows{};
+	windows[4] = "Command_Build";
+	std::vector<std::uint64_t> lit, dark;
+	bool shownBefore = false;
+	for (std::uint64_t tick = 1; tick <= 100; ++tick)
+	{
+		StepCameoFlash(flashes, tick, windows);
+		StepCameoFlash(flashes, tick, windows); // once a tick
+		if (flashes.flashing[4] != shownBefore)
+			(flashes.flashing[4] ? lit : dark).push_back(tick);
+		shownBefore = flashes.flashing[4];
+		if (tick == 60)
+			BOOST_TEST(!flashes.flash);
+	}
+	BOOST_TEST((lit == std::vector<std::uint64_t>{10, 30, 50}));
+	BOOST_TEST((dark == std::vector<std::uint64_t>{20, 40, 60}));
+	BOOST_TEST(flashes.counts.at("Command_Build") == 0);
+}
+
+// legacy_parity: ControlBar::update counts the flash down only while a command window shows the button (per window
+// showing it: two windows spend two), and ControlBar::processCommandUI stops it when the button is pressed
+// (setFlashCount(0), setFlash(FALSE); the port also clears the pressed window, where the original left it lit);
+// switchToContext(CB_CONTEXT_NONE) clears every window's flash.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cameo_flash_waits_for_its_button_and_stops_when_pressed)
+{
+	CameoFlashes flashes;
+	StartCameoFlash(flashes, "Command_Build", 2, true); // 4
+	std::array<std::string_view, 14> windows{};
+	StepCameoFlash(flashes, 10, windows);
+	BOOST_TEST(flashes.counts.at("Command_Build") == 4); // not shown: kept
+	windows[0] = "Command_Build";
+	windows[1] = "Command_Build";
+	StepCameoFlash(flashes, 20, windows);
+	BOOST_TEST(flashes.counts.at("Command_Build") == 2);
+	BOOST_TEST(flashes.flashing[0]);
+	BOOST_TEST(!flashes.flashing[1]); // the second window saw 3: odd, dark
+	StopCameoFlash(flashes, "Command_Build", 0);
+	BOOST_TEST(flashes.counts.at("Command_Build") == 0);
+	BOOST_TEST(!flashes.flash);
+	BOOST_TEST(!flashes.flashing[0]);
+	flashes.flashing[5] = true;
+	ClearCameoFlashing(flashes);
+	BOOST_TEST(!flashes.flashing[5]);
+}
+
+// legacy_parity: ScriptActions::doDisplayCinematicText and W3DDisplay::draw: the size after "Size:", bold for
+// "[Bold]"; LOGICFRAMES_PER_SECOND x seconds frames, one spent each drawn frame (30 a second), so 3 seconds show for
+// 3 seconds of real time; 0 never shows; a negative count never runs out. It sits centred ((800 - 300) / 2 = 250),
+// 20 from the left when wider than the screen, its top at (int)(height x .9): 540 on 600, 691 on 768; wrapped at the
+// width less 20.
+BOOST_AUTO_TEST_CASE(legacy_parity_cinematic_text_font_time_and_place)
+{
+	const CinematicFont font = ParseCinematicFont("Arial - Size:18 [Bold]");
+	BOOST_TEST(font.name == "Arial");
+	BOOST_TEST(font.size == 18);
+	BOOST_TEST(font.bold);
+	const CinematicFont plain = ParseCinematicFont("Placard Condensed - Size:12");
+	BOOST_TEST(plain.name == "Placard Condensed");
+	BOOST_TEST(plain.size == 12);
+	BOOST_TEST(!plain.bold);
+
+	CinematicText cinematic;
+	SetCinematicText(cinematic, u"Somewhere", "Arial - Size:18", 3);
+	BOOST_TEST(cinematic.frames == 90);
+	BOOST_TEST(CinematicTextShown(cinematic));
+	AdvanceCinematicText(cinematic, 2.9);
+	BOOST_TEST(CinematicTextShown(cinematic));
+	AdvanceCinematicText(cinematic, 0.1);
+	BOOST_TEST(!CinematicTextShown(cinematic));
+	SetCinematicText(cinematic, u"Never", "Arial - Size:18", 0);
+	BOOST_TEST(!CinematicTextShown(cinematic));
+	SetCinematicText(cinematic, u"Always", "Arial - Size:18", -1);
+	AdvanceCinematicText(cinematic, 1000.0);
+	BOOST_TEST(CinematicTextShown(cinematic));
+
+	const CinematicTextPlace place = PlaceCinematicText(800, 600, 300);
+	BOOST_TEST(place.x == 250);
+	BOOST_TEST(place.y == 540);
+	BOOST_TEST(place.wrapWidth == 780);
+	BOOST_TEST(PlaceCinematicText(800, 600, 900).x == 20);
+	BOOST_TEST(PlaceCinematicText(1024, 768, 100).y == 691);
+}
+
+// legacy_parity: InGameUI::popupMessage: x and y percents clamped to 0..100 and taken of the screen (truncated: 33% of
+// 1024 is 337), the width at least 50; InGamePopupMessageInit: the window as wide as that and as tall as the text
+// wrapped at the width less 14, plus 7 + 2 + 2, the OK button and 2; the text 2 in; the OK button at width - its
+// width - 2 across and text + 7 + 2 + 2 down. Closing says whether it had paused the game.
+BOOST_AUTO_TEST_CASE(legacy_parity_popup_message_placement_and_layout)
+{
+	PopupMessage popup;
+	ShowPopupMessage(popup, u"Hint", 33, 150, 30, true, 1024, 768);
+	BOOST_TEST(popup.shown);
+	BOOST_TEST(popup.x == 337);
+	BOOST_TEST(popup.y == 768);
+	BOOST_TEST(popup.width == 50);
+	ShowPopupMessage(popup, u"Hint", -5, 40, 300, true, 800, 600);
+	BOOST_TEST(popup.x == 0);
+	BOOST_TEST(popup.y == 240);
+	BOOST_TEST(popup.width == 300);
+	const PopupLayout layout = LayOutPopupMessage(popup, 40, 60, 20);
+	BOOST_TEST(layout.wrapWidth == 286);
+	BOOST_TEST(layout.window.width == 300);
+	BOOST_TEST(layout.window.height == 40 + 7 + 2 + 2 + 20 + 2);
+	BOOST_TEST(layout.text.x == 2);
+	BOOST_TEST(layout.text.width == 296);
+	BOOST_TEST(layout.text.height == 47);
+	BOOST_TEST(layout.ok.x == 238);
+	BOOST_TEST(layout.ok.y == 51);
+	BOOST_TEST(ClosePopupMessage(popup));
+	BOOST_TEST(!popup.shown);
+	BOOST_TEST(!ClosePopupMessage(popup));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

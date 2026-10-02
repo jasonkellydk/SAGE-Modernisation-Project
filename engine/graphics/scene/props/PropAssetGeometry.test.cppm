@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PropAssetGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <vector>
-#include <string>
 export module Graphics.Scene.Props.AssetGeometry.Tests;
+import std;
 import Graphics.Scene.Props.AssetGeometry;
 import Assets.Models;
 import Assets.Identity;

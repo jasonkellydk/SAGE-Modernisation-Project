@@ -1,8 +1,8 @@
 module;
 #define BOOST_TEST_MODULE FrameSubmissionStatisticsTests
 #include <boost/test/included/unit_test.hpp>
-#include <cstdint>
 export module Graphics.Frame.SubmissionStatistics.Tests;
+import std;
 import Graphics.Frame.SubmissionStatistics;
 import Graphics.RHI;
 

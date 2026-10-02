@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-
 export module Assets.Math;
+import std;
 
 namespace Assets
 {

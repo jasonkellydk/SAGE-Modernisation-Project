@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE StencilVolumeDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Scene.Shadows.StencilVolumes.Tests;
+import std;
 import Graphics.Scene.Shadows.StencilVolumes;
 import Graphics.Scene.Surfaces.Renderer;
 import Graphics.Tests.Device;

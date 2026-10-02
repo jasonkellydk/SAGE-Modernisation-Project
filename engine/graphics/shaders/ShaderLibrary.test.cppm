@@ -4,14 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <span>
-
 export module Graphics.Shaders.Library.Tests;
+import std;
 
 import Graphics.Shaders.Library;
 

@@ -1,11 +1,5 @@
-module;
-
-#include <cmath>
-#include <limits>
-#include <numbers>
-#include <utility>
-
 export module Engine.Core.Math.EulerAngles3;
+import std;
 
 export import Engine.Core.Math.AffineTransform3;
 

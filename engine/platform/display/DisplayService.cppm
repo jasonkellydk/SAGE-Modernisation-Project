@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <string>
-#include <vector>
 export module engine.platform.display;
+import std;
 import engine.platform.core.types;
 
 export namespace engine::platform

@@ -1,17 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <future>
-#include <thread>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Terrain.Geometry;
+import std;
 
 namespace Graphics
 {

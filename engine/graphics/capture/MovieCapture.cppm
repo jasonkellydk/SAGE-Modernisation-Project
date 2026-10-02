@@ -1,10 +1,5 @@
-module;
-#include <cmath>
-#include <cstdint>
-#include <filesystem>
-#include <string>
-#include <system_error>
 export module Graphics.Capture.MovieCapture;
+import std;
 export import Graphics.Capture.FrameCapture;
 import Video.Capture.AVIWriter;
 namespace Graphics

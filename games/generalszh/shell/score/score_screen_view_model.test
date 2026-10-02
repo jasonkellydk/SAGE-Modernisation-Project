@@ -1,0 +1,193 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.shell.score.score_screen_view_model;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(score_screen_view_model)
+
+// Legacy parity (ScoreScreen.cpp grabSinglePlayerInfo / populateSideInfo / hideWindows): the local player first as
+// "GUI:Player"; then the listed players summed by base side, allies before enemies, USA, China, GLA, each sum in its last
+// player's colour; an unlisted player (PLAYER_EXCLUDE_FROM_SCORE_SCREEN) and a neutral one left out; unused rows hidden.
+// finishSinglePlayerInit: Continue reads "GUI:SaveAndContinue" after a victory with missions left, "GUI:EndCampaign"
+// after the last, "GUI:Retry" after a defeat.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missions_score_screen)
+{
+	ScoreScreenViewModel screen([](std::string_view label) { return std::u16string(label.begin(), label.end()); });
+	ScoreScreenSetup setup;
+	setup.kind = ScoreScreenKind::SinglePlayer;
+	setup.victorious = true;
+	setup.localScoreScreenImage = "USA_ScoreScreen";
+	ScorePlayer me{u"ThePlayer", "USA", 0xFF0000FF, true, true, false, 1, 3, 1, 4, 2, 0, 5, 1200};
+	ScorePlayer ally{u"Ally", "USA", 0xFF00FF00, false, true, false, 1, 1, 0, 0, 0, 0, 0, 0};
+	ScorePlayer glaA{u"GLA1", "GLA", 0xFF111111, false, true, false, 2, 2, 2, 0, 1, 1, 0, 50};
+	ScorePlayer glaB{u"GLA2", "GLA", 0xFF222222, false, true, false, 2, 1, 1, 0, 0, 0, 0, 25};
+	ScorePlayer hidden{u"Hidden", "China", 0xFF333333, false, false, false, 2, 9, 9, 9, 9, 9, 9, 9};
+	ScorePlayer civilian{u"Civilian", "Civilian", 0xFFFFFFFF, false, true, false, 0, 7, 7, 7, 7, 7, 7, 7};
+	setup.players = {me, ally, glaA, glaB, hidden, civilian};
+	screen.Show(setup);
+	BOOST_TEST((screen.rows[0].name.Get() == u"GUI:Player"));
+	BOOST_TEST((screen.rows[0].values[0].Get() == u"3"));
+	BOOST_TEST((screen.rows[0].values[6].Get() == u"1200"));
+	BOOST_TEST(screen.rows[0].color.Get() == 0xFF0000FFu);
+	BOOST_TEST((screen.rows[1].name.Get() == u"GUI:USAAllies"));
+	BOOST_TEST((screen.rows[2].name.Get() == u"GUI:GLAEnemies"));
+	BOOST_TEST((screen.rows[2].values[0].Get() == u"3"));  // 2 + 1 built
+	BOOST_TEST((screen.rows[2].values[6].Get() == u"75")); // 50 + 25 earned
+	BOOST_TEST(screen.rows[2].color.Get() == 0xFF222222u);
+	BOOST_TEST(!screen.rows[3].shown.Get());
+	BOOST_TEST(screen.continueShown.Get());
+	BOOST_TEST((screen.continueText.Get() == u"GUI:SaveAndContinue"));
+	BOOST_TEST(screen.backdrop.Get() == "USA_ScoreScreen");
+	// finishSinglePlayerInit: "game saved" only after the mission save (a win with a mission to follow).
+	BOOST_TEST(!screen.gameSavedShown.Get());
+	setup.gameSaved = true;
+	screen.Show(setup);
+	BOOST_TEST(screen.gameSavedShown.Get());
+	setup.gameSaved = false;
+	setup.campaignOver = true;
+	screen.Show(setup);
+	BOOST_TEST((screen.continueText.Get() == u"GUI:EndCampaign"));
+	BOOST_TEST(!screen.gameSavedShown.Get());
+	setup.victorious = false;
+	screen.Show(setup);
+	BOOST_TEST((screen.continueText.Get() == u"GUI:Retry"));
+	screen.continueGame.Execute();
+	BOOST_TEST((screen.TakeChoice() == ScoreChoice::Continue));
+	BOOST_TEST((screen.TakeChoice() == ScoreChoice::None));
+}
+
+// Legacy parity (grabMultiPlayerInfo / initSkirmish): the seats by score, highest first, a tied score raised by the
+// next adder (1, 2, ...), so of two tied the later seat shows first; no Continue.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmishs_score_screen)
+{
+	ScoreScreenViewModel screen([](std::string_view label) { return std::u16string(label.begin(), label.end()); });
+	ScoreScreenSetup setup;
+	setup.kind = ScoreScreenKind::Skirmish;
+	ScorePlayer a{u"A", "USA", 1, true, true, false, 0, 1, 0, 0, 0, 0, 0, 0, 500};
+	ScorePlayer b{u"B", "China", 2, false, true, false, 2, 2, 0, 0, 0, 0, 0, 0, 900};
+	ScorePlayer c{u"C", "GLA", 3, false, true, false, 2, 3, 0, 0, 0, 0, 0, 0, 500};
+	setup.players = {a, b, c};
+	screen.Show(setup);
+	BOOST_TEST((screen.rows[0].name.Get() == u"B"));
+	BOOST_TEST((screen.rows[1].name.Get() == u"C")); // 500 + 1
+	BOOST_TEST((screen.rows[2].name.Get() == u"A"));
+	BOOST_TEST(!screen.rows[3].shown.Get());
+	BOOST_TEST(!screen.continueShown.Get());
+	BOOST_TEST(screen.backdrop.Get() == "MutiPlayer_ScoreScreen");
+	screen.ok.Execute();
+	BOOST_TEST((screen.TakeChoice() == ScoreChoice::MainMenu));
+}
+
+// legacy_parity: ScoreScreen.cpp (EA Zero Hour) finishSinglePlayerInit / displayChallengeWinLoss: a challenge campaign's
+// mission won shows the opponent's DefeatedImage in BigPortrait, "GUI:ChallengeWinText" with the opponent's GeneralName
+// for its %s, its DefeatedString as the remarks, and plays its WinSound; lost, its VictoriousImage, "GUI:ChallengeLossText",
+// VictoriousString and LossSound. MainBackdrop and GadgetParent hide, the backdrop is "GeneralsChallengeWinLoss"; Continue
+// keeps its text ("GUI:SaveAndContinue" / "GUI:Retry"). A campaign's mission shows none of it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_challenge_missions_score_screen_shows_the_opponent)
+{
+	std::vector<std::string> sounds;
+	ScoreScreenViewModel screen(
+		[](std::string_view label) {
+			if (label == "GUI:ChallengeWinText")
+				return std::u16string(u"Congratulations, you've defeated %s");
+			if (label == "GUI:ChallengeLossText")
+				return std::u16string(u"You've been defeated by %s");
+			if (label == "GUI:BioNameEntry_Pos1")
+				return std::u16string(u"Dr. Thrax");
+			return std::u16string(label.begin(), label.end());
+		},
+		[&sounds](std::string_view sound) { sounds.emplace_back(sound); });
+	ScoreScreenSetup setup;
+	setup.kind = ScoreScreenKind::SinglePlayer;
+	setup.localScoreScreenImage = "USA_ScoreScreen";
+	setup.players = {ScorePlayer{u"ThePlayer", "USA", 0xFF0000FF, true, true, false, 1}};
+	setup.challenge = ChallengeScore{"GUI:BioNameEntry_Pos1", "PAToxinGen_L", "PAToxinGen_R", "GUI:BioDefeatedEntry_Pos1",
+		"GUI:BioVictoriousEntry_Pos1", "Taunts_Thrax064", "Taunts_Thrax065"};
+	setup.victorious = true;
+	screen.Show(setup);
+	BOOST_TEST(screen.challengeShown.Get());
+	BOOST_TEST(!screen.scoresShown.Get());
+	BOOST_TEST(screen.backdrop.Get() == "GeneralsChallengeWinLoss");
+	BOOST_TEST(screen.challengePortrait.Get() == "PAToxinGen_L");
+	BOOST_TEST((screen.challengeHeader.Get() == u"Congratulations, you've defeated Dr. Thrax"));
+	BOOST_TEST((screen.challengeRemarks.Get() == u"GUI:BioDefeatedEntry_Pos1"));
+	BOOST_TEST((screen.continueText.Get() == u"GUI:SaveAndContinue"));
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "Taunts_Thrax064");
+
+	setup.victorious = false;
+	screen.Show(setup);
+	BOOST_TEST(screen.challengePortrait.Get() == "PAToxinGen_R");
+	BOOST_TEST((screen.challengeHeader.Get() == u"You've been defeated by Dr. Thrax"));
+	BOOST_TEST((screen.challengeRemarks.Get() == u"GUI:BioVictoriousEntry_Pos1"));
+	BOOST_TEST((screen.continueText.Get() == u"GUI:Retry"));
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1] == "Taunts_Thrax065");
+
+	setup.challenge.reset();
+	screen.Show(setup);
+	BOOST_TEST(!screen.challengeShown.Get());
+	BOOST_TEST(screen.scoresShown.Get());
+	BOOST_TEST(screen.backdrop.Get() == "USA_ScoreScreen");
+	BOOST_TEST(sounds.size() == 2u);
+	BOOST_TEST((ScoreScreenViewModel::FormatLabel(u"by %ls!", u"X") == u"by X!"));
+}
+
+// legacy_parity: ScoreScreen.cpp populatePlayerInfo / setObserverWindows (GameWindowWinner<n> shown with the player's
+// PlayerTemplate SideIconImage), populateSideInfo (a side's sum: its last summed player's icon, shown only when it has
+// one) and hideWindows (unused rows' markers hidden); ScoreScreenUpdate's music: a skirmish's local slot's
+// ScoreScreenMusic, FactionObserver's when the local slot has no player, none after a campaign or challenge mission.
+BOOST_AUTO_TEST_CASE(legacy_parity_score_rows_show_their_side_icons_and_the_side_plays_its_music)
+{
+	ScoreScreenViewModel screen([](std::string_view label) { return std::u16string(label.begin(), label.end()); });
+	ScoreScreenSetup setup;
+	setup.kind = ScoreScreenKind::Skirmish;
+	setup.observerScoreScreenMusic = "Score_USA";
+	ScorePlayer me{u"Me", "GLA", 1, true, true, false, 0, 1, 0, 0, 0, 0, 0, 0, 900};
+	me.sideIconImage = "GameinfoGLA";
+	me.scoreScreenMusic = "Score_GLA";
+	ScorePlayer them{u"Them", "China", 2, false, true, false, 2, 2, 0, 0, 0, 0, 0, 0, 500};
+	them.sideIconImage = "GameinfoCHINA";
+	ScorePlayer watcher{u"Watcher", "", 3, false, true, true, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	watcher.sideIconImage = "GameinfoOBSRVR";
+	setup.players = {me, them, watcher};
+	screen.Show(setup);
+	BOOST_TEST(screen.rows[0].winnerShown.Get());
+	BOOST_TEST(screen.rows[0].winnerImage.Get() == "GameinfoGLA");
+	BOOST_TEST(screen.rows[1].winnerImage.Get() == "GameinfoCHINA");
+	BOOST_TEST(screen.rows[2].winnerShown.Get()); // the observer's row too
+	BOOST_TEST(screen.rows[2].winnerImage.Get() == "GameinfoOBSRVR");
+	BOOST_TEST(!screen.rows[3].winnerShown.Get());
+	BOOST_TEST(ScoreScreenMusic(setup) == "Score_GLA");
+	setup.players = {them, watcher};
+	BOOST_TEST(ScoreScreenMusic(setup) == "Score_USA");
+
+	// A mission: the local row its own icon; GLA enemies summed, the last one's icon; a sum without an icon hidden.
+	setup.kind = ScoreScreenKind::SinglePlayer;
+	ScorePlayer local{u"Me", "USA", 1, true, true, false, 0, 1, 0, 0, 0, 0, 0, 0, 0};
+	local.sideIconImage = "GameinfoAMRCA";
+	local.scoreScreenMusic = "Score_USA";
+	ScorePlayer glaA{u"GLA1", "GLA", 2, false, true, false, 2, 1, 0, 0, 0, 0, 0, 0, 0};
+	glaA.sideIconImage = "GameinfoGLA";
+	ScorePlayer glaB{u"GLA2", "GLA", 3, false, true, false, 2, 1, 0, 0, 0, 0, 0, 0, 0};
+	glaB.sideIconImage = "GLA2Icon";
+	ScorePlayer china{u"China", "China", 4, false, true, false, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+	setup.players = {local, glaA, glaB, china};
+	screen.Show(setup);
+	BOOST_TEST(screen.rows[0].winnerImage.Get() == "GameinfoAMRCA");
+	BOOST_TEST(screen.rows[0].winnerShown.Get());
+	BOOST_TEST((screen.rows[1].name.Get() == u"GUI:ChinaAllies"));
+	BOOST_TEST(!screen.rows[1].winnerShown.Get());
+	BOOST_TEST((screen.rows[2].name.Get() == u"GUI:GLAEnemies"));
+	BOOST_TEST(screen.rows[2].winnerImage.Get() == "GLA2Icon");
+	BOOST_TEST(screen.rows[2].winnerShown.Get());
+	BOOST_TEST(!screen.rows[3].winnerShown.Get());
+	BOOST_TEST(ScoreScreenMusic(setup).empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

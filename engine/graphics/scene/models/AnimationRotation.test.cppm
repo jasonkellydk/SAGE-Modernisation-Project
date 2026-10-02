@@ -1,14 +1,9 @@
 module;
 #define BOOST_TEST_MODULE AnimationRotationTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cmath>
-#include <cstdint>
-#include <cstddef>
-#include <vector>
 #include "../../tests/LegacyMathReference.h"
 export module Graphics.Scene.Models.AnimationRotation.Tests;
+import std;
 import Graphics.Scene.Models.AnimationRotation;
 import Graphics.Scene.AffineTransform;
 import Graphics.Scene.Props.Renderer;

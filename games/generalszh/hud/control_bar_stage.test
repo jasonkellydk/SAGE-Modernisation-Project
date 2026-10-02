@@ -1,0 +1,104 @@
+#include <boost/test/unit_test.hpp>
+
+#include <vector>
+
+import games.generalszh.hud.control_bar_stage;
+
+using namespace generalszh;
+
+BOOST_AUTO_TEST_SUITE(control_bar_stage)
+
+// legacy_parity: ControlBar::toggleControlBarStage / switchControlBarStage / setLowControlBarConfig / setUpDownImages
+// (the minimise button, ButtonLarge, ControlBarCallback's GBM_SELECTED): DEFAULT to LOW puts the bar's top at
+// height - .1 * height (540 on 800 x 600, 691 on 1024 x 768, truncated) with the ToggleButtonUp images; LOW to DEFAULT
+// back at its laid-out top with the ToggleButtonDown images. During a replay's playback switchControlBarStage does nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_minimise_button_drops_and_raises_the_bar)
+{
+	BOOST_TEST(hud::LowStageTop(600) == 540);
+	BOOST_TEST(hud::LowStageTop(768) == 691);
+	BOOST_TEST(hud::LowStageTop(1080) == 972);
+	hud::ControlBarStageViewModel bar;
+	bar.SetLayout(450, 800, 600);
+	BOOST_TEST(bar.top.Get() == 450);
+	BOOST_TEST(!bar.minimised.Get());
+	bar.toggle.Execute();
+	BOOST_TEST((bar.Stage() == hud::ControlBarStage::Low));
+	BOOST_TEST(bar.top.Get() == 540);
+	BOOST_TEST(bar.minimised.Get());
+	bar.toggle.Execute();
+	BOOST_TEST((bar.Stage() == hud::ControlBarStage::Default));
+	BOOST_TEST(bar.top.Get() == 450);
+	BOOST_TEST(!bar.minimised.Get());
+	bar.SetPlayback(true);
+	bar.toggle.Execute();
+	BOOST_TEST((bar.Stage() == hud::ControlBarStage::Default));
+	BOOST_TEST(bar.top.Get() == 450);
+}
+
+// legacy_parity: ShowControlBar(FALSE) (a game's start, a letterbox's end) through AnimateWindowManager and
+// ProcessAnimateWindowSlideFromBottom: the bar starts the display's width (800) below its top of 400 and moves up 40 a
+// frame until within 80 of it, then each frame by the truncated velocity, which shrinks by 0.67 a frame but never below 1:
+// 1160, 1120 ... 480, 454, 437, 425, 417, 412, 409, 407, 406, 405, 404 ... 400, and settles at 400 on the 33rd frame.
+// Shown immediately (ToggleControlBar), it is at its place at once. The view model steps once per 1/30 s of real time.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shown_bar_slides_up_from_below)
+{
+	const std::vector<int> expected{1160, 1120, 1080, 1040, 1000, 960, 920, 880, 840, 800, 760, 720, 680, 640, 600, 560, 520, 480, 454, 437,
+		425, 417, 412, 409, 407, 406, 405, 404, 403, 402, 401, 400, 400};
+	hud::BottomSlide slide = hud::StartBottomSlide(400, 800);
+	BOOST_TEST(slide.currentY == 1200);
+	for (std::size_t frame = 0; frame < expected.size(); ++frame)
+	{
+		const bool finished = hud::StepBottomSlide(slide);
+		BOOST_TEST(slide.currentY == expected[frame]);
+		BOOST_TEST(finished == (frame + 1 == expected.size()));
+	}
+
+	hud::ControlBarStageViewModel bar;
+	bar.SetLayout(400, 800, 600);
+	bar.toggle.Execute(); // minimised first: showing puts it back to the default stage
+	bar.Show(false);
+	BOOST_TEST(!bar.minimised.Get());
+	BOOST_TEST(bar.top.Get() == 1200);
+	bar.Update(1.0 / 30.0);
+	BOOST_TEST(bar.top.Get() == 1160);
+	bar.Update(0.51); // 15 more frames (a little left over)
+	BOOST_TEST(bar.top.Get() == 560);
+	bar.Update(10.0);
+	BOOST_TEST(bar.top.Get() == 400);
+	BOOST_TEST(bar.Slide().finished);
+	bar.Show(true);
+	BOOST_TEST(bar.top.Get() == 400);
+}
+
+// legacy_parity: ControlBar::setDefaultControlBarConfig / setLowControlBarConfig and ControlBarCallback's ShowControlBar /
+// HideControlBar / ToggleControlBar (TheTacticalView->setHeight): the tactical view is (Int)(height * 0.80f) tall at the
+// default stage or the bar shown (480 of 600, 614 of 768, 864 of 1080), the whole display minimised or the bar hidden
+// (a letterbox, F9). During playback a stage switch leaves it, but showing the bar still shrinks it.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_tactical_view_shrinks_above_the_bar)
+{
+	BOOST_TEST(hud::DefaultStageViewHeight(600) == 480);
+	BOOST_TEST(hud::DefaultStageViewHeight(768) == 614);
+	BOOST_TEST(hud::DefaultStageViewHeight(1080) == 864);
+	hud::ControlBarStageViewModel bar;
+	bar.SetLayout(400, 800, 600);
+	BOOST_TEST(bar.viewHeight.Get() == 600);
+	bar.Switch(hud::ControlBarStage::Default); // ControlBarScheme::init
+	BOOST_TEST(bar.viewHeight.Get() == 480);
+	bar.toggle.Execute();
+	BOOST_TEST(bar.viewHeight.Get() == 600);
+	bar.toggle.Execute();
+	BOOST_TEST(bar.viewHeight.Get() == 480);
+	bar.Hide();
+	BOOST_TEST(bar.viewHeight.Get() == 600);
+	BOOST_TEST((bar.Stage() == hud::ControlBarStage::Default));
+	bar.Show(false);
+	BOOST_TEST(bar.viewHeight.Get() == 480);
+	bar.toggle.Execute();
+	bar.SetPlayback(true);
+	bar.Switch(hud::ControlBarStage::Default);
+	BOOST_TEST(bar.viewHeight.Get() == 600);
+	bar.Show(true);
+	BOOST_TEST(bar.viewHeight.Get() == 480);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

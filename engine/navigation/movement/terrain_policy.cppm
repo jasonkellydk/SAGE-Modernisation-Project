@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-
 export module engine.navigation.movement.terrain_policy;
+import std;
 
 export namespace navigation {
 enum class TerrainKind : unsigned char {

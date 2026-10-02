@@ -1,0 +1,505 @@
+#define BOOST_TEST_MODULE EngineGameplayContainment
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <optional>
+#include <vector>
+
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.common.spatial.components.attitude;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.containment.systems.boarding_system;
+import engine.gameplay.rts.containment.systems.unloading_system;
+import engine.gameplay.rts.containment.systems.cargo_transfer_system;
+import engine.gameplay.rts.containment.systems.passenger_ride_system;
+import engine.gameplay.rts.containment.algorithms.garrison_stations;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.rts.containment.systems.container_classes_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// A helicopter and a squad, run through the containment systems.
+struct Airfield
+{
+	engine::level::Heightfield field;
+	// The world owns the shared data; the fixture keeps handles to it.
+	ecs::World world{ecs::WorldConfig{4}};
+	SpatialIndex &spatial{world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50))};
+	SpatialGather &gather{world.EmplaceResource<SpatialGather>()};
+	WaypointGraph &waypoints{world.EmplaceResource<WaypointGraph>()};
+	CargoManifest &manifest{world.EmplaceResource<CargoManifest>()};
+	BoardRequests &boards{world.EmplaceResource<BoardRequests>()};
+	NavigationGrid &grid{world.EmplaceResource<NavigationGrid>()};
+	ExitRequests &exits{world.EmplaceResource<ExitRequests>()};
+	DropExits &dropExits{world.EmplaceResource<DropExits>()};
+	PlacedExits &placedExits{world.EmplaceResource<PlacedExits>()};
+	RiderExits &riderExits{world.EmplaceResource<RiderExits>()};
+	IntentExits &intentExits{world.EmplaceResource<IntentExits>()};
+	Relationships &relationships{world.EmplaceResource<Relationships>(1u)};
+	TeamRoster &roster{world.EmplaceResource<TeamRoster>()};
+	WeaponCatalog &weapons{world.EmplaceResource<WeaponCatalog>()};
+	ecs::Entity helicopter;
+	std::vector<ecs::Entity> squad;
+
+	Airfield()
+	{
+		field.width = 2;
+		field.height = 2;
+		field.cellSize = Fixed::FromInt(1000);
+		field.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<RandomSeed>(RandomSeed{3});
+		world.EmplaceResource<DropSettings>();
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<PhysicsBody>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<Collider>();
+		world.RegisterComponent<Squishable>();
+		world.RegisterComponent<Pursuit>();
+		world.RegisterComponent<SightLooker>();
+		world.RegisterComponent<Slaved>();
+		world.RegisterComponent<SurfaceLayer>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
+		world.RegisterComponent<Transport>();
+		world.RegisterComponent<BlockedState>();
+		world.RegisterComponent<GarrisonPoints>();
+		world.RegisterComponent<GarrisonStations>();
+		world.RegisterComponent<TransportFirePoints>();
+		world.RegisterComponent<Turret>();
+		world.RegisterComponent<Passenger>();
+		world.RegisterComponent<Boarding>();
+		world.RegisterComponent<ExitIntent>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Aggression>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<StatusFlags>();
+		world.RegisterComponent<BodyExtent>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<CargoSize>();
+		world.RegisterComponent<Garrison>();
+		world.RegisterComponent<Descent>();
+		world.RegisterComponent<FloorLift>();
+		world.RegisterComponent<DropHoming>();
+		world.RegisterComponent<Attitude>();
+		world.FinalizeComponents();
+
+		LocomotorDefinition rotor;
+		rotor.maxSpeed = Fixed::FromInt(3);
+		rotor.acceleration = Fixed::One();
+		rotor.braking = Fixed::One();
+		rotor.turnRate = Engine::Math::TurnFromDegrees(10);
+		rotor.preferredHeight = Fixed::FromInt(60);
+		rotor.preferredHeightDamping = Fixed::FromRatio(1, 5);
+		rotor.height = HeightBehavior::SurfaceRelative;
+		helicopter = Add(500, 500, rotor);
+		world.Add<Transport>(helicopter);
+		*world.Get<Transport>(helicopter) = {.definition = {.slots = 8, .exitDelay = 10}};
+		world.Get<Transform>(helicopter)->position.z = Fixed::FromInt(60);
+
+		LocomotorDefinition legs;
+		legs.maxSpeed = Fixed::One();
+		legs.acceleration = Fixed::One();
+		legs.braking = Fixed::One();
+		legs.turnRate = Engine::Math::TurnFromDegrees(30);
+		for (int index = 0; index < 3; ++index)
+		{
+			const ecs::Entity rifleman = Add(400 + index * 10, 400, legs);
+			world.Add<Boarding>(rifleman);
+			*world.Get<Boarding>(rifleman) = {helicopter};
+			squad.push_back(rifleman);
+		}
+	}
+
+	ecs::Entity Add(int x, int y, const LocomotorDefinition &locomotor)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Locomotion>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), target_class::Infantry};
+		*world.Get<Locomotion>(entity) = MakeLocomotion(locomotor);
+		return entity;
+	}
+
+	void Run(int ticks)
+	{
+		SpatialIndexSystem index;
+		TargetingSystem targeting;
+		BoardingSystem boarding;
+		UnloadingSystem unloading;
+		MovementSystem movement;
+		CargoTransferSystem transfer;
+		PassengerRideSystem ride;
+		ecs::SystemRegistry registry;
+		registry.Register(index);
+		registry.Register(targeting);
+		registry.Register(boarding);
+		registry.Register(unloading);
+		registry.Register(movement);
+		registry.Register(transfer);
+		registry.Register(ride);
+		registry.OrderBefore<CargoTransferSystem, PassengerRideSystem>();
+		registry.OrderBefore<BoardingSystem, UnloadingSystem>();
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{4});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		for (int tick = 1; tick <= ticks; ++tick)
+		{
+			scheduler.Execute(engine::time::SimulationTime{static_cast<std::uint64_t>(tick), engine::time::FixedStep{30}});
+		}
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(containment)
+
+// legacy_parity: PartitionFilterInsignificantBuildings::allow (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/
+// PartitionManager.cpp) as ContainerClassesSystem keeps it: a structure of no faction (isNonFactionStructure) whose
+// contain is no garrison (isGarrisonable false) is insignificant full or empty; a garrison only while it holds nobody;
+// a faction structure never.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_empty_or_non_garrison_civilian_container_is_insignificant)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<Transport>();
+	world.RegisterComponent<Targetable>();
+	world.RegisterComponent<Garrison>();
+	world.RegisterComponent<Armament>();
+	world.RegisterComponent<UnderConstruction>();
+	world.RegisterComponent<Sale>();
+	world.FinalizeComponents();
+	const auto make = [&](bool nonFaction, bool garrison, std::uint32_t occupied) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transport>(entity);
+		world.Add<Targetable>(entity);
+		world.Get<Transport>(entity)->occupied = occupied;
+		world.Get<Targetable>(entity)->classes = target_class::Structure | (nonFaction ? target_class::NonFactionStructure : 0u);
+		if (garrison)
+			world.Add<Garrison>(entity);
+		return entity;
+	};
+	const ecs::Entity emptyGarrison = make(true, true, 0);
+	const ecs::Entity heldGarrison = make(true, true, 2);
+	const ecs::Entity emptyOther = make(true, false, 0);
+	const ecs::Entity heldOther = make(true, false, 2);
+	const ecs::Entity factionEmpty = make(false, true, 0);
+	ContainerClassesSystem classes;
+	ecs::SystemRegistry registry;
+	registry.Register(classes);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	const auto insignificant = [&](ecs::Entity entity) { return (world.Get<Targetable>(entity)->classes & target_class::Insignificant) != 0; };
+	BOOST_TEST(insignificant(emptyGarrison));
+	BOOST_TEST(!insignificant(heldGarrison));
+	BOOST_TEST(insignificant(emptyOther));
+	BOOST_TEST(insignificant(heldOther));
+	BOOST_TEST(!insignificant(factionEmpty));
+	// Someone goes in: no longer.
+	world.Get<Transport>(emptyGarrison)->occupied = 1;
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(!insignificant(emptyGarrison));
+}
+
+
+// OpenContain::redeployOccupants (no fire points in the art): passengers ride at the transport's position; and
+// TransportContain::isPassengerAllowedToFire: with PassengersAllowedToFire only infantry may fire from inside.
+BOOST_AUTO_TEST_CASE(legacy_parity_passengers_ride_along_and_only_infantry_may_fire_out)
+{
+	Airfield airfield;
+	Transport &transport = *airfield.world.Get<Transport>(airfield.helicopter);
+	transport.definition.passengersFire = true;
+	transport.definition.infantryOnly = true;
+	// The last of the squad is a vehicle.
+	airfield.world.Get<Targetable>(airfield.squad.back())->classes = target_class::Vehicle;
+	airfield.Run(300);
+	BOOST_TEST_REQUIRE(airfield.world.Get<Transport>(airfield.helicopter)->occupied == 3u);
+	const Transform &carrier = *airfield.world.Get<Transform>(airfield.helicopter);
+	for (const ecs::Entity rider : airfield.squad)
+	{
+		const OffMap *inside = airfield.world.Get<OffMap>(rider);
+		BOOST_TEST_REQUIRE(inside != nullptr);
+		BOOST_TEST((inside->holder == airfield.helicopter));
+		BOOST_TEST(inside->armed == (rider != airfield.squad.back()));
+		BOOST_TEST((airfield.world.Get<Transform>(rider)->position == carrier.position));
+	}
+}
+
+// A transport whose passengers may not fire (no PassengersAllowedToFire) keeps them all from firing.
+BOOST_AUTO_TEST_CASE(legacy_parity_passengers_of_a_closed_transport_may_not_fire)
+{
+	Airfield airfield;
+	airfield.Run(300);
+	for (const ecs::Entity rider : airfield.squad)
+		BOOST_TEST(!airfield.world.Get<OffMap>(rider)->armed);
+}
+
+BOOST_AUTO_TEST_CASE(units_walk_to_a_transport_board_and_land_unload_one_by_one)
+{
+	Airfield airfield;
+	airfield.Run(300);
+	BOOST_TEST(airfield.world.Get<Transport>(airfield.helicopter)->occupied == 3u);
+	BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 3u);
+	for (const ecs::Entity rifleman : airfield.squad)
+		BOOST_TEST(airfield.world.Has<OffMap>(rifleman));
+
+	airfield.world.Get<Transport>(airfield.helicopter)->state = TransportState::Unloading;
+	airfield.Run(5); // coming down (a fifth of the height per tick): nobody leaves in the air
+	BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 3u);
+	BOOST_TEST((airfield.world.Get<Transform>(airfield.helicopter)->position.z > LandedHeight()));
+	airfield.Run(200);
+	BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 0u);
+	BOOST_TEST(airfield.world.Get<Transport>(airfield.helicopter)->occupied == 0u);
+	for (const ecs::Entity rifleman : airfield.squad)
+	{
+		BOOST_TEST(!airfield.world.Has<OffMap>(rifleman));
+		BOOST_TEST((airfield.world.Get<Transform>(rifleman)->position.z < Fixed::FromInt(4)));
+	}
+	// Empty again, it climbs back to its cruise height.
+	airfield.Run(150);
+	BOOST_TEST((airfield.world.Get<Transform>(airfield.helicopter)->position.z > Fixed::FromInt(50)));
+	BOOST_TEST((airfield.world.Get<Transport>(airfield.helicopter)->state == TransportState::Idle));
+}
+
+// TransportContain::onRemoving with GoAggressiveOnExit: each rider that gets out turns aggressive (setAttitude), the
+// as it leaves; while aboard it keeps its mood; without the flag nobody's changes.
+BOOST_AUTO_TEST_CASE(legacy_parity_riders_go_aggressive_as_they_get_out)
+{
+	for (const bool aggressive : {true, false})
+	{
+		Airfield airfield;
+		airfield.world.Get<Transport>(airfield.helicopter)->definition.goAggressiveOnExit = aggressive;
+		for (const ecs::Entity rifleman : airfield.squad)
+			airfield.world.Add<Aggression>(rifleman);
+		airfield.Run(300);
+		BOOST_TEST_REQUIRE(airfield.manifest.Count(airfield.helicopter) == 3u);
+		airfield.world.Get<Transport>(airfield.helicopter)->state = TransportState::Unloading;
+		airfield.Run(5); // still coming down: all aboard, as they were
+		for (const ecs::Entity rifleman : airfield.squad)
+			BOOST_TEST(airfield.world.Get<Aggression>(rifleman)->attitude == attitude::Normal);
+		airfield.Run(200);
+		for (const ecs::Entity rifleman : airfield.squad)
+		{
+			BOOST_TEST(!airfield.world.Has<OffMap>(rifleman));
+			BOOST_TEST(airfield.world.Get<Aggression>(rifleman)->attitude == (aggressive ? attitude::Aggressive : attitude::Normal));
+		}
+		BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 0u);
+	}
+}
+
+// ChinookAIUpdate::update (waitingToEnterOrExit and not landed: LANDING; nobody waiting and landed: TAKING_OFF) with
+// AIEnterState: an idle helicopter hovering at 60 with a squad on its way comes down for it from the first tick; no
+// one gets in while it is more than 15 above them; once they are all aboard and it is sent off, it climbs straight
+// back to its cruise height before it flies.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_helicopter_lands_for_those_boarding_it)
+{
+	Airfield airfield;
+	airfield.Run(1);
+	BOOST_TEST(airfield.world.Get<Transport>(airfield.helicopter)->landing);
+	BOOST_TEST((airfield.world.Get<Locomotion>(airfield.helicopter)->locomotor.preferredHeight == Fixed{}));
+	BOOST_TEST((airfield.world.Get<Transform>(airfield.helicopter)->position.z < Fixed::FromInt(60)));
+	bool boardedAloft = false;
+	for (int tick = 0; tick < 300 && airfield.manifest.Count(airfield.helicopter) < 3u; ++tick)
+	{
+		const std::size_t before = airfield.manifest.Count(airfield.helicopter);
+		const Fixed height = airfield.world.Get<Transform>(airfield.helicopter)->position.z;
+		airfield.Run(1);
+		if (airfield.manifest.Count(airfield.helicopter) > before && height > BoardingHeight())
+			boardedAloft = true;
+	}
+	BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 3u);
+	BOOST_TEST(!boardedAloft);
+	// Sent off loaded, it first climbs straight up (ChinookTakeoffOrLandingState: to its preferred height, within 3),
+	// then flies.
+	const auto from = airfield.world.Get<Transform>(airfield.helicopter)->position;
+	*airfield.world.Get<MoveOrder>(airfield.helicopter) = MoveToPoint({Fixed::FromInt(900), Fixed::FromInt(500)});
+	int climbing = 0;
+	while (airfield.world.Get<Transport>(airfield.helicopter)->takingOff || climbing == 0)
+	{
+		airfield.Run(1);
+		++climbing;
+		if (!airfield.world.Get<Transport>(airfield.helicopter)->takingOff)
+			break;
+		BOOST_TEST_REQUIRE((airfield.world.Get<Transform>(airfield.helicopter)->position.XY() == from.XY()));
+		BOOST_TEST_REQUIRE(climbing < 200);
+	}
+	BOOST_TEST(climbing > 5);
+	BOOST_TEST((airfield.world.Get<Transform>(airfield.helicopter)->position.z >= Fixed::FromInt(57)));
+	airfield.Run(60);
+	BOOST_TEST(!airfield.world.Get<Transport>(airfield.helicopter)->landing);
+	BOOST_TEST((airfield.world.Get<Transform>(airfield.helicopter)->position.x > from.x + Fixed::FromInt(50)));
+}
+
+// ChinookTakeoffOrLandingState::onEnter (landing): findPositionAround its bounding circle a hundred times over, for
+// a spot no other object reaches; with its squad gathered right under it, it heads for such a spot as it comes down
+// (clear of them), and they board it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_helicopter_lands_on_clear_ground_beside_those_waiting)
+{
+	Airfield airfield;
+	auto &world = airfield.world;
+	const auto above = world.Get<Transform>(airfield.helicopter)->position.XY();
+	for (std::size_t index = 0; index < airfield.squad.size(); ++index)
+		world.Get<Transform>(airfield.squad[index])->position = {above.x + Fixed::FromInt(static_cast<int>(index) * 4), above.y, {}};
+	world.Get<Targetable>(airfield.helicopter)->radius = Fixed::FromInt(12);
+	airfield.Run(2);
+	const Transport &transport = *world.Get<Transport>(airfield.helicopter);
+	BOOST_TEST(transport.landing);
+	BOOST_TEST_REQUIRE(transport.seekingSpot);
+	const auto spot = transport.landingSpot;
+	for (const ecs::Entity rifleman : airfield.squad)
+	{
+		const Fixed reach = Fixed::FromInt(12) + Fixed::FromInt(5);
+		BOOST_TEST((Engine::Math::DistanceSquared(spot, world.Get<Transform>(rifleman)->position.XY()) >= reach * reach));
+	}
+	// It heads for the spot as it comes down (the squad getting in once it is low enough within their reach).
+	const Fixed before = Engine::Math::DistanceSquared(world.Get<Transform>(airfield.helicopter)->position.XY(), spot);
+	airfield.Run(3);
+	BOOST_TEST((Engine::Math::DistanceSquared(world.Get<Transform>(airfield.helicopter)->position.XY(), spot) < before));
+	for (int tick = 0; tick < 400 && airfield.manifest.Count(airfield.helicopter) < 3u; ++tick)
+		airfield.Run(1);
+	BOOST_TEST(airfield.manifest.Count(airfield.helicopter) == 3u);
+}
+
+// GarrisonContain::findClosestFreeGarrisonPointIndex: occupants with a victim stand at the free fire point nearest it
+// (in entity order, one to a point, over all 40 places: those past the bones in the middle, 3D distance); one without a
+// victim stays in the middle.
+BOOST_AUTO_TEST_CASE(legacy_parity_garrisoned_units_shoot_from_the_fire_point_nearest_their_victim)
+{
+	Airfield airfield;
+	auto &world = airfield.world;
+	const ecs::Entity building = airfield.helicopter;
+	world.Get<Transform>(building)->position = {Fixed::FromInt(500), Fixed::FromInt(500), {}};
+	world.Remove<Locomotion>(building); // a building: it stays put
+	world.Add<GarrisonPoints>(building);
+	GarrisonPoints &points = *world.Get<GarrisonPoints>(building);
+	points.points[0][0] = {Fixed::FromInt(20), {}, Fixed::FromInt(10)};  // east
+	points.points[0][1] = {Fixed::FromInt(-20), {}, Fixed::FromInt(10)}; // west
+	points.points[0][2] = {{}, Fixed::FromInt(20), Fixed::FromInt(10)};  // north
+	points.counts[0] = 3;
+	const ecs::Entity victim = airfield.Add(700, 500, {});
+	for (const ecs::Entity rifleman : airfield.squad)
+	{
+		world.Add<Passenger>(rifleman);
+		*world.Get<Passenger>(rifleman) = {building, 1};
+		world.Add<OffMap>(rifleman);
+		airfield.manifest.Board(building, rifleman);
+	}
+	for (const ecs::Entity rifleman : airfield.squad)
+		if (!world.Has<AttackTarget>(rifleman))
+			world.Add<AttackTarget>(rifleman);
+	*world.Get<AttackTarget>(airfield.squad[0]) = {victim, true};
+	*world.Get<AttackTarget>(airfield.squad[1]) = {victim, true};
+	airfield.Run(1);
+	const auto at = [&](ecs::Entity entity) { return world.Get<Transform>(entity)->position; };
+	const auto middle = world.Get<Transform>(building)->position;
+	const auto offset = [&](int x, int y) { return Engine::Math::FixedVector3{middle.x + Fixed::FromInt(x), middle.y + Fixed::FromInt(y), middle.z + Fixed::FromInt(10)}; };
+	BOOST_TEST((at(airfield.squad[0]) == offset(20, 0))); // east: nearest the victim
+	// Next nearest: one of the places past the bones, in the middle (200 from the victim, 3D; north is 201.2).
+	BOOST_TEST((at(airfield.squad[1]) == middle));
+	BOOST_TEST((at(airfield.squad[2]) == middle)); // no victim: the middle
+	// Damaged (findConditionIndex): the damaged set's points; with its east point taken they fall back the same way.
+	points.points[1][0] = {Fixed::FromInt(15), Fixed::FromInt(5), Fixed::FromInt(8)};
+	points.counts[1] = 1;
+	points.condition = garrison_condition::Damaged;
+	airfield.Run(1);
+	BOOST_TEST((at(airfield.squad[0]) == Engine::Math::FixedVector3{middle.x + Fixed::FromInt(15), middle.y + Fixed::FromInt(5), middle.z + Fixed::FromInt(8)}));
+	BOOST_TEST((at(airfield.squad[1]) == middle));
+}
+
+// TunnelTracker::onTunnelDestroyed: a lost tunnel's riders move to the first tunnel of the network left (after those
+// already there); with the last one gone they are handed back to go down with it. The network counts every head in it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lost_tunnel_hands_its_riders_to_the_first_left)
+{
+	CargoManifest manifest;
+	const ecs::Entity first{1, 1}, second{2, 1}, third{3, 1}, other{4, 1};
+	const ecs::Entity a{10, 1}, b{11, 1}, c{12, 1}, d{13, 1};
+	manifest.Link(first, 7);
+	manifest.Link(second, 7);
+	manifest.Link(third, 7);
+	manifest.Link(other, 8);
+	manifest.Board(first, a);
+	manifest.Board(first, b);
+	manifest.Board(third, c);
+	manifest.Board(other, d);
+	BOOST_TEST(manifest.NetworkCount(7) == 3u);
+	BOOST_TEST(manifest.TakeAll(first).empty());
+	BOOST_TEST(manifest.Count(second) == 2u);
+	BOOST_TEST(manifest.TakeAll(second).empty());
+	const auto aboard = manifest.Aboard(third);
+	BOOST_TEST_REQUIRE(aboard.size() == 3u);
+	BOOST_TEST((aboard[0] == c && aboard[1] == a && aboard[2] == b));
+	const auto gone = manifest.TakeAll(third);
+	BOOST_TEST(gone.size() == 3u);
+	BOOST_TEST(manifest.Network(7).empty());
+	BOOST_TEST(manifest.Count(other) == 1u);
+}
+
+// GarrisonContain's station points (a fire base: IsEnclosingContainer No). redeployOccupants (on addToContain, and on a
+// model condition change: OpenContain::update) forgets every occupant (loadStationGarrisonPoints), then
+// positionObjectsAtStationGarrisonPoints gives each, in contain-list order, the first free station (pickAStationForMe);
+// onRemoving frees only the leaver's (removeObjectFromStationPoint), the others keeping theirs; occupants past the
+// stations have none. A station stands where the container's frame puts its bone (within 2 raw units: fixed-point
+// sine and cosine of a quarter turn).
+BOOST_AUTO_TEST_CASE(legacy_parity_fire_base_stations_are_given_in_order_of_entry)
+{
+	const ecs::Entity a{1, 1}, b{2, 1}, c{3, 1}, d{4, 1};
+	GarrisonStations stations;
+	stations.count = 3;
+	// a and b get in: stations 0 and 1.
+	std::vector<ecs::Entity> aboard{a, b};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == a && stations.occupants[1] == b && stations.occupants[2] == ecs::Entity{}));
+	// a leaves: b keeps station 1, 0 is free.
+	aboard = {b};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == b));
+	// The same again: nothing moves.
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == b));
+	// c gets in: everyone is redeployed in order of entry (b at 0, c at 1).
+	aboard = {b, c};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == b && stations.occupants[1] == c && stations.occupants[2] == ecs::Entity{}));
+	// b leaves, then the model condition changes: c moves to 0.
+	aboard = {c};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == c));
+	stations.occupants = CurrentStations(stations, aboard, true);
+	BOOST_TEST((stations.occupants[0] == c && stations.occupants[1] == ecs::Entity{}));
+	// Four in for three stations: the last has none.
+	aboard = {c, a, b, d};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == c && stations.occupants[1] == a && stations.occupants[2] == b));
+	// A station's place: the container's frame on the bone.
+	stations.points[1] = {Fixed::FromInt(10), {}, Fixed::FromInt(5)};
+	Transform frame;
+	frame.position = {Fixed::FromInt(100), Fixed::FromInt(200), Fixed::FromInt(3)};
+	frame.facing = Engine::Math::TurnAngle::Quarter_Turn();
+	const auto at = StationPosition(stations, 1, frame);
+	BOOST_TEST(std::abs((at.x - Fixed::FromInt(100)).Raw()) <= 2);
+	BOOST_TEST(std::abs((at.y - Fixed::FromInt(210)).Raw()) <= 2);
+	BOOST_TEST((at.z == Fixed::FromInt(8)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

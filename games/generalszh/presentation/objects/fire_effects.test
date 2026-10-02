@@ -1,0 +1,467 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.tick_effects;
+import games.generalszh.presentation.interaction.resources.interaction_resources;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.combat.resources.shots;
+import engine.gameplay.rts.combat.systems.auto_fire_system;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.presentation.objects.systems.effect_attachment_systems;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import engine.gameplay.common.appearance.components.debris_look;
+import games.generalszh.presentation.objects.systems.dynamic_light_systems;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(fire_effects)
+
+// Weapon::fireWeaponTemplate's fire FX and Object::isLogicallyVisible: a Crusader's CrusaderTankGun fire FX (WeaponFX_GenericTankGunNoTracer) is asked for
+// where it fired; stealthed and not detected, a GLA player watching (not its ally) gets none, while America (its own)
+// still does; detected again, the GLA watcher sees it too. (A mine, or a weapon with PlayFXWhenStealthed, always shows.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stealthed_firer_shows_no_fire_fx_to_its_enemies)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", at, {}, america);
+	const ecs::Entity target = game.Place("GLATankScorpion", at + FixedVector2{Fixed::FromInt(100), Fixed{}}, {}, gla);
+	auto &health = *world.Get<gp::Health>(target);
+	health.maximum = health.current = Fixed::FromInt(100000);
+	world.Get<gp::Armament>(target)->weapon = gp::WeaponCatalog::None;
+	gameplay::OrderAttack(game.Game(), tank, target);
+	bool fired = false;
+	for (int tick = 0; tick < 200 && !fired; ++tick)
+	{
+		game.Tick();
+		world.Resource<gp::FiredShots>().ForEach([&](const gp::Shot &shot) { fired = fired || shot.source == tank; });
+	}
+	BOOST_TEST_REQUIRE(fired);
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<LookCatalog>();
+	auto &local = world.EmplaceResource<LocalPlayer>();
+	const auto asked = [&](std::uint32_t watcher) {
+		local = LocalPlayer{watcher, true};
+		auto &fx = world.Resource<FxRequests>();
+		fx.pending.clear();
+		QueueTickEffects(fx, world.Resource<LookCatalog>(), game);
+		bool any = false;
+		for (const auto &request : fx.pending)
+			any = any || (request.firedBy == tank && request.fx == "WeaponFX_GenericTankGunNoTracer");
+		return any;
+	};
+	const std::uint32_t glaPlayer = game.Teams().TeamAt(gla).owner, americaPlayer = game.Teams().TeamAt(america).owner;
+	BOOST_TEST(asked(glaPlayer));
+	if (!world.Has<gp::Stealth>(tank))
+		world.Add<gp::Stealth>(tank);
+	world.Get<gp::Stealth>(tank)->flags = gp::stealth_flag::CanStealth | gp::stealth_flag::Stealthed;
+	BOOST_TEST(!asked(glaPlayer));
+	BOOST_TEST(asked(americaPlayer));
+	world.Get<gp::Stealth>(tank)->Set(gp::stealth_flag::Detected, true);
+	BOOST_TEST(asked(glaPlayer));
+}
+
+// FireWeaponUpdate's forceFireWeapon and Weapon::m_suspendFXFrame (SuspendFXDelay): the shipped NukeRadiationFieldWeapon
+// object fires its NukeRadiationFieldWeapon (DelayBetweenShots 750, SuspendFXDelay 10000 = 300 frames) at itself; its
+// pulses show no FX until 300 frames after it was made, then WeaponFX_LargeRadiationFieldWeapon at each, sized by its
+// PrimaryDamageRadius 200 (UseCallersRadius).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_radiation_field_holds_its_fx_back_at_first)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<LookCatalog>();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	world.EmplaceResource<LocalPlayer>(LocalPlayer{game.Teams().TeamAt(gla).owner, true});
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const std::uint64_t made = game.CurrentTick();
+	const ecs::Entity field = game.Place("NukeRadiationFieldWeapon", low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)}, {}, gla);
+	std::size_t quietPulses = 0, shownPulses = 0;
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		game.Tick();
+		bool pulsed = false;
+		world.Resource<gp::AutoShots>().ForEach([&](const gp::Shot &shot) { pulsed = pulsed || shot.source == field; });
+		if (!pulsed)
+			continue;
+		auto &fx = world.Resource<FxRequests>();
+		fx.pending.clear();
+		QueueTickEffects(fx, world.Resource<LookCatalog>(), game);
+		const FxRequest *shown = nullptr;
+		for (const auto &request : fx.pending)
+			if (request.firedBy == field)
+				shown = &request;
+		if (game.CurrentTick() < made + 300)
+		{
+			BOOST_TEST(shown == nullptr);
+			++quietPulses;
+		}
+		else
+		{
+			BOOST_TEST_REQUIRE(shown != nullptr);
+			BOOST_TEST(shown->fx == "WeaponFX_LargeRadiationFieldWeapon");
+			BOOST_TEST(shown->radius == 200.0f);
+			++shownPulses;
+		}
+	}
+	BOOST_TEST(quietPulses > 0u);
+	BOOST_TEST(shownPulses > 0u);
+}
+
+// Legacy parity (W3DModelDraw.cpp W3DModelDraw::getCurrentBoneTransforms, Thing.cpp Thing::transformBoneToWorld,
+// FXList.cpp FXListAtBonePosFXNugget::doFxAtBones (MAX_BONE_POINTS 40), SoundFXNugget::doFXObj). A building facing 90
+// degrees at (100, 200, 5) with FIREPOINT01 at (10, 0, 3) and FIREPOINT02 at (0, -4, 3) in its model (no bare
+// FIREPOINT, no FIREPOINT03): start 0 finds nothing, start 1 both, turned and moved with the building: (100, 210, 8)
+// and (104, 200, 8), each turned 90 degrees (1e-5: the float cos of 90 degrees). A model with 50 numbered bones gives
+// 40. Played by FxPlaybackSystem on the building, FX_Hit's FXListAtBonePos plays FX_Spark at both (its sound at each
+// bone, nobody's) and FX_Hit's own sound is for the building's owner (player 3).
+BOOST_AUTO_TEST_CASE(legacy_parity_fx_at_bones_follow_the_object_as_drawn)
+{
+	PresentedObject building;
+	building.entity = ecs::Entity{1, 1};
+	building.look = 7;
+	building.position = {100, 200, 5};
+	building.facing = 1.5707963f;
+	BonePoses poses;
+	std::vector<std::string> asked;
+	std::uint32_t lookAsked = 0;
+	poses.transform = [&](std::uint32_t look, float, float, std::string_view bone) -> std::optional<std::array<float, 12>> {
+		lookAsked = look;
+		asked.emplace_back(bone);
+		if (bone == "FIREPOINT01")
+			return std::array<float, 12>{1, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 3};
+		if (bone == "FIREPOINT02")
+			return std::array<float, 12>{1, 0, 0, 0, 0, 1, 0, -4, 0, 0, 1, 3};
+		if (bone.starts_with("MANY") && bone.size() == 6)
+			return std::array<float, 12>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+		return std::nullopt;
+	};
+	BOOST_TEST(CurrentBoneTransforms(building, poses, "FIREPOINT", 0).empty());
+	BOOST_TEST((asked == std::vector<std::string>{"FIREPOINT"}));
+	BOOST_TEST(lookAsked == 7u);
+	const auto bones = CurrentBoneTransforms(building, poses, "FIREPOINT", 1);
+	BOOST_TEST_REQUIRE(bones.size() == 2u);
+	const auto near = [](const std::array<float, 12> &got, const std::array<float, 12> &want) {
+		for (std::size_t index = 0; index < got.size(); ++index)
+			if (std::fabs(got[index] - want[index]) > 1e-5f)
+				return false;
+		return true;
+	};
+	BOOST_TEST(near(bones[0], {0, -1, 0, 100, 1, 0, 0, 210, 0, 0, 1, 8}));
+	BOOST_TEST(near(bones[1], {0, -1, 0, 104, 1, 0, 0, 200, 0, 0, 1, 8}));
+	BOOST_TEST(asked.back() == "FIREPOINT03");
+	BOOST_TEST(CurrentBoneTransforms(building, poses, "MANY", 1).size() == 40u);
+
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Owner>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	engine::effects::ParticleSystemDefinition spark;
+	spark.name = "Spark";
+	spark.burstCount = {1, 1};
+	spark.lifetime = {10, 10};
+	spark.systemLifetime = 1;
+	effects.particles.Define("Spark") = spark;
+	FxList inner;
+	ParticleNugget sparks;
+	sparks.system = "Spark";
+	inner.nuggets.push_back(sparks);
+	inner.nuggets.push_back(SoundNugget{"Crack"});
+	effects.fx.Define("FX_Spark") = inner;
+	FxList outer;
+	outer.nuggets.push_back(SoundNugget{"Boom"});
+	outer.nuggets.push_back(NestedFxNugget{"FX_Spark", "FIREPOINT", true});
+	effects.fx.Define("FX_Hit") = outer;
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	auto &requests = world.EmplaceResource<FxRequests>().pending;
+	auto &sounds = world.EmplaceResource<SoundRequests>().pending;
+	world.EmplaceResource<ShakeRequests>();
+	world.EmplaceResource<LightPulses>();
+	world.EmplaceResource<Tracers>();
+	world.EmplaceResource<ScorchMarks>();
+	world.EmplaceResource<PresentationRandom>();
+	world.EmplaceResource<TerrainHeightHandle>();
+	world.EmplaceResource<EffectStats>();
+	world.EmplaceResource<BonePoses>(poses);
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry systems;
+	FxPlaybackSystem fx;
+	systems.Register(fx);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<gp::DefinitionRef>(entity);
+	world.Add<gp::Owner>(entity);
+	world.Get<gp::Owner>(entity)->player = 3;
+	building.entity = entity;
+	presented.Reset(1);
+	presented.SlotAt(0).push_back(building);
+	FxRequest hit{"FX_Hit", building.position, building.facing, 0.0f, entity};
+	requests.push_back(hit);
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(requests.empty());
+	BOOST_TEST_REQUIRE(sounds.size() == 3u);
+	BOOST_TEST(sounds[0].sound == "Boom");
+	BOOST_TEST(sounds[0].owner == 3u);
+	BOOST_TEST(sounds[1].sound == "Crack");
+	BOOST_TEST(sounds[1].owner == SoundRequest::NoOwner);
+	BOOST_TEST(sounds[1].at[1] == 210.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(sounds[2].at[0] == 104.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(particles.SystemCount() == 2u);
+}
+
+// Legacy parity (W3DModelDraw.cpp setFullyObscuredByShroud / setHidden -> doStartOrStopParticleSys: a model state's
+// systems stop() while the drawable is hidden or fully obscured by the shroud and start() again, the same systems;
+// stopClientParticleSystems: destroy(); ParticleSystem.cpp ParticleSystem::update: a system attached to an object the
+// viewer sees fogged or shrouded (getShroudedStatus >= OBJECTSHROUD_FOGGED) emits nothing). A mill's EXHAUST smoke
+// started while it shows: fogged to the viewer and no longer presented, the same system is kept, switched off; seen
+// again, switched on; hidden by stealth, off; not presented while not fogged (gone off the map), destroyed. A system
+// riding it from an FX list emits nothing while it is shown (lingering) but fogged, and again once it is clear.
+BOOST_AUTO_TEST_CASE(legacy_parity_attached_systems_stop_under_the_shroud_and_go_on_after)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::DebrisLook>();
+	world.RegisterComponent<gp::ObjectShroud>();
+	world.RegisterComponent<gp::Transform>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("Smoke");
+	engine::effects::ParticleSystemDefinition spark;
+	spark.name = "Spark";
+	spark.burstCount = {1, 1};
+	spark.lifetime = {100, 100};
+	effects.particles.Define("Spark") = spark;
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.viewer = 0;
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	DefinitionLooks mill;
+	mill.states.states.resize(1);
+	mill.states.states[0].particleBones = {{"EXHAUST", "Smoke"}};
+	catalog.byDefinition = {mill};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"MILL"};
+	world.EmplaceResource<BonePoses>(BonePoses{[](std::string_view, std::string_view bone) {
+		BoneLookup lookup;
+		lookup.ready = true;
+		lookup.found = bone == "EXHAUST";
+		lookup.position = {5, 0, 3};
+		return lookup;
+	}});
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry systems;
+	EffectAttachmentSystem attach;
+	systems.Register(attach);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<gp::DefinitionRef>(entity);
+	world.Add<gp::ObjectShroud>(entity);
+	const auto fog = [&](bool fogged) {
+		gp::ObjectShroud &shroud = *world.Get<gp::ObjectShroud>(entity);
+		shroud.clear = fogged ? 0u : ~std::uint64_t{0};
+		shroud.fogged = fogged ? 1u : 0u;
+	};
+	const auto show = [&](bool visible, bool drawn = true) {
+		presented.Reset(1);
+		if (visible)
+		{
+			PresentedObject object{entity, 0, 0, 0, 0, {50, 50, 0}, 0.0f, 1.0f, {}, false};
+			object.drawn = drawn;
+			presented.SlotAt(0).push_back(object);
+		}
+		++frame.frame;
+		scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+	};
+	const auto smoke = [&]() -> std::uint64_t {
+		const auto *emission = world.Side<ConditionEmission>().Get(entity);
+		return emission != nullptr && !emission->systems.empty() ? emission->systems[0].id : 0;
+	};
+	show(true); // first seen: its side table is added
+	show(true);
+	const std::uint64_t started = smoke();
+	BOOST_TEST_REQUIRE(started != 0u);
+	BOOST_TEST(particles.Running(started));
+	fog(true);
+	show(false);
+	BOOST_TEST(smoke() == started);
+	BOOST_TEST(particles.Alive(started));
+	BOOST_TEST(!particles.Running(started));
+	particles.Step(); // kept while switched off
+	BOOST_TEST(particles.Alive(started));
+	fog(false);
+	show(true);
+	BOOST_TEST(smoke() == started);
+	BOOST_TEST(particles.Running(started));
+	show(true, false); // stealth
+	BOOST_TEST(!particles.Running(started));
+	show(true);
+	BOOST_TEST(particles.Running(started));
+
+	// An FX list's system riding it.
+	const std::uint64_t riding = particles.Create(spark, engine::effects::EmitterTransform::At(50, 50, 0));
+	world.Side<FxEmission>().Emplace(entity, FxEmission{{AttachedSystem{riding, {0, 0, 0}, 0.0f}}, frame.frame});
+	fog(true);
+	show(true); // still shown (lingering), but fogged
+	particles.Step();
+	BOOST_TEST(particles.ParticleCount() == 0u);
+	fog(false);
+	show(true);
+	particles.Step();
+	BOOST_TEST(particles.ParticleCount() == 1u);
+
+	// Hidden by the shroud, the riding system follows the object (attached: its transform), emitting nothing.
+	world.Add<gp::Transform>(entity);
+	world.Get<gp::Transform>(entity)->position = {Fixed::FromInt(300), Fixed::FromInt(400), Fixed::FromInt(0)};
+	fog(true);
+	show(false);
+	const auto followed = particles.TransformOf(riding);
+	BOOST_TEST_REQUIRE(followed.has_value());
+	BOOST_TEST((followed->Position() == std::array<float, 3>{300, 400, 0}));
+	particles.Step();
+	BOOST_TEST(particles.ParticleCount() == 1u); // only the one made while clear
+	fog(false);
+
+	show(false); // not presented and not fogged: off the map
+	BOOST_TEST(smoke() == 0u);
+	BOOST_TEST(!particles.Running(started));
+	particles.Step();
+	BOOST_TEST(!particles.Alive(started)); // destroyed, nothing of its own out: gone
+}
+
+// Legacy parity (W3DDisplayScene.cpp W3DDisplay::createLightPulse; W3DDynamicLight.cpp setFrameFade / On_Frame_Update,
+// called once a rendered frame from the scene's update list, whether the game runs or not). A pulse growing over 3 frames
+// and fading over 6 (radius 30) shows 1/3, 2/3, 1, then 5/6, 4/6, 3/6, 2/6, 1/6 of its colour and range, and is out on
+// the 9th frame; it does so with the game paused (no game time passing), counting real frames. One with no decay stays
+// lit at full strength after growing (the original's "never decays").
+BOOST_AUTO_TEST_CASE(legacy_parity_light_pulses_fade_by_rendered_frames_and_go_out)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::OffMap>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.seconds = 0.0f; // paused
+	frame.realSeconds = 1.0f / 30.0f;
+	world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	auto &pulses = world.EmplaceResource<LightPulses>().live;
+	const DynamicLights &lights = world.EmplaceResource<DynamicLights>();
+	ecs::SystemRegistry systems;
+	DynamicLightSystem shine;
+	systems.Register(shine);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	pulses.push_back({{10, 20, 5}, {1, 0.5f, 0}, 1.0f, 31.0f, 3.0f, 6.0f, 0.0f});
+	pulses.push_back({{50, 20, 5}, {0, 0, 1}, 1.0f, 31.0f, 2.0f, 0.0f, 0.0f}); // no decay
+	const float strengths[] = {1.0f / 3, 2.0f / 3, 1.0f, 5.0f / 6, 4.0f / 6, 3.0f / 6, 2.0f / 6, 1.0f / 6};
+	for (int update = 1; update <= 9; ++update)
+	{
+		frame.frame = static_cast<std::uint32_t>(update);
+		scheduler.Execute(engine::time::SimulationTime{static_cast<std::uint64_t>(update), engine::time::FixedStep{30}});
+		if (update <= 8)
+		{
+			BOOST_TEST_REQUIRE(lights.shown.size() == 2u);
+			BOOST_TEST(lights.shown[0].diffuse[0] == strengths[update - 1], boost::test_tools::tolerance(1e-5f));
+			BOOST_TEST(lights.shown[0].diffuse[1] == 0.5f * strengths[update - 1], boost::test_tools::tolerance(1e-5f));
+			BOOST_TEST(lights.shown[0].farRange == (std::max)(1.0f, 31.0f * strengths[update - 1]), boost::test_tools::tolerance(1e-5f));
+		}
+		else
+			BOOST_TEST_REQUIRE(lights.shown.size() == 1u); // out
+	}
+	BOOST_TEST(lights.shown.back().diffuse[2] == 1.0f);
+	BOOST_TEST(lights.shown.back().farRange == 31.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

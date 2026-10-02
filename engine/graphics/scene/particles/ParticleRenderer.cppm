@@ -1,16 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Particles.Renderer;
+import std;
 
 import engine.profiling;
 export import Graphics.Passes.Particles;

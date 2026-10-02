@@ -1,7 +1,5 @@
-module;
-#include <filesystem>
-
 export module Graphics.Frame.ToolFrame;
+import std;
 
 import Graphics.Frame.Runtime;
 import Graphics.Frame.SceneRenderers;

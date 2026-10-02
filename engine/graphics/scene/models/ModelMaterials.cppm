@@ -1,14 +1,6 @@
-module;
-
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.Materials;
+import std;
+import engine.core.contracts;
 
 import Graphics.Materials.MeshMaterial;
 import Graphics.Scene.Models.MaterialSlots;
@@ -57,7 +49,7 @@ class MaterialResourceRemap final
 public:
     MaterialResourceRemap(std::span<const Owner> source, std::span<const Owner> destination)
     {
-        assert(source.size() == destination.size());
+        engine::core::Assert(source.size() == destination.size());
         if (source.size() != destination.size()) {
             return;
         }
@@ -85,7 +77,7 @@ public:
                 return m_entries[index].destination;
             }
         }
-        assert(false && "Material resource is absent from the source collection");
+        engine::core::Assert(false && "Material resource is absent from the source collection");
         return m_empty;
     }
 
@@ -93,7 +85,7 @@ public:
     void Remap_Slots(const MaterialSlots<Owner>& source, MaterialSlots<Owner>& destination,
         std::size_t count)
     {
-        assert(count <= source.Count() && count <= destination.Count());
+        engine::core::Assert(count <= source.Count() && count <= destination.Count());
         if (count > source.Count() || count > destination.Count()) {
             return;
         }

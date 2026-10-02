@@ -1,0 +1,428 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.gameplay.ai.algorithms.guards;
+import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.teams.resources.team_roster;
+import engine.gameplay.common.areas.resources.trigger_areas;
+import engine.gameplay.common.areas.resources.area_activity;
+import games.generalszh.gameplay.ai.resources.ai_players;
+import games.generalszh.gameplay.upgrades.algorithms.research;
+import engine.gameplay.rts.production.components.production_queue;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.gameplay.ai.algorithms.ai_base_building;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import games.generalszh.content.combat.combat_catalog;
+
+// AIGuardMachine (AIGuard.cpp: AIGuardState::onEnter, AIGuardInnerState, AIGuardOuterState, AIGuardReturnState,
+// AIGuardIdleState, lookForInnerTarget) on the live shell map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+
+// Two teams whose owners are enemies (the guard's, the enemy's).
+std::optional<std::pair<std::uint32_t, std::uint32_t>> EnemyTeams(session::Session &game)
+{
+	const auto &relationships = game.World().Resource<gp::Relationships>();
+	for (std::uint32_t a = 0; a < game.Teams().TeamCount(); ++a)
+		for (std::uint32_t b = 0; b < game.Teams().TeamCount(); ++b)
+			if (game.Teams().TeamAt(a).name.starts_with("team") && game.Teams().TeamAt(b).name.starts_with("team") &&
+				relationships.Enemies(game.Teams().TeamAt(a).owner, game.Teams().TeamAt(b).owner))
+				return std::pair{a, b};
+	return std::nullopt;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(guards)
+
+// A Humvee told to guard another (aiGuardObject): AIGuardState::onEnter enters the inner state, which with no nemesis
+// goes on to outer and then return in the same tick (the crate pick-up between not ported), heading for the guarded
+// Humvee; its first look on the way comes within GuardEnemyReturnScanRate. There it idles, its first idle look within
+// GuardEnemyScanRate, then one every GuardEnemyScanRate. The guarded Humvee having moved over two cells along x since
+// the last look (m_guardeePos starts at zero, so the first look always finds it moved) sends it back (return), then
+// idle again. An unarmed enemy (a supply truck) put within its inner guard range is its nemesis at its next look: inner, attacking it. A
+// move order ends the guard. The same on 1 and 4 workers and after a checkpoint.
+// GameLogic::onDoGuardPosition / onDoGuardObject (MSG_DO_GUARD_POSITION / MSG_DO_GUARD_OBJECT from the control bar's
+// guard buttons) -> AIGroup::groupGuardPosition / groupGuardObject: each of the player's units guards the spot or object
+// AIAttackMoveToState (MSG_DO_ATTACKMOVETO -> aiAttackMoveToPosition, CMD_FROM_PLAYER): a Humvee sent 300 across the map
+// with an unarmed enemy supply truck near its way takes it on as it comes within its look (getNextMoodTarget while
+// moving), its move over while it fights; the truck dead, it heads on to the spot (repathing) and, there, is done (its
+// attack-move over). A move order meanwhile would have ended it (a new order leaves the state).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_attack_move_fights_what_it_meets_and_goes_on)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	game->Tick();
+	const auto teams = EnemyTeams(*game);
+	BOOST_TEST_REQUIRE(teams.has_value());
+	const std::uint32_t player = game->Teams().TeamAt(teams->first).owner;
+	const auto [low, high] = game->Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity humvee = game->Place("AmericaVehicleHumvee", centre, {}, teams->first);
+	const ecs::Entity truck = game->Place("ChinaVehicleSupplyTruck", centre + FixedVector2{Fixed::FromInt(150), Fixed::FromInt(60)}, {}, teams->second);
+	const FixedVector2 spot = centre + FixedVector2{Fixed::FromInt(300), Fixed{}};
+	gameplay::ApplyCommand(game->Game(), player, commands::AttackMoveTo{{humvee}, spot});
+	BOOST_TEST_REQUIRE(game->World().Has<gp::AttackMove>(humvee));
+	BOOST_TEST((game->World().Get<gp::MoveOrder>(humvee)->destination == spot));
+	bool engaged = false;
+	int ticks = 0;
+	for (; ticks < 30 * 60 && game->World().IsAlive(truck) && game->World().Get<gp::Health>(truck)->current > Fixed{}; ++ticks)
+	{
+		game->Tick();
+		engaged = engaged || game->World().Get<gp::AttackTarget>(humvee)->target == truck;
+	}
+	BOOST_TEST(engaged);
+	BOOST_TEST_REQUIRE(game->World().Has<gp::AttackMove>(humvee)); // still attack-moving after the fight
+	// Its fight over (nothing else taken on yet), it heads for the spot again.
+	bool resumed = false;
+	for (ticks = 0; ticks < 30 * 60 && !resumed; ++ticks)
+	{
+		game->Tick();
+		const auto &order = *game->World().Get<gp::MoveOrder>(humvee);
+		resumed = game->World().Get<gp::AttackTarget>(humvee)->target == ecs::Entity{} && order.mode == gp::MoveMode::Point && order.destination == spot;
+	}
+	BOOST_TEST(resumed);
+	// Away from the fighting (back the other way from the middle), nothing comes: it gets there and its attack-move is over.
+	const ecs::Entity alone = game->Place("AmericaVehicleHumvee", centre, {}, teams->first);
+	const FixedVector2 near = centre - FixedVector2{Fixed::FromInt(100), Fixed{}};
+	gameplay::ApplyCommand(game->Game(), player, commands::AttackMoveTo{{alone}, near});
+	for (ticks = 0; ticks < 30 * 30 && game->World().Has<gp::AttackMove>(alone); ++ticks)
+		game->Tick();
+	BOOST_TEST(!game->World().Has<gp::AttackMove>(alone));
+	BOOST_TEST((Engine::Math::DistanceSquared(game->World().Get<gp::Transform>(alone)->position.XY(), near) < Fixed::FromInt(80 * 80))); // ATTACK_CLOSE_ENOUGH_CELLS
+	// A plain move ends an attack-move.
+	gameplay::ApplyCommand(game->Game(), player, commands::AttackMoveTo{{humvee}, centre});
+	BOOST_TEST_REQUIRE(game->World().Has<gp::AttackMove>(humvee));
+	gameplay::ApplyCommand(game->Game(), player, commands::MoveTo{{humvee}, spot});
+	BOOST_TEST(!game->World().Has<gp::AttackMove>(humvee));
+}
+
+// in the order's mode (GUARDMODE_GUARD_WITHOUT_PURSUIT here); units not the player's are not ordered.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_players_guard_order_sets_its_units_guarding)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	game->Tick();
+	const auto teams = EnemyTeams(*game);
+	BOOST_TEST_REQUIRE(teams.has_value());
+	const std::uint32_t player = game->Teams().TeamAt(teams->first).owner;
+	const auto [low, high] = game->Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity mine = game->Place("AmericaVehicleHumvee", centre, {}, teams->first);
+	const ecs::Entity theirs = game->Place("AmericaVehicleHumvee", centre + FixedVector2{Fixed::FromInt(40), Fixed{}}, {}, teams->second);
+	const FixedVector2 spot = centre + FixedVector2{Fixed::FromInt(100), Fixed{}};
+	gameplay::ApplyCommand(game->Game(), player, commands::GuardPosition{{mine, theirs}, spot, 1});
+	BOOST_TEST_REQUIRE(game->World().Get<gameplay::Guard>(mine) != nullptr);
+	BOOST_TEST((game->World().Get<gameplay::Guard>(mine)->position == spot));
+	BOOST_TEST((game->World().Get<gameplay::Guard>(mine)->mode == gameplay::GuardMode::WithoutPursuit));
+	BOOST_TEST(game->World().Get<gameplay::Guard>(theirs) == nullptr);
+	const ecs::Entity guarded = game->Place("AmericaVehicleHumvee", centre + FixedVector2{Fixed{}, Fixed::FromInt(60)}, {}, teams->first);
+	gameplay::ApplyCommand(game->Game(), player, commands::GuardObject{{mine}, guarded, 0});
+	BOOST_TEST((game->World().Get<gameplay::Guard>(mine)->target == guarded));
+	BOOST_TEST((game->World().Get<gameplay::Guard>(mine)->mode == gameplay::GuardMode::Normal));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_guard_returns_idles_and_takes_on_what_comes_near)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](std::size_t workers, bool checkpoint) {
+		auto game = std::make_unique<session::Session>(shell.map->level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		const auto teams = EnemyTeams(*game);
+		BOOST_TEST_REQUIRE(teams.has_value());
+		const auto [low, high] = game->Game().ground.Extent();
+		const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+		const ecs::Entity guard = game->Place("AmericaVehicleHumvee", centre, {}, teams->first);
+		const ecs::Entity guarded = game->Place("AmericaVehicleHumvee", centre + FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, teams->first);
+		gameplay::GuardObject(game->Game(), guard, guarded);
+		const gameplay::GuardRules rules = game->World().Resource<gameplay::GuardRules>();
+		const auto state = [&] { return game->World().Get<gameplay::Guard>(guard)->state; };
+		game->Tick();
+		const std::uint64_t started = game->CurrentTick();
+		BOOST_TEST((state() == gameplay::GuardState::Return));
+		BOOST_TEST((game->World().Get<gp::MoveOrder>(guard)->mode == gp::MoveMode::Point));
+		BOOST_TEST((game->World().Get<gp::MoveOrder>(guard)->destination == centre + FixedVector2{Fixed::FromInt(60), Fixed{}}));
+		const std::uint64_t firstReturnLook = game->World().Get<gameplay::Guard>(guard)->nextReturnScan;
+		BOOST_TEST((firstReturnLook >= started && firstReturnLook <= started + rules.returnScanTicks));
+		// There, it idles; its first look within the scan rate. The first look finds the guarded Humvee "moved" (from
+		// zero): return, then idle again at once (already there).
+		int ticks = 0;
+		while (state() != gameplay::GuardState::Idle && ticks++ < 300)
+			game->Tick();
+		BOOST_TEST_REQUIRE((state() == gameplay::GuardState::Idle));
+		const std::uint64_t idled = game->CurrentTick();
+		const std::uint64_t firstLook = game->World().Get<gameplay::Guard>(guard)->nextScan;
+		BOOST_TEST((firstLook >= idled && firstLook <= idled + rules.scanTicks));
+		while (game->CurrentTick() < firstLook)
+			game->Tick();
+		game->Tick();
+		BOOST_TEST((game->World().Get<gameplay::Guard>(guard)->guardeeAt == game->World().Get<gp::Transform>(guarded)->position.XY()));
+		if (checkpoint)
+		{
+			auto restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, workers, {}}, game->Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST(restored->StateHash() == game->StateHash());
+			game = std::move(restored);
+		}
+		ticks = 0;
+		while (state() != gameplay::GuardState::Idle && ticks++ < 300)
+			game->Tick();
+		BOOST_TEST_REQUIRE((state() == gameplay::GuardState::Idle));
+		// An enemy truck close by: its nemesis at the next look.
+		const ecs::Entity tank = game->Place("ChinaVehicleSupplyTruck", centre + FixedVector2{Fixed{}, Fixed::FromInt(80)}, {}, teams->second);
+		const std::uint64_t look = game->World().Get<gameplay::Guard>(guard)->nextScan;
+		std::uint64_t engaged = 0;
+		for (int tick = 0; tick < 60 && engaged == 0; ++tick)
+		{
+			game->Tick();
+			if (state() == gameplay::GuardState::Inner)
+				engaged = game->CurrentTick();
+		}
+		BOOST_TEST(engaged == look);
+		BOOST_TEST((game->World().Get<gameplay::Guard>(guard)->nemesis == tank));
+		BOOST_TEST((game->World().Get<gp::AttackTarget>(guard)->target == tank));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int tick = 0; tick < 90; ++tick)
+		{
+			game->Tick();
+			hashes.push_back(game->StateHash());
+		}
+		// A move order ends the guard.
+		gameplay::OrderMove(game->Game(), guard, centre);
+		BOOST_TEST(game->World().Get<gameplay::Guard>(guard) == nullptr);
+		return hashes;
+	};
+	const auto single = run(1, false);
+	BOOST_TEST((run(4, false) == single));
+	BOOST_TEST((run(1, true) == single));
+}
+
+// AIGuardMachine guarding a trigger area (aiGuardArea: lookForInnerTarget with the area, checkFrame =
+// getFrameObjectsChangedTriggerAreas + GuardEnemyScanRate): it goes to the area's middle and idles. An enemy truck made
+// inside the area (a change of what the areas hold, Object's constructor) is its nemesis at its next look. With what
+// the areas hold unchanged for longer than the scan rate (held so), it finds nothing, the truck inside or not.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_area_guard_looks_only_after_the_areas_change)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](bool areasQuiet) {
+		session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+		for (int tick = 0; tick < 60; ++tick) // well past the first scan window
+			game.Tick();
+		const auto teams = EnemyTeams(game);
+		BOOST_TEST_REQUIRE(teams.has_value());
+		const auto &areas = game.World().Resource<gp::TriggerAreas>();
+		// A roomy area: at least 150 across.
+		std::uint32_t area = gp::TriggerAreas::None;
+		for (std::uint32_t index = 0; index < areas.areas.size() && area == gp::TriggerAreas::None; ++index)
+			if (areas.areas[index].hi[0] - areas.areas[index].lo[0] >= 150 && areas.areas[index].hi[1] - areas.areas[index].lo[1] >= 150)
+			{
+				const auto twice = areas.areas[index].CenterTimesTwo();
+				if (areas.areas[index].Contains(static_cast<std::int32_t>(twice[0] / 2), static_cast<std::int32_t>(twice[1] / 2)))
+					area = index;
+			}
+		BOOST_TEST_REQUIRE(area != gp::TriggerAreas::None);
+		const auto twice = areas.areas[area].CenterTimesTwo();
+		const FixedVector2 middle{Fixed::FromInt(twice[0] / 2), Fixed::FromInt(twice[1] / 2)};
+		const ecs::Entity guard = game.Place("AmericaVehicleHumvee", middle, {}, teams->first);
+		gameplay::GuardArea(game.Game(), guard, area);
+		const auto state = [&] { return game.World().Get<gameplay::Guard>(guard)->state; };
+		const auto quiet = [&] {
+			if (areasQuiet)
+				game.World().Resource<gp::AreaActivity>().lastChange = 1;
+		};
+		int ticks = 0;
+		while (state() != gameplay::GuardState::Idle && ticks++ < 300)
+		{
+			quiet();
+			game.Tick();
+		}
+		BOOST_TEST_REQUIRE((state() == gameplay::GuardState::Idle));
+		const ecs::Entity truck = game.Place("ChinaVehicleSupplyTruck", middle + FixedVector2{Fixed::FromInt(20), Fixed::FromInt(20)}, {}, teams->second);
+		const std::uint64_t look = game.World().Get<gameplay::Guard>(guard)->nextScan;
+		std::uint64_t engaged = 0;
+		for (int tick = 0; tick < 60 && engaged == 0; ++tick)
+		{
+			quiet();
+			game.Tick();
+			if (state() == gameplay::GuardState::Inner)
+				engaged = game.CurrentTick();
+		}
+		if (areasQuiet)
+			BOOST_TEST(engaged == 0u);
+		else
+		{
+			BOOST_TEST(engaged == look);
+			BOOST_TEST((game.World().Get<gameplay::Guard>(guard)->nemesis == truck));
+		}
+	};
+	run(false);
+	run(true);
+}
+
+// AIPlayer::buildUpgrade (AI_PLAYER_BUILD_UPGRADE): the computer player's build list is walked in order; a structure
+// being built is passed over, as is anything not on the list; the first standing one whose command set researches the
+// upgrade queues it (paid now). Asked again while it is in production: nothing more.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_researches_at_its_build_list)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &ais = game.World().Resource<gameplay::AiPlayers>();
+	std::optional<std::uint32_t> computer;
+	for (std::uint32_t player = 0; player < game.Teams().PlayerCount() && !computer; ++player)
+		if (ais.Of(player) != nullptr && game.Teams().FindTeam("team" + game.Teams().PlayerAt(player).name))
+			computer = player;
+	BOOST_TEST_REQUIRE(computer.has_value());
+	const auto team = *game.Teams().FindTeam("team" + game.Teams().PlayerAt(*computer).name);
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity outside = game.Place("AmericaBarracks", centre, {}, team);
+	const ecs::Entity building = game.Place("AmericaBarracks", centre + FixedVector2{Fixed::FromInt(200), Fixed{}}, {}, team);
+	const ecs::Entity listed = game.Place("AmericaBarracks", centre + FixedVector2{Fixed::FromInt(400), Fixed{}}, {}, team);
+	game.World().Add<gp::UnderConstruction>(building);
+	gameplay::AiPlayer &ai = *ais.Of(*computer);
+	ai.buildList.clear();
+	for (const ecs::Entity built : {building, listed})
+	{
+		gameplay::AiBuildSlot slot;
+		slot.structure = "AmericaBarracks";
+		slot.built = built;
+		ai.buildList.push_back(slot);
+	}
+	auto &money = game.World().Resource<gp::PlayerMoney>();
+	money.Deposit(*computer, 100000);
+	const std::int64_t before = money.Balance(*computer);
+	std::vector<ecs::Entity> factories;
+	for (const gameplay::AiBuildSlot &slot : ai.buildList)
+		factories.push_back(slot.built);
+	const std::string upgrade = "Upgrade_AmericaRangerFlashBangGrenade";
+	BOOST_TEST(gameplay::PlayerBuildUpgrade(game.Game(), *computer, upgrade, factories));
+	BOOST_TEST(game.World().Get<gp::ProductionQueue>(listed)->count == 1u);
+	BOOST_TEST(game.World().Get<gp::ProductionQueue>(outside)->count == 0u);
+	BOOST_TEST(money.Balance(*computer) < before);
+	BOOST_TEST(!gameplay::PlayerBuildUpgrade(game.Game(), *computer, upgrade, factories));
+	BOOST_TEST(game.World().Get<gp::ProductionQueue>(listed)->count == 1u);
+}
+
+// AIPlayer::isSupplySourceAttacked (SCAN_RATE 10 frames) and AIPlayer::guardSupplyCenter: a computer player's supply
+// truck (a HARVESTER) hit by an enemy on tick T is found attacked on T; the next look waits for T + 10 (none before);
+// with no further hit, at T + 10 the player was last attacked 10 frames ago (still recent) but the truck's hit is not
+// within the last 10 frames: nothing. Guarding its supply centre (TEAM_GUARD_SUPPLY_CENTER), a team looks again at once
+// and guards the spot 0.8 of the attacked truck's bounding radius from it, toward its enemy's structures.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_sees_its_supplies_attacked_and_guards_them)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &ais = game.World().Resource<gameplay::AiPlayers>();
+	const auto &relationships = game.World().Resource<gp::Relationships>();
+	std::optional<std::uint32_t> computer, enemy;
+	for (std::uint32_t player = 0; player < game.Teams().PlayerCount() && !computer; ++player)
+		if (ais.Of(player) != nullptr)
+			for (std::uint32_t other = 0; other < game.Teams().PlayerCount(); ++other)
+				if (relationships.Enemies(player, other) && game.Teams().FindTeam("team" + game.Teams().PlayerAt(other).name))
+				{
+					computer = player;
+					enemy = other;
+					break;
+				}
+	BOOST_TEST_REQUIRE(computer.has_value());
+	const std::string teamName = "team" + game.Teams().PlayerAt(*computer).name;
+	const auto team = game.Teams().FindTeam(teamName);
+	const auto enemyTeam = game.Teams().FindTeam("team" + game.Teams().PlayerAt(*enemy).name);
+	BOOST_TEST_REQUIRE((team.has_value() && enemyTeam.has_value()));
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity truck = game.Place("ChinaVehicleSupplyTruck", centre, {}, *team);
+	const ecs::Entity attacker = game.Place("AmericaInfantryRanger", centre + FixedVector2{Fixed::FromInt(600), Fixed{}}, {}, *enemyTeam); // out of reach: only the one hit
+	gameplay::AiPlayer &ai = *ais.Of(*computer);
+	game.World().Add<gp::PendingDamage>(truck);
+	*game.World().Get<gp::PendingDamage>(truck) = gp::PendingDamage{attacker, Fixed::FromInt(1), *content::DamageTypeIndex("SMALL_ARMS"), 0};
+	game.Tick();
+	const std::uint64_t hit = game.CurrentTick();
+	BOOST_TEST(game.Teams().PlayerAt(*computer).attackedTick == hit);
+	BOOST_TEST(gameplay::SupplySourceAttacked(game.Game(), ai));
+	BOOST_TEST((ai.attackedSupplyCenter == truck));
+	BOOST_TEST(ai.supplyAttackCheckTick == hit + 10);
+	BOOST_TEST(!gameplay::SupplySourceAttacked(game.Game(), ai)); // not before its next look
+	// The team (the computer player's own) guards near it; the look is made again at once.
+	gameplay::GuardSupplyCenter(game.Game(), teamName, 0);
+	const auto *guard = game.World().Get<gameplay::Guard>(truck);
+	BOOST_TEST_REQUIRE(guard != nullptr);
+	const Fixed radius = content::BoundingCircleRadius(shell.game.objects.Find("ChinaVehicleSupplyTruck")->geometry) * Fixed::FromRatio(4, 5);
+	BOOST_TEST((Engine::Math::Abs(Engine::Math::Distance(guard->position, game.World().Get<gp::Transform>(truck)->position.XY()) - radius) <= Fixed::FromRatio(1, 100)));
+	while (game.CurrentTick() < hit + 10)
+		game.Tick();
+	BOOST_TEST(game.World().Get<gp::Health>(truck)->lastDamageTick == hit);
+	BOOST_TEST(!gameplay::SupplySourceAttacked(game.Game(), ai));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,7 +1,5 @@
-module;
-#include <optional>
-#include <string_view>
 export module Assets.Adapters.W3D.Retention;
+import std;
 
 namespace Assets::W3D {
 // Views borrow the supplied name. Membership remains an exact, case-sensitive

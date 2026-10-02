@@ -1,13 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.Shadows;
+import std;
 
 export import Graphics.RHI;
 export import Graphics.RenderGraph;

@@ -50,7 +50,6 @@ module;
 
 #include "Precompiled/PreRTS.h"
 #include <SDL3/SDL.h>
-#include <time.h>
 //-----------------------------------------------------------------------------
 // USER INCLUDES //////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -73,6 +72,7 @@ module;
 #include "GameClient/GUICallbacks.h"
 
 export module Engine.UI.WND.Runtime.Renderer.W3DMainMenu;
+import std;
 
 import Engine.UI.WND;
 

@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TextureReferencesTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <filesystem>
-#include <span>
 export module Graphics.Resources.Textures.References.Tests;
+import std;
 import Graphics.Resources.Textures.References;
 import Graphics.Renderer2D;
 import Graphics.Tests.Device;

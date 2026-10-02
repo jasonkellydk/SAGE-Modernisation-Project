@@ -1,0 +1,161 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.navigation.algorithms.clearance;
+
+// Regression guards for the performance work: the optimised simulation must stay bit-identical. A two hard computer player
+// skirmish on Twilight Flame (a map with two bridge decks, many units running into each other: the unit blocking, the
+// zone rebuilds and the AI all at work) must not depend on the worker count, and the zones the deck-aware labelling builds
+// must be exactly the ones the cell-by-cell flood fill builds.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct TwilightFlame
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	std::optional<content::GameContent> game;
+	std::optional<engine::level::generals_map::ScriptFile> scripts;
+	std::optional<engine::level::generals_map::ReadResult> map;
+	std::optional<session::setup::SkirmishLevel> skirmish;
+};
+
+TwilightFlame *Load()
+{
+	static TwilightFlame loaded;
+	static bool tried = false;
+	if (tried)
+		return loaded.skirmish ? &loaded : nullptr;
+	tried = true;
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return nullptr;
+	content::MountInstall(loaded.files, install);
+	loaded.loader.emplace(loaded.files, content::ZeroHourIniGrammar(loaded.grammarDiagnostics));
+	loaded.game.emplace(content::LoadGameContent(*loaded.loader, engine::time::FixedStep{30}));
+	const auto scb = loaded.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto bytes = loaded.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	if (!scb || !bytes)
+		return nullptr;
+	auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read || !file)
+		return nullptr;
+	loaded.scripts.emplace(std::move(*file));
+	loaded.map.emplace(std::move(*read));
+	int spots = 0;
+	for (const auto &marker : loaded.map->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < loaded.game->playerTemplates.templates.size(); ++index)
+			if (loaded.game->playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 11;
+	setup.startingCash = 10000;
+	const char *factions[] = {"FactionAmerica", "FactionChina"};
+	for (int slot = 0; slot < 2; ++slot)
+	{
+		setup.slots[slot].SetState(session::setup::SlotState::HardAI);
+		setup.slots[slot].playerTemplate = templateOf(factions[slot]);
+		setup.slots[slot].startPos = slot;
+	}
+	loaded.skirmish.emplace(session::setup::PrepareSkirmishLevel(loaded.map->level, setup, loaded.game->playerTemplates, std::max(spots, 2), &*loaded.scripts));
+	return &loaded;
+}
+
+session::SessionOptions Options(const TwilightFlame &map, std::size_t workers)
+{
+	session::SessionOptions options{11, workers, {}, {}};
+	for (const auto &player : map.skirmish->players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	return options;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(determinism_guards)
+
+// Two minutes of the skirmish (bases going up, the first armies out and running into each other) on one worker and on
+// four: every 30th tick's state must match.
+BOOST_AUTO_TEST_CASE(a_twilight_flame_skirmish_does_not_depend_on_worker_count)
+{
+	TwilightFlame *map = Load();
+	if (map == nullptr)
+		return;
+	session::Session serial(map->skirmish->level, *map->game, Options(*map, 1));
+	session::Session parallel(map->skirmish->level, *map->game, Options(*map, 4));
+	for (int tick = 1; tick <= 30 * 120; ++tick)
+	{
+		serial.Tick();
+		parallel.Tick();
+		if (tick % 30 == 0)
+			BOOST_TEST_REQUIRE(serial.StateHash() == parallel.StateHash(), "diverged at tick " << tick);
+	}
+	BOOST_TEST(serial.EntityCount() == parallel.EntityCount());
+}
+
+// BuildZones labels a map with decks by runs over the ground's components, joined to the decks (LinkDeckZones): after two
+// minutes of building (obstacles stamped, zones rebuilt), each clearance plane's zones and terrain zones must equal the
+// cell-by-cell flood fill's (FloodZones), number for number.
+BOOST_AUTO_TEST_CASE(zones_on_a_map_with_decks_match_the_flood_fill)
+{
+	TwilightFlame *map = Load();
+	if (map == nullptr)
+		return;
+	session::Session game(map->skirmish->level, *map->game, Options(*map, 1));
+	for (int tick = 1; tick <= 30 * 120; ++tick)
+		game.Tick();
+	gp::NavigationGrid &grid = game.World().Resource<gp::NavigationGrid>();
+	BOOST_TEST_REQUIRE(!grid.Decks().empty());
+	BOOST_TEST_REQUIRE(!grid.Clearance().empty());
+	for (const gp::ClearancePlane &original : grid.Clearance())
+	{
+		if (original.room.empty())
+			continue;
+		gp::ClearancePlane plane = original;
+		plane.zonesStale = true;
+		gp::BuildZones(grid, plane);
+		const std::size_t groundCells = plane.room.size();
+		const auto deckUsable = [&](std::size_t index) {
+			std::uint8_t layer = static_cast<std::uint8_t>(grid.Decks().size());
+			while (layer > 1 && index < grid.DeckOffset(layer))
+				--layer;
+			const std::size_t local = index - grid.DeckOffset(layer);
+			const gp::DeckLayer &deck = grid.Decks()[layer - 1];
+			return layer <= plane.deckRoom.size() && local < plane.deckRoom[layer - 1].size() && plane.deckRoom[layer - 1][local] != 0 &&
+				deck.type[local] == gp::PathfindCellType::Clear;
+		};
+		const auto types = grid.Types();
+		std::vector<std::uint32_t> zones, terrainZones;
+		gp::clearance_detail::FloodZones(grid, zones, [&](std::size_t index) {
+			if (index >= groundCells)
+				return deckUsable(index);
+			return plane.room[index] != 0 && types[index] != gp::PathfindCellType::BridgeImpassable;
+		});
+		gp::clearance_detail::FloodZones(grid, terrainZones, [&](std::size_t index) {
+			if (index >= groundCells)
+				return deckUsable(index);
+			return (plane.room[index] != 0 && types[index] != gp::PathfindCellType::BridgeImpassable) || types[index] == gp::PathfindCellType::Obstacle;
+		});
+		BOOST_TEST((plane.zones == zones), "zones differ for surfaces " << int(plane.surfaces));
+		BOOST_TEST((plane.terrainZones == terrainZones), "terrain zones differ for surfaces " << int(plane.surfaces));
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,158 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.challenge.challenge_view_model;
+
+using namespace generalszh::shell;
+
+namespace
+{
+struct Heard
+{
+	std::vector<std::string> sounds, voices;
+	std::vector<std::string> started;
+	Difficulty difficulty{Difficulty::Easy};
+};
+
+ChallengeViewModel Make(ShellModel &model, Heard &heard)
+{
+	std::vector<ChallengeGeneral> generals(ChallengeViewModel::Count);
+	generals[0] = {true, "USAGeneral_slvr", "USAGeneral_blue", "USAGeneral_orng", "PAAirGen_S", u"Granger", u"General", u"Air Force", u"Air",
+		"Taunts_GCAnnouncer07", "CHALLENGE_0", "FactionAmericaAirForceGeneral"};
+	generals[1] = {true, "ToxinGeneral_slvr", "ToxinGeneral_blue", "ToxinGeneral_orng", "PUThraxGen_S", u"Thrax", u"", u"GLA", u"Toxins",
+		"Taunts_GCAnnouncer08", "CHALLENGE_1", "FactionGLAToxinGeneral"};
+	ChallengeServices services;
+	services.sound = [&heard](std::string_view sound) { heard.sounds.emplace_back(sound); };
+	services.voice = [&heard](std::string_view voice) { heard.voices.emplace_back(voice); };
+	services.start = [&heard](const ChallengeGeneral &general, Difficulty difficulty) {
+		heard.started.push_back(general.campaign);
+		heard.difficulty = difficulty;
+	};
+	return ChallengeViewModel(model, std::move(generals), std::move(services));
+}
+}
+
+BOOST_AUTO_TEST_SUITE(challenge_view_model)
+
+// ChallengeMenuInit: no bio, no Play, nothing chosen.
+BOOST_AUTO_TEST_CASE(legacy_parity_opens_with_nothing_chosen)
+{
+	ShellModel model;
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	BOOST_TEST(!menu.bioShown.Get());
+	BOOST_TEST(!menu.playShown.Get());
+	BOOST_TEST(menu.Chosen() == -1);
+}
+
+// updateBio(TELETYPE_SKIP): two letters a frame, line after line.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_bio_types_two_letters_a_frame)
+{
+	ShellModel model;
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	menu.enter[0].Execute();
+	BOOST_TEST(menu.bioShown.Get());
+	BOOST_TEST(menu.portrait.Get() == "PAAirGen_S");
+	BOOST_TEST(heard.sounds.back() == "GUILogoMouseOver");
+	BOOST_TEST(menu.lines[0].Get().empty());
+	menu.Update(false);
+	BOOST_TEST((menu.lines[0].Get() == u"Gr"));
+	for (int frame = 0; frame < 3; ++frame)
+		menu.Update(false);
+	BOOST_TEST((menu.lines[0].Get() == u"Granger"));
+	BOOST_TEST((menu.lines[1].Get() == u"G"));
+	for (int frame = 0; frame < 20; ++frame)
+		menu.Update(false);
+	BOOST_TEST((menu.lines[1].Get() == u"General"));
+	BOOST_TEST((menu.lines[2].Get() == u"Air Force"));
+	BOOST_TEST((menu.lines[3].Get() == u"Air"));
+}
+
+// GBM_MOUSE_LEAVING shows the chosen general's bio again; with none chosen the last one stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_leaving_goes_back_to_the_chosen_bio)
+{
+	ShellModel model;
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	menu.enter[1].Execute();
+	menu.leave[1].Execute();
+	BOOST_TEST(menu.portrait.Get() == "PUThraxGen_S");
+	menu.enter[0].Execute();
+	menu.select[0].Execute();
+	menu.leave[0].Execute();
+	menu.enter[1].Execute();
+	BOOST_TEST(menu.portrait.Get() == "PUThraxGen_S");
+	menu.leave[1].Execute();
+	BOOST_TEST(menu.portrait.Get() == "PAAirGen_S");
+	// Pointing at the chosen one again types nothing new.
+	const std::size_t sounds = heard.sounds.size();
+	menu.enter[0].Execute();
+	BOOST_TEST(heard.sounds.size() == sounds);
+}
+
+// GBM_SELECTED: exactly one medallion down; its preview replaces the last voice; Play shows.
+BOOST_AUTO_TEST_CASE(legacy_parity_one_general_is_chosen_at_a_time)
+{
+	ShellModel model;
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	menu.select[0].Execute();
+	BOOST_TEST(menu.checked[0].Get());
+	BOOST_TEST(menu.playShown.Get());
+	menu.select[1].Execute();
+	BOOST_TEST(!menu.checked[0].Get());
+	BOOST_TEST(menu.checked[1].Get());
+	BOOST_TEST(heard.voices == (std::vector<std::string>{"Taunts_GCAnnouncer07", "Taunts_GCAnnouncer08"}), boost::test_tools::per_element());
+	menu.select[1].Execute();
+	BOOST_TEST(menu.checked[1].Get());
+}
+
+// ButtonPlay: the chosen campaign at the main menu's difficulty; the medallion comes back up.
+BOOST_AUTO_TEST_CASE(legacy_parity_play_starts_the_chosen_challenge)
+{
+	ShellModel model;
+	model.campaignDifficulty.Set(Difficulty::Hard);
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	menu.play.Execute();
+	BOOST_TEST(heard.started.empty());
+	menu.select[1].Execute();
+	menu.play.Execute();
+	BOOST_TEST(heard.started == (std::vector<std::string>{"CHALLENGE_1"}), boost::test_tools::per_element());
+	BOOST_TEST((heard.difficulty == Difficulty::Hard));
+	BOOST_TEST(!menu.checked[1].Get());
+	BOOST_TEST(menu.Chosen() == -1);
+}
+
+// "Choose your general." ten frames after the fade in, once; Back pops the menu.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_announcer_asks_once_the_fade_is_done)
+{
+	ShellModel model;
+	model.Push(Screen::ChallengeMenu);
+	Heard heard;
+	ChallengeViewModel menu = Make(model, heard);
+	menu.Open();
+	for (int frame = 0; frame < 30; ++frame)
+		menu.Update(false);
+	BOOST_TEST(heard.sounds.empty());
+	for (int frame = 0; frame < 9; ++frame)
+		menu.Update(true);
+	BOOST_TEST(heard.sounds.empty());
+	menu.Update(true);
+	BOOST_TEST(heard.sounds == (std::vector<std::string>{"Taunts_GCAnnouncer01"}), boost::test_tools::per_element());
+	for (int frame = 0; frame < 30; ++frame)
+		menu.Update(true);
+	BOOST_TEST(heard.sounds.size() == 1u);
+	menu.back.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

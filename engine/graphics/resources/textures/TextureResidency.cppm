@@ -1,12 +1,5 @@
-module;
-
-#include <cstdint>
-#include <chrono>
-#include <functional>
-#include <memory>
-#include <utility>
-
 export module Graphics.Resources.Textures.Residency;
+import std;
 
 export import Graphics.Resources.Loading.Queue;
 export import Graphics.Resources.Recreation;

@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdio>
-#include <cstdlib>
-#include <cstdint>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
 export module Assets.Adapters.W3D.TextureMapping;
+import std;
 import Assets.Materials.TextureMapping;
 import Assets.Math;
 

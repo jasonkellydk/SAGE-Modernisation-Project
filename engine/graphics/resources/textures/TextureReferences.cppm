@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <unordered_map>
-
 export module Graphics.Resources.Textures.References;
+import std;
 import Graphics.RHI;
 
 namespace Graphics

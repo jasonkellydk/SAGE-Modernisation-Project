@@ -1,12 +1,5 @@
-module;
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.search.cell_query_cache;
+import std;
 
 export namespace navigation {
 // First observations for one search, including its suspended slices.

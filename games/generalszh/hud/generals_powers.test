@@ -1,0 +1,176 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.generals_powers;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.sciences.resources.player_ranks;
+
+// The General's Powers screen over a shipped skirmish (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(generals_powers)
+
+// ControlBar::populatePurchaseScience and GUI_COMMAND_PURCHASE_SCIENCE -> GameLogic::onPurchaseScience ->
+// Player::attemptToPurchaseScience, for an American general at rank 1 with its one point: the Paladin (rank 1 row,
+// first) may be bought; Paradrop 1 (rank 3 row, line 4) shows but is off (it needs SCIENCE_Rank3; its roots, AMERICA and
+// Rank1, are known); the MOAB (rank 8 row, line 4, SCRIPT_ONLY) never shows. Clicking the Paladin buys it on the
+// command's tick: it draws in colour and is off, the point spent. A script's Hidden science hides its button, a
+// Disabled one stays shown but off.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_general_buys_a_science_from_the_screen)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+
+	auto state = hud::ReadGeneralsPowers(game, america);
+	BOOST_TEST_REQUIRE(state.hasPlayer);
+	BOOST_TEST(state.level == 1);
+	BOOST_TEST(state.purchasePoints == 1);
+	const auto &paladin = state.ranks[0][0];
+	BOOST_TEST(paladin.shown);
+	BOOST_TEST(paladin.enabled);
+	BOOST_TEST(!paladin.owned);
+	BOOST_TEST(paladin.image == "SAPaladin");
+	BOOST_TEST(paladin.purchase == "SCIENCE_PaladinTank");
+	BOOST_TEST(state.ranks[1][3].shown);   // Paradrop 1
+	BOOST_TEST(!state.ranks[1][3].enabled); // needs rank 3
+	BOOST_TEST(!state.ranks[2][3].shown);   // the MOAB: script only
+	// China's screen shows none of America's (its roots: SCIENCE_AMERICA).
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	BOOST_TEST(hud::ReadGeneralsPowers(game, china).ranks[0][0].purchase != "SCIENCE_PaladinTank");
+
+	std::vector<commands::GameCommand> sent;
+	hud::GeneralsPowersViewModel screen([&](commands::GameCommand command) { sent.push_back(std::move(command)); },
+		[](std::int32_t level) { return u"Rank " + std::u16string(1, static_cast<char16_t>(u'0' + level)); }, "Off", "On");
+	screen.Apply(state, 0);
+	screen.general.Execute();
+	BOOST_TEST(screen.shown.Get());
+	BOOST_TEST((screen.points.Get() == u"1"));
+	BOOST_TEST((screen.title.Get() == u"Rank 1"));
+	BOOST_TEST(screen.slotEnabled[0][0].Get());
+	screen.clicked[0][0].Execute();
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(sent.front())};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	const auto paladinBit = *shell.game.Science("SCIENCE_PaladinTank");
+	BOOST_TEST(game.World().Resource<gp::PlayerSciences>().Has(america, paladinBit));
+	state = hud::ReadGeneralsPowers(game, america);
+	BOOST_TEST(state.purchasePoints == 0);
+	BOOST_TEST(state.ranks[0][0].owned);
+	BOOST_TEST(!state.ranks[0][0].enabled);
+	screen.Apply(state, 0);
+	BOOST_TEST((screen.points.Get() == u"0"));
+	BOOST_TEST(screen.slotOwned[0][0].Get());
+	BOOST_TEST(!screen.clicked[0][0].enabled.Get());
+	screen.exit.Execute();
+	BOOST_TEST(!screen.shown.Get());
+
+	auto &sciences = game.World().Resource<gp::PlayerSciences>();
+	sciences.SetAvailability(america, *shell.game.Science("SCIENCE_Paradrop1"), gp::ScienceAvailability::Hidden);
+	sciences.SetAvailability(america, *shell.game.Science("SCIENCE_StealthFighter"), gp::ScienceAvailability::Disabled);
+	game.World().Resource<gp::PlayerRanks>().Of(america).purchasePoints = 1;
+	state = hud::ReadGeneralsPowers(game, america);
+	BOOST_TEST(!state.ranks[1][3].shown);
+	BOOST_TEST(state.ranks[0][1].shown); // the stealth fighter: shown, off
+	BOOST_TEST(!state.ranks[0][1].enabled);
+	BOOST_TEST(state.ranks[0][2].enabled); // the spy drone
+}
+
+// ControlBar::getStarImage and onPlayerSciencePurchasePointsChanged: with points to spend the general's button blinks
+// on a one-second wall-clock cycle, lit for its second half (the cycle only runs while it blinks); opening the screen
+// stops it; points coming in start it again; with none it does not blink.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_generals_star_blinks_while_points_wait)
+{
+	hud::GeneralsPowersViewModel screen([](commands::GameCommand) {}, [](std::int32_t) { return std::u16string{}; }, "Off", "On");
+	hud::GeneralsPowersState state;
+	state.hasPlayer = true;
+	state.purchasePoints = 1;
+	screen.Apply(state, 250'000);
+	BOOST_TEST(screen.generalImage.Get() == "Off");
+	screen.Apply(state, 500'000);
+	BOOST_TEST(screen.generalImage.Get() == "On"); // 0.75 s into the cycle
+	screen.Apply(state, 500'000);
+	BOOST_TEST(screen.generalImage.Get() == "Off"); // 0.25 s into the next
+	screen.Show();
+	screen.Apply(state, 500'000);
+	BOOST_TEST(screen.generalImage.Get() == "Off");
+	state.purchasePoints = 2;
+	screen.Apply(state, 0);
+	BOOST_TEST(screen.generalImage.Get() == "Off"); // flashing again; its clock stood still while it was not (0.25 s in)
+	screen.Apply(state, 500'000);
+	BOOST_TEST(screen.generalImage.Get() == "On");
+	state.purchasePoints = 0;
+	screen.Apply(state, 500'000);
+	BOOST_TEST(screen.generalImage.Get() == "Off");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

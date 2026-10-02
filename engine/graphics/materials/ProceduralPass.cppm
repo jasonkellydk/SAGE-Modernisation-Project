@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <utility>
-
 export module Graphics.Materials.ProceduralPass;
+import std;
 
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.State;

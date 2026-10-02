@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <cmath>
-#include <string>
-
 export module Assets.Tests.W3DModelBuilder;
+import std;
 
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;
@@ -61,6 +57,9 @@ BOOST_AUTO_TEST_CASE(model_builder_creates_generic_submesh_and_dependencies)
 	BOOST_REQUIRE_EQUAL(description.submeshes.size(), 1);
 	BOOST_REQUIRE_EQUAL(description.materials.size(), 1);
 	BOOST_CHECK(description.submeshes[0].material_index == 0);
+	// Each submesh keeps its own mesh's attribute bits (W3DMeshRenderObject::Load_W3D reads hidden, collision and geometry
+	// type per mesh), not only the model's union.
+	BOOST_CHECK(description.submeshes[0].source_attributes == 4u);
 	BOOST_CHECK(description.materials[0].primary_texture == "Body.TGA");
 	BOOST_CHECK(description.bounds.Is_Valid());
 	BOOST_CHECK(description.sort_level == 3);
@@ -135,4 +134,62 @@ BOOST_AUTO_TEST_CASE(authored_tangent_handedness_follows_the_w3d_v_axis_conversi
 	Assets::ModelAssetDesc mirrored;
 	Assets::W3D::W3DAppend_Mesh(mirrored, mesh);
 	BOOST_TEST(mirrored.vertices[0].tangent_sign == 1.0f);
+}
+
+// Legacy parity (engine/graphics/scene/models/ModelMeshDrawing.cppm Draw_Base, the reference renderer's mesh drawing,
+// fed by W3DMeshResource's per-polygon shader and texture arrays and per-vertex material array): a pass's polygons draw
+// in authored order in batches that share a shader (per polygon), a stage 0 texture (per polygon) and the vertex
+// material of their first vertex. Faces: 0 (vm0, sh0, tx0), 1 (vm0, sh0, tx1), 2 (vm1, sh1, tx1) by its first vertex,
+// 3 (vm0, sh0, tx0) again: four batches, three distinct materials (the last batch reuses the first's).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pass_splits_where_its_polygons_shader_texture_or_first_vertex_material_changes)
+{
+	Assets::W3D::W3DParsedMesh mesh;
+	mesh.header.name = "body";
+	mesh.header.container_name = "unit";
+	for (int vertex = 0; vertex < 8; ++vertex)
+		mesh.positions.push_back({static_cast<float>(vertex), 0.0f, 0.0f});
+	mesh.normals.assign(8, {0.0f, 0.0f, 1.0f});
+	mesh.stage_texcoords.assign(8, {});
+	mesh.colors.assign(8, {});
+	mesh.triangles = {{0, 1, 2}, {1, 2, 3}, {4, 5, 6}, {2, 3, 7}};
+	mesh.materials.vertex_materials.push_back({{"plain", ""}});
+	mesh.materials.vertex_materials.push_back({{"glass", ""}});
+	mesh.materials.textures.push_back({"Hull.TGA"});
+	mesh.materials.textures.push_back({"Window.TGA"});
+	Assets::W3D::W3DShaderSettings opaque;
+	Assets::W3D::W3DShaderSettings blended;
+	blended.source_blend = 2;
+	blended.destination_blend = 5;
+	mesh.materials.shaders = {opaque, blended};
+	Assets::W3D::W3DMaterialPass pass;
+	pass.vertex_material_ids = {0, 0, 0, 0, 1, 1, 1, 0};
+	pass.vertex_material_index = 0;
+	pass.shader_ids = {0, 0, 1, 0};
+	pass.shader_index = 0;
+	pass.texture_ids = {0, 1, 1, 0};
+	pass.texture_index = 0;
+	mesh.materials.passes.push_back(pass);
+
+	Assets::ModelAssetDesc description;
+	Assets::W3D::W3DAppend_Mesh(description, mesh);
+
+	BOOST_REQUIRE_EQUAL(description.submeshes.size(), 4u);
+	BOOST_REQUIRE_EQUAL(description.materials.size(), 3u);
+	const std::array<std::uint32_t, 4> firsts{0, 3, 6, 9};
+	const std::array<std::uint32_t, 4> materials{0, 1, 2, 0};
+	for (std::size_t batch = 0; batch < 4; ++batch)
+	{
+		BOOST_TEST(description.submeshes[batch].first_index == firsts[batch]);
+		BOOST_TEST(description.submeshes[batch].index_count == 3u);
+		BOOST_TEST(description.submeshes[batch].material_index == materials[batch]);
+		// W3DMeshRenderObject::Load_W3D's is_alpha per polygon: only the blended shader's batch counts as alpha.
+		BOOST_TEST(description.submeshes[batch].pass == 0u);
+		BOOST_TEST(description.submeshes[batch].blends == (batch == 2));
+	}
+	BOOST_TEST(description.materials[0].primary_texture == "Hull.TGA");
+	BOOST_TEST(description.materials[1].primary_texture == "Window.TGA");
+	BOOST_TEST(description.materials[2].primary_texture == "Window.TGA");
+	BOOST_TEST(description.materials[2].name == "glass");
+	BOOST_TEST((description.materials[2].render_mode == Assets::MaterialRenderMode::AlphaBlend));
+	BOOST_TEST((description.materials[0].render_mode != Assets::MaterialRenderMode::AlphaBlend));
 }

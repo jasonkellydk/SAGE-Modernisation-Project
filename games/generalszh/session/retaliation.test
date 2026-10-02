@@ -1,0 +1,215 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.status.components.ai_activity;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.navigation.algorithms.goal_claims;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.combat.components.aggression;
+import games.generalszh.gameplay.ai.components.guard;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+
+// A human player's things striking back at their aggressors (ActiveBody's retaliation, AIGuardRetaliateMachine) on a
+// shipped skirmish map.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// America (player0, start 0) against China (player1, start 2), both human seats with nobody at them.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+// One ARMOR_PIERCING hit of 10 from `source` on `target` next tick.
+void Strike(session::Session &game, ecs::Entity source, ecs::Entity target)
+{
+	auto &world = game.World();
+	if (!world.Has<gp::PendingDamage>(target))
+		world.Add<gp::PendingDamage>(target);
+	*world.Get<gp::PendingDamage>(target) =
+		gp::PendingDamage{source, Fixed::FromInt(10), *content::DamageTypeIndex("ARMOR_PIERCING"), *content::DeathTypeIndex("NORMAL")};
+}
+}
+
+BOOST_AUTO_TEST_SUITE(retaliation)
+
+// ActiveBody::attemptDamage's retaliation (shouldRetaliateAgainstAggressor, shouldRetaliate, aiGuardRetaliate) and
+// AIGuardRetaliateMachine: America's player (human) off retaliation mode (Player's default until its client's
+// MSG_ENABLE_RETALIATION_MODE), a Crusader struck by a China Battlemaster calls nobody; on, the struck Crusader and an
+// idle one beside it (within RetaliationFriendsRadius 120 plus its bounding circle) strike back at the Battlemaster
+// (AI_GUARD_RETALIATE in its attack-aggressor state, CMD_FROM_AI) while one 400 away is not called; the Battlemaster
+// gone, their machines return where they stood, look once and end (AI_IDLE) within the guard look's rate.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_struck_players_tanks_strike_back_at_the_aggressor)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = match->Team(game, 0), china = match->Team(game, 1);
+	const ecs::Entity struck = game.Place("AmericaTankCrusader", match->At(0, -300), {}, america);
+	const ecs::Entity beside = game.Place("AmericaTankCrusader", match->At(0, -250), {}, america);
+	const ecs::Entity far = game.Place("AmericaTankCrusader", match->At(-400, -300), {}, america);
+	const ecs::Entity aggressor = game.Place("ChinaTankBattleMaster", match->At(200, -300), {}, china);
+	// Standing where a move of theirs would have left them: on their cells' points (Pathfinder::snapPosition,
+	// adjustCoordToCell), where the return's adjusted goal (AIGuardRetaliateReturnState::onEnter: adjustDestination) is.
+	for (const ecs::Entity tank : {struck, beside})
+	{
+		auto &at = world.Get<gp::Transform>(tank)->position;
+		const auto *agent = world.Get<gp::NavigationAgent>(tank);
+		BOOST_TEST_REQUIRE(agent != nullptr);
+		const Engine::Math::Fixed half = agent->centered != 0 ? Engine::Math::Fixed{} : Engine::Math::Fixed::FromInt(5);
+		const auto [x, y] = gp::WorldToCell(world.Resource<gp::NavigationGrid>(), {at.x + half, at.y + half});
+		const auto point = gp::GoalCellPoint(x, y, agent->centered != 0);
+		at.x = point.x;
+		at.y = point.y;
+	}
+	const std::uint32_t player = world.Get<gp::Owner>(struck)->player;
+	game.Tick();
+	BOOST_TEST(!game.RetaliationEnabled(player));
+	Strike(game, aggressor, struck);
+	game.Tick();
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(struck) == nullptr);
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(beside) == nullptr);
+
+	generalszh::gameplay::ApplyCommand(game.Game(), player, generalszh::commands::EnableRetaliation{true});
+	BOOST_TEST_REQUIRE(game.RetaliationEnabled(player));
+	Strike(game, aggressor, struck);
+	game.Tick();
+	for (const ecs::Entity tank : {struck, beside})
+	{
+		const auto *guard = world.Get<generalszh::gameplay::Guard>(tank);
+		BOOST_TEST_REQUIRE(guard != nullptr);
+		BOOST_TEST((guard->mode == generalszh::gameplay::GuardMode::Retaliate));
+		BOOST_TEST((guard->state == generalszh::gameplay::GuardState::Aggressor));
+		BOOST_TEST((guard->nemesis == aggressor));
+		BOOST_TEST((world.Get<gp::AiActivity>(tank) == nullptr || world.Get<gp::AiActivity>(tank)->commanded == 0u));
+	}
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(far) == nullptr);
+	game.Tick();
+	BOOST_TEST((world.Get<gp::AttackTarget>(struck)->target == aggressor));
+	BOOST_TEST((world.Get<gp::AttackTarget>(beside)->target == aggressor));
+
+	generalszh::gameplay::RetireNow(game.Game(), {aggressor});
+	int ticks = 0;
+	while ((world.Get<generalszh::gameplay::Guard>(struck) != nullptr || world.Get<generalszh::gameplay::Guard>(beside) != nullptr) && ticks < 120)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("ended after " << ticks << " ticks");
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(struck) == nullptr);
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(beside) == nullptr);
+	// Return (already there), then Idle's first look within GuardEnemyScanRate.
+	BOOST_TEST(ticks <= 2 + static_cast<int>(game.Game().world.Resource<generalszh::gameplay::GuardRules>().scanTicks) + 2);
+	BOOST_TEST((world.Get<gp::MoveOrder>(struck)->mode == gp::MoveMode::Idle));
+	BOOST_TEST((world.Get<gp::AiActivity>(struck) == nullptr || world.Get<gp::AiActivity>(struck)->busy == 0u));
+
+	// Off again: nobody is called.
+	generalszh::gameplay::ApplyCommand(game.Game(), player, generalszh::commands::EnableRetaliation{false});
+	const ecs::Entity second = game.Place("ChinaTankBattleMaster", match->At(200, -300), {}, china);
+	game.Tick();
+	Strike(game, second, struck);
+	game.Tick();
+	BOOST_TEST(world.Get<generalszh::gameplay::Guard>(beside) == nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,13 +1,6 @@
-module;
-
-#include <algorithm>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <vector>
-
 export module engine.navigation.dynamic_request_queue;
+import std;
+import engine.core.contracts;
 
 export extern "C++" {
 namespace navigation {
@@ -66,7 +59,7 @@ public:
     std::size_t size() const { return count_; }
     bool empty() const { return count_ == 0; }
     Id at(std::size_t offset) const {
-        assert(offset < count_);
+        engine::core::Assert(offset < count_);
         return ring_[(head_ + offset) & (ring_.size() - 1)];
     }
     bool contains(Id id) const {
@@ -84,7 +77,7 @@ public:
         return true;
     }
     Id pop() {
-        assert(!empty());
+        engine::core::Assert(!empty());
         const auto id = ring_[head_];
         head_ = (head_ + 1) & (ring_.size() - 1);
         --count_;

@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module engine.platform.time;
+import std;
 
 export namespace engine::platform
 {

@@ -1,9 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
 export module Graphics.Scene.Props.Surface;
+import std;
 import Assets.Materials;
 
 namespace Graphics {
@@ -13,6 +9,8 @@ export inline constexpr std::size_t PropSurfaceTextureFirst = 4;
 export inline constexpr std::size_t PropSurfaceTextureCount = 7;
 export inline constexpr std::size_t PropTextureCount = 11;
 export inline constexpr std::uint32_t PropSurfaceVertexAlphaUVOffset = 128;
+// House colour (Assets::MaterialHouseColor) in the map bits above the maps.
+export inline constexpr std::uint32_t PropSurfaceHouseColorShift = 8;
 
 export struct PropSurfaceParameters final {
     float shading_model = 0;
@@ -39,7 +37,8 @@ export bool Configure_Prop_Surface(const Assets::MaterialSurfaceParameters& sour
     PropSurfaceParameters parameters;
     parameters.shading_model = source.shading_model == Assets::MaterialShadingModel::Legacy ? 0
         : source.shading_model == Assets::MaterialShadingModel::SpecularGlossiness ? 1 : 2;
-    parameters.maps = map_mask | (source.uv_offset_from_vertex_alpha ? PropSurfaceVertexAlphaUVOffset : 0u);
+    parameters.maps = map_mask | (source.uv_offset_from_vertex_alpha ? PropSurfaceVertexAlphaUVOffset : 0u)
+        | (static_cast<std::uint32_t>(source.house_color) << PropSurfaceHouseColorShift);
     parameters.normal_scale = source.normal_scale;
     parameters.normal_flip_green = source.normal_flip_green ? 1.0f : 0.0f;
     parameters.specular_scale = source.specular_scale;

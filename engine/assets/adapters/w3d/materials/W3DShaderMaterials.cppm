@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <bit>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.ShaderMaterials;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 

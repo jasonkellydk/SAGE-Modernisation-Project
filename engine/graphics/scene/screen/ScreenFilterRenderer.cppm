@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Screen.Filters;
+import std;
 export import Graphics.RHI;
 import Graphics.Shaders.Library;
 namespace Graphics
@@ -34,6 +28,8 @@ export struct ScreenFilterStyle final
     RHIBlendFactor source=RHIBlendFactor::SourceAlpha;
     RHIBlendFactor destination=RHIBlendFactor::InverseSourceAlpha;
     std::uint8_t color_write_mask=15;
+    // Drawn only where the stencil passes (a full-screen colour over stencilled pixels); off by default.
+    RHIStencilDescription stencil{};
     bool operator==(const ScreenFilterStyle&) const = default;
 };
 export class ScreenFilterRenderer final
@@ -103,6 +99,7 @@ private:
         description.blend_alpha_like_color=true; description.custom_blend_factors=true;
         description.source_blend=style.source; description.destination_blend=style.destination;
         description.color_write_mask=style.color_write_mask; description.sampler_count=2;
+        description.stencil=style.stencil;
         for (unsigned i=0;i<2;++i) description.samplers[i].address.fill(RHISamplerAddress::Clamp);
         const auto handle=m_device->Create_Pipeline(description,
             {m_shaders.Bytecode(m_shader,ShaderStage::Vertex)},{m_shaders.Bytecode(m_shader,ShaderStage::Pixel)});

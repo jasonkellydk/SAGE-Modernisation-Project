@@ -1,9 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <span>
-
 export module Graphics.Scene.Water.View;
+import std;
 
 namespace Graphics
 {

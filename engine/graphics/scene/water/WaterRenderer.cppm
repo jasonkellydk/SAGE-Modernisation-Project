@@ -1,15 +1,6 @@
-module;
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Water.Renderer;
+import std;
+import engine.core.contracts;
 import engine.profiling;
 export import Graphics.Scene.Water.Geometry;
 export import Graphics.Scene.Water.View;
@@ -229,7 +220,7 @@ private:
         const WaterParameters &parameters, std::span<const RHITextureHandle> textures, bool instanced)
     {
         engine::profiling::Scope profile_scope_230("Graphics.Water.Draw");
-        assert(m_device != nullptr && mesh != nullptr && (textures.size() == 9 || textures.size() == 11));
+        engine::core::Assert(m_device != nullptr && mesh != nullptr && (textures.size() == 9 || textures.size() == 11));
         if (mesh->geometry.Indices().empty()) return true;
         if (style.pass == WaterPass::Underwater) {
             if (textures.size() != 11 || !textures[5].Is_Valid() || !textures[8].Is_Valid()

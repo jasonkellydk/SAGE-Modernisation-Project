@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE FramePreviewTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <vector>
 export module Graphics.Capture.FramePreview.Tests;
+import std;
 import Graphics.Capture.FramePreview;
 import Graphics.FrameTargets;
 import Graphics.Tests.Device;

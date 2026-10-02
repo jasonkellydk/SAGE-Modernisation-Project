@@ -1,7 +1,5 @@
-module;
-#include <cmath>
-
 export module engine.navigation.movement.following.route_target;
+import std;
 export import engine.navigation.movement.following.route_geometry;
 
 export namespace navigation::following {

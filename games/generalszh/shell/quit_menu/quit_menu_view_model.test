@@ -1,0 +1,61 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.quit_menu.quit_menu_view_model;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(quit_menu_view_model)
+
+// Legacy parity (QuitMenu.cpp ToggleQuitMenu / QuitMenuSystem): a mission pauses while the menu is open and names its
+// buttons "Restart Mission" / "Exit Mission"; Exit and Restart ask first, and a yes closes the menu (the game goes on)
+// before it acts; a skirmish keeps the layout's labels; a multiplayer game neither pauses nor offers Save/Load, its
+// Restart is Surrender (off for a player already beaten); Options and Save/Load are off while input is off.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_quit_menu_by_game)
+{
+	std::vector<std::string> log;
+	MessageBoxViewModel messages;
+	QuitMenuServices services;
+	services.exit = [&] { log.push_back("exit"); };
+	services.restart = [&] { log.push_back("restart"); };
+	services.surrender = [&] { log.push_back("surrender"); };
+	services.openSaveLoad = [&] { log.push_back("save/load"); };
+	services.pause = [&](bool paused) { log.push_back(paused ? "pause" : "resume"); };
+	QuitMenuViewModel menu(messages, services);
+	menu.Open(QuitMenuMode::SinglePlayer, true, false);
+	BOOST_TEST(menu.open.Get());
+	BOOST_TEST((menu.restartText.Get() == u"Restart Mission"));
+	BOOST_TEST((menu.exitText.Get() == u"Exit Mission"));
+	BOOST_TEST(menu.saveLoadShown.Get());
+	menu.saveLoad.Execute();
+	menu.restart.Execute();
+	BOOST_TEST(messages.open.Get());
+	messages.yes.Execute();
+	BOOST_TEST(!menu.open.Get());
+	BOOST_TEST((log == std::vector<std::string>{"pause", "save/load", "resume", "restart"}));
+
+	log.clear();
+	menu.Open(QuitMenuMode::Skirmish, false, false);
+	BOOST_TEST((menu.restartText.Get() == u"Restart Game"));
+	BOOST_TEST(!menu.saveLoadEnabled.Get());
+	BOOST_TEST(!menu.optionsEnabled.Get());
+	menu.exit.Execute();
+	messages.no.Execute();
+	BOOST_TEST(menu.open.Get());
+	menu.returnToGame.Execute();
+	BOOST_TEST((log == std::vector<std::string>{"pause", "resume"}));
+
+	log.clear();
+	menu.Open(QuitMenuMode::Multiplayer, true, true);
+	BOOST_TEST(!menu.saveLoadShown.Get());
+	BOOST_TEST(!menu.restartEnabled.Get());
+	BOOST_TEST((menu.restartText.Get() == u"Surrender"));
+	menu.Open(QuitMenuMode::Multiplayer, true, false);
+	menu.restart.Execute();
+	messages.yes.Execute();
+	BOOST_TEST((log == std::vector<std::string>{"surrender"}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DMeshDataTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <variant>
-#include <vector>
 export module Assets.Adapters.W3D.MeshData.Tests;
+import std;
 import Assets.Adapters.W3D.MeshData;
 import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.Geometry;

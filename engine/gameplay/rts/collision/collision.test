@@ -1,0 +1,231 @@
+#define BOOST_TEST_MODULE EngineGameplayCollision
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.rts.collision.systems.crush_system;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Crush = 1;
+constexpr std::uint32_t Crushed = 2;
+
+struct Road
+{
+	explicit Road(std::size_t workers)
+	{
+		Register(world);
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<ColliderIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+		world.EmplaceResource<ColliderGather>();
+		world.EmplaceResource<ContactOffers>();
+		world.EmplaceResource<Contacts>();
+		world.EmplaceResource<CrushSettings>(CrushSettings{Crush, Crushed});
+		world.EmplaceResource<CrushDamage>();
+		world.EmplaceResource<IncomingDamage>();
+		world.EmplaceResource<ArmorCatalog>();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Hits>();
+		world.EmplaceResource<SecondLives>();
+		world.EmplaceResource<WaypointGraph>();
+		world.EmplaceResource<RandomSeed>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(3u);
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		relationships.Set(0, 2, Relationship::Allies);
+		relationships.Set(2, 0, Relationship::Allies);
+		registry.Register(index);
+		registry.Register(movement);
+		registry.Register(contacts);
+		registry.Register(crush);
+		registry.Register(health);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Collider>();
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<Targetable>();
+		target.RegisterComponent<HealthFloor>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<Squishable>();
+		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<MoveOrder>();
+		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
+		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<DefinitionRef>();
+		target.RegisterComponent<BoundingVolume>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Body(std::uint32_t player, int x, int y, std::uint32_t crushable, bool squishable)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Collider>(entity);
+		world.Add<Health>(entity);
+		world.Add<Owner>(entity);
+		if (squishable)
+			world.Add<Squishable>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Collider>(entity) = {Fixed::FromInt(4), 0, crushable};
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		*world.Get<Owner>(entity) = {player};
+		return entity;
+	}
+
+	// Driving east (facing 0) at 1 a tick.
+	ecs::Entity Tank(std::uint32_t player, int x, int y, std::uint32_t crusher)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Collider>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Locomotion>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Collider>(entity) = {Fixed::FromInt(10), crusher, 255};
+		*world.Get<Owner>(entity) = {player};
+		world.Get<Locomotion>(entity)->speed = Fixed::One();
+		return entity;
+	}
+
+	std::vector<Death> Step()
+	{
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<Death> out;
+		world.Resource<Deaths>().ForEach([&](const Death &death) { out.push_back(death); });
+		return out;
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ColliderIndexSystem index;
+	MovementSystem movement;
+	ContactSystem contacts;
+	CrushSystem crush;
+	HealthSystem health;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(collision)
+
+BOOST_AUTO_TEST_CASE(a_tank_squishes_enemy_infantry_in_its_path_and_spares_the_rest)
+{
+	Road road(2);
+	road.Tank(0, 100, 100, 1);
+	const ecs::Entity enemy = road.Body(1, 108, 100, 0, true);    // ahead
+	const ecs::Entity ally = road.Body(2, 106, 102, 0, true);     // ahead, but an ally
+	const ecs::Entity behind = road.Body(1, 93, 100, 0, true);    // under it, but behind
+	const ecs::Entity beside = road.Body(1, 100, 113, 0, true);   // touching, not under it
+	const auto deaths = road.Step();
+	BOOST_TEST_REQUIRE(deaths.size() == 1u);
+	BOOST_TEST((deaths[0].entity == enemy));
+	BOOST_TEST(deaths[0].deathType == Crushed);
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(ally)));
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(behind)));
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(beside)));
+}
+
+// PartitionData::collidesWith (PartitionManager.cpp): "invariant for all geometries: first do z collision check" -- a
+// crusher meets only what its height range overlaps (its top at or over the other's bottom, its bottom at or under the
+// other's top), so SquishCollide::onCollide never hears of a ranger hanging under its parachute over a Technical. The
+// same ranger on the ground, and one whose feet are just at the tank's top, are run over.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crusher_meets_only_what_its_height_overlaps)
+{
+	Road road(1);
+	const auto volume = [&](ecs::Entity entity, int above) {
+		road.world.Add<BoundingVolume>(entity);
+		road.world.Get<BoundingVolume>(entity)->above = Fixed::FromInt(above);
+	};
+	volume(road.Tank(0, 100, 100, 1), 10);
+	const ecs::Entity aloft = road.Body(1, 108, 100, 0, true);
+	road.world.Get<Transform>(aloft)->position.z = Fixed::FromInt(70); // under its parachute
+	volume(aloft, 12);
+	volume(road.Tank(0, 100, 300, 1), 10);
+	const ecs::Entity grounded = road.Body(1, 108, 300, 0, true);
+	volume(grounded, 12);
+	volume(road.Tank(0, 100, 500, 1), 10);
+	const ecs::Entity touching = road.Body(1, 108, 500, 0, true);
+	road.world.Get<Transform>(touching)->position.z = Fixed::FromInt(10); // its bottom at the tank's top
+	volume(touching, 12);
+	road.Step();
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(aloft)));
+	BOOST_TEST(IsDead(*road.world.Get<Health>(grounded)));
+	BOOST_TEST(IsDead(*road.world.Get<Health>(touching)));
+}
+
+BOOST_AUTO_TEST_CASE(crushing_goes_by_level)
+{
+	Road road(1);
+	road.Tank(0, 100, 100, 2);
+	const ecs::Entity car = road.Body(1, 108, 100, 1, false);     // crushable level 1 < 2
+	road.Tank(0, 100, 300, 1);
+	const ecs::Entity truck = road.Body(1, 108, 300, 1, false);   // 1 does not beat 1
+	road.Step();
+	BOOST_TEST(IsDead(*road.world.Get<Health>(car)));
+	BOOST_TEST(!IsDead(*road.world.Get<Health>(truck)));
+}
+
+BOOST_AUTO_TEST_CASE(crushing_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto populate = [](Road &road) {
+		for (int index = 0; index < 40; ++index)
+		{
+			road.Tank(index % 2, 20 + index * 22, 400, 1 + index % 2);
+			for (int body = 0; body < 5; ++body)
+				road.Body((index + body) % 3, 20 + index * 22 + 3 + body * 4, 398 + body, body % 3, body % 2 == 0);
+		}
+	};
+	Road one(1), four(4);
+	populate(one);
+	populate(four);
+	for (int step = 0; step < 20; ++step)
+	{
+		one.Step();
+		four.Step();
+	}
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Road loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 30; ++step)
+	{
+		one.Step();
+		loaded.Step();
+	}
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,12 +1,6 @@
-module;
-#include <algorithm>
-#include <cassert>
-#include <cstddef>
-#include <optional>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.Children;
+import std;
+import engine.core.contracts;
 
 namespace Graphics {
 
@@ -29,7 +23,7 @@ public:
     ModelChildren& operator=(const ModelChildren&) = delete;
 
     void Initialize(std::size_t levels) {
-        assert(Count() == 0);
+        engine::core::Assert(Count() == 0);
         m_levels.clear();
         m_levels.resize(levels);
         m_current = 0;
@@ -38,13 +32,13 @@ public:
     int Level_Count() const noexcept { return static_cast<int>(m_levels.size()); }
     int Current_Level() const noexcept { return m_current; }
     std::span<const Attachment> Level(int level) const {
-        assert(level >= 0 && level < Level_Count());
+        engine::core::Assert(level >= 0 && level < Level_Count());
         return m_levels[level];
     }
     std::span<const Attachment> Additional() const noexcept { return m_additional; }
 
     void Add(int level, Owner model, int bone) {
-        assert(level >= 0 && level < Level_Count());
+        engine::core::Assert(level >= 0 && level < Level_Count());
         m_levels[level].push_back({std::move(model), bone});
     }
     void Add_Additional(Owner model, int bone) {
@@ -53,7 +47,7 @@ public:
 
     template<class Clone>
     void Clone_From(const ModelChildren& source, Clone&& clone) {
-        assert(Count() == 0);
+        engine::core::Assert(Count() == 0);
         Initialize(source.m_levels.size());
         for (int level = 0; level < Level_Count(); ++level) {
             m_levels[level].reserve(source.m_levels[level].size());

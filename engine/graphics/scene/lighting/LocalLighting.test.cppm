@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE LocalLightingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
 export module Graphics.Scene.Lighting.Local.Tests;
+import std;
 import Graphics.Scene.Lighting;
 import Graphics.Scene.Lighting.Local;
 import Graphics.Scene.Props.LightingParameters;

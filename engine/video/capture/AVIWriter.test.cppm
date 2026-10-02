@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE AVIWriterTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <limits>
-#include <span>
-#include <vector>
 export module Video.Capture.AVIWriter.Tests;
+import std;
 import Video.Capture.AVIWriter;
 using namespace Engine::Video;
 

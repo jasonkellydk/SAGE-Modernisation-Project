@@ -1,0 +1,443 @@
+#define BOOST_TEST_MODULE EngineCamera
+#include <boost/test/included/unit_test.hpp>
+#include <cmath>
+#include <numbers>
+#include <optional>
+#include <vector>
+import engine.camera.model.rts_camera;
+import engine.camera.motion.camera_motion;
+
+using namespace engine::camera;
+using Engine::Math::AffineTransform3;
+using Engine::Math::Vector2;
+using Engine::Math::Vector3;
+
+namespace
+{
+constexpr float Pi = std::numbers::pi_v<float>;
+
+bool Near(float a, float b, float eps) { return std::fabs(a - b) <= eps; }
+bool Near(Vector3 a, Vector3 b, float eps) { return Near(a.x, b.x, eps) && Near(a.y, b.y, eps) && Near(a.z, b.z, eps); }
+
+// Independent restatement of legacy W3DView::buildCameraPosition for a user
+// controlled camera: offset height = pivot z + MaxCameraHeight, rotate the
+// default-pitch offset by (pitch - 37.5 deg) about -X then by yaw about +Z, then
+// scale so the pivot height is subtracted.
+Vector3 ExpectedEye(Vector3 pivot, float yaw, float pitch, float zoom, float maxCameraHeight = 310.0f)
+{
+	const float offsetZ = (pivot.z + maxCameraHeight) * zoom;
+	const float back = offsetZ / std::tan(ViewDefaultPitchRadians);
+	const float dp = pitch - ViewDefaultPitchRadians;
+	// pitch about -X: y' = c*y + s*z, z' = -s*y + c*z with y = -back.
+	const float y1 = std::cos(dp) * -back + std::sin(dp) * offsetZ;
+	const float z1 = -std::sin(dp) * -back + std::cos(dp) * offsetZ;
+	// yaw about +Z: x' = -s*y, y' = c*y.
+	const float x2 = -std::sin(yaw) * y1;
+	const float y2 = std::cos(yaw) * y1;
+	const float scale = 1.0f - pivot.z / offsetZ;
+	return {pivot.x + x2 * scale, pivot.y + y2 * scale, pivot.z + z1 * scale};
+}
+
+// Like the game at map start: desired height = max height (setZoomToDefault).
+RtsCamera FlatCamera(float height = 0.0f)
+{
+	RtsCamera camera(CameraSettings{}, [height](float, float) { return height; });
+	camera.SetZoomToDefault();
+	return camera;
+}
+
+CameraFrameTiming Step(float milliseconds)
+{
+	CameraFrameTiming timing;
+	timing.deltaMilliseconds = milliseconds;
+	return timing;
+}
+
+void RunUntilFinished(RtsCamera &camera, float stepMilliseconds, int limit = 10000)
+{
+	for (int i = 0; i < limit && !camera.IsCameraMovementFinished(); ++i)
+		camera.Update(Step(stepMilliseconds));
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(defaults_follow_retail_game_data)
+{
+	RtsCamera camera = FlatCamera();
+	BOOST_TEST(Near(camera.Pitch(), 37.5f * Pi / 180.0f, 1e-6f));
+	BOOST_TEST(camera.Angle() == 0.0f);
+	BOOST_TEST(camera.Zoom() == 1.0f);
+	BOOST_TEST(camera.FxPitch() == 1.0f);
+	BOOST_TEST((camera.Position() == (Vector3{870.0f, 770.0f, 10.0f})));
+	camera.Update();
+	const CameraView &view = camera.View();
+	BOOST_TEST(Near(view.horizontalFieldOfView, 50.0f * Pi / 180.0f, 1e-6f));
+	BOOST_TEST(view.nearClip == 10.0f);
+	BOOST_TEST(view.farClip == 1290.0f);
+}
+
+BOOST_AUTO_TEST_CASE(default_transform_matches_legacy_math)
+{
+	RtsCamera camera = FlatCamera();
+	camera.Update();
+	const CameraView &view = camera.View();
+	const Vector3 pivot{870.0f, 770.0f, 10.0f};
+	BOOST_TEST(Near(view.eye, ExpectedEye(pivot, 0.0f, ViewDefaultPitchRadians, 1.0f), 1e-3f));
+	// At the default pitch the eye sits exactly MaxCameraHeight above the pivot.
+	BOOST_TEST(Near(view.eye.z - view.target.z, 310.0f, 1e-3f));
+	BOOST_TEST((view.target == pivot));
+	BOOST_TEST((view.transform == AffineTransform3::Look_At(view.eye, view.target)));
+	// Looks down -Z toward the target, north (+Y) at yaw 0.
+	const Vector3 forward = view.transform.Basis_Z() * -1.0f;
+	BOOST_TEST(forward.y > 0.0f);
+	BOOST_TEST(forward.z < 0.0f);
+	BOOST_TEST(Near(forward.x, 0.0f, 1e-6f));
+}
+
+BOOST_AUTO_TEST_CASE(yaw_pitch_zoom_samples_match_legacy_math)
+{
+	struct Sample
+	{
+		float yaw;
+		float pitch;
+	};
+	for (const Sample sample : {Sample{Pi / 2, ViewDefaultPitchRadians}, Sample{-Pi / 4, 50.0f * Pi / 180.0f},
+			 Sample{2.5f, 20.0f * Pi / 180.0f}}) {
+		RtsCamera camera = FlatCamera();
+		camera.SetAngle(sample.yaw);
+		camera.SetPitch(sample.pitch);
+		camera.SetZoom(0.6f);
+		camera.Update();
+		const CameraView &view = camera.View();
+		const Vector3 expected = ExpectedEye(camera.Position(), camera.Angle(), camera.Pitch(), camera.Zoom());
+		BOOST_TEST(Near(view.eye, expected, 2e-3f));
+		BOOST_TEST((view.target == camera.Position()));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(fx_pitch_lowers_target_and_extends_far_clip)
+{
+	RtsCamera camera = FlatCamera();
+	camera.Update();
+	const Vector3 eye = camera.View().eye;
+	camera.PitchCamera(0.5f, 1, 0.0f, 0.0f);
+	BOOST_TEST(camera.IsPitching());
+	camera.Update();
+	BOOST_TEST(!camera.IsPitching());
+	BOOST_TEST(camera.FxPitch() == 0.5f);
+	// FX pitch <= 1 keeps the eye and lowers the look-at target toward the ground.
+	const CameraView &view = camera.View();
+	BOOST_TEST(eye.z > 0.0f);
+	BOOST_TEST(Near(view.target.x, 870.0f, 1e-4f));
+	BOOST_TEST(Near(view.target.z, view.eye.z - (view.eye.z - 10.0f) * 0.5f, 1e-3f));
+	BOOST_TEST(view.farClip == 12900.0f);
+}
+
+BOOST_AUTO_TEST_CASE(parabolic_ease_profile)
+{
+	const ParabolicEase linear;
+	BOOST_TEST(linear(0.0f) == 0.0f);
+	BOOST_TEST(Near(linear(0.3f), 0.3f, 1e-6f));
+	BOOST_TEST(linear(1.0f) == 1.0f);
+
+	const ParabolicEase ease(0.25f, 0.25f);
+	BOOST_TEST(ease(0.0f) == 0.0f);
+	BOOST_TEST(Near(ease(0.25f), 1.0f / 6.0f, 1e-6f));
+	BOOST_TEST(Near(ease(0.5f), 0.5f, 1e-6f));
+	BOOST_TEST(Near(ease(0.75f), 5.0f / 6.0f, 1e-6f));
+	BOOST_TEST(Near(ease(1.0f), 1.0f, 1e-6f));
+	// Accelerates quadratically during ease-in.
+	BOOST_TEST(Near(ease(0.125f), 0.125f * 0.125f / (1.5f * 0.25f), 1e-6f));
+	// Monotonic.
+	float previous = 0.0f;
+	for (int i = 1; i <= 100; ++i) {
+		const float value = ease(i / 100.0f);
+		BOOST_TEST(value >= previous);
+		previous = value;
+	}
+	// Overlapping ease times collapse like legacy.
+	const ParabolicEase overlap(0.8f, 0.8f);
+	BOOST_TEST(overlap.EaseIn() == overlap.EaseOut());
+}
+
+BOOST_AUTO_TEST_CASE(move_to_reaches_destination_on_time)
+{
+	RtsCamera camera = FlatCamera(5.0f);
+	const Vector3 destination{1870.0f, 770.0f, 0.0f};
+	camera.MoveCameraTo(destination, 1000, 0, false, 0.0f, 0.0f);
+	BOOST_TEST(camera.IsMovingAlongPath());
+	BOOST_TEST(!camera.IsUserControlled());
+	for (int i = 0; i < 5; ++i)
+		camera.Update(Step(100.0f));
+	// Linear with no easing: halfway after 500 ms.
+	BOOST_TEST(Near(camera.Position().x, 1370.0f, 0.05f));
+	BOOST_TEST(Near(camera.Position().y, 770.0f, 1e-3f));
+	for (int i = 0; i < 4; ++i)
+		camera.Update(Step(100.0f));
+	BOOST_TEST(!camera.IsCameraMovementFinished());
+	camera.Update(Step(100.0f));
+	camera.Update(Step(100.0f));
+	BOOST_TEST(camera.IsCameraMovementFinished());
+	BOOST_TEST(camera.Position().x == destination.x);
+	BOOST_TEST(camera.Position().y == destination.y);
+	// Pivot height blends to the ground at the destination.
+	BOOST_TEST(camera.Position().z == 5.0f);
+	BOOST_TEST((camera.View().target == camera.Position()));
+}
+
+BOOST_AUTO_TEST_CASE(move_to_eases_in_and_out)
+{
+	RtsCamera camera = FlatCamera();
+	camera.MoveCameraTo({1870.0f, 770.0f, 0.0f}, 1000, 0, false, 250.0f, 250.0f);
+	std::vector<float> xs;
+	for (int i = 0; i < 10; ++i) {
+		camera.Update(Step(25.0f));
+		xs.push_back(camera.Position().x);
+	}
+	// 250 ms = end of ease-in: 1/6 of the distance.
+	BOOST_TEST(Near(xs.back(), 870.0f + 1000.0f / 6.0f, 0.05f));
+	// Speed grows during ease-in.
+	for (std::size_t i = 2; i < xs.size(); ++i)
+		BOOST_TEST(xs[i] - xs[i - 1] > xs[i - 1] - xs[i - 2] - 1e-3f);
+	RunUntilFinished(camera, 25.0f);
+	BOOST_TEST(camera.Position().x == 1870.0f);
+}
+
+BOOST_AUTO_TEST_CASE(instant_move_happens_immediately)
+{
+	RtsCamera camera = FlatCamera();
+	camera.MoveCameraTo({100.0f, 200.0f, 0.0f}, 0, 0, false, 0.0f, 0.0f);
+	camera.Update(Step(33.0f));
+	BOOST_TEST(camera.IsCameraMovementFinished());
+	BOOST_TEST(camera.Position().x == 100.0f);
+	BOOST_TEST(camera.Position().y == 200.0f);
+}
+
+BOOST_AUTO_TEST_CASE(final_look_toward_orients_at_the_end)
+{
+	RtsCamera camera = FlatCamera();
+	camera.MoveCameraTo({1870.0f, 770.0f, 0.0f}, 1000, 0, false, 0.0f, 0.0f);
+	camera.CameraModFinalLookToward({2870.0f, 770.0f, 0.0f});
+	camera.Update(Step(500.0f));
+	const float midway = camera.Angle();
+	BOOST_TEST(midway < 0.0f);
+	BOOST_TEST(midway > -Pi / 2);
+	RunUntilFinished(camera, 100.0f);
+	// Looking along +X: yaw -90 degrees (the default camera looks along +Y).
+	BOOST_TEST(Near(camera.Angle(), -Pi / 2, 1e-5f));
+	camera.Update();
+	const Vector3 forward = camera.View().transform.Basis_Z() * -1.0f;
+	BOOST_TEST(Near(forward.y, 0.0f, 1e-5f));
+	BOOST_TEST(forward.x > 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(look_toward_applies_to_every_waypoint)
+{
+	RtsCamera camera = FlatCamera();
+	const std::vector<Vector3> path{{1370.0f, 770.0f, 0.0f}, {1870.0f, 770.0f, 0.0f}};
+	camera.MoveCameraAlongWaypointPath(path, 2000, 0, false, 0.0f, 0.0f);
+	const Vector3 focus{1370.0f, 1770.0f, 0.0f};
+	camera.CameraModLookToward(focus);
+	const WaypointPathMotion &motion = camera.PathMotion();
+	BOOST_TEST(motion.numWaypoints == 3);
+	BOOST_TEST(Near(motion.cameraAngle[2], 0.0f, 1e-5f)); // straight north from (1370, 770)
+	BOOST_TEST(motion.cameraAngle[3] > 0.0f);             // north-west from (1870, 770)
+	RunUntilFinished(camera, 50.0f);
+	BOOST_TEST(Near(camera.Angle(), *YawToward({focus.x - 1870.0f, focus.y - 770.0f}), 1e-5f));
+}
+
+BOOST_AUTO_TEST_CASE(waypoint_path_traversal)
+{
+	RtsCamera camera(CameraSettings{}, [](float x, float) { return x * 0.01f; });
+	const std::vector<Vector3> path{
+		{1370.0f, 770.0f, 0.0f},
+		{1375.0f, 772.0f, 0.0f}, // closer than MAP_XY_FACTOR to the previous one: dropped
+		{1370.0f, 1270.0f, 0.0f},
+		{870.0f, 1270.0f, 0.0f}};
+	camera.MoveCameraAlongWaypointPath(path, 3000, 0, true, 0.0f, 0.0f);
+	const WaypointPathMotion &motion = camera.PathMotion();
+	BOOST_TEST(motion.numWaypoints == 4);
+	BOOST_TEST(Near(motion.totalDistance, 1500.0f, 1e-3f));
+	// Orient: -90 (east), 0 (north), +90 (west), averaged with the previous leg.
+	BOOST_TEST(Near(motion.cameraAngle[2], 0.0f, 1e-6f));
+	BOOST_TEST(Near(motion.cameraAngle[3], Pi / 4, 1e-6f));
+	BOOST_TEST(Near(motion.cameraAngle[4], Pi / 2, 1e-6f));
+
+	int arrivals = 0;
+	for (int i = 0; i < 1000 && !camera.IsCameraMovementFinished(); ++i) {
+		camera.Update(Step(1000.0f / 30.0f));
+		if (camera.IsCameraMovementAtWaypointAlongPath())
+			++arrivals;
+		// Corners are smoothed: the path never overshoots the waypoint hull.
+		BOOST_TEST(camera.Position().x <= 1370.0f + 1e-3f);
+		BOOST_TEST(camera.Position().y <= 1270.0f + 1e-3f);
+	}
+	BOOST_TEST(camera.IsCameraMovementFinished());
+	BOOST_TEST(arrivals >= 2);
+	BOOST_TEST(camera.Position().x == 870.0f);
+	BOOST_TEST(camera.Position().y == 1270.0f);
+	BOOST_TEST(Near(camera.Position().z, 8.7f, 1e-4f)); // ground at the final waypoint
+	BOOST_TEST(Near(camera.Angle(), Pi / 2, 1e-6f));
+}
+
+BOOST_AUTO_TEST_CASE(rotate_zoom_follow_real_time_at_any_frame_rate)
+{
+	// 1000 ms rotate (30 legacy frames) and 500 ms zoom (15), at 30 and 240 fps:
+	// both finish after the same real time.
+	for (const int fps : {30, 240})
+	{
+		RtsCamera camera = FlatCamera();
+		camera.RotateCamera(0.25f, 1000, 0.0f, 0.0f);
+		camera.ZoomCamera(0.5f, 500, 0.0f, 0.0f);
+		const float step = 1000.0f / static_cast<float>(fps);
+		for (int i = 0; i < fps / 2; ++i)
+			camera.Update(Step(step));
+		BOOST_TEST(!camera.IsZooming());
+		BOOST_TEST(camera.Zoom() == 0.5f);
+		BOOST_TEST(Near(camera.Angle(), Pi / 4, 1e-3f));
+		for (int i = 0; i < fps / 2 - 1; ++i)
+			camera.Update(Step(step));
+		BOOST_TEST(camera.IsRotating());
+		camera.Update(Step(step * 1.01f));
+		BOOST_TEST(!camera.IsRotating());
+		BOOST_TEST(Near(camera.Angle(), Pi / 2, 1e-6f));
+		BOOST_TEST(camera.IsCameraMovementFinished());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(rotate_toward_position_and_target)
+{
+	RtsCamera camera = FlatCamera();
+	camera.RotateCameraTowardPosition({870.0f - 500.0f, 770.0f, 0.0f}, 300, 0.0f, 0.0f, false);
+	RunUntilFinished(camera, 33.0f);
+	BOOST_TEST(Near(camera.Angle(), Pi / 2, 1e-5f)); // looking west
+
+	Vector3 target{870.0f, 770.0f + 500.0f, 0.0f};
+	camera.RotateCameraTowardTarget([&target]() -> std::optional<Vector3> { return target; }, 300, 300, 0.0f, 0.0f);
+	for (int i = 0; i < 9; ++i)
+		camera.Update();
+	BOOST_TEST(Near(camera.Angle(), 0.0f, 1e-5f)); // looking north at the target
+	target = {870.0f + 500.0f, 770.0f, 0.0f};         // target moves east during the hold
+	camera.Update();
+	BOOST_TEST(Near(camera.Angle(), -Pi / 2, 1e-5f));
+	RunUntilFinished(camera, 33.0f);
+	BOOST_TEST(camera.IsCameraMovementFinished());
+}
+
+BOOST_AUTO_TEST_CASE(reset_camera_restores_defaults)
+{
+	RtsCamera camera = FlatCamera();
+	camera.SetAngle(1.0f);
+	camera.ResetCamera({500.0f, 500.0f, 0.0f}, 600, 0.0f, 0.0f);
+	camera.CameraModFreezeTime();
+	BOOST_TEST(camera.IsTimeFrozen());
+	RunUntilFinished(camera, 1000.0f / 30.0f);
+	BOOST_TEST(!camera.IsTimeFrozen());
+	BOOST_TEST(Near(camera.Angle(), 0.0f, 1e-6f));
+	BOOST_TEST(camera.FxPitch() == 1.0f);
+	BOOST_TEST(camera.Position().x == 500.0f);
+	BOOST_TEST(camera.Zoom() == camera.MaxZoom(500.0f, 500.0f));
+}
+
+BOOST_AUTO_TEST_CASE(user_camera_settles_to_terrain)
+{
+	float ground = 50.0f;
+	RtsCamera camera(CameraSettings{}, [&ground](float, float) { return ground; });
+	camera.InitHeightForMap();
+	camera.SetZoomToDefault();
+	camera.SetOkToAdjustHeight(true);
+	camera.Update();
+	BOOST_TEST(camera.Position().z == 50.0f);
+	BOOST_TEST(Near(camera.CurrentHeightAboveGround(), 310.0f, 1e-3f));
+	ground = 100.0f; // terrain rises under the pivot
+	for (int i = 0; i < 60; ++i)
+		camera.Update();
+	BOOST_TEST(Near(camera.Position().z, 100.0f, 0.2f));
+	BOOST_TEST(Near(camera.CurrentHeightAboveGround(), 310.0f, 1.0f));
+	BOOST_TEST(camera.View().eye.z > 100.0f + 300.0f);
+}
+
+BOOST_AUTO_TEST_CASE(look_at_centers_on_ground)
+{
+	RtsCamera camera = FlatCamera(20.0f);
+	camera.LookAt({400.0f, 300.0f, 0.0f});
+	BOOST_TEST((camera.Position() == (Vector3{400.0f, 300.0f, 20.0f})));
+	camera.Update();
+	BOOST_TEST((camera.View().target == camera.Position()));
+}
+
+BOOST_AUTO_TEST_CASE(camera_lock_follows_target)
+{
+	RtsCamera camera = FlatCamera();
+	Vector3 unit{1000.0f, 1000.0f, 0.0f};
+	bool alive = true;
+	camera.SetCameraLock([&]() -> std::optional<LockTargetState> {
+		if (!alive)
+			return std::nullopt;
+		return LockTargetState{unit, std::nullopt};
+	});
+	for (int i = 0; i < 40; ++i)
+		camera.Update();
+	BOOST_TEST(Near(camera.Position().x, 1000.0f, 1e-3f));
+	BOOST_TEST(Near(camera.Position().y, 1000.0f, 1e-3f));
+	alive = false;
+	camera.Update();
+	BOOST_TEST(!camera.HasCameraLock());
+}
+
+BOOST_AUTO_TEST_CASE(area_constraints_keep_view_inside_map)
+{
+	RtsCamera camera = FlatCamera();
+	camera.SetMapExtent(MapExtent{{0.0f, 0.0f}, {2000.0f, 2000.0f}});
+	camera.SetPosition({-500.0f, 1000.0f, 0.0f});
+	camera.Update();
+	const auto constraints = camera.CameraAreaConstraints();
+	BOOST_TEST(constraints.has_value());
+	BOOST_TEST(constraints->lo.x > 0.0f);
+	BOOST_TEST(camera.Position().x == constraints->lo.x + 0.1f);
+	BOOST_TEST(camera.Position().y == 1000.0f);
+}
+
+BOOST_AUTO_TEST_CASE(scripted_motion_is_deterministic)
+{
+	auto run = []() {
+		RtsCamera camera(CameraSettings{}, [](float x, float y) { return std::sin(x * 0.01f) * 20.0f + y * 0.02f; });
+		camera.InitHeightForMap();
+		camera.SetZoomToDefault();
+		camera.SetOkToAdjustHeight(true);
+		const std::vector<Vector3> path{{1200.0f, 900.0f, 0.0f}, {1500.0f, 1400.0f, 0.0f}, {900.0f, 1600.0f, 0.0f}};
+		camera.MoveCameraAlongWaypointPath(path, 2500, 100, true, 400.0f, 600.0f);
+		camera.CameraModFinalZoom(0.8f, 0.2f, 0.2f);
+		camera.CameraModFinalPitch(0.9f, 0.1f, 0.1f);
+		camera.CameraModRollingAverage(3);
+		std::vector<CameraView> views;
+		for (int i = 0; i < 120; ++i) {
+			camera.Update(Step(1000.0f / 30.0f));
+			views.push_back(camera.View());
+		}
+		return views;
+	};
+	const auto a = run();
+	const auto b = run();
+	BOOST_TEST_REQUIRE(a.size() == b.size());
+	for (std::size_t i = 0; i < a.size(); ++i) {
+		BOOST_TEST((a[i].eye == b[i].eye));
+		BOOST_TEST((a[i].target == b[i].target));
+		BOOST_TEST((a[i].transform == b[i].transform));
+		BOOST_TEST(a[i].farClip == b[i].farClip);
+	}
+}
+
+// legacy_parity: View::setTimeMultiplier (SET_VISUAL_SPEED_MULTIPLIER) and W3DDisplay::draw / FramePacer::
+// isActualFramesPerSecondLimitEnabled: a multiplier above 1 runs that many logic frames to each drawn one (4: four
+// times the game's pace); 1, 0 or less leaves it as it is. The camera keeps the multiplier its scripts set.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_time_multiplier_fast_forwards_the_logic)
+{
+	RtsCamera camera(CameraSettings{}, [](float, float) { return 0.0f; });
+	BOOST_TEST(camera.TimeMultiplier() == 1);
+	camera.SetTimeMultiplier(4);
+	BOOST_TEST(camera.TimeMultiplier() == 4);
+	BOOST_TEST(FastForwardFactor(camera.TimeMultiplier()) == 4);
+	BOOST_TEST(FastForwardFactor(1) == 1);
+	BOOST_TEST(FastForwardFactor(0) == 1);
+	BOOST_TEST(FastForwardFactor(-3) == 1);
+}

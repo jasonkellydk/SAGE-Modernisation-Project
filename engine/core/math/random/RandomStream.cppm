@@ -1,10 +1,5 @@
-module;
-
-#include <bit>
-#include <cmath>
-#include <cstdint>
-
 export module Engine.Core.Math.RandomStream;
+import std;
 
 export namespace Engine::Math
 {

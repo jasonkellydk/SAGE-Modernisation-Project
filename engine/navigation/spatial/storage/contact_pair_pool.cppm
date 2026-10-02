@@ -1,7 +1,5 @@
-module;
-#include <utility>
-
 export module engine.navigation.spatial.storage.contact_pair_pool;
+import std;
 import engine.navigation.spatial.contact_pairs;
 export import engine.navigation.spatial.storage.contact_queue;
 

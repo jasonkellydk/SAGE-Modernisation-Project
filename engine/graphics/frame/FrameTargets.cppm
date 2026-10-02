@@ -1,7 +1,5 @@
-module;
-#include <cstdint>
-
 export module Graphics.FrameTargets;
+import std;
 
 export import Graphics.RHI;
 

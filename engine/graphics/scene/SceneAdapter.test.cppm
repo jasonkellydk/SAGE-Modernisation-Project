@@ -2,10 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE SceneAdapterTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <vector>
 
 export module Graphics.Scene.Adapter.Tests;
+import std;
 
 import Graphics.Scene.Traversal;
 

@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <utility>
 export module Assets.Adapters.W3D.Assembly;
+import std;
 export import Assets.ModelAssembly;
 import Assets.Adapters.W3D.Chunks;
 namespace Assets::W3D {

@@ -1,9 +1,5 @@
-module;
-
-#include <array>
-#include <cstdint>
-
 export module Graphics.Frame.RenderServices;
+import std;
 
 export import Graphics.Frame.RenderClock;
 export import Graphics.Frame.RenderSettings;

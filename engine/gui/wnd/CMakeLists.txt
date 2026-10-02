@@ -62,16 +62,37 @@ target_sources(generals_ui_wnd
             "${CMAKE_CURRENT_SOURCE_DIR}/layout"
             "${CMAKE_CURRENT_SOURCE_DIR}/document"
             "${CMAKE_CURRENT_SOURCE_DIR}/runtime"
+            "${CMAKE_CURRENT_SOURCE_DIR}/binding"
+            "${CMAKE_CURRENT_SOURCE_DIR}/input"
+            "${CMAKE_CURRENT_SOURCE_DIR}/transitions"
         FILES
             renderer/WNDRenderer.cppm
             controls/WNDControls.cppm
             layout/WNDLayout.cppm
             document/WNDDocument.cppm
             runtime/WNDRuntime.cppm
+            binding/WNDBindings.cppm
+            input/WNDInput.cppm
+            transitions/WNDTransitions.cppm
 )
 
 target_compile_features(generals_ui_wnd PUBLIC cxx_std_23)
-target_link_libraries(generals_ui_wnd PUBLIC generals_graphics generals_assets)
+target_link_libraries(generals_ui_wnd PUBLIC generals_graphics generals_assets engine_gui_mvvm)
+
+# The pointer over a layout (hit testing, button hover and clicks): headless, always tested.
+if(BUILD_TESTING)
+    find_package(Boost CONFIG REQUIRED)
+    add_executable(engine_gui_wnd_input_tests)
+    target_sources(engine_gui_wnd_input_tests
+        PRIVATE
+            FILE_SET CXX_MODULES
+            BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            FILES tests/input/WNDInput.test.cppm)
+    target_compile_features(engine_gui_wnd_input_tests PRIVATE cxx_std_23)
+    target_include_directories(engine_gui_wnd_input_tests PRIVATE ${Boost_INCLUDE_DIRS})
+    target_link_libraries(engine_gui_wnd_input_tests PRIVATE generals_ui_wnd)
+    add_test(NAME engine_gui_wnd_input_tests COMMAND engine_gui_wnd_input_tests)
+endif()
 
 if(RTS_BUILD_GRAPHICS_TESTS)
     find_package(Boost CONFIG REQUIRED)
@@ -175,11 +196,11 @@ if(RTS_BUILD_GRAPHICS_TESTS AND WIN32)
             FILE_SET CXX_MODULES
             BASE_DIRS
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-                "${PROJECT_SOURCE_DIR}/engine/graphics"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics"
             FILES
                 tests/support/WNDGameData.cppm
                 tests/snapshots/WNDAssetSnapshots.test.cppm
-                "${PROJECT_SOURCE_DIR}/engine/graphics/tests/visual_regression/VisualRegression.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics/tests/visual_regression/VisualRegression.cppm"
     )
     target_compile_features(generals_ui_wnd_asset_snapshot_test PRIVATE cxx_std_23)
     target_include_directories(generals_ui_wnd_asset_snapshot_test PRIVATE ${Boost_INCLUDE_DIRS})
@@ -213,11 +234,11 @@ if(RTS_BUILD_GRAPHICS_TESTS AND WIN32)
             FILE_SET CXX_MODULES
             BASE_DIRS
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-                "${PROJECT_SOURCE_DIR}/engine/graphics"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics"
             FILES
                 tests/support/WNDGameData.cppm
                 tests/buttons/WNDButtonSnapshots.test.cppm
-                "${PROJECT_SOURCE_DIR}/engine/graphics/tests/visual_regression/VisualRegression.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics/tests/visual_regression/VisualRegression.cppm"
     )
     target_compile_features(generals_ui_wnd_button_snapshot_test PRIVATE cxx_std_23)
     target_include_directories(generals_ui_wnd_button_snapshot_test PRIVATE ${Boost_INCLUDE_DIRS})
@@ -251,11 +272,11 @@ if(RTS_BUILD_GRAPHICS_TESTS AND WIN32)
             FILE_SET CXX_MODULES
             BASE_DIRS
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
-                "${PROJECT_SOURCE_DIR}/engine/graphics"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics"
             FILES
                 tests/support/WNDGameData.cppm
                 tests/controls/WNDControlSnapshots.test.cppm
-                "${PROJECT_SOURCE_DIR}/engine/graphics/tests/visual_regression/VisualRegression.cppm")
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics/tests/visual_regression/VisualRegression.cppm")
     target_compile_features(generals_ui_wnd_control_snapshot_test PRIVATE cxx_std_23)
     target_include_directories(generals_ui_wnd_control_snapshot_test PRIVATE ${Boost_INCLUDE_DIRS})
     target_link_libraries(generals_ui_wnd_control_snapshot_test PRIVATE

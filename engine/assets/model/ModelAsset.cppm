@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Models;
+import std;
 
 import Assets.Handles;
 import Assets.Identity;
@@ -39,6 +29,13 @@ export struct ModelSubmeshDesc final
 	std::uint32_t material_index = 0;
 	std::string name;
 	bool skinned = false;
+	// The source mesh's own attribute bits (W3D: its header attributes: hidden, geometry type camera aligned or oriented).
+	std::uint32_t source_attributes = 0;
+	// The material pass it draws in, and whether its polygons blend without alpha test on that pass (W3D: its shader's
+	// destination blend is not ZERO or its source blend not ONE, alpha test off: what W3DMeshRenderObject::Load_W3D
+	// counts as alpha on pass 0).
+	std::uint8_t pass = 0;
+	bool blends = false;
 };
 
 export using ModelMaterialDesc = MaterialAssetDesc;
@@ -82,6 +79,13 @@ export struct ModelSubmesh final
 	std::uint32_t material_index = 0;
 	std::string name;
 	bool skinned = false;
+	// The source mesh's own attribute bits (W3D: its header attributes: hidden, geometry type camera aligned or oriented).
+	std::uint32_t source_attributes = 0;
+	// The material pass it draws in, and whether its polygons blend without alpha test on that pass (W3D: its shader's
+	// destination blend is not ZERO or its source blend not ONE, alpha test off: what W3DMeshRenderObject::Load_W3D
+	// counts as alpha on pass 0).
+	std::uint8_t pass = 0;
+	bool blends = false;
 };
 
 export struct ModelMaterial final
@@ -191,7 +195,7 @@ ModelAsset::ModelAsset(
 			submesh.first_index,
 			submesh.index_count,
 			submesh.material_index,
-			std::move(submesh.name), submesh.skinned});
+			std::move(submesh.name), submesh.skinned, submesh.source_attributes, submesh.pass, submesh.blends});
 	}
 
 	m_materials.reserve(description.materials.size());

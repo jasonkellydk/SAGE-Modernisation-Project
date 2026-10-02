@@ -1,0 +1,49 @@
+#include <boost/test/unit_test.hpp>
+
+#include <set>
+#include <string>
+
+import games.generalszh.presentation.hud.algorithms.screen_capture;
+import games.generalszh.presentation.hud.algorithms.replay_fast_forward;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(screen_capture)
+
+// legacy_parity: W3DDisplay.cpp takeScreenShot: the static frame_number starts at 1 and names "sshot%.3d.bmp", skipping
+// every name already in the user data folder (_access), the counter moving on past each tried; then
+// TheInGameUI->message(GUI:ScreenCapture, leafname).
+BOOST_AUTO_TEST_CASE(legacy_parity_screenshots_take_the_next_free_name)
+{
+	int counter = 1;
+	const std::set<std::string> there{"sshot001.bmp", "sshot002.bmp", "sshot004.bmp"};
+	const auto exists = [&](const std::string &name) { return there.contains(name); };
+	BOOST_TEST(NextScreenshotName(counter, exists) == "sshot003.bmp");
+	BOOST_TEST(counter == 4);
+	BOOST_TEST(NextScreenshotName(counter, exists) == "sshot005.bmp");
+	BOOST_TEST(NextScreenshotName(counter, {}) == "sshot006.bmp");
+	int big = 1000;
+	BOOST_TEST(NextScreenshotName(big, {}) == "sshot1000.bmp");
+	BOOST_TEST((ScreenCaptureMessage(u"Screen Captured to '%s'", "sshot003.bmp") == u"Screen Captured to 'sshot003.bmp'"));
+}
+
+// legacy_parity: GameEngine.cpp execute / W3DDisplay.cpp draw with GlobalData m_TiVOFastMode (release build): in a replay
+// the frame rate limit is off and only logic frames 1, 31, 61... are drawn; paused, or out of a replay, or with the mode
+// off, every pass draws and the limit holds. CommandXlat's message: GUI:FF_ON / GUI:FF_OFF.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fast_forwarded_replay_draws_one_frame_in_thirty)
+{
+	BOOST_TEST(ReplayFastForwardUnlimited(true, true));
+	BOOST_TEST(!ReplayFastForwardUnlimited(true, false));
+	BOOST_TEST(!ReplayFastForwardUnlimited(false, true));
+	BOOST_TEST(ReplayFastForwardDraws(true, true, false, 1));
+	BOOST_TEST(!ReplayFastForwardDraws(true, true, false, 2));
+	BOOST_TEST(!ReplayFastForwardDraws(true, true, false, 30));
+	BOOST_TEST(ReplayFastForwardDraws(true, true, false, 31));
+	BOOST_TEST(ReplayFastForwardDraws(true, true, true, 2));
+	BOOST_TEST(ReplayFastForwardDraws(true, false, false, 2));
+	BOOST_TEST(ReplayFastForwardDraws(false, true, false, 2));
+	BOOST_TEST(ReplayFastForwardLabel(true) == "GUI:FF_ON");
+	BOOST_TEST(ReplayFastForwardLabel(false) == "GUI:FF_OFF");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

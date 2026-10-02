@@ -1,12 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Beams.RibbonSubdivision;
+import std;
 
 namespace Graphics {
 export struct RibbonPoint final {

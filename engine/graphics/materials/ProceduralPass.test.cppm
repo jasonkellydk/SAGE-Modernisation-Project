@@ -1,11 +1,9 @@
 module;
 #define BOOST_TEST_MODULE ProceduralPassTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <memory>
 
 export module Graphics.Materials.ProceduralPass.Tests;
+import std;
 import Graphics.Materials.MeshMaterial;
 import Graphics.Materials.ProceduralPass;
 import Graphics.Materials.State;

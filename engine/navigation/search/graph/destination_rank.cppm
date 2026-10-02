@@ -1,10 +1,5 @@
-module;
-#include <optional>
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-
 export module engine.navigation.search.graph.destination_rank;
+import std;
 
 export namespace navigation {
 // Copy this after resolving the requested destination and obstacle exceptions.

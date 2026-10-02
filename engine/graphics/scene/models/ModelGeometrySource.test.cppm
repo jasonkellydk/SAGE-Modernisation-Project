@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelGeometrySourceTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <string>
-#include <vector>
 export module Graphics.Scene.Models.GeometrySource.Tests;
+import std;
 import Graphics.Scene.Models.GeometrySource;
 import Graphics.Scene.Models.GeometryMath;
 import Graphics.Scene.Models.Deformation;

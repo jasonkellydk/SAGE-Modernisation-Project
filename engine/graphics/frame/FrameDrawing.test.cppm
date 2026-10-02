@@ -2,12 +2,9 @@ module;
 #define BOOST_TEST_MODULE FrameDrawingTests
 #define NOMINMAX
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
 #include <windows.h>
 export module Graphics.Frame.Drawing.Tests;
+import std;
 import Graphics.FrameOwner;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Props.Renderer;

@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE AnimationAssetTests
 #include <boost/test/included/unit_test.hpp>
-#include <string>
-#include <utility>
 export module Assets.Animations.Tests;
+import std;
 import Assets.Animations;
 using namespace Assets;
 

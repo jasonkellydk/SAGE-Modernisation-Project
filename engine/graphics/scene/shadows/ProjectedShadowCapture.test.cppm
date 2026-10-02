@@ -1,12 +1,9 @@
 module;
 #define BOOST_TEST_MODULE ProjectedShadowCaptureTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
 
 export module Graphics.Scene.Shadows.ProjectedCapture.Tests;
+import std;
 import Graphics.Scene.Shadows.Projected;
 import Graphics.Scene.Shadows.ProjectedCapture;
 import Graphics.Frame.AttachmentBindings;

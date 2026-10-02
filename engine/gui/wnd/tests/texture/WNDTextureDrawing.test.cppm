@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE WNDTextureDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Engine.UI.WND.TextureDrawing.Tests;
+import std;
 import Engine.UI.WND;
 import Graphics.Tests.Device;
 using namespace Graphics;

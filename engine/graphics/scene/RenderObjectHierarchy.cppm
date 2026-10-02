@@ -1,9 +1,5 @@
-module;
-
-#include <cstddef>
-#include <string_view>
-
 export module Graphics.Scene.RenderObjectHierarchy;
+import std;
 
 export import Graphics.Scene.RenderObjectState;
 

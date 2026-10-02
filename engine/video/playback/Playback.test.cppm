@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string_view>
-
 export module Video.Playback.Tests;
+import std;
 
 import Video.Playback;
 

@@ -1,10 +1,5 @@
-module;
-#include <cstdint>
-#include <functional>
-#include <map>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.OrderedDraws;
+import std;
 
 namespace Graphics {
 

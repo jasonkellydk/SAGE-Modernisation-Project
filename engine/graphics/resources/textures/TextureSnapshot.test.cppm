@@ -1,14 +1,9 @@
 module;
 #define BOOST_TEST_MODULE TextureSnapshotTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 
 export module Graphics.Resources.Textures.Snapshot.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Resources.Textures.Snapshot;
 import Graphics.Scene.Props.Renderer;

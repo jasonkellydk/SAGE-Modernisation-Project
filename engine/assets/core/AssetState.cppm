@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Assets.States;
+import std;
 
 namespace Assets
 {

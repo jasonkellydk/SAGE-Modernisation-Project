@@ -1,12 +1,9 @@
 module;
 #define BOOST_TEST_MODULE AffineTransformTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cstdint>
-#include <string>
 #include "../tests/LegacyMathReference.h"
 export module Graphics.Scene.AffineTransform.Tests;
+import std;
 import Graphics.Scene.AffineTransform;
 import Graphics.Scene.Models.Hierarchy;
 import Assets.ModelRig;

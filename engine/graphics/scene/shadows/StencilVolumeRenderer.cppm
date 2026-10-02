@@ -1,7 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
 export module Graphics.Scene.Shadows.StencilVolumes;
+import std;
 export import Graphics.Scene.Surfaces.Renderer;
 namespace Graphics
 {

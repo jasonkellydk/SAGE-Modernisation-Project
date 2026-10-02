@@ -1,0 +1,177 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.slaves.systems.disable_follow_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+struct Site
+{
+	explicit Site(std::size_t workers)
+	{
+		world.RegisterComponent<Disabled>();
+		world.RegisterComponent<DisabledUntil>();
+		world.RegisterComponent<Mount>();
+		world.RegisterComponent<Mounted>();
+		world.RegisterComponent<Spawner>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<AttackTarget>();
+		world.FinalizeComponents();
+		world.EmplaceResource<DisableRequests>();
+		registry.Register(follow);
+		registry.Register(apply);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// A spawner of `count` soldiers, each on the move and aiming at `enemy`.
+	ecs::Entity Spawns(std::size_t count, bool weapons, ecs::Entity enemy, std::vector<ecs::Entity> &made)
+	{
+		const ecs::Entity site = world.Create();
+		world.Add<Spawner>(site);
+		Spawner &spawner = *world.Get<Spawner>(site);
+		spawner.spawnsAreWeapons = weapons;
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const ecs::Entity soldier = world.Create();
+			world.Add<MoveOrder>(soldier);
+			world.Get<MoveOrder>(soldier)->mode = MoveMode::Point;
+			world.Add<AttackTarget>(soldier);
+			world.Get<AttackTarget>(soldier)->target = enemy;
+			world.Get<Spawner>(site)->spawned[world.Get<Spawner>(site)->spawnedCount++] = soldier;
+			made.push_back(soldier);
+		}
+		return site;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	bool Emp(ecs::Entity entity)
+	{
+		const Disabled *off = world.Get<Disabled>(entity);
+		return off != nullptr && (off->mask & disabled_type::Emp) != 0;
+	}
+	std::uint64_t Until(ecs::Entity entity)
+	{
+		const DisabledUntil *timers = world.Get<DisabledUntil>(entity);
+		return timers != nullptr ? timers->until[static_cast<std::size_t>(std::countr_zero(disabled_type::Emp))] : 0u;
+	}
+
+	ecs::World world{ecs::WorldConfig{4}};
+	DisableFollowSystem follow;
+	DisableApplySystem apply;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(disable_follow)
+
+// Object::setDisabledUntil and SpawnBehavior::orderSlavesDisabledUntil (GeneralsMD/Code/GameEngine/Source/GameLogic/
+// Object/Object.cpp, Object/Behavior/SpawnBehavior.cpp): an EMP on a Stinger Site (SPAWNS_ARE_THE_WEAPONS) until tick
+// 901 disables its soldiers until 901 as well, and they go idle (no move, no target), on the same tick; a spawner whose
+// spawns are not its weapons keeps its spawns working; an Overlord's mounted cannon (friend_getRider) is disabled with
+// it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_timed_disable_reaches_riders_and_weapon_spawns)
+{
+	Site site(2);
+	const ecs::Entity enemy = site.world.Create();
+	std::vector<ecs::Entity> soldiers, trucks;
+	const ecs::Entity stinger = site.Spawns(3, true, enemy, soldiers);
+	const ecs::Entity supply = site.Spawns(1, false, enemy, trucks);
+	const ecs::Entity overlord = site.world.Create();
+	const ecs::Entity cannon = site.world.Create();
+	site.world.Add<Mount>(overlord);
+	site.world.Get<Mount>(overlord)->rider = cannon;
+	site.world.Add<Mounted>(cannon);
+	site.world.Get<Mounted>(cannon)->carrier = overlord;
+	auto &requests = site.world.Resource<DisableRequests>().list;
+	for (const ecs::Entity victim : {stinger, supply, overlord})
+		requests.push_back({victim, disabled_type::Emp, 0, 901});
+	site.Step(); // tick 1
+	BOOST_TEST(site.Emp(stinger));
+	for (const ecs::Entity soldier : soldiers)
+	{
+		BOOST_TEST(site.Emp(soldier));
+		BOOST_TEST(site.Until(soldier) == 901u);
+		BOOST_TEST((site.world.Get<MoveOrder>(soldier)->mode == MoveMode::Idle));
+		BOOST_TEST(!site.world.Get<AttackTarget>(soldier)->target.IsValid());
+	}
+	BOOST_TEST(site.Emp(supply));
+	BOOST_TEST(!site.Emp(trucks[0]));
+	BOOST_TEST((site.world.Get<MoveOrder>(trucks[0])->mode == MoveMode::Point));
+	BOOST_TEST(site.Emp(overlord));
+	BOOST_TEST(site.Emp(cannon));
+	BOOST_TEST(site.Until(cannon) == 901u);
+}
+
+// An end that does not change is not passed on (the original's m_disabledTillFrame[type] != frame): a soldier
+// disabled on its own until 950 keeps that end when its site is given 901 again.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_unchanged_disable_is_not_passed_on)
+{
+	Site site(1);
+	std::vector<ecs::Entity> soldiers;
+	const ecs::Entity stinger = site.Spawns(2, true, ecs::Entity{}, soldiers);
+	auto &requests = site.world.Resource<DisableRequests>().list;
+	requests.push_back({stinger, disabled_type::Emp, 0, 901});
+	site.Step();
+	requests.push_back({soldiers[0], disabled_type::Emp, 0, 950});
+	site.Step();
+	requests.push_back({stinger, disabled_type::Emp, 0, 901});
+	site.Step();
+	BOOST_TEST(site.Until(soldiers[0]) == 950u);
+	BOOST_TEST(site.Until(soldiers[1]) == 901u);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(disable_following_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Site site(workers);
+		std::vector<ecs::Entity> soldiers;
+		std::vector<ecs::Entity> sites;
+		for (int index = 0; index < 8; ++index)
+			sites.push_back(site.Spawns(3, index % 2 == 0, ecs::Entity{}, soldiers));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 10; ++step)
+		{
+			site.world.Resource<DisableRequests>().list.push_back({sites[static_cast<std::size_t>(step) % sites.size()], disabled_type::Emp, 0, site.tick + 5});
+			site.Step();
+			hashes.push_back(site.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Site saved(2);
+	std::vector<ecs::Entity> soldiers;
+	const ecs::Entity stinger = saved.Spawns(2, true, ecs::Entity{}, soldiers);
+	saved.world.Resource<DisableRequests>().list.push_back({stinger, disabled_type::Emp, 0, 9});
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Site loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int step = 0; step < 10; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

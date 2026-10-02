@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.ObjectDrawing;
+import std;
 import Graphics.RHI;
 import Graphics.Materials.State;
 import Graphics.Materials.Fog;

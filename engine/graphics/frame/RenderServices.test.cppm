@@ -5,16 +5,10 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <thread>
-#include <vector>
 #include <windows.h>
 
 export module Graphics.Frame.RenderServices.Tests;
+import std;
 
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Frame.RenderServices;

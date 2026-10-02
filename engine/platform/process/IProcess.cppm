@@ -1,7 +1,5 @@
-module;
-#include <cstddef>
-#include <span>
 export module engine.platform.process.interface;
+import std;
 export namespace engine::platform
 {
 class IProcess

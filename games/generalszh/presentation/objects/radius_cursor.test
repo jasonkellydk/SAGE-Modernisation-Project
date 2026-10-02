@@ -1,0 +1,390 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <array>
+#include <cmath>
+#include <numbers>
+#include <string>
+
+import games.generalszh.presentation.objects.systems.radius_cursor_system;
+import games.generalszh.presentation.objects.systems.radius_decal_view_system;
+import games.generalszh.gameplay.effects.algorithms.radius_decals;
+import games.generalszh.gameplay.powers.components.spectre_gunship;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import engine.gameplay.common.spatial.components.transform;
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.global.in_game_ui;
+import engine.level.adapters.generals_map.map_reader;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.FixedPresentation;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	content::InGameUiContent ui;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		ui = content::BindInGameUi(loader->Load({"Data/INI/Default/InGameUI", "Data/INI/InGameUI"}));
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(radius_cursor)
+
+// Legacy parity (GeneralsMD InGameUI.cpp, InGameUI::setRadiusCursor / handleRadiusCursor, and RadiusDecal.cpp,
+// RadiusDecalTemplate::createRadiusDecal / RadiusDecal::update), the pointer straight over a Crusader:
+//   GUARD_AREA: getStdGuardRange, vision 150 x GuardInnerModifierHuman 1.8 = 270 for a human's (x 1.1 = 165 for a
+//     computer's); SCCGuard_Generic in R:240 G:240 B:240.
+//   DAISYCUTTER: SuperweaponDaisyCutter's RadiusCursorRadius 170, SCCFuelAirBomb_USA in red, throbbing 50-100% over 30
+//     frames: frame 0 (and 30) 191, frame 5 246, frame 20 136 (truncated); 0 with icon UI off.
+//   ATTACK_DAMAGE_AREA: the Crusader's CrusaderTankGun's PrimaryDamageRadius 5.
+//   ATTACK_SCATTER_AREA (the Comanche's rocket pods, TERTIARY): ScatterRadius 0 + ScatterTargetScalar 50; before the
+//     upgrade its TERTIARY slot is empty: no cursor.
+//   Over an opaque window: none. Another player watching: none shown (OnlyVisibleToOwningPlayer).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_radius_cursor_takes_its_radius_colour_and_throb)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", at, {}, america);
+	const ecs::Entity comanche = game.Place("AmericaVehicleComanche", at + FixedVector2{Fixed::FromInt(100), Fixed{}}, {}, america);
+
+	world.EmplaceResource<RadiusCursorLooks>().looks = shell.ui.radiusCursors;
+	world.EmplaceResource<RadiusCursor>();
+	world.EmplaceResource<LookCatalog>().playerColors.assign(16, {0.5f, 0.5f, 0.5f, 1.0f});
+	auto &local = world.EmplaceResource<LocalPlayer>();
+	local = LocalPlayer{player, true};
+	auto &frame = world.EmplaceResource<PresentationFrame>();
+	auto &pointer = world.EmplaceResource<PointerInput>();
+	pointer.x = 400;
+	pointer.y = 300;
+	auto &view = world.EmplaceResource<InteractionView>();
+	const float x = Engine::Math::ToFloat(at.x), y = Engine::Math::ToFloat(at.y);
+	view = InteractionView{{x, y, 600.0f}, {1, 0, 0}, {0, 1, 0}, {0, 0, -1}, 1, 1, 800, 600, true};
+	auto &targeting = world.EmplaceResource<GuiTargeting>();
+
+	RadiusCursorSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t step = 0;
+	const auto run = [&] { scheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}}); };
+	const RadiusCursor &cursor = world.Resource<RadiusCursor>();
+	const auto target = [&](ecs::Entity source, std::string_view type, Fixed powerRadius = {}, std::uint8_t slot = 0) {
+		targeting = GuiTargeting{};
+		targeting.active = true;
+		targeting.source = source;
+		targeting.radiusCursor = content::RadiusCursorIndex(type);
+		targeting.powerCursorRadius = powerRadius;
+		targeting.weaponSlot = slot;
+	};
+
+	auto &roster = world.Resource<gp::TeamRoster>();
+	roster.PlayerAt(player).human = true;
+	target(tank, "GUARD_AREA");
+	run();
+	BOOST_TEST(cursor.type == content::radius_cursor::GuardArea);
+	BOOST_TEST(cursor.shown);
+	BOOST_TEST(cursor.texture == "SCCGuard_Generic");
+	BOOST_TEST(std::abs(cursor.radius - 270.0f) < 0.01f);
+	BOOST_TEST(std::abs(cursor.color[0] - 240.0f / 255.0f) < 1e-6f);
+	BOOST_TEST(std::abs(cursor.at[0] - x) < 0.01f);
+	BOOST_TEST(std::abs(cursor.at[1] - y) < 0.01f);
+	// Kept as made while its type stays: a computer's range only once made again.
+	roster.PlayerAt(player).human = false;
+	run();
+	BOOST_TEST(std::abs(cursor.radius - 270.0f) < 0.01f);
+	targeting.active = false;
+	run();
+	BOOST_TEST(cursor.type == content::radius_cursor::None);
+	target(tank, "GUARD_AREA");
+	run();
+	BOOST_TEST(std::abs(cursor.radius - 165.0f) < 0.01f);
+
+	const auto power = shell.game.powers.Template("SuperweaponDaisyCutter");
+	BOOST_TEST_REQUIRE(power.has_value());
+	target(tank, "DAISYCUTTER", shell.game.powers.templates[*power].radiusCursorRadius);
+	const auto opacityAt = [&](std::uint64_t tick) {
+		frame.tick = tick;
+		run();
+		return cursor.opacity;
+	};
+	BOOST_TEST(opacityAt(0) == 191);
+	BOOST_TEST(cursor.type == content::RadiusCursorIndex("DAISYCUTTER"));
+	BOOST_TEST(std::abs(cursor.radius - 170.0f) < 0.01f);
+	BOOST_TEST(cursor.texture == "SCCFuelAirBomb_USA");
+	BOOST_TEST(!cursor.additive);
+	BOOST_TEST(cursor.color[0] == 1.0f);
+	BOOST_TEST(cursor.color[1] == 0.0f);
+	BOOST_TEST(cursor.color[2] == 0.0f);
+	BOOST_TEST(opacityAt(5) == 246);
+	BOOST_TEST(opacityAt(20) == 136);
+	BOOST_TEST(opacityAt(30) == 191);
+	frame.drawIconUi = false;
+	BOOST_TEST(opacityAt(5) == 0);
+	frame.drawIconUi = true;
+	pointer.overInterface = true;
+	run();
+	BOOST_TEST(cursor.type == content::radius_cursor::None);
+	pointer.overInterface = false;
+	local = LocalPlayer{player + 1, true};
+	run();
+	BOOST_TEST(cursor.type == content::RadiusCursorIndex("DAISYCUTTER"));
+	BOOST_TEST(!cursor.shown);
+	local = LocalPlayer{player, true};
+
+	target(tank, "ATTACK_DAMAGE_AREA");
+	run();
+	BOOST_TEST(std::abs(cursor.radius - 5.0f) < 0.01f);
+	target(comanche, "ATTACK_SCATTER_AREA", {}, 2);
+	run();
+	BOOST_TEST(cursor.type == content::radius_cursor::None);
+	world.Get<gp::WeaponSlots>(comanche)->slots[2].weapon = game.Game().templates.Weapon("ComancheRocketPodWeapon");
+	run();
+	BOOST_TEST(cursor.type == content::radius_cursor::AttackScatterArea);
+	BOOST_TEST(std::abs(cursor.radius - 50.0f) < 0.01f);
+}
+
+// Legacy parity (RadiusDecal.cpp, RadiusDecalTemplate::createRadiusDecal / RadiusDecal::update): a Scud Storm's decal
+// (SUPERWEAPON_ScudStorm's: SCCScudStorm_GLA, R:33 G:255 B:67, 25-50% over 500 ms = 15 frames, only its owner sees it)
+// shows its owner a square of radius 200 on the spot, frame 0 at (0.25 + 0.5 x 0.25) x 255 = 95; another player sees
+// nothing; cleared, none.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_objects_radius_decal_shows_to_its_owner)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const std::uint32_t player = game.Teams().TeamAt(gla).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity storm = game.Place("GLAScudStorm", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, gla);
+	const content::CreationNugget *attack = nullptr;
+	for (const content::CreationNugget &nugget : shell.game.creation.at("SUPERWEAPON_ScudStorm").nuggets)
+		if (nugget.kind == content::CreationKind::Attack)
+			attack = &nugget;
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	const Engine::Math::FixedVector3 spot{low.x + Fixed::FromInt(900), low.y + Fixed::FromInt(300), Fixed{}};
+	gameplay::LayRadiusDecal(game.Game(), storm, attack->deliveryDecal, attack->deliveryDecalRadius, spot, gameplay::RadiusDecalUntil::NoLongerAttacking);
+
+	world.EmplaceResource<RadiusDecalViews>();
+	world.EmplaceResource<LookCatalog>();
+	auto &local = world.EmplaceResource<LocalPlayer>();
+	local = LocalPlayer{player, true};
+	world.EmplaceResource<PresentationFrame>().tick = 0;
+	RadiusDecalViewSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t step = 0;
+	const auto run = [&] {
+		scheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}});
+		return world.Resource<RadiusDecalViews>().decals;
+	};
+	auto views = run();
+	BOOST_TEST_REQUIRE(views.size() == 1u);
+	BOOST_TEST(views[0].texture == "SCCScudStorm_GLA");
+	BOOST_TEST(!views[0].additive);
+	BOOST_TEST(views[0].radius == 200.0f);
+	BOOST_TEST(std::abs(views[0].at[0] - Engine::Math::ToFloat(spot.x)) < 0.01f);
+	BOOST_TEST(std::abs(views[0].color[1] - 1.0f) < 1e-6f);
+	BOOST_TEST(std::abs(views[0].color[0] - 33.0f / 255.0f) < 1e-6f);
+	BOOST_TEST(views[0].opacity == 95);
+	local = LocalPlayer{player + 1, true};
+	BOOST_TEST(run().empty());
+	local = LocalPlayer{player, true};
+	world.Get<gameplay::RadiusDecal>(storm)->look = gameplay::RadiusDecal::None;
+	BOOST_TEST(run().empty());
+}
+
+// Legacy parity (SpectreGunshipUpdate.cpp, initiateIntentToDoSpecialPower's createRadiusDecal, update's setPosition,
+// cleanUp): AirF_AmericaJetSpectreGunship1's AttackAreaDecal (SCCSpecTarg, AttackAreaRadius 200) over its first
+// target and TargetingReticleDecal (SCCSpecRet, TargetingReticleRadius 25) over where it aims, while it inserts and
+// orbits; departing (cleaned up), none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_shows_its_attack_area_and_reticle)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity ship = game.Place("AirF_AmericaJetSpectreGunship1", low + FixedVector2{Fixed::FromInt(250), Fixed::FromInt(250)}, {}, america);
+	auto *gunship = world.Get<gameplay::SpectreGunship>(ship);
+	BOOST_TEST_REQUIRE(gunship != nullptr);
+	gunship->initialTarget = {low.x + Fixed::FromInt(800), low.y + Fixed::FromInt(600), Fixed{}};
+	gunship->reticle = {low.x + Fixed::FromInt(820), low.y + Fixed::FromInt(590), Fixed{}};
+	gunship->status = gameplay::GunshipStatus::Inserting;
+
+	world.EmplaceResource<RadiusDecalViews>();
+	world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LocalPlayer>() = LocalPlayer{player, true};
+	world.EmplaceResource<PresentationFrame>();
+	RadiusDecalViewSystem decals;
+	SpectreDecalViewSystem spectres;
+	ecs::SystemRegistry registry;
+	registry.Register(decals);
+	registry.Register(spectres);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t step = 0;
+	const auto run = [&] {
+		scheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}});
+		return world.Resource<RadiusDecalViews>().decals;
+	};
+	auto views = run();
+	BOOST_TEST_REQUIRE(views.size() == 2u);
+	BOOST_TEST(views[0].texture == "SCCSpecTarg");
+	BOOST_TEST(views[0].radius == 200.0f);
+	BOOST_TEST(std::abs(views[0].at[0] - Engine::Math::ToFloat(gunship->initialTarget.x)) < 0.01f);
+	BOOST_TEST(views[1].texture == "SCCSpecRet");
+	BOOST_TEST(views[1].radius == 25.0f);
+	BOOST_TEST(std::abs(views[1].at[1] - Engine::Math::ToFloat(gunship->reticle.y)) < 0.01f);
+	gunship->status = gameplay::GunshipStatus::Orbiting;
+	BOOST_TEST(run().size() == 2u);
+	gunship->status = gameplay::GunshipStatus::Departing;
+	BOOST_TEST(run().empty());
+}
+
+// Legacy parity (DynamicShroudClearingRangeUpdate.cpp, createGridDecals / animateGridDecals): SpySatellitePing's grid
+// while shown is 30 pieces of its GridDecalTemplate (EXGrid, SHADOW_ADDITIVE_DECAL, R:32 G:64 B:128), radius 100, on
+// its ring: piece k at the centre plus (sin, cos) of k 30ths of a turn times the ring, each coordinate less its
+// truncated remainder by 23; all at the opacity x 255 truncated (0.5: 127). Made or gone: none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scans_grid_lays_its_pieces_on_its_ring)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity ping = game.Place("SpySatellitePing", low + FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}, {}, america);
+	auto *clearing = world.Get<gp::DynamicClearing>(ping);
+	BOOST_TEST_REQUIRE(clearing != nullptr);
+	clearing->grid = 1;
+	clearing->gridRadius = Fixed::FromInt(130);
+	clearing->gridOpacity = Fixed::FromRatio(1, 2);
+
+	world.EmplaceResource<RadiusDecalViews>();
+	auto &catalog = world.EmplaceResource<LookCatalog>();
+	KnowLooks(catalog, game);
+	world.EmplaceResource<LocalPlayer>() = LocalPlayer{player, true};
+	world.EmplaceResource<PresentationFrame>();
+	RadiusDecalViewSystem decals;
+	SpectreDecalViewSystem spectres;
+	GridDecalViewSystem grids;
+	ecs::SystemRegistry registry;
+	registry.Register(decals);
+	registry.Register(spectres);
+	registry.Register(grids);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t step = 0;
+	const auto run = [&] {
+		world.Resource<RadiusDecalViews>().decals.clear();
+		scheduler.Execute(engine::time::SimulationTime{++step, engine::time::FixedStep{30}});
+		return world.Resource<RadiusDecalViews>().decals;
+	};
+	const auto views = run();
+	BOOST_TEST_REQUIRE(views.size() == 30u);
+	const float cx = Engine::Math::ToFloat(world.Get<gp::Transform>(ping)->position.x), cy = Engine::Math::ToFloat(world.Get<gp::Transform>(ping)->position.y);
+	float angle = 0.0f;
+	for (std::size_t k = 0; k < views.size(); ++k)
+	{
+		float x = cx + std::sin(angle) * 130.0f, y = cy + std::cos(angle) * 130.0f;
+		x -= static_cast<float>(static_cast<std::int32_t>(x) % 23);
+		y -= static_cast<float>(static_cast<std::int32_t>(y) % 23);
+		BOOST_TEST(views[k].at[0] == x);
+		BOOST_TEST(views[k].at[1] == y);
+		angle += (std::numbers::pi_v<float> * 2.0f) / 30.0f;
+	}
+	BOOST_TEST(views[0].texture == "EXGrid");
+	BOOST_TEST(views[0].additive);
+	BOOST_TEST(views[0].radius == 100.0f);
+	BOOST_TEST(std::abs(views[0].color[2] - 128.0f / 255.0f) < 1e-6f);
+	BOOST_TEST(views[0].opacity == 127);
+	BOOST_TEST(views[29].opacity == 127);
+	clearing->grid = 2;
+	BOOST_TEST(run().empty());
+	clearing->grid = 0;
+	BOOST_TEST(run().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

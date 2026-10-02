@@ -1,0 +1,240 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.world.algorithms.water_levels;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
+import Engine.Core.Math.FixedPresentation;
+
+// TerrainLogic::changeWaterHeightOverTime / update / setWaterHeight on the shipped MD_CHI04 (a campaign mission whose
+// scripts move a water table).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(water_levels)
+
+// Legacy parity (TerrainLogic.cpp: changeWaterHeightOverTime, update, setWaterHeight, isUnderwater): a water area told
+// to rise 30 over 2 seconds with 50 damage moves (target - height) / 60 a frame, its polygon at the whole units of the
+// height kept exactly each frame; on the frame whose step reaches the target it is set to the target and the change
+// ends. A rise damages what stands where the ground is now under the water (DAMAGE_WATER) on frames that are whole
+// seconds and on the final one, dealt in the next tick's damage; the pathfinding map is remade (a cell newly under the
+// water becomes water). A checkpoint taken mid-rise plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_water_table_rises_over_time)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_CHI04/MD_CHI04.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	session::SessionOptions options{7, 1, {}, seats};
+	options.singlePlayer = true;
+	session::Session game(read->level, shell.game, options);
+	game.Tick();
+	// A named water area with a spot inside it whose ground is above the water now but below it 30 higher.
+	const auto &areas = game.Game().ground.WaterAreas();
+	std::optional<std::size_t> chosen;
+	Engine::Math::FixedVector2 probe;
+	for (std::size_t index = 0; index < areas.size() && !chosen; ++index)
+	{
+		const auto &area = areas[index];
+		if (area.name.empty())
+			continue;
+		for (Fixed x = area.low.x; x <= area.high.x && !chosen; x += Fixed::FromInt(5))
+			for (Fixed y = area.low.y; y <= area.high.y && !chosen; y += Fixed::FromInt(5))
+			{
+				const Engine::Math::FixedVector2 at{x, y};
+				Fixed water;
+				if (!area.Contains(at) || !game.Game().ground.Water(at, water) || water != area.height)
+					continue;
+				const Fixed floor = game.Game().ground.At(at);
+				if (floor > area.height + Fixed::FromInt(2) && floor < area.height + Fixed::FromInt(25))
+				{
+					chosen = index;
+					probe = at;
+				}
+			}
+	}
+	BOOST_TEST_REQUIRE(chosen.has_value());
+	const std::string name = areas[*chosen].name;
+	const Fixed start = areas[*chosen].height;
+	const Fixed target = start + Fixed::FromInt(30);
+	const auto &grid = game.World().Resource<gp::NavigationGrid>();
+	const std::int32_t cellX = static_cast<std::int32_t>((probe.x / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	const std::int32_t cellY = static_cast<std::int32_t>((probe.y / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	BOOST_TEST((grid.Type(cellX, cellY) != gp::PathfindCellType::Water));
+	const ecs::Entity soldier = game.Place("ChinaInfantryRedguard", probe, {}, *game.Teams().FindTeam("team"));
+	BOOST_TEST_REQUIRE(game.World().IsAlive(soldier));
+	gameplay::ChangeWaterHeightOverTime(game.Game(), name, target, Fixed::FromInt(2), Fixed::FromInt(50));
+	const Fixed step = (target - start) / Fixed::FromInt(60);
+	Fixed exact = start;
+	std::unique_ptr<session::Session> restored;
+	std::uint64_t reached = 0, firstHurt = 0;
+	const Fixed full = game.World().Get<gp::Health>(soldier)->current;
+	for (int tick = 0; tick < 90 && reached == 0; ++tick)
+	{
+		game.Tick();
+		if (restored)
+			restored->Tick();
+		const std::uint64_t now = game.CurrentTick();
+		const Fixed height = game.Game().ground.WaterAreas()[*chosen].height;
+		if (exact + step >= target)
+		{
+			reached = now;
+			BOOST_TEST((height == target));
+		}
+		else
+		{
+			exact += step;
+			BOOST_TEST((height == Fixed::FromInt(exact.Floor())), "tick " << now);
+		}
+		if (tick == 20)
+		{
+			restored = session::Session::Restore(read->level, shell.game, options, game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+		}
+		if (firstHurt == 0 && game.World().IsAlive(soldier) && game.World().Get<gp::Health>(soldier)->current < full)
+			firstHurt = now;
+	}
+	BOOST_TEST_REQUIRE(reached != 0u);
+	BOOST_TEST_MESSAGE("reached " << reached << " first hurt " << firstHurt);
+	BOOST_TEST((grid.Type(cellX, cellY) == gp::PathfindCellType::Water));
+	BOOST_TEST_REQUIRE(firstHurt != 0u);
+	// Hurt the tick after a whole-second frame once its ground was under the water (the damage is dealt next tick).
+	BOOST_TEST(((firstHurt - 1) % 30 == 0 || firstHurt - 1 == reached));
+	game.Tick();
+	restored->Tick();
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ScriptActions::doWaterChangeHeight -> TerrainLogic::setWaterHeight(water, height, 999999.9, TRUE)): the
+// named area's water is set at once to the height's whole units, what the rise puts under it takes 999999.9 water damage
+// (dying on the next tick's damage) and the pathfinding map is remade on the same tick (forcePathfindUpdate). One and
+// four workers agree; a checkpoint just after plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_water_table_is_set_at_once)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_CHI04/MD_CHI04.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	const auto options = [&](std::size_t workers) {
+		session::SessionOptions made{7, workers, {}, seats};
+		made.singlePlayer = true;
+		return made;
+	};
+	session::Session game(read->level, shell.game, options(1));
+	session::Session four(read->level, shell.game, options(4));
+	game.Tick();
+	four.Tick();
+	const auto &areas = game.Game().ground.WaterAreas();
+	std::optional<std::size_t> chosen;
+	Engine::Math::FixedVector2 probe;
+	for (std::size_t index = 0; index < areas.size() && !chosen; ++index)
+	{
+		const auto &area = areas[index];
+		if (area.name.empty())
+			continue;
+		for (Fixed x = area.low.x; x <= area.high.x && !chosen; x += Fixed::FromInt(5))
+			for (Fixed y = area.low.y; y <= area.high.y && !chosen; y += Fixed::FromInt(5))
+			{
+				const Engine::Math::FixedVector2 at{x, y};
+				Fixed water;
+				if (!area.Contains(at) || !game.Game().ground.Water(at, water) || water != area.height)
+					continue;
+				const Fixed floor = game.Game().ground.At(at);
+				if (floor > area.height + Fixed::FromInt(2) && floor < area.height + Fixed::FromInt(25))
+				{
+					chosen = index;
+					probe = at;
+				}
+			}
+	}
+	BOOST_TEST_REQUIRE(chosen.has_value());
+	const std::string name = areas[*chosen].name;
+	const Fixed target = areas[*chosen].height + Fixed::FromRatio(61, 2); // 30.5 more: whole units kept
+	const auto &grid = game.World().Resource<gp::NavigationGrid>();
+	const std::int32_t cellX = static_cast<std::int32_t>((probe.x / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	const std::int32_t cellY = static_cast<std::int32_t>((probe.y / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	BOOST_TEST((grid.Type(cellX, cellY) != gp::PathfindCellType::Water));
+	const auto team = *game.Teams().FindTeam("team");
+	const ecs::Entity soldier = game.Place("ChinaInfantryRedguard", probe, {}, team);
+	BOOST_TEST((four.Place("ChinaInfantryRedguard", probe, {}, team) == soldier));
+	// Known to the partition (a tick's spatial index) before the scripts set the water.
+	game.Tick();
+	four.Tick();
+	gameplay::ChangeWaterHeight(game.Game(), name, target);
+	gameplay::ChangeWaterHeight(four.Game(), name, target);
+	BOOST_TEST((game.Game().ground.WaterAreas()[*chosen].height == Fixed::FromInt(target.Floor())));
+	game.Tick();
+	four.Tick();
+	// Remade this tick; the soldier struck (dying on the next tick's damage).
+	BOOST_TEST((grid.Type(cellX, cellY) == gp::PathfindCellType::Water));
+	auto restored = session::Session::Restore(read->level, shell.game, options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	game.Tick();
+	four.Tick();
+	restored->Tick();
+	BOOST_TEST((!game.World().IsAlive(soldier) || game.World().Get<gp::Health>(soldier)->current == Fixed{}));
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

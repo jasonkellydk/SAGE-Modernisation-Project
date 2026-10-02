@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MovieCaptureTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <vector>
 export module Graphics.Capture.MovieCapture.Tests;
+import std;
 import Graphics.Capture.MovieCapture;
 import Graphics.Tests.Device;
 using namespace Graphics;

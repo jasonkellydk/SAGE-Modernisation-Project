@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Passes.Sky;
+import std;
 
 export import Graphics.RenderGraph.Execution;
 export import Graphics.RHI;

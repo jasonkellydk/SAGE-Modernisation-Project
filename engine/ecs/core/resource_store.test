@@ -1,0 +1,218 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+import engine.ecs.core.world;
+import engine.ecs.system.system;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+namespace resource_store_test
+{
+struct Value
+{
+	std::int64_t amount{0};
+};
+
+// Plain data resources: settings in, a total out.
+struct Settings
+{
+	std::int64_t step{3};
+};
+
+struct Total
+{
+	std::int64_t sum{0};
+};
+
+struct Undeclared
+{
+	int unused{0};
+};
+
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<resource_store_test::Value>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.value";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+template<>
+struct ResourceTraits<resource_store_test::Settings>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.settings";
+};
+template<>
+struct ResourceTraits<resource_store_test::Total>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.total";
+};
+template<>
+struct ResourceTraits<resource_store_test::Undeclared>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.undeclared";
+};
+}
+
+namespace resource_store_test
+{
+// Stateless: all it touches comes through the context.
+struct AccumulateSystem
+{
+	using Query = ecs::Query<ecs::Write<Value>>;
+	using Resources = ecs::Resources<ecs::Read<Settings>, ecs::Write<Total>>;
+
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const Settings &settings = context.Read<Settings>();
+		for (Value &value : chunk.Get<Value>())
+			value.amount += settings.step;
+	}
+};
+
+struct SumSystem
+{
+	using Query = ecs::Query<ecs::Read<Value>>;
+	using Resources = ecs::Resources<ecs::Write<Total>>;
+
+	void Execute(Query &query, ecs::SystemContext &context) const
+	{
+		Total &total = context.Write<Total>();
+		total.sum = 0;
+		query.ForEachChunk([&](auto chunk) {
+			for (const Value &value : chunk.template Get<Value>())
+				total.sum += value.amount;
+		});
+	}
+};
+
+// Reads what it never declared: refused.
+struct SneakySystem
+{
+	using Query = ecs::Query<ecs::Read<Value>>;
+	using Resources = ecs::Resources<ecs::Read<Settings>>;
+
+	void Execute(Query::Chunk, ecs::SystemContext &context) const { (void)context.Read<Undeclared>(); }
+};
+
+// Writes what it only declared for reading: refused.
+struct ReadOnlySystem
+{
+	using Query = ecs::Query<ecs::Read<Value>>;
+	using Resources = ecs::Resources<ecs::Read<Settings>>;
+
+	void Execute(Query::Chunk, ecs::SystemContext &context) const { (void)context.Write<Settings>(); }
+};
+}
+
+namespace ecs
+{
+template<>
+struct SystemTraits<resource_store_test::AccumulateSystem>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.accumulate";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<resource_store_test::SumSystem>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.sum";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<resource_store_test::SneakySystem>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.sneaky";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<resource_store_test::ReadOnlySystem>
+{
+	static constexpr std::string_view StableName = "tests.resource_store.read_only";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+}
+
+using namespace resource_store_test;
+
+BOOST_AUTO_TEST_SUITE(resource_store)
+
+BOOST_AUTO_TEST_CASE(the_world_owns_one_value_per_resource_type)
+{
+	ecs::World world;
+	BOOST_TEST(world.FindResource<Settings>() == nullptr);
+	Settings &settings = world.EmplaceResource<Settings>(Settings{5});
+	BOOST_TEST(&world.Resource<Settings>() == &settings);
+	BOOST_TEST(world.Resource<Settings>().step == 5);
+	BOOST_CHECK_THROW(world.EmplaceResource<Settings>(), std::logic_error);
+	BOOST_CHECK_THROW(world.Resource<Total>(), std::logic_error);
+	// Stable: inserting more never moves a resource.
+	world.EmplaceResource<Total>();
+	world.EmplaceResource<Undeclared>();
+	BOOST_TEST(&world.Resource<Settings>() == &settings);
+}
+
+BOOST_AUTO_TEST_CASE(stateless_systems_reach_resources_through_their_context)
+{
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		ecs::World world(ecs::WorldConfig{8});
+		world.RegisterComponent<Value>();
+		world.FinalizeComponents();
+		world.EmplaceResource<Settings>(Settings{2});
+		world.EmplaceResource<Total>();
+		for (int index = 0; index < 100; ++index)
+			world.Get<Value>(world.Create<Value>())->amount = index;
+		AccumulateSystem accumulate;
+		SumSystem sum;
+		ecs::SystemRegistry registry;
+		registry.Register(accumulate);
+		registry.Register(sum);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+		BOOST_TEST(world.Resource<Total>().sum == 4950 + 200);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(undeclared_resource_access_is_refused)
+{
+	const auto run = [](auto system) {
+		ecs::World world;
+		world.RegisterComponent<Value>();
+		world.FinalizeComponents();
+		world.EmplaceResource<Settings>();
+		world.EmplaceResource<Undeclared>();
+		world.Create<Value>();
+		ecs::SystemRegistry registry;
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	};
+	SneakySystem sneaky;
+	ReadOnlySystem readOnly;
+	BOOST_CHECK_THROW(run(sneaky), std::logic_error);
+	BOOST_CHECK_THROW(run(readOnly), std::logic_error);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

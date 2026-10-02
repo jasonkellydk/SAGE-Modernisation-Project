@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelHierarchyTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include <utility>
 export module Graphics.Scene.Models.Hierarchy.Tests;
+import std;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;

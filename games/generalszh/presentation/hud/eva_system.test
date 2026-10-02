@@ -1,0 +1,1050 @@
+#define BOOST_TEST_MODULE GeneralsZhEva
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <functional>
+#include <memory>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import engine.gameplay.rts.stealth.components.stealth;
+import games.generalszh.presentation.hud.systems.eva_system;
+import games.generalszh.presentation.hud.systems.production_presentation_system;
+import games.generalszh.presentation.hud.systems.radar_event_system;
+import games.generalszh.presentation.hud.systems.rally_notice_system;
+import games.generalszh.presentation.hud.systems.construction_notice_system;
+import games.generalszh.presentation.hud.systems.money_sound_system;
+import games.generalszh.presentation.hud.systems.radar_sound_system;
+import games.generalszh.presentation.objects.systems.ability_presentation_systems;
+import games.generalszh.gameplay.teams.algorithms.defection;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.identity.components.owner;
+import Engine.Core.Math.FixedPresentation;
+import engine.gameplay.rts.production.components.production_queue;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.powers.algorithms.special_power_state;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+
+// EVA over a shipped skirmish (real data), as America watches.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(eva_system)
+
+// Player::onStructureConstructionComplete and Object::onDie -> Eva::setShouldPlay, then Eva::update: the GLA Scud Storm
+// put up is "enemy Scud Storm detected" to America (EvaUSA_DetectedScudStorm), spoken the tick it is heard; America's dozer
+// killed by a GLA Scorpion is "unit lost" (EvaUSA_UnitLost, Priority 1) the tick it dies; the voice is taken until the
+// audio says it is done.
+BOOST_AUTO_TEST_CASE(legacy_parity_eva_announces_to_the_watcher)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	options.presentationComponents = [](ecs::World &world) { world.RegisterComponent<presentation::SuperweaponEvaReady>(); };
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	world.EmplaceResource<presentation::EvaState>().catalog = content::BindEva(shell.loader->Load({"Data/INI/Default/Eva", "Data/INI/Eva"}), engine::time::FixedStep{30});
+	world.Resource<presentation::EvaState>().side = game.PlayerSide(america);
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &commands = world.EmplaceResource<presentation::AudioCommands>();
+	auto &audio = world.EmplaceResource<presentation::AudioState>();
+	world.EmplaceResource<presentation::AudioHandle>();
+	world.EmplaceResource<presentation::PresentationRandom>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	auto &feedback = world.EmplaceResource<presentation::RadarFeedback>();
+	// Every definition on the radar (each one's DefinitionLooks, as KnowLooks keeps them as definitions appear).
+	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
+	const auto know = [&] {
+		looks.byDefinition.resize(game.DefinitionCount());
+		looks.known.assign(game.DefinitionCount(), 1);
+		for (auto &look : looks.byDefinition)
+			look.onRadar = true;
+	};
+	feedback.unitUnderAttack = u"Unit under attack";
+	feedback.structureSound = "RadarNotifyStructure";
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	presentation::EvaSystem eva;
+	presentation::RadarEventSystem radarEvents;
+	ecs::SystemRegistry registry;
+	registry.Register(eva);
+	registry.Register(radarEvents);
+	registry.OrderBefore<presentation::RadarEventSystem, presentation::EvaSystem>();
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto teamOf = [&](std::uint32_t player) {
+		for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+			if (game.Teams().TeamAt(team).owner == player && !game.Teams().TeamAt(team).members.empty())
+				return team;
+		return 0u;
+	};
+	// The tick, then EVA on it; what it said (the audio then says it has finished).
+	const auto step = [&](std::span<const engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		know();
+		commands.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+		std::vector<std::string> said;
+		for (const auto &command : commands.pending)
+			if (command.kind == presentation::AudioCommand::Kind::Eva)
+				said.push_back(command.text);
+		audio.evaServed += static_cast<std::uint32_t>(said.size());
+		return said;
+	};
+	step();
+	step();
+	const ecs::Entity silo = game.Place("GLAScudStorm", {Engine::Math::Fixed::FromInt(900), Engine::Math::Fixed::FromInt(500)}, {}, teamOf(gla));
+	BOOST_TEST_REQUIRE(world.IsAlive(silo));
+	generalszh::gameplay::NoticeSuperweaponDetected(game.Game(), silo);
+	// The notices of a tick are made in it: this one is kept for the next tick's EVA by hand.
+	const auto detected = world.Resource<generalszh::gameplay::EvaNotices>().list;
+	BOOST_TEST_REQUIRE(detected.size() == 1u);
+	BOOST_TEST((detected[0].weapon == generalszh::gameplay::EvaWeapon::ScudStorm));
+	BOOST_TEST(detected[0].player == gla);
+	commands.pending.clear();
+	know();
+	scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(commands.pending.size() == 1u);
+	BOOST_TEST(commands.pending[0].text == "EvaUSA_DetectedScudStorm");
+	audio.evaServed = world.Resource<presentation::EvaState>().requested;
+
+	const ecs::Entity theirs = [&] {
+		for (const ecs::Entity member : game.Teams().TeamAt(teamOf(america)).members)
+			if (game.DefinitionName(world.Get<gp::DefinitionRef>(member)->index) == "AmericaCommandCenter")
+				return member;
+		return ecs::Entity{};
+	}();
+	BOOST_TEST_REQUIRE(world.IsAlive(theirs));
+	const auto at = game.TransformOf(theirs)->position.XY();
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {at.x + Engine::Math::Fixed::FromInt(200), at.y}, {}, teamOf(america));
+	const ecs::Entity scorpion = game.Place("GLATankScorpion", {at.x + Engine::Math::Fixed::FromInt(260), at.y}, {}, teamOf(gla));
+	std::vector<engine::net::CommandEnvelope> attack{commands::Encode(commands::Attack{{scorpion}, dozer})};
+	attack.front().player = 1;
+	std::vector<std::string> said = step(std::span(attack));
+	// Radar::tryUnderAttackEvent on the first damage to the dozer: an under attack event, its message and the
+	// structure sound (the retail choice for units), once for the next 10 s.
+	std::uint64_t warnedOn = 0;
+	for (int tick = 0; tick < 30 * 60 && warnedOn == 0; ++tick)
+	{
+		if (radar.last && radar.events[*radar.last].type == presentation::RadarEventType::UnderAttack)
+		{
+			warnedOn = game.CurrentTick();
+			break;
+		}
+		said = step();
+	}
+	BOOST_TEST_REQUIRE(warnedOn != 0u);
+	BOOST_TEST(std::any_of(commands.pending.begin(), commands.pending.end(), [](const auto &command) {
+		return command.kind == presentation::AudioCommand::Kind::Interface && command.text == "RadarNotifyStructure"; }));
+	BOOST_TEST(std::any_of(messages.slots.begin(), messages.slots.end(), [](const auto &slot) { return slot.shown && slot.text == u"Unit under attack"; }));
+	BOOST_TEST_MESSAGE("warned on tick " << warnedOn);
+	std::uint64_t diedOn = 0;
+	for (int tick = 0; tick < 30 * 60 && diedOn == 0; ++tick)
+	{
+		const bool lost = std::any_of(world.Resource<generalszh::gameplay::EvaNotices>().list.begin(), world.Resource<generalszh::gameplay::EvaNotices>().list.end(),
+			[&](const auto &notice) { return notice.cue == generalszh::gameplay::EvaCue::UnitLost && notice.player == america; });
+		if (lost)
+		{
+			diedOn = game.CurrentTick();
+			break;
+		}
+		BOOST_TEST(said.empty());
+		said = step();
+	}
+	BOOST_TEST_REQUIRE(diedOn != 0u);
+	BOOST_TEST_MESSAGE("the dozer died on tick " << diedOn);
+	BOOST_TEST_REQUIRE(said.size() == 1u);
+	BOOST_TEST(said[0] == "EvaUSA_UnitLost");
+}
+
+// ProductionUpdate::update: a Ranger trained at America's barracks says RangerVoiceCreate where it came out, the tick
+// it came; the flash-bang research finished there is told to its player (UPGRADE:UpgradeComplete with the upgrade's
+// name), its ResearchSound played only when the audio knows it (here none: EVA's UPGRADECOMPLETE instead).
+BOOST_AUTO_TEST_CASE(legacy_parity_production_speaks_and_tells_of_upgrades)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	messages.upgradeCompleteText = u"Upgrade complete: %ls";
+	messages.upgradeNames.resize(shell.game.upgrades.upgrades.size());
+	const auto flashBang = *shell.game.upgrades.Find("Upgrade_AmericaRangerFlashBangGrenade");
+	messages.upgradeNames[flashBang] = u"Flash-Bang Grenades";
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	world.EmplaceResource<presentation::AudioHandle>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	presentation::ProductionPresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto step = [&](std::span<const engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		sounds.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	};
+	std::uint32_t team = 0;
+	for (std::uint32_t index = 0; index < game.Teams().TeamCount(); ++index)
+		if (game.Teams().TeamAt(index).owner == america && !game.Teams().TeamAt(index).members.empty())
+			team = index;
+	const auto home = game.TransformOf(game.Teams().TeamAt(team).members.front())->position.XY();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", {home.x + Engine::Math::Fixed::FromInt(250), home.y}, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	std::vector<engine::net::CommandEnvelope> train{commands::Encode(commands::QueueUnit{barracks, "AmericaInfantryRanger"})};
+	train.front().player = 0;
+	step(std::span(train));
+	bool voiced = false;
+	for (int tick = 0; tick < 30 * 60 && !voiced; ++tick)
+	{
+		for (const auto &sound : sounds.pending)
+			voiced = voiced || sound.sound == "RangerVoiceCreate";
+		if (!voiced)
+			step();
+	}
+	BOOST_TEST_REQUIRE(voiced);
+	BOOST_TEST(world.Resource<generalszh::gameplay::ProductionNotices>().created.size() == 1u);
+	std::vector<engine::net::CommandEnvelope> research{commands::Encode(commands::ResearchUpgrade{barracks, "Upgrade_AmericaRangerFlashBangGrenade"})};
+	research.front().player = 0;
+	step(std::span(research));
+	bool told = false;
+	for (int tick = 0; tick < 30 * 60 && !told; ++tick)
+	{
+		for (const auto &slot : messages.slots)
+			told = told || (slot.shown && slot.text == u"Upgrade complete: Flash-Bang Grenades");
+		if (!told)
+			step();
+	}
+	BOOST_TEST(told);
+	BOOST_TEST(radar.last.has_value()); // the upgrade's radar event
+	BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::Upgrade));
+	for (const auto &sound : sounds.pending)
+		BOOST_TEST(sound.sound != "RangerVoiceUpgradeFlashBangGrenades"); // unknown to this audio
+}
+
+// GameLogic's doSetRallyPoint feedback (isLocalPlayer): America's barracks given a rally point tells its player
+// (GUI:RallyPointSet with the barracks' name, RallyPointSet played at the point); one no path reaches, GUI:RallyPointNoPath
+// and UnableToSetRallyPoint; the other player's rally points are not told to this one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_rally_point_set_or_refused_is_told_to_its_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	messages.rallySetText = u"Rally point set for %ls";
+	messages.rallyNoPathText = u"No path to rally point";
+	messages.displayNames.emplace(shell.game.objects.Find("AmericaBarracks")->displayName, u"Barracks");
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	presentation::RallyNoticeSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint32_t team = 0;
+	for (std::uint32_t index = 0; index < game.Teams().TeamCount(); ++index)
+		if (game.Teams().TeamAt(index).owner == america && !game.Teams().TeamAt(index).members.empty())
+			team = index;
+	const ecs::Entity anyOfOurs = game.Teams().TeamAt(team).members.front();
+	const auto home = world.Get<engine::gameplay::Transform>(anyOfOurs)->position.XY();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", {home.x + Engine::Math::Fixed::FromInt(120), home.y}, {}, team);
+	const auto order = [&](commands::GameCommand command, std::uint32_t seat) {
+		std::vector<engine::net::CommandEnvelope> envelopes{std::visit([](const auto &c) { return commands::Encode(c); }, command)};
+		envelopes.front().player = seat;
+		game.Tick(std::span(envelopes));
+		sounds.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	};
+	const auto shown = [&](std::u16string_view text) {
+		return std::any_of(messages.slots.begin(), messages.slots.end(), [&](const auto &slot) { return slot.shown && slot.text == text; });
+	};
+	order(commands::SetRallyPoint{barracks, {home.x + Engine::Math::Fixed::FromInt(200), home.y}}, 0);
+	BOOST_TEST(shown(u"Rally point set for Barracks"));
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "RallyPointSet");
+	order(commands::SetRallyPoint{barracks, {Engine::Math::Fixed::FromInt(-100000), Engine::Math::Fixed::FromInt(-100000)}}, 0);
+	BOOST_TEST(shown(u"No path to rally point"));
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "UnableToSetRallyPoint");
+	world.Resource<presentation::PresentationFrame>().viewer = america == 0 ? 1u : 0u; // someone else watching
+	order(commands::SetRallyPoint{barracks, {home.x + Engine::Math::Fixed::FromInt(200), home.y}}, 0);
+	BOOST_TEST(sounds.pending.empty());
+}
+
+// DozerActionDoActionState::update, DOZER_TASK_BUILD complete (isLocallyControlled): America's dozer finishing its
+// power plant tells America the tick it stands (DOZER:ConstructionComplete with the plant's name), says the dozer's
+// VoiceTaskComplete where the dozer is and puts a construction event on the radar where the plant is; nothing comes
+// before. DOZER_TASK_REPAIR: damaged and repaired by the dozer, DOZER:RepairComplete the tick the dozer at work finds it
+// whole (the retail broadcast to every screen fixed: only its player). The GLA watching hears of neither.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_tells_its_player_of_a_finished_build_and_repair)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	for (const bool americaWatches : {true, false})
+	{
+		session::Session game(skirmish.level, shell.game, options);
+		auto &world = game.World();
+		const std::uint32_t america = *game.Teams().FindPlayer("player0");
+		const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+		world.EmplaceResource<presentation::PresentationFrame>().viewer = americaWatches ? america : gla;
+		auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+		messages.constructionCompleteText = u"Construction complete: %ls";
+		messages.repairCompleteText = u"Repair complete";
+		messages.displayNames.emplace(shell.game.objects.Find("AmericaPowerPlant")->displayName, u"Cold Fusion Reactor");
+		auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+		auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+		presentation::ConstructionNoticeSystem system;
+		ecs::SystemRegistry registry;
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		const auto step = [&](std::span<const engine::net::CommandEnvelope> orders = {}) {
+			sounds.pending.clear();
+			game.Tick(orders);
+			scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+		};
+		const auto order = [&](const commands::GameCommand &command) {
+			std::vector<engine::net::CommandEnvelope> orders{commands::Encode(command)};
+			orders.front().player = 0;
+			step(std::span(orders));
+		};
+		const auto told = [&](std::u16string_view text) {
+			return std::ranges::any_of(messages.slots, [&](const auto &slot) { return slot.shown && slot.text == text; });
+		};
+		std::uint32_t team = 0;
+		for (std::uint32_t index = 0; index < game.Teams().TeamCount(); ++index)
+			if (game.Teams().TeamAt(index).owner == america && !game.Teams().TeamAt(index).members.empty())
+				team = index;
+		const auto home = game.TransformOf(game.Teams().TeamAt(team).members.front())->position.XY();
+		const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {home.x + Engine::Math::Fixed::FromInt(200), home.y}, {}, team);
+		BOOST_TEST_REQUIRE(world.IsAlive(dozer));
+		world.Resource<gp::PlayerMoney>().Deposit(america, 10000);
+		order(commands::BuildStructure{dozer, "AmericaPowerPlant", {home.x + Engine::Math::Fixed::FromInt(280), home.y}, 0});
+		BOOST_TEST_REQUIRE(world.Get<gp::Builder>(dozer) != nullptr);
+		const ecs::Entity plant = world.Get<gp::Builder>(dozer)->target;
+		const std::string voice(shell.game.objects.Find("AmericaVehicleDozer")->Sound("VoiceTaskComplete"));
+		BOOST_TEST(!voice.empty());
+		const auto voiced = [&] { return std::ranges::any_of(sounds.pending, [&](const auto &sound) { return sound.sound == voice; }); };
+		std::optional<std::uint64_t> standing;
+		for (int tick = 0; tick < 30 * 120 && !standing; ++tick)
+		{
+			step();
+			if (!world.Has<gp::UnderConstruction>(plant))
+				standing = game.CurrentTick();
+			else
+			{
+				BOOST_TEST_REQUIRE(!told(u"Construction complete: Cold Fusion Reactor"));
+				BOOST_TEST_REQUIRE(!voiced());
+			}
+		}
+		BOOST_TEST_REQUIRE(standing.has_value());
+		// Told the tick it stands, to America only.
+		BOOST_TEST(told(u"Construction complete: Cold Fusion Reactor") == americaWatches);
+		BOOST_TEST(voiced() == americaWatches);
+		BOOST_TEST(radar.last.has_value() == americaWatches);
+		if (americaWatches)
+		{
+			BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::Construction));
+			const auto at = game.TransformOf(plant)->position;
+			BOOST_TEST(radar.events[*radar.last].world[0] == Engine::Math::ToFloat(at.x));
+			BOOST_TEST(radar.events[*radar.last].world[1] == Engine::Math::ToFloat(at.y));
+		}
+		// Damaged, then repaired by its dozer: told as the dozer finds it whole, not before.
+		for (int tick = 0; tick < 60; ++tick)
+			step();
+		auto &health = *world.Get<gp::Health>(plant);
+		health.current = health.maximum / Engine::Math::Fixed::FromInt(2);
+		order(commands::WorkOn{dozer, plant});
+		BOOST_TEST_REQUIRE(world.Get<gp::Builder>(dozer) != nullptr);
+		std::optional<std::uint64_t> repaired;
+		for (int tick = 0; tick < 30 * 120 && !repaired; ++tick)
+		{
+			const bool whole = world.Get<gp::Health>(plant)->current >= world.Get<gp::Health>(plant)->maximum;
+			step();
+			if (!world.Has<gp::Builder>(dozer))
+			{
+				repaired = game.CurrentTick();
+				BOOST_TEST(whole); // whole before the tick its dozer is done
+			}
+			else
+				BOOST_TEST_REQUIRE(!told(u"Repair complete"));
+		}
+		BOOST_TEST_REQUIRE(repaired.has_value());
+		BOOST_TEST(told(u"Repair complete") == americaWatches);
+		BOOST_TEST_MESSAGE("plant standing on tick " << *standing << ", repaired on tick " << *repaired);
+	}
+}
+
+// Money::withdraw / Money::deposit (EA's GeneralsMD/Code/GameEngine/Source/Common/RTS/Money.cpp: the MiscAudio event
+// with the money's player, added unless the call says not to) through ProductionUpdate::queueCreateUnit (withdraw) and
+// cancelUnitCreate (deposit): America queueing a Ranger rings MoneyWithdraw for America the tick it is queued, cancelling it
+// rings MoneyDeposited that tick; both heard without a position. The starting cash (deposit(.., FALSE)) rings nothing, and
+// nor does a tick with no transaction.
+BOOST_AUTO_TEST_CASE(legacy_parity_spending_and_refunds_ring_their_players_money_sounds)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	auto &feedback = world.EmplaceResource<presentation::MoneyFeedback>();
+	feedback.depositSound = shell.game.miscAudio.at("MoneyDepositSound");
+	feedback.withdrawSound = shell.game.miscAudio.at("MoneyWithdrawSound");
+	BOOST_TEST(feedback.depositSound == "MoneyDeposited");
+	BOOST_TEST(feedback.withdrawSound == "MoneyWithdraw");
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	presentation::MoneySoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto step = [&](std::span<const engine::net::CommandEnvelope> orders = {}) {
+		sounds.pending.clear();
+		game.Tick(orders);
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	};
+	const auto order = [&](const commands::GameCommand &command) {
+		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(command)};
+		orders.front().player = 0;
+		step(std::span(orders));
+	};
+	// The first tick: the starting cash is in, silently.
+	step();
+	BOOST_TEST(world.Resource<gp::PlayerMoney>().Balance(america) > 0);
+	BOOST_TEST(sounds.pending.empty());
+	std::uint32_t team = 0;
+	for (std::uint32_t index = 0; index < game.Teams().TeamCount(); ++index)
+		if (game.Teams().TeamAt(index).owner == america && !game.Teams().TeamAt(index).members.empty())
+			team = index;
+	const auto home = game.TransformOf(game.Teams().TeamAt(team).members.front())->position.XY();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", {home.x + Engine::Math::Fixed::FromInt(250), home.y}, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	step();
+	BOOST_TEST(sounds.pending.empty());
+	order(commands::QueueUnit{barracks, "AmericaInfantryRanger"});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "MoneyWithdraw");
+	BOOST_TEST(sounds.pending[0].owner == america);
+	BOOST_TEST(!sounds.pending[0].positioned);
+	const std::uint32_t id = world.Get<gp::ProductionQueue>(barracks)->entries[0].productionId;
+	step();
+	BOOST_TEST(sounds.pending.empty());
+	order(commands::CancelUnit{barracks, id});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "MoneyDeposited");
+	BOOST_TEST(sounds.pending[0].owner == america);
+}
+
+// StealthDetectorUpdate::update's feedback (StealthDetectorUpdate.cpp): America's Colonel Burton, hidden, is found by a GLA
+// radar van; America (the watcher, its owner) gets a stealth neutralized radar event where he is, StealthNeutralizedSound,
+// MESSAGE:StealthNeutralized and EVA's own-hero-detected line (his OwnDetectionEvaEvent: OwnColonelBurtonDetected), once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hero_found_by_the_enemy_is_told_to_his_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	options.presentationComponents = [](ecs::World &world) { world.RegisterComponent<presentation::SuperweaponEvaReady>(); };
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	auto &eva = world.EmplaceResource<presentation::EvaState>();
+	eva.catalog = content::BindEva(shell.loader->Load({"Data/INI/Default/Eva", "Data/INI/Eva"}), engine::time::FixedStep{30});
+	eva.side = game.PlayerSide(america);
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &commands = world.EmplaceResource<presentation::AudioCommands>();
+	world.EmplaceResource<presentation::AudioState>();
+	world.EmplaceResource<presentation::AudioHandle>();
+	world.EmplaceResource<presentation::PresentationRandom>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	auto &feedback = world.EmplaceResource<presentation::RadarFeedback>();
+	feedback.stealthNeutralized = u"Stealth neutralized";
+	feedback.stealthNeutralizedSound = "StealthNeutralizedSound";
+	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	presentation::RadarEventSystem radarEvents;
+	ecs::SystemRegistry registry;
+	registry.Register(radarEvents);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto teamOf = [&](std::uint32_t player) {
+		for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+			if (game.Teams().TeamAt(team).owner == player && !game.Teams().TeamAt(team).members.empty())
+				return team;
+		return 0u;
+	};
+	game.Tick();
+	const ecs::Entity burton = game.Place("AmericaInfantryColonelBurton", {Engine::Math::Fixed::FromInt(900), Engine::Math::Fixed::FromInt(500)}, {}, teamOf(america));
+	BOOST_TEST_REQUIRE(world.IsAlive(burton));
+	// His StealthUpdate's EVA lines, as the presentation reads them (KnowLooks).
+	presentation::KnowLooks(looks, game);
+	const std::uint32_t burtonKind = world.Get<gp::DefinitionRef>(burton)->index;
+	BOOST_TEST(looks.Of(burtonKind)->detectionEva[0] == *content::EvaMessageOf("EnemyColonelBurtonDetected"));
+	BOOST_TEST(looks.Of(burtonKind)->detectionEva[1] == *content::EvaMessageOf("OwnColonelBurtonDetected"));
+	for (int tick = 0; tick < 150 && !world.Get<gp::Stealth>(burton)->Hidden(); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Stealth>(burton)->Hidden());
+	game.Place("GLAVehicleRadarVan", {Engine::Math::Fixed::FromInt(960), Engine::Math::Fixed::FromInt(500)}, {}, teamOf(gla));
+	int told = 0;
+	for (int tick = 0; tick < 300; ++tick)
+	{
+		game.Tick();
+		commands.pending.clear();
+		eva.shouldPlay.fill(false);
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+		if (std::any_of(commands.pending.begin(), commands.pending.end(), [](const auto &command) {
+				return command.kind == presentation::AudioCommand::Kind::Interface && command.text == "StealthNeutralizedSound"; }))
+		{
+			++told;
+			BOOST_TEST(eva.shouldPlay[*content::EvaMessageOf("OwnColonelBurtonDetected")]);
+			BOOST_TEST(!eva.shouldPlay[*content::EvaMessageOf("EnemyColonelBurtonDetected")]);
+			BOOST_TEST_REQUIRE(radar.last.has_value());
+			BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::StealthNeutralized));
+			BOOST_TEST(std::any_of(messages.slots.begin(), messages.slots.end(), [](const auto &slot) { return slot.shown && slot.text == u"Stealth neutralized"; }));
+		}
+	}
+	BOOST_TEST(told == 1);
+	BOOST_TEST(!world.Get<gp::Stealth>(burton)->Hidden());
+}
+
+namespace
+{
+// America (player0, start 0) and the GLA (player1, start 2) on Tournament Continent, as the tests above have them (the
+// session keeps the level it was made from: the map read and the skirmish level live beside it).
+struct Skirmish
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	std::unique_ptr<session::Session> game;
+};
+
+std::unique_ptr<Skirmish> TwoPlayerSkirmish(Install &shell, const std::function<void(ecs::World &)> &presentationComponents = {})
+{
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!map)
+		return nullptr;
+	auto read = engine::level::generals_map::Read(*map);
+	if (!read)
+		return nullptr;
+	auto made = std::make_unique<Skirmish>();
+	made->read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	made->skirmish = session::setup::PrepareSkirmishLevel(made->read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : made->skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	if (presentationComponents)
+		options.presentationComponents = presentationComponents;
+	made->game = std::make_unique<session::Session>(made->skirmish.level, shell.game, options);
+	return made;
+}
+
+std::uint32_t TeamOf(session::Session &game, std::uint32_t player)
+{
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (game.Teams().TeamAt(team).owner == player && !game.Teams().TeamAt(team).members.empty())
+			return team;
+	return 0u;
+}
+}
+
+// Player::addRadar / removeRadar / disableRadar / enableRadar and okToPlayRadarEdgeSound (Player.cpp): America's command
+// centre gives it radar as the map is made (GrantUpgradeCreate Upgrade_AmericaRadar, frame 0: nothing heard). A Strategy
+// Center (EnergyProduction -2) put up with no power plant browns America out (onPowerBrownOutChange: disableRadar): the
+// tick its radar goes America hears RadarNotifyOfflineSound (RadarOff), once, for it alone and without a position; a
+// power plant (+5) brings it back (enableRadar): RadarNotifyOnlineSound (RadarOn) that tick, once. The GLA hears nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_going_off_and_on_is_heard_by_its_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	auto &radarSounds = world.EmplaceResource<presentation::RadarSounds>();
+	radarSounds.online = shell.game.miscAudio.at("RadarNotifyOnlineSound");
+	radarSounds.offline = shell.game.miscAudio.at("RadarNotifyOfflineSound");
+	BOOST_TEST(radarSounds.online == "RadarOn");
+	BOOST_TEST(radarSounds.offline == "RadarOff");
+	world.EmplaceResource<presentation::RadarHeard>();
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	presentation::RadarSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto step = [&] {
+		sounds.pending.clear();
+		game.Tick();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	};
+	const auto &radar = world.Resource<gp::PlayerRadar>();
+	for (int tick = 0; tick < 5; ++tick)
+	{
+		step();
+		BOOST_TEST(sounds.pending.empty()); // the radar the map gave is not news
+	}
+	BOOST_TEST_REQUIRE(radar.Has(america));
+	const auto home = game.TransformOf(game.Teams().TeamAt(TeamOf(game, america)).members.front())->position.XY();
+	BOOST_TEST_REQUIRE(world.IsAlive(game.Place("AmericaStrategyCenter", {home.x + Engine::Math::Fixed::FromInt(300), home.y}, {}, TeamOf(game, america))));
+	int offlineHeard = 0;
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		const bool had = radar.Has(america);
+		step();
+		const bool lost = had && !radar.Has(america);
+		BOOST_TEST(sounds.pending.size() == (lost ? 1u : 0u));
+		if (lost && sounds.pending.size() == 1u)
+		{
+			++offlineHeard;
+			BOOST_TEST(sounds.pending[0].sound == "RadarOff");
+			BOOST_TEST(sounds.pending[0].owner == america);
+			BOOST_TEST(!sounds.pending[0].positioned);
+		}
+	}
+	BOOST_TEST(offlineHeard == 1);
+	BOOST_TEST_REQUIRE(!radar.Has(america));
+	BOOST_TEST_REQUIRE(world.IsAlive(game.Place("AmericaPowerPlant", {home.x - Engine::Math::Fixed::FromInt(300), home.y}, {}, TeamOf(game, america))));
+	int onlineHeard = 0;
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		const bool had = radar.Has(america);
+		step();
+		const bool back = !had && radar.Has(america);
+		BOOST_TEST(sounds.pending.size() == (back ? 1u : 0u));
+		if (back && sounds.pending.size() == 1u)
+		{
+			++onlineHeard;
+			BOOST_TEST(sounds.pending[0].sound == "RadarOn");
+			BOOST_TEST(sounds.pending[0].owner == america);
+			BOOST_TEST(!sounds.pending[0].positioned);
+		}
+	}
+	BOOST_TEST(onlineHeard == 1);
+	BOOST_TEST(radar.Has(america));
+}
+
+// okToPlayRadarEdgeSound: a player defeated (hasSinglePlayerBeenDefeated) hears no radar edge, and what the presentation
+// first sees (the map's own radar, the logic's frame 0) is never heard.
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_edges_are_not_heard_by_the_defeated)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.FinalizeComponents();
+	auto &radar = world.EmplaceResource<gp::PlayerRadar>();
+	auto &outcome = world.EmplaceResource<gp::MatchOutcome>();
+	world.EmplaceResource<gp::TeamRoster>();
+	auto &radarSounds = world.EmplaceResource<presentation::RadarSounds>();
+	radarSounds.online = "RadarOn";
+	radarSounds.offline = "RadarOff";
+	world.EmplaceResource<presentation::RadarHeard>();
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	presentation::RadarSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto step = [&] {
+		sounds.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		return sounds.pending.size();
+	};
+	radar.has = {1, 1, 0};
+	BOOST_TEST(step() == 0u); // first seen: taken note of
+	radar.has = {1, 1, 1};
+	BOOST_TEST_REQUIRE(step() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "RadarOn");
+	BOOST_TEST(sounds.pending[0].owner == 2u);
+	outcome.players = {{0, true, false}, {1, false, false}, {2, false, false}};
+	radar.has = {0, 0, 1};
+	BOOST_TEST_REQUIRE(step() == 1u); // player 0 is defeated: only player 1 hears it
+	BOOST_TEST(sounds.pending[0].sound == "RadarOff");
+	BOOST_TEST(sounds.pending[0].owner == 1u);
+	BOOST_TEST(step() == 0u); // no change, nothing heard
+}
+
+// StealthDetectorUpdate::update's feedback (StealthDetectorUpdate.cpp), for the finder: America's Colonel Burton, hidden,
+// is found by a GLA radar van; the GLA (the watcher, the detector's player, not allied to him) tries a stealth discovered
+// radar event where he is (Radar::tryEvent), and made it hears StealthDiscoveredSound (for its player), reads
+// MESSAGE:StealthDiscovered and gets his EnemyDetectionEvaEvent (EnemyColonelBurtonDetected), once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hero_found_is_told_to_the_finder)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell, [](ecs::World &world) { world.RegisterComponent<presentation::SuperweaponEvaReady>(); });
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	auto &eva = world.EmplaceResource<presentation::EvaState>();
+	eva.catalog = content::BindEva(shell.loader->Load({"Data/INI/Default/Eva", "Data/INI/Eva"}), engine::time::FixedStep{30});
+	eva.side = game.PlayerSide(gla);
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = gla;
+	auto &commands = world.EmplaceResource<presentation::AudioCommands>();
+	world.EmplaceResource<presentation::AudioState>();
+	world.EmplaceResource<presentation::AudioHandle>();
+	world.EmplaceResource<presentation::PresentationRandom>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	auto &feedback = world.EmplaceResource<presentation::RadarFeedback>();
+	feedback.stealthDiscovered = u"Stealth discovered";
+	feedback.stealthDiscoveredSound = shell.game.miscAudio.at("StealthDiscoveredSound");
+	feedback.stealthNeutralizedSound = shell.game.miscAudio.at("StealthNeutralizedSound");
+	BOOST_TEST(feedback.stealthDiscoveredSound == "StealthDiscoveredSound");
+	BOOST_TEST(feedback.stealthNeutralizedSound == "StealthNeutralizedSound");
+	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	presentation::RadarEventSystem radarEvents;
+	ecs::SystemRegistry registry;
+	registry.Register(radarEvents);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	game.Tick();
+	const ecs::Entity burton = game.Place("AmericaInfantryColonelBurton", {Engine::Math::Fixed::FromInt(900), Engine::Math::Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	BOOST_TEST_REQUIRE(world.IsAlive(burton));
+	presentation::KnowLooks(looks, game);
+	for (int tick = 0; tick < 150 && !world.Get<gp::Stealth>(burton)->Hidden(); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Stealth>(burton)->Hidden());
+	game.Place("GLAVehicleRadarVan", {Engine::Math::Fixed::FromInt(960), Engine::Math::Fixed::FromInt(500)}, {}, TeamOf(game, gla));
+	int told = 0;
+	for (int tick = 0; tick < 300; ++tick)
+	{
+		game.Tick();
+		commands.pending.clear();
+		eva.shouldPlay.fill(false);
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+		BOOST_TEST(std::none_of(commands.pending.begin(), commands.pending.end(), [](const auto &command) { return command.text == "StealthNeutralizedSound"; }));
+		if (std::any_of(commands.pending.begin(), commands.pending.end(), [](const auto &command) {
+				return command.kind == presentation::AudioCommand::Kind::Interface && command.text == "StealthDiscoveredSound"; }))
+		{
+			++told;
+			BOOST_TEST(eva.shouldPlay[*content::EvaMessageOf("EnemyColonelBurtonDetected")]);
+			BOOST_TEST(!eva.shouldPlay[*content::EvaMessageOf("OwnColonelBurtonDetected")]);
+			BOOST_TEST_REQUIRE(radar.last.has_value());
+			BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::StealthDiscovered));
+			BOOST_TEST(std::any_of(messages.slots.begin(), messages.slots.end(), [](const auto &slot) { return slot.shown && slot.text == u"Stealth discovered"; }));
+		}
+	}
+	BOOST_TEST(told == 1);
+	BOOST_TEST(!world.Get<gp::Stealth>(burton)->Hidden());
+}
+
+// Object::defect (Object.cpp) with a detection time, ObjectDefectionHelper::update (ObjectDefectionHelper.cpp) and
+// Radar::tryInfiltrationEvent: an American Ranger defecting to the GLA for DEFECTION_DETECTION_TIME_MAX (300 frames)
+// plays MiscAudio's DefectorTimerTickSound on it the tick it defects (with its flash); America, whose unit it was, gets
+// an infiltration radar event there with RADAR:Infiltration and RadarNotifyInfiltrationSound (the shipped NoSound).
+// Its cover then ticks on frames 49, 69, 85, 98, 110 ... 290, 294, 298 of the 300 (37 ticks, as each phase leaves an odd
+// whole number); the frame its time is up it flashes white with DefectorTimerDingSound, which MiscAudio.ini leaves unset
+// (an empty event: heard as nothing), here given a name to hear it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_defectors_timer_ticks_then_dings)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell, [](ecs::World &world) {
+		presentation::RegisterObjectPresentation(world);
+		world.RegisterComponent<presentation::SuperweaponEvaReady>();
+	});
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	auto &eva = world.EmplaceResource<presentation::EvaState>();
+	eva.catalog = content::BindEva(shell.loader->Load({"Data/INI/Default/Eva", "Data/INI/Eva"}), engine::time::FixedStep{30});
+	eva.side = game.PlayerSide(america);
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &commands = world.EmplaceResource<presentation::AudioCommands>();
+	world.EmplaceResource<presentation::AudioState>();
+	world.EmplaceResource<presentation::AudioHandle>();
+	world.EmplaceResource<presentation::PresentationRandom>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	auto &feedback = world.EmplaceResource<presentation::RadarFeedback>();
+	feedback.infiltration = u"Infiltration";
+	feedback.infiltrationSound = shell.game.miscAudio.at("RadarNotifyInfiltrationSound");
+	BOOST_TEST(feedback.infiltrationSound == "NoSound");
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	presentation::AbilityFeedbackSystem abilityFeedback;
+	presentation::RadarEventSystem radarEvents;
+	ecs::SystemRegistry registry;
+	registry.Register(abilityFeedback);
+	registry.Register(radarEvents);
+	registry.OrderBefore<presentation::AbilityFeedbackSystem, presentation::RadarEventSystem>();
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", {Engine::Math::Fixed::FromInt(900), Engine::Math::Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	presentation::KnowLooks(looks, game);
+	// MiscAudio.ini as the presentation reads it (KnowLooks): the timer's tick; no ding; the crates', the sniped pilot's and
+	// the drone weld's.
+	BOOST_TEST(looks.defectorTickSound == "DefectorTimerTick");
+	BOOST_TEST(looks.defectorDingSound.empty());
+	BOOST_TEST(looks.crateFreeUnitSound == "CrateFreeUnit");
+	BOOST_TEST(looks.crateHealSound == "CrateHeal");
+	BOOST_TEST(looks.crateShroudSound == "CrateShroud");
+	BOOST_TEST(looks.pilotSplatterSound == "VehicleSnipeVictim");
+	BOOST_TEST(looks.repairSparksSound == "RepairSparks");
+	BOOST_TEST(looks.aircraftWheelScreechSound == "JetSkid");
+	looks.defectorDingSound = "DefectorTimerDing";
+	game.Tick();
+	const auto heard = [&](std::string_view name) {
+		return static_cast<int>(std::count_if(sounds.pending.begin(), sounds.pending.end(), [&](const auto &sound) { return sound.sound == name; }));
+	};
+	generalszh::gameplay::Defect(game.Game(), ranger, TeamOf(game, gla), 300);
+	BOOST_TEST_REQUIRE(world.Get<gp::UndetectedDefector>(ranger) != nullptr);
+	const std::uint64_t until = world.Get<gp::UndetectedDefector>(ranger)->until;
+	const std::uint64_t start = until - 300;
+	sounds.pending.clear();
+	commands.pending.clear();
+	scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	BOOST_TEST(heard("DefectorTimerTick") == 1);
+	BOOST_TEST(heard("DefectorTimerDing") == 0);
+	const auto tick = std::find_if(sounds.pending.begin(), sounds.pending.end(), [](const auto &sound) { return sound.sound == "DefectorTimerTick"; });
+	BOOST_TEST_REQUIRE((tick != sounds.pending.end()));
+	// On the defector, where it stands.
+	BOOST_TEST(tick->at[0] == Engine::Math::ToFloat(world.Get<gp::Transform>(ranger)->position.x));
+	BOOST_TEST(tick->at[1] == Engine::Math::ToFloat(world.Get<gp::Transform>(ranger)->position.y));
+	BOOST_TEST(std::count_if(commands.pending.begin(), commands.pending.end(), [](const auto &command) {
+		return command.kind == presentation::AudioCommand::Kind::Interface && command.text == "NoSound"; }) == 1);
+	BOOST_TEST_REQUIRE(radar.last.has_value());
+	BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::Infiltration));
+	BOOST_TEST(std::any_of(messages.slots.begin(), messages.slots.end(), [](const auto &slot) { return slot.shown && slot.text == u"Infiltration"; }));
+	std::vector<std::uint64_t> ticks;
+	std::vector<std::uint64_t> dings;
+	while (game.CurrentTick() < until + 30)
+	{
+		game.Tick();
+		sounds.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+		for (int count = heard("DefectorTimerTick"); count > 0; --count)
+			ticks.push_back(game.CurrentTick() - start);
+		for (int count = heard("DefectorTimerDing"); count > 0; --count)
+			dings.push_back(game.CurrentTick() - start);
+	}
+	BOOST_TEST_REQUIRE(ticks.size() == 37u);
+	const std::vector<std::uint64_t> first{49, 69, 85, 98, 110};
+	const std::vector<std::uint64_t> last{290, 294, 298};
+	BOOST_TEST(std::vector<std::uint64_t>(ticks.begin(), ticks.begin() + 5) == first, boost::test_tools::per_element());
+	BOOST_TEST(std::vector<std::uint64_t>(ticks.end() - 3, ticks.end()) == last, boost::test_tools::per_element());
+	BOOST_TEST_REQUIRE(dings.size() == 1u);
+	BOOST_TEST(dings[0] == 300u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,50 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.terrain.terrain_type;
+import games.generalszh.content.install.install_mount;
+
+// TerrainTypeCollection's Terrain blocks (Core/GameEngine/Source/Common/TerrainTypes.cpp) as shipped.
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(terrain_type)
+
+// TerrainType's field parse on Default/Terrain.ini and Terrain.ini (DefaultTerrain and the 247 shipped ones); each one's
+// Texture is the file WorldHeightMap loads from TERRAIN_TGA_DIR_PATH ("Art/Terrain/" + Texture; GrassRockTransitionType1:
+// Art/Terrain/TTGrasRock01a.tga). RestrictConstruction (BuildAssistant::isLocationLegalToBuild's tile check) is No on
+// every one of them (only DefaultTerrain names it at all), so no shipped tile ever restricts building.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_terrain_types)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Terrain", "Data/INI/Terrain"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	DefinitionTable<TerrainTypeDefinition> types;
+	BindBlocks(document, "Terrain", TerrainTypeSchema(), types, context, Redefinition::Replace);
+	BOOST_TEST(types.Size() > 200u);
+	const TerrainTypeDefinition *grass = types.Find("GrassRockTransitionType1");
+	BOOST_TEST_REQUIRE(grass != nullptr);
+	BOOST_TEST(grass->texture == "TTGrasRock01a.tga");
+	BOOST_TEST(grass->terrainClass == "TRANSITION");
+	BOOST_TEST(TerrainTexturePath(*grass) == "Art/Terrain/TTGrasRock01a.tga");
+	const TerrainTypeDefinition *asphalt = types.Find("AsphaltType1");
+	BOOST_TEST_REQUIRE(asphalt != nullptr);
+	BOOST_TEST(TerrainTexturePath(*asphalt) == "Art/Terrain/TXAsph01a.tga");
+	std::size_t restricted = 0;
+	for (const auto &[name, type] : types)
+		restricted += type.restrictConstruction ? 1u : 0u;
+	BOOST_TEST(restricted == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

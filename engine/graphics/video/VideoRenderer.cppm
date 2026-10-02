@@ -1,17 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <vector>
-
 export module Graphics.Video.Renderer;
+import std;
 
 export import Graphics.Passes.Video;
 export import Graphics.Resources.Materials.Material;

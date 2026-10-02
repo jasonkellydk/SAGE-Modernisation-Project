@@ -1,0 +1,232 @@
+#include <boost/test/unit_test.hpp>
+
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.interaction.algorithms.unit_voices;
+import games.generalszh.content.combat.combat_catalog;
+
+// CommandXlat.cpp pickAndPlayUnitVoiceResponse, case by case, over made-up templates (each sound named after its unit
+// and role) and ControlBarCommandProcessing's answered buttons.
+using namespace generalszh;
+using namespace generalszh::presentation;
+using Rel = engine::gameplay::Relationship;
+
+namespace
+{
+// A template whose audio array's voices (VoiceSelect, VoiceMove, VoiceAttack, VoiceAttackAir, VoiceGuard and a field
+// VoiceEnter) and UnitSpecificSounds (`perUnit`) are named "<who>.<role>".
+content::ObjectDefinition Template(const std::string &who, std::vector<std::string> perUnit)
+{
+	content::ObjectDefinition definition;
+	definition.name = who;
+	for (const char *role : {"VoiceSelect", "VoiceMove", "VoiceAttack", "VoiceAttackAir", "VoiceGuard", "VoiceEnter"})
+		definition.sounds[role] = who + "." + role;
+	for (const std::string &role : perUnit)
+		definition.unitSounds[role] = who + "." + role;
+	return definition;
+}
+
+VoiceUnit Unit(const content::ObjectDefinition &definition, std::uint32_t index)
+{
+	VoiceUnit unit;
+	unit.entity = ecs::Entity{index, 1};
+	unit.definition = &definition;
+	unit.hasAi = true;
+	return unit;
+}
+
+const auto Valid = [](std::string_view name) { return !name.empty() && name != "NoSound"; };
+
+std::optional<VoicePick> Pick(const std::vector<VoiceUnit> &units, const UnitVoiceCue &cue, const VoiceTarget &target = {})
+{
+	return PickUnitVoice(units, cue, target, Valid);
+}
+
+std::uint32_t Damage(std::string_view name) { return *content::DamageTypeIndex(name); }
+}
+
+BOOST_AUTO_TEST_SUITE(unit_voices)
+
+// MSG_CREATE_SELECTED_GROUP: the first of the list not IGNORED_IN_GUI says its VoiceSelect and ends the walk (skip).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_first_in_the_list_answers_a_selection)
+{
+	const auto a = Template("A", {}), b = Template("B", {}), ignored = Template("I", {});
+	std::vector<VoiceUnit> units{Unit(ignored, 0), Unit(a, 1), Unit(b, 2)};
+	units[0].ignoredInGui = true;
+	const auto pick = Pick(units, UnitVoiceCue{VoiceOrder::CreateGroup});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound == "A.VoiceSelect");
+	BOOST_TEST((pick->carBomb == CarBombVoice::None));
+	// A list of only things the GUI ignores answers nothing.
+	BOOST_TEST(!Pick({units[0]}, UnitVoiceCue{VoiceOrder::CreateGroup}).has_value());
+}
+
+// MSG_DO_MOVETO and its kin: things without an AI pass; the first with one sets VoiceMove (even an empty one: silence)
+// and a later one only upgrades it: VoiceSalvage when the audio knows it (MSG_DO_SALVAGE), a GLA worker's
+// VoiceMoveUpgraded once its player has the shoes; in waypoint mode those already moving pass.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_move_is_answered_by_the_first_with_an_ai)
+{
+	auto silent = Template("S", {});
+	silent.sounds.erase("VoiceMove");
+	const auto building = Template("Bld", {}), salvager = Template("V", {"VoiceSalvage"}), worker = Template("W", {"VoiceMoveUpgraded"});
+	std::vector<VoiceUnit> units{Unit(building, 0), Unit(silent, 1), Unit(salvager, 2)};
+	units[0].hasAi = false;
+	auto pick = Pick(units, UnitVoiceCue{VoiceOrder::Move});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound.empty());
+	pick = Pick(units, UnitVoiceCue{VoiceOrder::Salvage});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 2u);
+	BOOST_TEST(pick->sound == "V.VoiceSalvage");
+	auto noSalvage = Template("V", {});
+	noSalvage.unitSounds["VoiceSalvage"] = "NoSound"; // not an event the audio knows
+	units[2] = Unit(noSalvage, 2);
+	pick = Pick(units, UnitVoiceCue{VoiceOrder::Salvage});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	std::vector<VoiceUnit> crew{Unit(salvager, 0), Unit(worker, 1)};
+	crew[1].shoedWorker = true;
+	pick = Pick(crew, UnitVoiceCue{VoiceOrder::AttackMove});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound == "W.VoiceMoveUpgraded");
+	UnitVoiceCue waypoints{VoiceOrder::Move};
+	waypoints.waypointMode = true;
+	crew[0].effectivelyMoving = true;
+	crew[1].shoedWorker = false;
+	pick = Pick(crew, waypoints);
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound == "W.VoiceMove");
+}
+
+// MSG_ENTER: the per-unit sound by the target: a heal pad VoiceGetHealed; a structure VoiceEnterHostile when an enemy's,
+// else VoiceGarrison; anything not an ally VoiceEnterHostile; else VoiceEnter, the UnitSpecificSounds one (the audio
+// array's VoiceEnter of the same name is never asked: without a per-unit one it is silent).
+BOOST_AUTO_TEST_CASE(legacy_parity_entering_is_answered_by_what_is_entered)
+{
+	const auto ranger = Template("R", {"VoiceGetHealed", "VoiceEnterHostile", "VoiceGarrison", "VoiceEnter"});
+	std::vector<VoiceUnit> units{Unit(ranger, 0)};
+	const UnitVoiceCue enter{VoiceOrder::Enter};
+	BOOST_TEST(Pick(units, enter, {true, true, false})->sound == "R.VoiceGetHealed");
+	units[0].toTarget = Rel::Enemies;
+	BOOST_TEST(Pick(units, enter, {true, false, true})->sound == "R.VoiceEnterHostile");
+	BOOST_TEST(Pick(units, enter, {true, false, false})->sound == "R.VoiceEnterHostile");
+	units[0].toTarget = Rel::Neutral;
+	BOOST_TEST(Pick(units, enter, {true, false, true})->sound == "R.VoiceGarrison");
+	BOOST_TEST(Pick(units, enter, {true, false, false})->sound == "R.VoiceEnterHostile"); // not an ally
+	units[0].toTarget = Rel::Allies;
+	BOOST_TEST(Pick(units, enter, {true, false, false})->sound == "R.VoiceEnter");
+	const auto fieldOnly = Template("F", {});
+	const auto silent = Pick({Unit(fieldOnly, 1)}, enter, {true, false, false});
+	BOOST_TEST_REQUIRE(silent.has_value());
+	BOOST_TEST(silent->sound.empty());
+}
+
+// The attacks: VoiceAttack (VoiceAttackAir for a flying target) from the first, then the weapon's damage type: SURRENDER
+// VoiceClearBuilding at a structure, else VoiceSubdue; DISARM VoiceDisarm; KILL_PILOT and MELEE only for a command
+// button's weapon (MSG_DO_WEAPON_AT_OBJECT): VoiceSnipePilot, VoiceMelee. A force attack on the ground says VoiceBombard
+// when the audio knows it, else goes on as an attack.
+BOOST_AUTO_TEST_CASE(legacy_parity_attacks_are_answered_by_the_weapon)
+{
+	const auto plain = Template("P", {}), ranger = Template("R", {"VoiceSubdue", "VoiceClearBuilding"}), jarmen = Template("J", {"VoiceSnipePilot"}),
+			   artillery = Template("A", {"VoiceBombard"});
+	UnitVoiceCue attack{VoiceOrder::AttackObject};
+	attack.air = true;
+	BOOST_TEST(Pick({Unit(plain, 0)}, attack)->sound == "P.VoiceAttackAir");
+	attack.air = false;
+	BOOST_TEST(Pick({Unit(plain, 0)}, attack)->sound == "P.VoiceAttack");
+	VoiceUnit flashbang = Unit(ranger, 1);
+	flashbang.hasWeapon = true;
+	flashbang.damageType = Damage("SURRENDER");
+	auto pick = Pick({Unit(plain, 0), flashbang}, attack, {true, false, true});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound == "R.VoiceClearBuilding");
+	BOOST_TEST(Pick({flashbang}, attack, {true, false, false})->sound == "R.VoiceSubdue");
+	VoiceUnit sniper = Unit(jarmen, 0);
+	sniper.hasWeapon = true;
+	sniper.damageType = Damage("KILL_PILOT");
+	BOOST_TEST(Pick({sniper}, attack)->sound == "J.VoiceAttack");
+	BOOST_TEST(Pick({sniper}, UnitVoiceCue{VoiceOrder::WeaponAtObject})->sound == "J.VoiceSnipePilot");
+	BOOST_TEST(Pick({Unit(artillery, 0)}, UnitVoiceCue{VoiceOrder::ForceAttackGround})->sound == "A.VoiceBombard");
+	pick = Pick({Unit(plain, 0), Unit(artillery, 1)}, UnitVoiceCue{VoiceOrder::ForceAttackGround});
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 0u); // the first ends the walk either way
+	BOOST_TEST(pick->sound == "P.VoiceAttack");
+	// At a spot: a FLAME or POISON weapon not in the primary slot says VoiceFlameLocation / VoicePoisonLocation.
+	const auto firestorm = Template("F", {"VoiceFlameLocation"});
+	VoiceUnit flamer = Unit(firestorm, 0);
+	flamer.hasWeapon = true;
+	flamer.damageType = Damage("FLAME");
+	flamer.weaponSlot = 1;
+	BOOST_TEST(Pick({flamer}, UnitVoiceCue{VoiceOrder::WeaponAtLocation})->sound == "F.VoiceFlameLocation");
+	flamer.weaponSlot = 0;
+	BOOST_TEST(Pick({flamer}, UnitVoiceCue{VoiceOrder::WeaponAtLocation})->sound == "F.VoiceAttack");
+}
+
+// MSG_SWITCH_WEAPONS with the button's slot: VoicePrimary / Secondary / TertiaryWeaponMode; MSG_DO_GUARD_*: VoiceGuard;
+// a special power: the InitiateSound of the first selected thing's module for that power (one without passes).
+BOOST_AUTO_TEST_CASE(legacy_parity_modes_guards_and_powers_are_answered)
+{
+	const auto ranger = Template("R", {"VoicePrimaryWeaponMode", "VoiceSecondaryWeaponMode"});
+	UnitVoiceCue swap{VoiceOrder::SwitchWeapons};
+	swap.weaponSlot = 1;
+	BOOST_TEST(Pick({Unit(ranger, 0)}, swap)->sound == "R.VoiceSecondaryWeaponMode");
+	BOOST_TEST(!Pick({Unit(ranger, 0)}, UnitVoiceCue{VoiceOrder::SwitchWeapons}).has_value()); // no slot: nothing
+	BOOST_TEST(Pick({Unit(ranger, 0)}, UnitVoiceCue{VoiceOrder::Guard})->sound == "R.VoiceGuard");
+	const auto other = Template("O", {});
+	VoiceUnit capturer = Unit(ranger, 1);
+	capturer.hasPowerModule = true;
+	capturer.powerInitiateSound = "RangerVoiceCapture";
+	UnitVoiceCue power{VoiceOrder::SpecialPower};
+	power.specialPower = "SpecialAbilityRangerCaptureBuilding";
+	const auto pick = Pick({Unit(other, 0), capturer}, power);
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST(pick->unit == 1u);
+	BOOST_TEST(pick->sound == "RangerVoiceCapture");
+	BOOST_TEST(!Pick({Unit(other, 0)}, power).has_value());
+}
+
+// A car bomb (OBJECT_STATUS_IS_CARBOMB) answering adds the terrorist's line: TerroristInCarAttackVoice for an attack
+// (MSG_DO_ATTACK_OBJECT, the force attacks), TerroristInCarMoveVoice for a move, attack-move, get-repaired, get-healed
+// or salvage, TerroristInCarSelectVoice for a selection; nothing for anything else (an enter, a guard).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_car_bomb_adds_the_terrorists_line)
+{
+	const auto car = Template("C", {});
+	VoiceUnit bomb = Unit(car, 0);
+	bomb.carBomb = true;
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::Move})->carBomb == CarBombVoice::Move));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::GetHealed})->carBomb == CarBombVoice::Move));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::AttackObject})->carBomb == CarBombVoice::Attack));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::ForceAttackGround})->carBomb == CarBombVoice::Attack));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::CreateGroup})->carBomb == CarBombVoice::Select));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::Guard})->carBomb == CarBombVoice::None));
+	BOOST_TEST((Pick({bomb}, UnitVoiceCue{VoiceOrder::WeaponAtObject})->carBomb == CarBombVoice::None));
+	// Only the one answering counts.
+	BOOST_TEST((Pick({Unit(car, 1), bomb}, UnitVoiceCue{VoiceOrder::Move})->carBomb == CarBombVoice::None));
+}
+
+// ControlBar::processCommandUI: GUI_COMMAND_EVACUATE answers MSG_EVACUATE, GUI_COMMAND_SWITCH_WEAPON MSG_SWITCH_WEAPONS
+// with its slot; the bar's other commands (a stop, a sale) are not answered.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_control_bar_answers_evacuate_and_weapon_switches)
+{
+	const auto evacuate = ControlBarVoice(commands::Evacuate{{}});
+	BOOST_TEST_REQUIRE(evacuate.has_value());
+	BOOST_TEST((evacuate->order == VoiceOrder::Evacuate));
+	const auto swap = ControlBarVoice(commands::SwitchWeapon{{}, 2});
+	BOOST_TEST_REQUIRE(swap.has_value());
+	BOOST_TEST((swap->order == VoiceOrder::SwitchWeapons));
+	BOOST_TEST(swap->weaponSlot == 2u);
+	const auto hack = ControlBarVoice(commands::HackInternet{{}});
+	BOOST_TEST_REQUIRE(hack.has_value());
+	BOOST_TEST((hack->order == VoiceOrder::InternetHack));
+	BOOST_TEST(!ControlBarVoice(commands::Stop{{}}).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,9 +1,5 @@
-module;
-
-#include <cstdint>
-#include <span>
-
 export module Graphics.Resources.Textures.CachePolicy;
+import std;
 
 import Graphics.Resources.Textures.Residency;
 

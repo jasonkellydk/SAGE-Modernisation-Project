@@ -1,0 +1,249 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.shortcut_bar;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+
+// The general's powers shortcut bar over a shipped skirmish (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+const hud::ShortcutSlot *SlotOf(const hud::ShortcutBarState &state, std::string_view button, std::size_t *at = nullptr)
+{
+	for (std::size_t index = 0; index < state.slots.size(); ++index)
+		if (state.slots[index].button != nullptr && state.slots[index].button->name == button)
+		{
+			if (at != nullptr)
+				*at = index;
+			return &state.slots[index];
+		}
+	return nullptr;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shortcut_bar)
+
+// ControlBar::populateSpecialPowerShortcut / updateSpecialPowerShortcut / drawSpecialPowerShortcutMultiplierText and
+// GUI_COMMAND_SPECIAL_POWER_FROM_SHORTCUT over Player::findMostReadyShortcutSpecialPowerOfType, for an American general
+// (FactionAmerica: SpecialPowerShortcutUSA in GenPowersShortcutBarUS.wnd, 10 buttons): without a particle uplink its
+// button (NEED_SPECIAL_POWER_SCIENCE, no science needed) is not there; one built, it shows but charging (COMMAND_NOT_READY,
+// its inverse clock at the percent ready: half way at 500 per mille), then ready. Two ready read "2". A press waits for
+// the spot (NEED_TARGET_POS) with the most ready one as the source: the first ready one found, walking the player's
+// objects newest first; a disabled one only as a last resort. Emergency repair shows once its science is had, drawn as
+// the best of its Science list the player has (SCIENCE_EmergencyRepair2: Command_PurchaseScienceEmergencyRepair2's
+// SSRepair2).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shortcut_bar_fires_the_most_ready_power)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	std::optional<std::uint32_t> team;
+	for (std::uint32_t index = 0; index < game.Teams().TeamCount() && !team; ++index)
+		if (game.Teams().TeamAt(index).owner == america)
+			team = index;
+	BOOST_TEST_REQUIRE(team.has_value());
+	auto &world = game.World();
+
+	auto state = hud::ReadShortcutBar(game, america);
+	BOOST_TEST_REQUIRE(state.hasPlayer);
+	BOOST_TEST(state.layout == "GenPowersShortcutBarUS.wnd");
+	BOOST_TEST(state.used == 10u);
+	BOOST_TEST(SlotOf(state, "Command_FireParticleUplinkCannonFromShortcut") == nullptr);
+	BOOST_TEST(SlotOf(state, "Command_EmergencyRepairFromShortcut") == nullptr);
+
+	// Power enough for the uplinks, and the uplinks.
+	ecs::Entity commandCenter;
+	for (const ecs::Entity member : game.Teams().TeamAt(*team).members)
+		if (world.IsAlive(member) && game.Definition(world.Get<gp::DefinitionRef>(member)->index).name == "AmericaCommandCenter")
+			commandCenter = member;
+	BOOST_TEST_REQUIRE(world.IsAlive(commandCenter));
+	const FixedVector2 base = world.Get<gp::Transform>(commandCenter)->position.XY();
+	for (int plant = 0; plant < 6; ++plant)
+		game.Place("AmericaPowerPlant", base + FixedVector2{Fixed::FromInt(-150 - (plant / 3) * 90), Fixed::FromInt(-120 + (plant % 3) * 80)}, {}, *team);
+	const ecs::Entity first = game.Place("AmericaParticleCannonUplink", base + FixedVector2{Fixed::FromInt(200), Fixed{}}, {}, *team);
+	game.Tick();
+	const std::uint32_t power = *shell.game.powers.Template("SuperweaponParticleUplinkCannon");
+	const auto timerOf = [&](ecs::Entity uplink) -> gp::SpecialPowerTimer & { return *world.Get<gp::SpecialPowerTimers>(uplink)->Find(power); };
+	const std::uint64_t reload = shell.game.powers.templates[power].reloadTicks;
+	state = hud::ReadShortcutBar(game, america);
+	std::size_t at = 0;
+	const hud::ShortcutSlot *cannon = SlotOf(state, "Command_FireParticleUplinkCannonFromShortcut", &at);
+	BOOST_TEST_REQUIRE(cannon != nullptr);
+	BOOST_TEST(cannon->shown);
+	BOOST_TEST(!cannon->enabled);
+	BOOST_TEST(cannon->image == "SSParticleFire");
+	BOOST_TEST(state.canShow);
+	timerOf(first).availableOn = game.CurrentTick() + reload / 2;
+	BOOST_TEST(hud::ReadShortcutBar(game, america).slots[at].clock == 500u);
+	timerOf(first).availableOn = 0;
+	state = hud::ReadShortcutBar(game, america);
+	BOOST_TEST(state.slots[at].enabled);
+	BOOST_TEST(state.slots[at].clock == 1000u);
+	BOOST_TEST(state.slots[at].count.empty());
+
+	const ecs::Entity second = game.Place("AmericaParticleCannonUplink", base + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(140)}, {}, *team);
+	game.Tick();
+	timerOf(second).availableOn = 0;
+	state = hud::ReadShortcutBar(game, america);
+	BOOST_TEST((state.slots[at].count == u"2"));
+	BOOST_TEST((game.ShortcutPowerSource(america, "SPECIAL_PARTICLE_UPLINK_CANNON") == second)); // newest first
+	std::vector<commands::GameCommand> sent;
+	std::optional<std::pair<std::string, ecs::Entity>> waiting;
+	hud::ShortcutBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); },
+		[&](std::string button, ecs::Entity source) { waiting = std::pair{std::move(button), source}; }, [](std::vector<ecs::Entity>) {},
+		[&](const content::CommandButtonContent &button) {
+			hud::ShortcutSources found;
+			found.power = game.ShortcutPowerSource(america, shell.game.powers.templates[*shell.game.powers.Template(button.specialPower)].type);
+			return found;
+		});
+	bar.Apply(state);
+	BOOST_TEST(bar.shown.Get());
+	BOOST_TEST(bar.slotShown[at].Get());
+	BOOST_TEST(bar.clicked[at].enabled.Get());
+	// The newer one disabled: the older, ready, fires.
+	world.Add<gp::Disabled>(second);
+	world.Get<gp::Disabled>(second)->mask = gp::disabled_type::Emp;
+	bar.clicked[at].Execute();
+	BOOST_TEST(sent.empty());
+	BOOST_TEST_REQUIRE(waiting.has_value());
+	BOOST_TEST(waiting->first == "Command_FireParticleUplinkCannonFromShortcut");
+	BOOST_TEST((waiting->second == first));
+	BOOST_TEST(game.ReadyShortcutPowers(america, "SPECIAL_PARTICLE_UPLINK_CANNON") == 1);
+	// Both disabled: the disabled one as a last resort (the first found), its button off.
+	world.Add<gp::Disabled>(first);
+	world.Get<gp::Disabled>(first)->mask = gp::disabled_type::Emp;
+	BOOST_TEST((game.ShortcutPowerSource(america, "SPECIAL_PARTICLE_UPLINK_CANNON") == second));
+	BOOST_TEST(!hud::ReadShortcutBar(game, america).slots[at].enabled);
+
+	auto &sciences = world.Resource<gp::PlayerSciences>();
+	sciences.Grant(america, *shell.game.Science("SCIENCE_EmergencyRepair1"));
+	sciences.Grant(america, *shell.game.Science("SCIENCE_EmergencyRepair2"));
+	state = hud::ReadShortcutBar(game, america);
+	const hud::ShortcutSlot *repair = SlotOf(state, "Command_EmergencyRepairFromShortcut");
+	BOOST_TEST_REQUIRE(repair != nullptr);
+	BOOST_TEST(repair->image == "SSRepair2");
+}
+
+// ControlBar::processCommandUI's GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT (Command_SneakAttackFromShortcut): the
+// player's most ready object with its power (findMostReadyShortcutSpecialPowerOfType) places its Object as a build
+// (placeBuildAvailable with that object), noting the button (setSpecialPowerConstructionCommandButton): no order yet,
+// no target waited for.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sneak_attack_from_the_shortcut_bar_places_its_tunnel)
+{
+	content::CommandButtonContent sneak;
+	sneak.name = "Command_SneakAttackFromShortcut";
+	sneak.command = content::ButtonCommand::SpecialPower;
+	sneak.commandName = "SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT";
+	sneak.specialPower = "SuperweaponSneakAttack";
+	sneak.object = "GLASneakAttackTunnelNetwork";
+	sneak.options = content::button_option::NeedScience;
+	ecs::Entity centre;
+	centre.index = 9;
+	centre.generation = 1;
+	std::vector<commands::GameCommand> sent;
+	bool waited = false;
+	struct Placed
+	{
+		std::string structure;
+		ecs::Entity source;
+		std::string power;
+		std::uint32_t options{0};
+	};
+	std::vector<Placed> placed;
+	hud::ShortcutBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); },
+		[&](std::string, ecs::Entity) { waited = true; }, [](std::vector<ecs::Entity>) {},
+		[&](const content::CommandButtonContent &) {
+			hud::ShortcutSources found;
+			found.power = centre;
+			return found;
+		});
+	bar.SetPlace([&](std::string structure, ecs::Entity source, std::string power, std::uint32_t options) {
+		placed.push_back({std::move(structure), source, std::move(power), options});
+	});
+	hud::ShortcutBarState state;
+	state.hasPlayer = true;
+	state.canShow = true;
+	state.slots[0] = {&sneak, true, true, false, 1000, "SUSneakAttack", {}};
+	bar.Apply(state);
+	BOOST_TEST(bar.clicked[0].Execute());
+	BOOST_TEST(sent.empty());
+	BOOST_TEST(!waited);
+	BOOST_TEST_REQUIRE(placed.size() == 1u);
+	BOOST_TEST(placed[0].structure == "GLASneakAttackTunnelNetwork");
+	BOOST_TEST((placed[0].source == centre));
+	BOOST_TEST(placed[0].power == "SuperweaponSneakAttack");
+	BOOST_TEST(placed[0].options == content::button_option::NeedScience);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

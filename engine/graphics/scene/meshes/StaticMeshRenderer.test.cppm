@@ -4,16 +4,11 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 #if defined(_WIN32)
-#include <filesystem>
 #endif
 
 export module Graphics.Scene.StaticMeshes.Tests;
+import std;
 
 import Graphics.Scene.StaticMeshes;
 #if defined(_WIN32)

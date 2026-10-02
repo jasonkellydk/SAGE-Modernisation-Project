@@ -53,6 +53,8 @@ cbuffer PropMaterialConstants : register(b2)
     float4 SurfaceTeamColor;
     float4 MuzzleFlashState;
     float4 VertexMaterialOverride;
+    float4 MaterialDiffuseReplacement;
+    float4 MaterialEmissiveReplacement;
 };
 cbuffer PropObjectConstants : register(b3)
 {
@@ -162,7 +164,20 @@ PropOutput Transform_Prop_Vertex(PropInput input, row_major float4x4 WorldTransf
         if (VertexMaterialOverride.z != 0)
             output.material_diffuse.rgb = VertexMaterialOverride.xxx;
     }
+    // A material pass's own material (heat vision): lit, its diffuse and emissive, no ambient or vertex colour.
+    const bool replaced = MaterialEmissiveReplacement.w != 0;
+    if (replaced) {
+        output.color = float4(1,1,1,1);
+        output.material_ambient = float4(0,0,0,1);
+        output.material_diffuse = float4(MaterialDiffuseReplacement.rgb,1);
+        output.material_emissive.rgb = MaterialEmissiveReplacement.rgb;
+    }
     output.material_emissive.rgb *= VertexMaterialOverride.y;
+    // HOUSECOLOR meshes: the player colour is the material colour.
+    if (!replaced && (SurfaceMaps & 256u) != 0 && SurfaceTeamColor.a > 0.5) {
+        output.material_ambient.rgb = SurfaceTeamColor.rgb;
+        output.material_diffuse.rgb = SurfaceTeamColor.rgb;
+    }
     output.material_specular = input.material_specular;
     if (MuzzleFlashState.x > 0.5)
         Prepare_Muzzle_Flash_UV(input.uv, output.uv, output.secondary_uv);
@@ -224,6 +239,25 @@ float2 Prop_Coordinate(uint stage,PropOutput input)
     return coordinate.xy;
 }
 #include "prop_surface.slangh"
+// The player colour on a legacy base map: ZHCA maps show it through where
+// they are not opaque (and are opaque); ZHCD maps' top-row palette of 16
+// shades draws as the player colour at those shades.
+float4 House_Color(float4 color, float2 uv)
+{
+    if (SurfaceTeamColor.a < 0.5) return color;
+    if ((SurfaceMaps & 512u) != 0)
+        return float4(lerp(color.rgb, SurfaceTeamColor.rgb, 1 - color.a), 1);
+    if ((SurfaceMaps & 1024u) != 0) {
+        static const float shades[16] = {255,239,223,211,195,174,167,151,135,123,107,91,79,63,47,35};
+        uint width, height;
+        BaseTexture().GetDimensions(width, height);
+        const float2 wrapped = uv - floor(uv);
+        const uint2 texel = min(uint2(wrapped * float2(width, height)), uint2(width - 1, height - 1));
+        if (texel.y == 0 && texel.x < 16)
+            return float4(SurfaceTeamColor.rgb * (shades[texel.x] / 255.0), color.a);
+    }
+    return color;
+}
 float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
 {
     ClipEnvironment(input.world_position);
@@ -295,6 +329,7 @@ float4 Shade_Prop_Pixel(PropOutput input, PropLightingData lighting)
         diffuse = float4(saturate(saturate(lit)+specular),input.material_diffuse.a);
     }
     float4 color = Textured > 0.5 ? BaseTexture().Sample(BaseSampler(),Prop_Coordinate(0,input)) : float4(1,1,1,1);
+    if (Textured > 0.5) color = House_Color(color, Prop_Coordinate(0,input));
     float2 bump_offset = 0;
     if (Textured < 0.5) color = diffuse;
     else if (PrimaryGradient == 1) color *= diffuse;

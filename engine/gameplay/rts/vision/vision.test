@@ -1,0 +1,532 @@
+#define BOOST_TEST_MODULE EngineGameplayVision
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <set>
+#include <utility>
+
+import engine.gameplay.rts.vision.systems.vision_system;
+import engine.gameplay.rts.vision.systems.object_shroud_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// The cells of a disc, row by row (DiscreteCircle::drawCircle), as the legacy code draws them.
+std::map<std::int32_t, std::pair<std::int32_t, std::int32_t>> RowsSeen(const ShroudMap &map, std::uint32_t player)
+{
+	std::map<std::int32_t, std::pair<std::int32_t, std::int32_t>> rows;
+	for (std::int32_t y = 0; y < map.CellsY(); ++y)
+		for (std::int32_t x = 0; x < map.CellsX(); ++x)
+			if (map.Status(player, x, y) == CellShroud::Clear)
+			{
+				auto [it, fresh] = rows.try_emplace(y, x, x);
+				it->second.second = x;
+			}
+	return rows;
+}
+
+struct Harness
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	ShroudMap *map{nullptr};
+	Relationships *relationships{nullptr};
+	std::uint64_t tick{0};
+
+	explicit Harness(std::uint32_t players = 3)
+	{
+		world.RegisterComponent<Vision>();
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<Carried>();
+		world.RegisterComponent<Stealth>();
+		world.RegisterComponent<Dying>();
+		world.RegisterComponent<Garrison>();
+		world.FinalizeComponents();
+		relationships = &world.EmplaceResource<Relationships>(Relationships{players});
+		for (std::uint32_t a = 0; a < players; ++a)
+			for (std::uint32_t b = 0; b < players; ++b)
+				relationships->Set(a, b, Relationship::Enemies);
+		map = &world.EmplaceResource<ShroudMap>();
+		// A 400 x 400 map in cells of 40 (PartitionCellSize), unlooks persisting 150 frames (UnlookPersistDuration 5000 ms).
+		map->Init(Fixed::FromInt(400), Fixed::FromInt(400), Fixed::FromInt(40), players, 150);
+	}
+
+	void Run()
+	{
+		VisionSystem vision;
+		ecs::SystemRegistry registry;
+		registry.Register(vision);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+	void RunUntil(std::uint64_t last)
+	{
+		while (tick < last)
+			Run();
+	}
+
+	ecs::Entity Looker(std::uint32_t player, std::int64_t x, std::int64_t y, std::int64_t range)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Vision>(entity);
+		world.Get<Vision>(entity)->clearingRange = Fixed::FromInt(range);
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		world.Add<Owner>(entity);
+		world.Get<Owner>(entity)->player = player;
+		return entity;
+	}
+	void Move(ecs::Entity entity, std::int64_t x, std::int64_t y)
+	{
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+	}
+	CellShroud At(std::uint32_t player, std::int32_t x, std::int32_t y) const { return map->Status(player, x, y); }
+};
+}
+
+BOOST_AUTO_TEST_SUITE(vision)
+
+// DiscreteCircle (Core DiscreteCircle.cpp: generateEdgePairs' Bresenham variant, removeDuplicates keeping the last line
+// of a row, drawCircle mirroring about the centre row): a radius of 1 clears a column of three cells; 3 and 5 the rows
+// below, retail's shapes exactly.
+// ShroudMap::CellOf's multiply is the division it replaces ((x / cellSize).Floor(), worldToCell), for every cell size
+// tried, at cell edges and a spread of coordinates, negative and huge ones included.
+BOOST_AUTO_TEST_CASE(cell_of_matches_the_division)
+{
+	for (const Fixed cellSize : {Fixed::FromInt(40), Fixed::FromInt(10), Fixed::FromRatio(25, 2), Fixed::FromRaw(65537), Fixed::FromRaw(3000001), Fixed::FromInt(1)})
+	{
+		ShroudMap map;
+		map.Init(Fixed::FromInt(800), Fixed::FromInt(800), cellSize, 1, 150);
+		const auto check = [&](std::int64_t raw) {
+			const Fixed x = Fixed::FromRaw(raw);
+			BOOST_REQUIRE_EQUAL(map.CellIndexOf(x), static_cast<std::int32_t>((x / map.CellSize()).Floor()));
+		};
+		for (std::int64_t cell = -3; cell < 200; ++cell)
+			for (std::int64_t offset = -3; offset <= 3; ++offset)
+			{
+				check(cell * cellSize.Raw() + offset);
+				check(cell * cellSize.Raw() + cellSize.Raw() / 2 + offset);
+			}
+		std::uint64_t state = 0x9E3779B97F4A7C15u;
+		for (int sample = 0; sample < 200000; ++sample)
+		{
+			state = state * 6364136223846793005u + 1442695040888963407u;
+			check(static_cast<std::int64_t>(state >> 32) - (std::int64_t{1} << 20));
+		}
+		for (std::int64_t raw : {std::int64_t{0}, std::int64_t{1}, (std::int64_t{1} << 32) - 70000, (std::int64_t{1} << 32) - 1, std::int64_t{1} << 32, (std::int64_t{1} << 40) + 12345})
+			check(raw);
+	}
+}
+
+// FootprintCells' box of cells (a 64-bit map, the allowance only when it could bind) takes doRectFill's cells in its
+// order (PartitionData::doRectFill, addSubPixToCoverage: each once, while under calcMaxCoiForShape's allowance), as the
+// straight sampling below does, for boxes of every size and turn, on and off the map's edges.
+BOOST_AUTO_TEST_CASE(rect_cells_match_the_sampled_fill)
+{
+	for (const Fixed cellSize : {Fixed::FromInt(40), Fixed::FromInt(10)})
+	{
+		ShroudMap map;
+		map.Init(Fixed::FromInt(800), Fixed::FromInt(600), cellSize, 1, 150);
+		std::uint64_t state = 0x2545F4914F6CDD1Du;
+		const auto next = [&](std::uint64_t range) {
+			state = state * 6364136223846793005u + 1442695040888963407u;
+			return (state >> 33) % range;
+		};
+		std::vector<std::array<std::int32_t, 2>> cells, expected;
+		for (int sample = 0; sample < 20000; ++sample)
+		{
+			PartitionFootprint footprint;
+			footprint.box = 1;
+			footprint.major = Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{160} << 16)) + (sample % 7 == 0 ? 0 : 1));
+			footprint.minor = sample % 5 == 0 ? footprint.major : Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{80} << 16)));
+			const Engine::Math::FixedVector2 at{Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{880} << 16)) - (std::int64_t{40} << 16)),
+				Fixed::FromRaw(static_cast<std::int64_t>(next(std::uint64_t{680} << 16)) - (std::int64_t{40} << 16))};
+			const Engine::Math::TurnAngle facing{sample % 3 == 0 ? static_cast<std::uint32_t>(next(4)) << 30 : static_cast<std::uint32_t>(next(std::uint64_t{1} << 32))};
+			FootprintCells(map, footprint, at, facing, cells);
+			// doRectFill, straight: every sample, a set of the cells taken, the allowance always.
+			expected.clear();
+			const Footprint shape = footprint.Shape();
+			const std::size_t allowance = footprint_cells_detail::Allowance(map, shape);
+			std::set<std::pair<std::int32_t, std::int32_t>> taken;
+			const Fixed c = Engine::Math::Cos(facing), s = Engine::Math::Sin(facing);
+			const Fixed step = map.CellSize() / Fixed::FromInt(2);
+			const Fixed ydx = s * step, ydy = -c * step, xdx = c * step, xdy = s * step;
+			const std::int64_t stepsX = (shape.major * Fixed::FromInt(2) / step).Ceil();
+			const std::int64_t stepsY = (shape.minor * Fixed::FromInt(2) / step).Ceil();
+			Fixed rowX = at.x - shape.major * c - shape.minor * s;
+			Fixed rowY = at.y + shape.minor * c - shape.major * s;
+			for (std::int64_t iy = 0; iy < stepsY; ++iy, rowX += ydx, rowY += ydy)
+			{
+				Fixed x = rowX, y = rowY;
+				for (std::int64_t ix = 0; ix < stepsX; ++ix, x += xdx, y += xdy)
+				{
+					const auto cell = map.CellOf(x, y);
+					if (cell[0] < 0 || cell[1] < 0 || cell[0] >= map.CellsX() || cell[1] >= map.CellsY() || expected.size() >= allowance)
+						continue;
+					if (taken.insert({cell[0], cell[1]}).second)
+						expected.push_back(cell);
+				}
+			}
+			BOOST_REQUIRE_EQUAL(cells.size(), expected.size());
+			for (std::size_t index = 0; index < cells.size(); ++index)
+				BOOST_REQUIRE(cells[index][0] == expected[index][0] && cells[index][1] == expected[index][1]);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_discrete_circle_scanlines)
+{
+	using Rows = std::map<std::int32_t, std::pair<std::int32_t, std::int32_t>>;
+	ShroudMap map;
+	map.Init(Fixed::FromInt(800), Fixed::FromInt(800), Fixed::FromInt(40), 1, 150);
+	map.Reveal(10, 10, 1, 1);
+	BOOST_TEST((RowsSeen(map, 0) == Rows{{9, {10, 10}}, {10, {10, 10}}, {11, {10, 10}}}));
+	map.Unreveal(10, 10, 1, 1);
+	map.Reveal(10, 10, 3, 1);
+	BOOST_TEST((RowsSeen(map, 0) == Rows{{7, {9, 11}}, {8, {8, 12}}, {9, {7, 13}}, {10, {7, 13}}, {11, {7, 13}}, {12, {8, 12}}, {13, {9, 11}}}));
+	map.Unreveal(10, 10, 3, 1);
+	map.Reveal(10, 10, 5, 1);
+	BOOST_TEST((RowsSeen(map, 0) == Rows{{5, {8, 12}}, {6, {7, 13}}, {7, {6, 14}}, {8, {5, 15}}, {9, {5, 15}}, {10, {5, 15}}, {11, {5, 15}}, {12, {5, 15}},
+		{13, {6, 14}}, {14, {7, 13}}, {15, {8, 12}}}));
+	// Cut at the map's edge (off-map cells skipped).
+	map.Unreveal(10, 10, 5, 1);
+	map.Reveal(0, 0, 3, 1);
+	BOOST_TEST((RowsSeen(map, 0) == Rows{{0, {0, 3}}, {1, {0, 3}}, {2, {0, 2}}, {3, {0, 1}}}));
+}
+
+// PartitionCell addLooker / removeLooker / addShrouder / removeShrouder: a cell starts shrouded (1); a look clears it
+// (-1, -2 with a second); the last looker gone leaves it fogged (0), or shrouded under active shroud; a shrouder covers a
+// fogged cell at once but not a looked-at one.
+BOOST_AUTO_TEST_CASE(legacy_parity_cell_shroud_levels)
+{
+	ShroudMap map;
+	map.Init(Fixed::FromInt(400), Fixed::FromInt(400), Fixed::FromInt(40), 2, 150);
+	BOOST_TEST(map.CellsX() == 10);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Shrouded));
+	map.Reveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Clear));
+	BOOST_TEST((map.Status(1, 5, 5) == CellShroud::Shrouded)); // not in the mask
+	map.Reveal(5, 5, 1, 1);
+	map.Unreveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Clear)); // one looker left
+	map.Unreveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Fogged));
+	map.Cover(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Shrouded));
+	map.Reveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Clear));
+	map.Cover(5, 5, 1, 1); // looked at: stays clear
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Clear));
+	map.Unreveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Shrouded)); // under active shroud
+	map.Uncover(5, 5, 1, 1);
+	map.Uncover(5, 5, 1, 1);
+	map.Reveal(5, 5, 1, 1);
+	map.Unreveal(5, 5, 1, 1);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Fogged));
+	// revealMapForPlayer fogs the whole map; shroudMapForPlayer shrouds what nobody looks at.
+	map.Reveal(2, 2, 1, 1);
+	map.ShroudAll(0);
+	BOOST_TEST((map.Status(0, 5, 5) == CellShroud::Shrouded));
+	BOOST_TEST((map.Status(0, 2, 2) == CellShroud::Clear));
+	map.RevealAll(0);
+	BOOST_TEST((map.Status(0, 9, 9) == CellShroud::Fogged));
+	map.RevealAllPermanently(1);
+	BOOST_TEST((map.Status(1, 9, 9) == CellShroud::Clear));
+	map.UndoRevealAllPermanently(1);
+	BOOST_TEST((map.Status(1, 9, 9) == CellShroud::Fogged));
+}
+
+// TerrainLogic::setActiveBoundary with PartitionManager::storeFoggedCells / restoreFoggedCells: a 10x10 map grows to
+// 10x12: fogged cells stay fogged; the pending unlooks are done first (a look waiting to be undone leaves its cells
+// fogged); cells an object looks at (its look forgotten, not undone) are kept as revealed for good, so once the looker
+// goes they stay clear; the new cells are shrouded; the
+// looker looks again as it next updates. Shrunk to 10x5, restoreFoggedCells stops at the first row past the grid for
+// every player: only player 0 gets its cells back, player 1's all come back shrouded (the original's early return).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_new_map_boundary_keeps_what_was_seen)
+{
+	ShroudMap map;
+	map.Init(Fixed::FromInt(400), Fixed::FromInt(400), Fixed::FromInt(40), 2, 150);
+	map.Reveal(2, 2, 1, 1);
+	map.Unreveal(2, 2, 1, 1); // player 0 fogged at (2, 2)
+	const std::uint32_t slot = map.Acquire(ecs::Entity{1, 1});
+	Looker *looker = map.LookerAt(slot);
+	map.Look(looker->look, 6, 6, 1, 3); // both players
+	looker->keyCellX = 6;
+	looker->keyCellY = 6;
+	map.Reveal(8, 8, 1, 3);                // a look...
+	map.QueueUnreveal(8, 8, 1, 3, 0, 150); // ...waiting to be undone
+	map.SwitchExtent(Fixed::FromInt(400), Fixed::FromInt(480));
+	BOOST_TEST(map.CellsY() == 12);
+	BOOST_TEST((map.Status(0, 2, 2) == CellShroud::Fogged));
+	BOOST_TEST((map.Status(0, 6, 6) == CellShroud::Clear));
+	BOOST_TEST((map.Status(1, 6, 6) == CellShroud::Clear));
+	BOOST_TEST((map.Status(0, 8, 8) == CellShroud::Fogged)); // undone at once
+	BOOST_TEST((map.Status(0, 5, 11) == CellShroud::Shrouded));
+	BOOST_TEST(map.LookerAt(slot)->look.valid == 0);
+	BOOST_TEST(map.LookerAt(slot)->keyCellX == Looker::Relook);
+	// Its look forgotten: undoing it does nothing, the cell stays clear.
+	map.Unlook(*map.LookerAt(slot), 0, 0);
+	map.ProcessPending(std::nullopt);
+	BOOST_TEST((map.Status(0, 6, 6) == CellShroud::Clear));
+
+	map.SwitchExtent(Fixed::FromInt(400), Fixed::FromInt(200));
+	BOOST_TEST(map.CellsY() == 5);
+	BOOST_TEST((map.Status(0, 2, 2) == CellShroud::Fogged));
+	BOOST_TEST((map.Status(0, 3, 3) == CellShroud::Shrouded));
+	BOOST_TEST((map.Status(1, 2, 2) == CellShroud::Shrouded)); // player 1 never restored
+}
+
+// Object::look / unlook with PartitionManager::queueUndoShroudReveal and processPendingUndoShroudRevealQueue: a unit of
+// range 100 (radius ceil(100/40) = 3) looks on tick 1; moving to another partition cell on tick 10 it looks there and its
+// old look is undone 150 frames later: the cells only the old look saw stay clear through tick 160 (due 160, undone once
+// the frame passes it) and are fogged on tick 161. Moving within a cell does not relook.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_unlook_persists_150_frames)
+{
+	Harness harness;
+	const ecs::Entity unit = harness.Looker(0, 100, 100, 100); // cell (2, 2)
+	harness.Run();
+	BOOST_TEST((harness.At(0, 2, 5) == CellShroud::Clear));
+	BOOST_TEST((harness.At(0, 2, 6) == CellShroud::Shrouded));
+	BOOST_TEST((harness.At(1, 2, 2) == CellShroud::Shrouded)); // an enemy's
+	harness.RunUntil(8);
+	harness.Move(unit, 110, 110); // same cell, tick 9
+	harness.Run();
+	BOOST_TEST(harness.map->PendingCount() == 0u);
+	harness.Move(unit, 100, 300); // cell (2, 7)
+	harness.Run();
+	BOOST_TEST(harness.tick == 10u);
+	BOOST_TEST(harness.map->PendingCount() == 1u);
+	BOOST_TEST((harness.At(0, 2, 10 - 1) == CellShroud::Clear)); // the new look
+	harness.RunUntil(160);
+	BOOST_TEST((harness.At(0, 2, 0) == CellShroud::Clear));
+	harness.Run();
+	BOOST_TEST((harness.At(0, 2, 0) == CellShroud::Fogged));
+	BOOST_TEST((harness.At(0, 2, 4) == CellShroud::Clear)); // both saw it: still the new look's
+	// Gone (onDelete): its look is undone 150 frames on too.
+	harness.world.Destroy(unit);
+	harness.Run();
+	BOOST_TEST(harness.tick == 162u);
+	harness.RunUntil(312);
+	BOOST_TEST((harness.At(0, 2, 7) == CellShroud::Clear));
+	harness.Run();
+	BOOST_TEST((harness.At(0, 2, 7) == CellShroud::Fogged));
+}
+
+// Object::look: its player and allies see through it; a KINDOF_REVEAL_TO_ALL object shows everyone; dead
+// (Object::onDie) it looks no more (its look undone 150 frames on); in a transport or tunnel (a container not
+// garrisonable) it does not look, in a garrison it does.
+BOOST_AUTO_TEST_CASE(legacy_parity_who_sees_through_an_object)
+{
+	Harness harness;
+	harness.relationships->Set(0, 1, Relationship::Allies);
+	const ecs::Entity scout = harness.Looker(0, 100, 100, 40);
+	const ecs::Entity beacon = harness.Looker(2, 300, 300, 40);
+	harness.world.Get<Vision>(beacon)->revealToAll = 1;
+	harness.Run();
+	BOOST_TEST((harness.At(0, 2, 2) == CellShroud::Clear));
+	BOOST_TEST((harness.At(1, 2, 2) == CellShroud::Clear)); // an ally
+	BOOST_TEST((harness.At(2, 2, 2) == CellShroud::Shrouded));
+	for (std::uint32_t player = 0; player < 3; ++player)
+		BOOST_TEST((harness.At(player, 7, 7) == CellShroud::Clear));
+	// Allied later: no relook until something of its own changes (the original's cached mask).
+	harness.relationships->Set(0, 2, Relationship::Allies);
+	harness.Run();
+	BOOST_TEST((harness.At(2, 2, 2) == CellShroud::Shrouded));
+
+	harness.world.Add<Dying>(scout);
+	harness.Run(); // tick 3
+	BOOST_TEST(harness.map->PendingCount() == 1u);
+	harness.RunUntil(153);
+	BOOST_TEST((harness.At(0, 2, 2) == CellShroud::Clear));
+	harness.Run();
+	BOOST_TEST((harness.At(0, 2, 2) == CellShroud::Fogged));
+
+	// In a transport: unlooked, no look. In a garrison: looks.
+	const ecs::Entity transport = harness.Looker(1, 300, 100, 0);
+	const ecs::Entity bunker = harness.Looker(1, 100, 300, 0);
+	harness.world.Add<Garrison>(bunker);
+	const ecs::Entity rider = harness.Looker(1, 300, 100, 40);
+	harness.Run();
+	BOOST_TEST((harness.At(1, 7, 2) == CellShroud::Clear));
+	harness.world.Add<Carried>(rider);
+	harness.world.Get<Carried>(rider)->carrier = transport;
+	harness.Run();
+	const std::uint64_t boarded = harness.tick;
+	harness.RunUntil(boarded + 151);
+	BOOST_TEST((harness.At(1, 7, 2) == CellShroud::Fogged));
+	harness.world.Get<Carried>(rider)->carrier = bunker;
+	harness.Move(rider, 100, 300);
+	harness.Run();
+	BOOST_TEST((harness.At(1, 2, 7) == CellShroud::Clear));
+}
+
+// Object::getShroudClearingRange / look: under construction it sees only its footprint's bounding circle and reveals
+// nothing to all; finished, it relooks at its full range, and with a ShroudRevealToAllRange shows its enemies and
+// neutrals around it, unless stealthed and not detected (the stealth bits relooking it).
+BOOST_AUTO_TEST_CASE(legacy_parity_construction_and_reveal_to_all)
+{
+	Harness harness;
+	harness.relationships->Set(0, 1, Relationship::Allies);
+	const ecs::Entity silo = harness.Looker(0, 200, 200, 200); // cell (5, 5), radius 5
+	harness.world.Get<Vision>(silo)->revealToAllRange = Fixed::FromInt(40);
+	harness.world.Get<Vision>(silo)->footprintRange = Fixed::FromInt(30); // radius 1
+	harness.world.Add<UnderConstruction>(silo);
+	harness.Run();
+	BOOST_TEST((harness.At(0, 5, 6) == CellShroud::Clear));
+	BOOST_TEST((harness.At(0, 6, 5) == CellShroud::Shrouded)); // a radius-1 disc: the column only
+	BOOST_TEST((harness.At(2, 5, 5) == CellShroud::Shrouded));
+	harness.world.Remove<UnderConstruction>(silo);
+	harness.Run();
+	BOOST_TEST((harness.At(0, 9, 5) == CellShroud::Clear));
+	BOOST_TEST((harness.At(2, 5, 5) == CellShroud::Clear)); // revealed to its enemy
+	BOOST_TEST((harness.At(2, 5, 4) == CellShroud::Clear));
+	BOOST_TEST((harness.At(2, 6, 5) == CellShroud::Shrouded));
+	BOOST_TEST((harness.At(1, 5, 5) == CellShroud::Clear)); // the ally by its own look
+	// Stealthed, undetected: no reveal to all (its old one fading 150 frames on).
+	harness.world.Add<Stealth>(silo);
+	harness.world.Get<Stealth>(silo)->flags = stealth_flag::CanStealth | stealth_flag::Stealthed;
+	harness.Run();
+	const std::uint64_t hidden = harness.tick;
+	harness.RunUntil(hidden + 151);
+	BOOST_TEST((harness.At(2, 5, 5) == CellShroud::Fogged));
+	harness.world.Get<Stealth>(silo)->flags |= stealth_flag::Detected;
+	harness.Run();
+	BOOST_TEST((harness.At(2, 5, 5) == CellShroud::Clear));
+}
+
+// The shroud (levels, the pending unlocks, the lookers) survives a checkpoint.
+BOOST_AUTO_TEST_CASE(shroud_map_round_trips)
+{
+	Harness harness;
+	const ecs::Entity unit = harness.Looker(0, 100, 100, 100);
+	harness.Run();
+	harness.Move(unit, 300, 300);
+	harness.Run();
+	engine::core::serialization::ByteWriter writer;
+	harness.map->Save(writer);
+	ShroudMap copy;
+	engine::core::serialization::ByteReader reader(writer.Bytes());
+	BOOST_TEST(copy.Load(reader));
+	BOOST_TEST(copy.PendingCount() == 1u);
+	BOOST_TEST(copy.SlotCount() == 1u);
+	for (std::int32_t y = 0; y < 10; ++y)
+		for (std::int32_t x = 0; x < 10; ++x)
+			BOOST_TEST((copy.Status(0, x, y) == harness.At(0, x, y)));
+	copy.ProcessPending(std::nullopt);
+	BOOST_TEST((copy.Status(0, 2, 0) == CellShroud::Fogged));
+}
+
+// PartitionData::doCircleFill (retail's loop), doSmallFill and doRectFill, with addSubPixToCoverage's once-each: a
+// circle of one cell's radius touches only its own cell, of two a 3 x 3 block, of three 21 cells; a small geometry the
+// cells under its bounding square; a 100 x 40 box facing east at (200, 200), sampled every half cell from its corner,
+// only the three cells of its top row (retail's under-sampling).
+BOOST_AUTO_TEST_CASE(legacy_parity_footprint_cells)
+{
+	using Pairs = std::vector<std::pair<std::int32_t, std::int32_t>>;
+	const auto pairs = [](const std::vector<std::array<std::int32_t, 2>> &cells) {
+		Pairs out;
+		for (const auto &cell : cells)
+			out.emplace_back(cell[0], cell[1]);
+		return out;
+	};
+	ShroudMap map;
+	map.Init(Fixed::FromInt(800), Fixed::FromInt(800), Fixed::FromInt(40), 1, 150);
+	std::vector<std::array<std::int32_t, 2>> cells;
+	PartitionFootprint circle;
+	circle.major = circle.minor = Fixed::FromInt(30);
+	FootprintCells(map, circle, {Fixed::FromInt(420), Fixed::FromInt(420)}, {}, cells);
+	BOOST_TEST((pairs(cells) == Pairs{{10, 10}}));
+	circle.major = circle.minor = Fixed::FromInt(80);
+	FootprintCells(map, circle, {Fixed::FromInt(420), Fixed::FromInt(420)}, {}, cells);
+	BOOST_TEST((pairs(cells) == Pairs{{10, 11}, {10, 9}, {9, 10}, {10, 10}, {11, 10}, {9, 11}, {11, 11}, {9, 9}, {11, 9}}));
+	circle.major = circle.minor = Fixed::FromInt(100);
+	FootprintCells(map, circle, {Fixed::FromInt(420), Fixed::FromInt(420)}, {}, cells);
+	BOOST_TEST(cells.size() == 21u);
+	PartitionFootprint tiny;
+	tiny.smallGeometry = 1;
+	tiny.major = tiny.minor = Fixed::FromInt(10);
+	FootprintCells(map, tiny, {Fixed::FromInt(79), Fixed::FromInt(79)}, {}, cells);
+	BOOST_TEST((pairs(cells) == Pairs{{1, 1}, {1, 2}, {2, 1}, {2, 2}}));
+	PartitionFootprint box;
+	box.box = 1;
+	box.major = Fixed::FromInt(50);
+	box.minor = Fixed::FromInt(20);
+	FootprintCells(map, box, {Fixed::FromInt(200), Fixed::FromInt(200)}, {}, cells);
+	BOOST_TEST((pairs(cells) == Pairs{{3, 5}, {4, 5}, {5, 5}}));
+	// Off the map: none, so shrouded.
+	FootprintCells(map, tiny, {Fixed::FromInt(-100), Fixed::FromInt(-100)}, {}, cells);
+	BOOST_TEST(cells.empty());
+	BOOST_TEST((ShroudLevelOf(map, 0, cells) == ObjectShroudLevel::Shrouded));
+}
+
+// PartitionData::getShroudedStatus over its cells, and Object::getShroudedStatus (ALWAYS_VISIBLE; out of the partition
+// inside a container: clear): a 3 x 3 unit half looked at is partly clear, wholly looked at clear, the look gone fogged,
+// never looked at shrouded.
+BOOST_AUTO_TEST_CASE(legacy_parity_object_shroud_status)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<ObjectShroud>();
+	world.RegisterComponent<PartitionFootprint>();
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<OffMap>();
+	world.FinalizeComponents();
+	ShroudMap &map = world.EmplaceResource<ShroudMap>();
+	map.Init(Fixed::FromInt(400), Fixed::FromInt(400), Fixed::FromInt(40), 2, 150);
+	const auto make = [&](std::int64_t x, std::int64_t y) {
+		const ecs::Entity entity = world.Create();
+		world.Add<ObjectShroud>(entity);
+		world.Add<PartitionFootprint>(entity);
+		world.Get<PartitionFootprint>(entity)->major = world.Get<PartitionFootprint>(entity)->minor = Fixed::FromInt(80);
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		return entity;
+	};
+	const ecs::Entity tank = make(220, 220); // cells (4..6, 4..6)
+	const ecs::Entity beacon = make(20, 380);
+	world.Get<PartitionFootprint>(beacon)->alwaysVisible = 1;
+	const ecs::Entity rider = make(380, 20);
+	world.Add<OffMap>(rider);
+	const auto run = [&] {
+		ObjectShroudSystem system;
+		ecs::SystemRegistry registry;
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	};
+	const auto of = [&](ecs::Entity entity) { return *world.Get<ObjectShroud>(entity); };
+	run();
+	BOOST_TEST(of(tank).clear == 0u);
+	BOOST_TEST(of(tank).partial == 0u);
+	BOOST_TEST(of(tank).fogged == 0u); // shrouded to both
+	BOOST_TEST(of(beacon).ClearTo(1));
+	BOOST_TEST(of(rider).ClearTo(0));
+	map.Reveal(4, 5, 1, 1); // column x 4: player 0 sees three of its nine cells
+	run();
+	BOOST_TEST(!of(tank).ClearTo(0));
+	BOOST_TEST(of(tank).SeenBy(0));
+	BOOST_TEST(!of(tank).SeenBy(1));
+	map.Reveal(5, 5, 2, 1); // the rest
+	run();
+	BOOST_TEST(of(tank).ClearTo(0));
+	map.Unreveal(4, 5, 1, 1);
+	map.Unreveal(5, 5, 2, 1);
+	run();
+	BOOST_TEST(!of(tank).SeenBy(0));
+	BOOST_TEST(of(tank).fogged == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,7 +1,5 @@
-module;
-#include <cmath>
-
 export module engine.navigation.spatial.collision.cylinder_contact;
+import std;
 
 export namespace navigation::collision {
 struct Point { float x=0,y=0,z=0; };

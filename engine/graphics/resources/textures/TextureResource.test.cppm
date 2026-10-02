@@ -2,12 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE TextureResourceTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <vector>
 export module Graphics.Resources.Textures.Resource.Tests;
+import std;
 import Graphics.Resources.Textures.Resource;
 import Graphics.Resources.Textures.Upload;
 import Graphics.Tests.Device;

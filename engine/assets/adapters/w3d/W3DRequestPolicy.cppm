@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <optional>
-#include <string>
-#include <string_view>
-
 export module Assets.Adapters.W3D.RequestPolicy;
+import std;
 
 namespace Assets::W3D
 {

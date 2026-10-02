@@ -2,15 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE ResourceLoadQueueTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <chrono>
-#include <cstddef>
-#include <future>
-#include <memory>
-#include <stdexcept>
-#include <thread>
-#include <vector>
 export module Graphics.Resources.Loading.Queue.Tests;
+import std;
 import Graphics.Resources.Loading.Queue;
 import Graphics.Resources.Textures.Upload;
 import Graphics.Tests.Device;

@@ -1,10 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <span>
 export module Graphics.Scene.Models.AnimationChannels;
+import std;
 import Assets.ModelRig;
 
 namespace Graphics {

@@ -1,11 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <memory>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Models.VertexChannels;
+import std;
 import Graphics.Scene.Models.SourceRevision;
 
 namespace Graphics {

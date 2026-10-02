@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <numbers>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Particles.LineGroupGeometry;
+import std;
 import Assets.Math;
 export import Graphics.Scene.Props.Geometry;
 

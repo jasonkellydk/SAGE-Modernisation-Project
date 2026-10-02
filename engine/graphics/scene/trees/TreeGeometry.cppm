@@ -1,12 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Trees.Geometry;
+import std;
 
 namespace Graphics
 {

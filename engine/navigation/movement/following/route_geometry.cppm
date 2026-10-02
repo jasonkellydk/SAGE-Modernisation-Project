@@ -1,7 +1,5 @@
-module;
-#include <vector>
-
 export module engine.navigation.movement.following.route_geometry;
+import std;
 
 export namespace navigation::following {
 struct RoutePoint { float x{}, y{}, z{}; };

@@ -1,0 +1,104 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.replay.replay_menu_view_model;
+
+using namespace generalszh::shell;
+
+namespace
+{
+// A replay's header as the game writes it.
+std::vector<std::byte> Replay(std::uint16_t hour, std::uint16_t minute, const std::string &map, int localPlayer)
+{
+	ReplayHeader header;
+	header.startTime = 1745713883;
+	header.endTime = 1745715733;
+	header.frameCount = 55427;
+	header.name = u"Last Replay";
+	header.date = {2025, 4, 0, 27, hour, minute, 23, 102};
+	header.version = u"Version 1.04";
+	header.gameOptions = "US=1;M=07maps/" + map + ";MC=4AF0F44A;SD=1;";
+	header.localPlayer = localPlayer;
+	return WriteReplayHeader(header);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(replay_menu_view_model)
+
+// The port's own replay header (no compatibility with the original's GENREP files) reads back as written; anything else
+// (an original's GENREP replay, a damaged file) is no replay.
+BOOST_AUTO_TEST_CASE(a_replay_header_reads_back_as_written)
+{
+	const auto bytes = Replay(3, 31, "floodedplains", 0);
+	const auto header = ReadReplayHeader(bytes);
+	BOOST_TEST_REQUIRE(header.has_value());
+	BOOST_TEST(header->frameCount == 55427u);
+	BOOST_TEST((header->version == u"Version 1.04"));
+	BOOST_TEST((header->name == u"Last Replay"));
+	BOOST_TEST(header->date.year == 2025);
+	BOOST_TEST(header->date.minute == 31);
+	BOOST_TEST(header->localPlayer == 0);
+	BOOST_TEST(header->Map() == "floodedplains");
+	BOOST_TEST(header->size == bytes.size());
+	BOOST_TEST((WriteReplayHeader(*header) == bytes));
+	std::vector<std::byte> genrep(bytes.size(), std::byte{0});
+	for (std::size_t index = 0; index < 6; ++index)
+		genrep[index] = static_cast<std::byte>("GENREP"[index]);
+	BOOST_TEST(!ReadReplayHeader(genrep).has_value());
+	const std::vector<std::byte> cut(bytes.begin(), bytes.end() - 3);
+	BOOST_TEST(!ReadReplayHeader(cut).has_value());
+}
+
+// Legacy parity (PopulateReplayFileListbox, createReplayName, deleteReplay / copyReplay).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_menu_lists_by_file_name_and_asks_before_deleting)
+{
+	std::map<std::string, std::vector<std::byte>> folder{{"zulu.rep", Replay(10, 5, "tournamentdesert", 1)}, {"00000000.rep", Replay(3, 31, "floodedplains", 0)},
+		{"notes.txt", {}}, {"broken.rep", {std::byte{1}}}};
+	ReplayFiles files;
+	files.list = [&] {
+		std::vector<std::string> names;
+		for (const auto &[name, bytes] : folder)
+			names.push_back(name);
+		return names;
+	};
+	files.read = [&](const std::string &name) { return std::optional(folder.at(name)); };
+	files.remove = [&](const std::string &name) { return folder.erase(name) == 1; };
+	ShellModel model;
+	model.Push(Screen::ReplayMenu);
+	MessageBoxViewModel messages;
+	ReplayMenuViewModel menu(model, messages, files, ReplayTexts{});
+	menu.Populate();
+	const auto &rows = menu.items.Get();
+	BOOST_TEST_REQUIRE(rows.size() == 2u); // the unreadable replay and the other file left out
+	BOOST_TEST((rows[0] == u"Last Replay\t03:31 2025/04/27\tVersion 1.04\tfloodedplains"));
+	BOOST_TEST((rows[1] == u"zulu\t10:05 2025/04/27\tVersion 1.04\ttournamentdesert"));
+	BOOST_TEST(menu.selected.Get() == 0);
+	// Delete asks first; No keeps it, Yes deletes it and lists again.
+	menu.selected.Set(1);
+	menu.deleteReplay.Execute();
+	BOOST_TEST(messages.open.Get());
+	BOOST_TEST(messages.showYes.Get());
+	messages.no.Execute();
+	BOOST_TEST(folder.contains("zulu.rep"));
+	menu.deleteReplay.Execute();
+	messages.yes.Execute();
+	BOOST_TEST(!folder.contains("zulu.rep"));
+	BOOST_TEST(menu.items.Get().size() == 1u);
+	// Nothing selected: it says so.
+	menu.selected.Set(-1);
+	menu.copyReplay.Execute();
+	BOOST_TEST(messages.open.Get());
+	BOOST_TEST(messages.showOk.Get());
+	BOOST_TEST((messages.title.Get() == ReplayTexts{}.noFileSelected));
+	messages.ok.Execute();
+	menu.back.Execute();
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,10 +1,5 @@
-module;
-#include <cstdint>
-#include <span>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.movement.snapshot.occupants;
+import std;
 
 export namespace navigation {
 // Answers are relative to one mover at capture time, not universal unit traits.

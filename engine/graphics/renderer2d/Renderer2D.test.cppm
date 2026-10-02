@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <span>
-#include <vector>
-
 export module Graphics.Renderer2D.Tests;
+import std;
 
 import Graphics.Renderer2D;
 

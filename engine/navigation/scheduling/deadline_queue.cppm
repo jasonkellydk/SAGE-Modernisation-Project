@@ -1,13 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <type_traits>
-#include <unordered_map>
-#include <vector>
-
 export module engine.navigation.scheduling.deadline_queue;
+import std;
 
 export namespace navigation::scheduling {
 // Only distinct deadlines participate in the heap. Equal-deadline entries

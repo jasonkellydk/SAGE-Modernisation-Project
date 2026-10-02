@@ -1,0 +1,244 @@
+#define BOOST_TEST_MODULE EngineGameplayFire
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.fire.systems.flammability_system;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.fire.systems.fire_spread_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Flame = 6;
+constexpr std::uint32_t Bullet = 3;
+constexpr std::uint32_t Burned = 3;
+
+struct Village
+{
+	explicit Village(std::size_t workers)
+	{
+		Register(world);
+		world.EmplaceResource<FireSettings>(FireSettings{std::uint64_t{1} << Flame, Flame, Burned});
+		ArmorCatalog &armors = world.EmplaceResource<ArmorCatalog>();
+		ArmorDefinition fireproof;
+		fireproof.coefficient[Flame] = Fixed::FromRatio(1, 2);
+		halfFlame = armors.Add(fireproof);
+		world.EmplaceResource<IncomingDamage>();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Hits>();
+		world.EmplaceResource<SecondLives>();
+		world.EmplaceResource<BurnDamage>();
+		world.EmplaceResource<IgnitionOffers>();
+		world.EmplaceResource<Ignitions>();
+		world.EmplaceResource<SpreadTries>();
+		world.EmplaceResource<RandomSeed>();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+		world.EmplaceResource<SpatialGather>();
+		registry.Register(index);
+		registry.Register(spread);
+		registry.Register(flammability);
+		registry.Register(health);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<HealthFloor>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<Flammable>();
+		target.RegisterComponent<FireSpread>();
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Targetable>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<DefinitionRef>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Hut(int hitPoints = 1000, std::uint32_t armor = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Health>(entity);
+		world.Add<Flammable>(entity);
+		*world.Get<Health>(entity) = {Fixed::FromInt(hitPoints), Fixed::FromInt(hitPoints), armor};
+		Flammable fire;
+		fire.limit = fire.remaining = Fixed::FromInt(20);
+		fire.expiration = 60;
+		fire.aflameDuration = 150;
+		fire.burnDelay = 15;
+		fire.burnAmount = Fixed::FromInt(5);
+		fire.burnedDelay = 90;
+		*world.Get<Flammable>(entity) = fire;
+		return entity;
+	}
+
+	// A tree that spreads its fire every 30..60 ticks to the closest within 50.
+	ecs::Entity Tree(int x, int y)
+	{
+		const ecs::Entity entity = Hut();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<FireSpread>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), 0};
+		*world.Get<FireSpread>(entity) = {30, 60, 0, Fixed::FromInt(50)};
+		return entity;
+	}
+
+	void Hit(ecs::Entity target, int amount, std::uint32_t type) { world.Resource<IncomingDamage>().Add({target, {}, Fixed::FromInt(amount), type, 0}); }
+
+	void Step()
+	{
+		world.Resource<IncomingDamage>().Seal();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		world.Resource<IncomingDamage>().Clear();
+	}
+
+	const Flammable &Fire(ecs::Entity entity) const { return *world.Get<Flammable>(entity); }
+	int HitPoints(ecs::Entity entity) const { return static_cast<int>(world.Get<Health>(entity)->current.Floor()); }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	SpatialIndexSystem index;
+	FireSpreadSystem spread;
+	FlammabilitySystem flammability;
+	HealthSystem health;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint32_t halfFlame{0};
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(fire)
+
+BOOST_AUTO_TEST_CASE(flame_damage_past_the_limit_sets_it_alight_and_it_burns_out_burned)
+{
+	Village village(2);
+	const ecs::Entity hut = village.Hut();
+	village.Hit(hut, 50, Bullet); // not igniting
+	village.Hit(hut, 15, Flame);
+	village.Step();
+	BOOST_TEST((village.Fire(hut).state == FlameState::Normal));
+	village.Hit(hut, 10, Flame);
+	village.Step();
+	const std::uint64_t lit = village.tick;
+	BOOST_TEST((village.Fire(hut).state == FlameState::Aflame));
+	BOOST_TEST(village.HitPoints(hut) == 925);
+	// Burning: 5 every 15 ticks, burned after 90, out after 150.
+	while (village.tick < lit + 150)
+		village.Step();
+	BOOST_TEST(village.HitPoints(hut) == 925 - 5 * 10);
+	BOOST_TEST((village.Fire(hut).state == FlameState::Burned));
+	BOOST_TEST(village.Fire(hut).burned == 1u);
+	// Burned things never catch fire again.
+	village.Hit(hut, 100, Flame);
+	village.Step();
+	BOOST_TEST((village.Fire(hut).state == FlameState::Burned));
+}
+
+BOOST_AUTO_TEST_CASE(the_limit_comes_back_after_a_quiet_spell_and_armor_counts)
+{
+	Village village(1);
+	const ecs::Entity hut = village.Hut();
+	village.Hit(hut, 15, Flame);
+	village.Step();
+	for (int step = 0; step < 70; ++step)
+		village.Step();
+	village.Hit(hut, 15, Flame); // the limit is back to 20
+	village.Step();
+	BOOST_TEST((village.Fire(hut).state == FlameState::Normal));
+	// Armor halves flame: 30 counts as 15.
+	const ecs::Entity bunker = village.Hut(1000, village.halfFlame);
+	village.Hit(bunker, 30, Flame);
+	village.Step();
+	BOOST_TEST((village.Fire(bunker).state == FlameState::Normal));
+	village.Hit(bunker, 12, Flame);
+	village.Step();
+	BOOST_TEST((village.Fire(bunker).state == FlameState::Aflame));
+}
+
+BOOST_AUTO_TEST_CASE(fire_spreads_to_the_closest_tree_that_would_burn_and_throws_embers)
+{
+	Village village(2);
+	const ecs::Entity first = village.Tree(100, 100);
+	const ecs::Entity close = village.Tree(130, 100);
+	const ecs::Entity next = village.Tree(140, 100);
+	const ecs::Entity away = village.Tree(300, 100);
+	village.Hit(first, 25, Flame);
+	village.Step();
+	BOOST_TEST_REQUIRE((village.Fire(first).state == FlameState::Aflame));
+	const std::uint64_t lit = village.tick;
+	std::size_t tries = 0;
+	// Its first try comes 30..60 ticks after it caught fire: the closest catches.
+	while (village.tick < lit + 61 && village.Fire(close).state == FlameState::Normal)
+	{
+		village.Step();
+		tries += village.world.Resource<SpreadTries>().Size();
+	}
+	BOOST_TEST((village.Fire(close).state == FlameState::Aflame));
+	BOOST_TEST(village.tick >= lit + 30);
+	BOOST_TEST(tries >= 1u); // embers flew
+	BOOST_TEST((village.Fire(next).state == FlameState::Normal));
+	// Burning ones do not catch again: the next try (of either) takes the next tree.
+	for (int step = 0; step < 61; ++step)
+		village.Step();
+	BOOST_TEST((village.Fire(next).state == FlameState::Aflame));
+	BOOST_TEST((village.Fire(away).state == FlameState::Normal)); // out of reach
+}
+
+BOOST_AUTO_TEST_CASE(burning_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](Village &village, int ticks) {
+		for (int step = 0; step < ticks; ++step)
+		{
+			for (std::uint32_t index = 0; index < 200; ++index)
+				if ((index + step) % 7 == 0)
+					village.Hit(ecs::Entity{index, 1}, 3 + static_cast<int>(index % 5), index % 3 == 0 ? Bullet : Flame);
+			village.Step();
+		}
+	};
+	Village one(1), four(4);
+	for (int index = 0; index < 200; ++index)
+	{
+		one.Tree(20 + (index % 20) * 40, 20 + (index / 20) * 40);
+		four.Tree(20 + (index % 20) * 40, 20 + (index / 20) * 40);
+	}
+	run(one, 40);
+	run(four, 40);
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Village loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	run(one, 120);
+	run(loaded, 120);
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

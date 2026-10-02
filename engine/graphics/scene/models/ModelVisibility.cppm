@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Graphics.Scene.Models.ModelVisibility;
+import std;
 
 namespace Graphics
 {

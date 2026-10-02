@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE VertexChannelsTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cstdint>
-#include <cstring>
-#include <memory>
-#include <span>
-#include <string>
-#include <unordered_map>
-#include <vector>
 export module Graphics.Scene.Models.VertexChannels.Tests;
+import std;
 import Graphics.Scene.Models.VertexChannels;
 import Engine.Core.Math.Vector2;
 using Engine::Math::Vector2;

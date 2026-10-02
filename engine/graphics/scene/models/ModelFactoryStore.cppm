@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <cctype>
-#include <cstddef>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.FactoryStore;
+import std;
 
 namespace Graphics {
 // Named factories belong to the graphics owner. Payload creation and destruction

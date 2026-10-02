@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <optional>
-#include <string>
 export module engine.platform.system;
+import std;
 
 export namespace engine::platform
 {

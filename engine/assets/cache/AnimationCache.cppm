@@ -1,14 +1,5 @@
-module;
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
 export module Assets.Cache.Animations;
+import std;
 export import Assets.Animations;
 export import Assets.Handles;
 import Assets.Identity;

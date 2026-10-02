@@ -1,9 +1,5 @@
-module;
-
-#include <span>
-#include <vector>
-
 export module Engine.Core.Math.PolygonClip3;
+import std;
 
 export import Engine.Core.Math.Plane3;
 

@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <limits>
-
 export module engine.navigation.spatial.query.visit_epoch;
+import std;
 
 export namespace navigation::spatial {
 // Zero denotes unvisited. Clear every retained mark before reusing an epoch.

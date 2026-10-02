@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module engine.navigation.spatial.storage.contact_queue;
+import std;
 
 export namespace navigation {
 struct QueuedContact { std::uintptr_t first=0,second=0; };

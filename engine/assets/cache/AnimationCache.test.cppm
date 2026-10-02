@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE AnimationCacheTests
 #include <boost/test/included/unit_test.hpp>
-#include <string>
-#include <vector>
 export module Assets.Cache.Animations.Tests;
+import std;
 import Assets.Cache.Animations;
 using namespace Assets;
 namespace {

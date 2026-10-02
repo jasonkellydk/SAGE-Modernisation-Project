@@ -1,0 +1,210 @@
+#define BOOST_TEST_MODULE EngineGameplayVeterancy
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.rts.veterancy.systems.veterancy_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+// The game's weapon bonus conditions as a test gives them (any bits do).
+namespace weapon_bonus_condition
+{
+inline constexpr std::uint32_t Horde = 1u << 1;
+inline constexpr std::uint32_t Nationalism = 1u << 4;
+inline constexpr std::uint32_t PlayerUpgrade = 1u << 5;
+inline constexpr std::uint32_t DroneSpotting = 1u << 6;
+inline constexpr std::uint32_t Veteran = 1u << 9;
+inline constexpr std::uint32_t Elite = 1u << 10;
+inline constexpr std::uint32_t Hero = 1u << 11;
+inline constexpr std::uint32_t Fanaticism = 1u << 23;
+}
+
+namespace
+{
+// Two enemy playable players and a civilian one; a ranger-like definition (ExperienceValue 20 20 40 60,
+// ExperienceRequired 0 40 60 120, IsTrainable) and an IGNORED_IN_GUI one.
+struct Field
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t tick{0};
+	static constexpr std::uint32_t Ranger = 0;
+	static constexpr std::uint32_t Ignored = 1;
+	static constexpr std::uint32_t Untrained = 2;
+
+	Field()
+	{
+		world.RegisterComponent<Experience>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<WeaponBonusConditions>();
+		world.RegisterComponent<Upgradable>();
+		world.RegisterComponent<UnderConstruction>();
+		world.FinalizeComponents();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Hits>();
+		world.EmplaceResource<SecondLives>();
+		world.EmplaceResource<ObjectUpgradeGrants>();
+		world.EmplaceResource<Promotions>();
+		world.EmplaceResource<ExperienceAwards>();
+		world.EmplaceResource<SkillPointAwards>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(3u);
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		relationships.Set(0, 2, Relationship::Enemies);
+		TeamRoster &roster = world.EmplaceResource<TeamRoster>();
+		roster.AddPlayer({"one"});
+		roster.AddPlayer({"two"});
+		roster.AddPlayer({"civilian"});
+		roster.PlayerAt(0).playable = true;
+		roster.PlayerAt(1).playable = true;
+		VeterancyCatalog &catalog = world.EmplaceResource<VeterancyCatalog>();
+		VeterancyDefinition ranger;
+		ranger.value = {20, 20, 40, 60};
+		ranger.required = {0, 40, 60, 120};
+		ranger.trainable = true;
+		ranger.skillValue = {10, 15, 25, 50};
+		VeterancyDefinition ignored = ranger;
+		ignored.scoresKills = false;
+		VeterancyDefinition untrained = ranger;
+		untrained.trainable = false;
+		catalog.byDefinition = {ranger, ignored, untrained};
+		catalog.healthBonus = {Fixed::One(), Fixed::FromRatio(6, 5), Fixed::FromRatio(13, 10), Fixed::FromRatio(3, 2)};
+		catalog.levelUpgrade = {VeterancyCatalog::NoUpgrade, 0, 1, 2};
+		catalog.levelBonus = {0u, weapon_bonus_condition::Veteran, weapon_bonus_condition::Elite, weapon_bonus_condition::Hero};
+	}
+
+	ecs::Entity Unit(std::uint32_t player, std::uint32_t definition = Ranger, std::uint8_t level = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Experience>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<WeaponBonusConditions>(entity);
+		const VeterancyDefinition &d = world.Resource<VeterancyCatalog>().byDefinition[definition];
+		*world.Get<Experience>(entity) = {d.required[level], level, d.trainable};
+		*world.Get<DefinitionRef>(entity) = {definition};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(80), Fixed::FromInt(100)};
+		return entity;
+	}
+
+	// One tick in which these (victim, killer) deaths happened, in order.
+	void Kills(std::vector<std::pair<ecs::Entity, ecs::Entity>> kills)
+	{
+		Deaths &deaths = world.Resource<Deaths>();
+		deaths.Reset(1);
+		for (const auto &[victim, killer] : kills)
+			deaths.SlotAt(0).push_back({victim, killer});
+		world.Resource<ObjectUpgradeGrants>().list.clear();
+		VeterancySystem veterancy;
+		ecs::SystemRegistry registry;
+		registry.Register(veterancy);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	const Experience &Of(ecs::Entity entity) { return *world.Get<Experience>(entity); }
+};
+}
+
+BOOST_AUTO_TEST_SUITE(veterancy)
+
+// Object::scoreTheKill -> ExperienceTracker::addExperiencePoints: the victim's ExperienceValue at its level;
+// the level is the highest ExperienceRequired reached. Object::onVeterancyLevelChanged: the level's weapon bonus
+// alone (a change: the weapons re-time), ActiveBody::onVeterancyLevelChanged: max health times new over old
+// HealthBonus keeping the ratio (80/100 -> 96/120 -> 104/130), and the level's veterancy upgrade.
+BOOST_AUTO_TEST_CASE(legacy_parity_kills_promote_a_unit_by_its_experience_required)
+{
+	Field field;
+	const ecs::Entity killer = field.Unit(0);
+	field.Kills({{field.Unit(1), killer}});
+	BOOST_TEST(field.Of(killer).points == 20);
+	BOOST_TEST(field.Of(killer).level == std::uint8_t{0});
+	BOOST_TEST(field.world.Get<WeaponBonusConditions>(killer)->flags == 0u);
+	field.Kills({{field.Unit(1), killer}});
+	BOOST_TEST(field.Of(killer).points == 40);
+	BOOST_TEST(field.Of(killer).level == std::uint8_t{1});
+	BOOST_TEST(field.world.Get<WeaponBonusConditions>(killer)->flags == weapon_bonus_condition::Veteran);
+	BOOST_TEST(field.world.Get<WeaponBonusConditions>(killer)->changedTick == 2u);
+	// HealthBonus 1.2 and 1.3 are not exact in fixed point (nor in the original's floats): within 1/2048.
+	const auto about = [](Fixed value, int whole) { return std::abs(value.Raw() - Fixed::FromInt(whole).Raw()) <= 32; };
+	BOOST_TEST(about(field.world.Get<Health>(killer)->maximum, 120));
+	BOOST_TEST(about(field.world.Get<Health>(killer)->current, 96));
+	BOOST_TEST_REQUIRE(field.world.Has<Upgradable>(killer));
+	BOOST_TEST(field.world.Get<Upgradable>(killer)->completed.Has(0));
+	// A veteran victim is worth its veteran value (20): 60, elite.
+	field.Kills({{field.Unit(1, Field::Ranger, std::uint8_t{1}), killer}});
+	BOOST_TEST(field.Of(killer).level == std::uint8_t{2});
+	BOOST_TEST(field.world.Get<WeaponBonusConditions>(killer)->flags == weapon_bonus_condition::Elite);
+	BOOST_TEST(about(field.world.Get<Health>(killer)->maximum, 130)); // 120 * 1.3 / 1.2
+	BOOST_TEST_REQUIRE(field.world.Resource<ObjectUpgradeGrants>().list.size() == 1u);
+	BOOST_TEST(field.world.Resource<ObjectUpgradeGrants>().list[0].upgrade == 1u);
+	// Two kills in a tick add up in order: an elite victim is worth 40, two of them 140: heroic.
+	field.Kills({{field.Unit(1, Field::Ranger, std::uint8_t{2}), killer}, {field.Unit(1, Field::Ranger, std::uint8_t{2}), killer}});
+	BOOST_TEST(field.Of(killer).points == 140);
+	BOOST_TEST(field.Of(killer).level == std::uint8_t{3});
+	BOOST_TEST(field.world.Get<WeaponBonusConditions>(killer)->flags == weapon_bonus_condition::Hero);
+	// The promotion, for the presentation (createVeterancyLevelFX): from where the tick began to where it ends.
+	const auto &promotions = field.world.Resource<Promotions>().list;
+	BOOST_TEST_REQUIRE(promotions.size() == 1u);
+	BOOST_TEST((promotions[0].entity == killer));
+	BOOST_TEST(promotions[0].from == 2u); // elite to heroic
+	BOOST_TEST(promotions[0].to == 3u);
+	// A tick with no promotion lists none.
+	field.Kills({});
+	BOOST_TEST(field.world.Resource<Promotions>().list.empty());
+}
+
+// Object::scoreTheKill scores nothing for a victim of an unplayable side, an IGNORED_IN_GUI one, a friend or its own
+// player's, nor for a killer that cannot train and has no sink; ExperienceTracker passes a gain to its sink scaled
+// by its own scalar (int times float, truncated: 20 x 1.55 = 31), where the sink's scalar applies again.
+BOOST_AUTO_TEST_CASE(legacy_parity_only_enemy_kills_of_playable_sides_score)
+{
+	Field field;
+	const ecs::Entity killer = field.Unit(0);
+	field.Kills({{field.Unit(2), killer}, {field.Unit(1, Field::Ignored), killer}, {field.Unit(0), killer}});
+	BOOST_TEST(field.Of(killer).points == 0);
+	const ecs::Entity untrained = field.Unit(0, Field::Untrained);
+	field.Kills({{field.Unit(1), untrained}});
+	BOOST_TEST(field.Of(untrained).points == 0);
+	const ecs::Entity sink = field.Unit(0);
+	field.world.Get<Experience>(sink)->scalar = Fixed::FromInt(2);
+	const ecs::Entity drone = field.Unit(0, Field::Untrained);
+	field.world.Get<Experience>(drone)->sink = sink;
+	field.world.Get<Experience>(drone)->scalar = Fixed::FromRatio(155, 100);
+	field.Kills({{field.Unit(1), drone}});
+	BOOST_TEST(field.Of(drone).points == 0);
+	BOOST_TEST(field.Of(sink).points == 62);
+}
+
+// Object::scoreTheKill -> Player::addSkillPointsForKill: the killer's player earns the victim's SkillPointValue at its
+// level for an enemy kill of a playable side that scores kills, whether or not the killer takes experience; nothing for
+// what was still under construction, a civilian's, one that does not score, or its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_kills_earn_the_killers_player_skill_points)
+{
+	Field field;
+	const ecs::Entity killer = field.Unit(0, Field::Untrained);
+	const ecs::Entity building = field.Unit(1);
+	field.world.Add<UnderConstruction>(building);
+	field.Kills({{field.Unit(1, Field::Ranger, 2), killer}, {field.Unit(2), killer}, {field.Unit(1, Field::Ignored), killer}, {field.Unit(0), killer},
+		{building, killer}, {field.Unit(1), killer}});
+	const auto &awards = field.world.Resource<SkillPointAwards>().list;
+	BOOST_TEST_REQUIRE(awards.size() == 2u);
+	BOOST_TEST(awards[0].player == 0u);
+	BOOST_TEST(awards[0].points == 25);
+	BOOST_TEST((awards[0].killer == killer)); // doBountyForKill(killer, victim)
+	BOOST_TEST(awards[1].points == 10);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

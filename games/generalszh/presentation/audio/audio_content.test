@@ -1,0 +1,146 @@
+#define BOOST_TEST_MODULE GeneralsZhAudio
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+
+import games.generalszh.presentation.audio.sound_files;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	std::optional<presentation::AudioContent> audio;
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		audio = presentation::LoadAudioContent(*loader);
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_CASE(zero_hour_sounds_bind_with_their_defaults)
+{
+	Install &install = Data();
+	if (!install.audio)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &audio = *install.audio;
+	BOOST_TEST_MESSAGE(audio.events.Size() << " sound events, " << audio.tracks.size() << " music tracks");
+	BOOST_TEST(audio.events.Size() > 1000u);
+	BOOST_TEST(audio.tracks.size() > 10u);
+	BOOST_TEST(audio.settings.soundsFolder == "Sounds");
+	BOOST_TEST(audio.settings.defaultMusicVolume > 0.0f);
+	// AudioSettings.ini's sample pools (the original's defaults: 6 flat, 24 world).
+	BOOST_TEST_MESSAGE("sample pools: " << audio.settings.sampleCount2D << " 2D, " << audio.settings.sampleCount3D << " 3D");
+	BOOST_TEST(audio.settings.sampleCount2D > 0u);
+	BOOST_TEST(audio.settings.sampleCount3D > 0u);
+
+	// Every shipped MusicTrack is music; dialog is speech; UI sounds are flat.
+	for (const auto &name : audio.tracks)
+		BOOST_TEST_REQUIRE((audio.Find(name)->bus == engine::audio::Bus::Music));
+	for (const auto &[name, sound] : audio.events)
+		if (!sound.filename.empty() && sound.bus == engine::audio::Bus::Effects)
+			BOOST_FAIL(name << " has a file but plays as an effect");
+}
+
+BOOST_AUTO_TEST_CASE(sounds_and_music_decode_from_the_install)
+{
+	Install &install = Data();
+	if (!install.audio)
+		return;
+	const auto &audio = *install.audio;
+	presentation::SoundFiles files(install.files, audio.settings, 48000);
+
+	// A world sound: every file of its list decodes.
+	std::size_t decoded = 0, missing = 0;
+	std::size_t checked = 0;
+	for (const auto &[name, sound] : audio.events)
+	{
+		if (sound.sounds.empty() || ++checked > 60)
+			continue;
+		for (const auto &file : sound.sounds)
+			(files.Sound(file) != nullptr ? decoded : missing) += 1;
+	}
+	BOOST_TEST_MESSAGE(decoded << " sounds decoded, " << missing << " missing");
+	BOOST_TEST(decoded > 50u);
+	BOOST_TEST(missing * 20 < decoded); // a few shipped lists name files that do not exist
+
+	// Music streams.
+	const auto *track = audio.Find(audio.tracks.front());
+	auto feed = files.Stream(track->filename, engine::audio::Bus::Music);
+	BOOST_TEST_REQUIRE(feed != nullptr, "track " << track->filename << " streams");
+	feed->Pump();
+	BOOST_TEST(feed->Output()->Available() > 40000u);
+}
+
+// legacy_parity: Core/GameEngine/Source/Common/Audio/GameAudio.cpp audioSettingsFieldParseTable over the shipped
+// Data\INI\AudioSettings.ini: the folders AudioEventRTS::generateFilenamePrefix / generateFilenameExtension build paths
+// from (Data\Audio\Sounds\<name>.wav; Tracks and Speech hold the streamed files, played as named), the sample pools
+// (4 flat, 25 world), MinSampleVolume 2%, the Global ranges 5000 / 500000, TimeToFadeAudio 2000 ms = 60 frames
+// (parseDurationUnsignedInt: ceil(ms x 30 / 1000)), Relative2DVolume -10%, the default volumes (80, 80, 70, 55%) and
+// the microphone's 50 / 33.3%. Percentages within the binder's fixed-point rounding (1 / 65536).
+BOOST_AUTO_TEST_CASE(legacy_parity_audio_settings_read_as_the_original)
+{
+	Install &install = Data();
+	if (!install.audio)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const presentation::AudioSettings &settings = install.audio->settings;
+	constexpr float rounding = 1.0f / 65536.0f;
+	BOOST_TEST(settings.audioRoot == "Data\Audio");
+	BOOST_TEST(settings.soundsFolder == "Sounds");
+	BOOST_TEST(settings.musicFolder == "Tracks");
+	BOOST_TEST(settings.streamingFolder == "Speech");
+	BOOST_TEST(settings.soundsExtension == "wav");
+	BOOST_TEST(settings.sampleCount2D == 4u);
+	BOOST_TEST(settings.sampleCount3D == 25u);
+	BOOST_TEST(std::fabs(settings.minSampleVolume - 0.02f) <= rounding);
+	BOOST_TEST(settings.globalMinRange == 5000.0f);
+	BOOST_TEST(settings.globalMaxRange == 500000.0f);
+	BOOST_TEST(settings.fadeAudioFrames == 60u);
+	BOOST_TEST(std::fabs(settings.relative2DVolume + 0.10f) <= rounding);
+	BOOST_TEST(std::fabs(settings.defaultSoundVolume - 0.80f) <= rounding);
+	BOOST_TEST(std::fabs(settings.default3DSoundVolume - 0.80f) <= rounding);
+	BOOST_TEST(std::fabs(settings.defaultSpeechVolume - 0.70f) <= rounding);
+	BOOST_TEST(std::fabs(settings.defaultMusicVolume - 0.55f) <= rounding);
+	BOOST_TEST(settings.microphoneHeightAboveTerrain == 50.0f);
+	BOOST_TEST(std::fabs(settings.microphoneMaxBetweenGroundAndCamera - 0.333f) <= rounding);
+
+	// The paths those folders make (sounds and music: sounds_and_music_decode_from_the_install): speech streams.
+	presentation::SoundFiles files(install.files, settings, 48000);
+	std::size_t checked = 0, streamed = 0;
+	for (const auto &[name, sound] : install.audio->events)
+		if (sound.bus == engine::audio::Bus::Speech && !sound.filename.empty() && checked < 20)
+		{
+			++checked;
+			streamed += files.Stream(sound.filename, sound.bus) != nullptr;
+		}
+	BOOST_TEST_MESSAGE(streamed << " of " << checked << " speech lines stream from Speech");
+	BOOST_TEST(checked > 0u);
+	BOOST_TEST(streamed > 0u);
+}

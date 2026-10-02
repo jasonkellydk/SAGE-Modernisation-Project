@@ -1,0 +1,388 @@
+#include <boost/test/unit_test.hpp>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <map>
+#include <span>
+#include <type_traits>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.algorithms.steering;
+import engine.ecs.query.query;
+import engine.gameplay.rts.docking.components.docking;
+import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.harvesting.components.harvester;
+
+using namespace generalszh;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// A skirmish on Twilight Flame: America (the human) against the GLA.
+struct TwilightFlame
+{
+	std::optional<engine::level::generals_map::ScriptFile> scripts;
+	std::optional<session::setup::SkirmishLevel> skirmish;
+	std::optional<session::Session> game;
+	FixedVector2 start;
+
+	explicit TwilightFlame(Install &shell, bool bothAi = false)
+	{
+		const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+		BOOST_TEST_REQUIRE(bytes.has_value());
+		auto read = engine::level::generals_map::Read(*bytes);
+		BOOST_TEST_REQUIRE(read.has_value());
+		int spots = 0;
+		for (const auto &marker : read->level.markers)
+			spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+		const auto templateOf = [&](std::string_view name) {
+			for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+				if (shell.game.playerTemplates.templates[index].name == name)
+					return static_cast<int>(index);
+			return -1;
+		};
+		session::setup::GameSetup setup;
+		setup.seed = 1234;
+		setup.startingCash = 10000;
+		if (bothAi)
+			setup.slots[0].SetState(session::setup::SlotState::HardAI);
+		else
+			setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+		setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(bothAi ? session::setup::SlotState::HardAI : session::setup::SlotState::EasyAI);
+		setup.slots[1].playerTemplate = templateOf("FactionGLA");
+		setup.slots[1].startPos = 1;
+		// The computer players' SkirmishScripts (as the game's skirmish start gives them).
+		const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+		BOOST_TEST_REQUIRE(scb.has_value());
+		auto file = engine::level::generals_map::ReadScriptFile(*scb);
+		BOOST_TEST_REQUIRE(file.has_value());
+		scripts = std::move(*file);
+		skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots, &*scripts);
+		session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish->players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		game.emplace(skirmish->level, shell.game, options);
+		for (const auto &marker : skirmish->level.markers)
+			if (marker.name == "Player_1_Start")
+				start = marker.position.XY();
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(movement)
+
+// A unit ordered a short way off (behind, beside and ahead of it) on open ground must get there without driving in
+// circles: Locomotor::moveTowardsPositionWheels brakes one kept within four cells of its goal for more than 2.5 s (its
+// anti-donut rule), treads pivot; so no order may turn it more than one full turn on the way. Reports each order's
+// ticks to arrive and its total turning.
+BOOST_AUTO_TEST_CASE(units_reach_short_move_orders_without_circling)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	for (const char *unitName : {"AmericaVehicleHumvee", "AmericaTankCrusader"})
+		for (const auto [ahead, side] : std::array<std::pair<int, int>, 5>{{{-40, 0}, {-80, 10}, {0, 60}, {30, 30}, {200, 0}}})
+		{
+			TwilightFlame match(shell);
+			session::Session &game = *match.game;
+			game.Tick();
+			const auto team = *game.Teams().FindTeam(match.skirmish->players[0].team);
+			const FixedVector2 at = match.start + FixedVector2{Fixed::FromInt(-150), Fixed::FromInt(-150)};
+			const ecs::Entity unit = game.Place(unitName, at, {}, team);
+			BOOST_TEST_REQUIRE(game.World().IsAlive(unit));
+			for (int tick = 0; tick < 30; ++tick)
+				game.Tick();
+			const auto *transform = game.World().Get<gp::Transform>(unit);
+			const float facing = Engine::Math::ToRadiansFloat(transform->facing);
+			const float fx = std::cos(facing), fy = std::sin(facing);
+			const float x = Engine::Math::ToFloat(transform->position.x), y = Engine::Math::ToFloat(transform->position.y);
+			const FixedVector2 goal{Fixed::FromRatio(static_cast<std::int64_t>((x + fx * ahead - fy * side) * 1000.0f), 1000),
+				Fixed::FromRatio(static_cast<std::int64_t>((y + fy * ahead + fx * side) * 1000.0f), 1000)};
+			const std::uint32_t player = game.World().Get<gp::Owner>(unit)->player;
+			gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{{unit}, goal});
+			float turned = 0.0f;
+			float last = facing;
+			int arrived = -1;
+			for (int tick = 1; tick <= 900 && arrived < 0; ++tick)
+			{
+				game.Tick();
+				const auto *now = game.World().Get<gp::Transform>(unit);
+				const float heading = Engine::Math::ToRadiansFloat(now->facing);
+				float delta = heading - last;
+				while (delta > 3.14159265f)
+					delta -= 6.2831853f;
+				while (delta < -3.14159265f)
+					delta += 6.2831853f;
+				turned += std::abs(delta);
+				last = heading;
+				if (game.World().Get<gp::MoveOrder>(unit)->mode == gp::MoveMode::Idle)
+					arrived = tick;
+			}
+			const auto *end = game.World().Get<gp::Transform>(unit);
+			const float left = std::hypot(Engine::Math::ToFloat(end->position.x - goal.x), Engine::Math::ToFloat(end->position.y - goal.y));
+			BOOST_TEST_MESSAGE(unitName << " to (" << ahead << ", " << side << "): arrived at tick " << arrived << ", turned " << turned
+									   << " rad, " << left << " from the goal");
+			BOOST_TEST(arrived > 0);
+			BOOST_TEST(turned < 6.2831853f);
+		}
+}
+
+// A group of six ordered to one point (the player's selection moved as one: AIGroup::groupMoveToPosition) must settle
+// there without circling: each unit's goal is its own (the group's spread, the pathfinder's free spot), so each stops.
+// Reports each unit's arrival tick, total turning and where it ended.
+BOOST_AUTO_TEST_CASE(a_group_sent_to_one_point_settles_without_circling)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	for (const char *unitName : {"AmericaVehicleHumvee", "AmericaTankCrusader"})
+	{
+		TwilightFlame match(shell);
+		session::Session &game = *match.game;
+		game.Tick();
+		const auto team = *game.Teams().FindTeam(match.skirmish->players[0].team);
+		std::vector<ecs::Entity> units;
+		for (int index = 0; index < 6; ++index)
+			units.push_back(game.Place(unitName, match.start + FixedVector2{Fixed::FromInt(-150 + (index % 3) * 25), Fixed::FromInt(-150 + (index / 3) * 25)}, {}, team));
+		for (int tick = 0; tick < 30; ++tick)
+			game.Tick();
+		const FixedVector2 goal = match.start + FixedVector2{Fixed::FromInt(-150), Fixed::FromInt(50)};
+		const std::uint32_t player = game.World().Get<gp::Owner>(units[0])->player;
+		gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{units, goal});
+		std::vector<float> turned(units.size()), last(units.size());
+		std::vector<int> arrived(units.size(), -1);
+		for (std::size_t unit = 0; unit < units.size(); ++unit)
+			last[unit] = Engine::Math::ToRadiansFloat(game.World().Get<gp::Transform>(units[unit])->facing);
+		for (int tick = 1; tick <= 900; ++tick)
+		{
+			game.Tick();
+			for (std::size_t unit = 0; unit < units.size(); ++unit)
+			{
+				const float heading = Engine::Math::ToRadiansFloat(game.World().Get<gp::Transform>(units[unit])->facing);
+				float delta = heading - last[unit];
+				while (delta > 3.14159265f)
+					delta -= 6.2831853f;
+				while (delta < -3.14159265f)
+					delta += 6.2831853f;
+				turned[unit] += std::abs(delta);
+				last[unit] = heading;
+				if (arrived[unit] < 0 && game.World().Get<gp::MoveOrder>(units[unit])->mode == gp::MoveMode::Idle)
+					arrived[unit] = tick;
+			}
+		}
+		for (std::size_t unit = 0; unit < units.size(); ++unit)
+		{
+			const auto *end = game.World().Get<gp::Transform>(units[unit]);
+			BOOST_TEST_MESSAGE(unitName << " #" << unit << ": arrived at tick " << arrived[unit] << ", turned " << turned[unit] << " rad, ended at ("
+									   << Engine::Math::ToFloat(end->position.x - goal.x) << ", " << Engine::Math::ToFloat(end->position.y - goal.y) << ") from the goal");
+			BOOST_TEST(arrived[unit] > 0);
+			BOOST_TEST(turned[unit] < 6.2831853f);
+		}
+	}
+}
+
+// The donut detector: two hard AIs play Twilight Flame for five minutes; every ground unit going somewhere
+// (a move order) is watched over sliding three-second windows; one that turns a full turn or more while getting under 30
+// from where it was (driving in circles) is reported with its definition, where it was and where it was going. Legacy's
+// wheels brake near a goal after 2.5 s and treads pivot, so none should (Locomotor::moveTowardsPosition*).
+BOOST_AUTO_TEST_CASE(ai_skirmish_units_do_not_drive_in_circles)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	TwilightFlame match(shell, true);
+	session::Session &game = *match.game;
+	struct Track
+	{
+		std::array<float, 90> turn{};
+		std::array<std::array<float, 2>, 90> at{};
+		std::array<std::array<float, 4>, 90> log{}; // facing, speed, goal x, goal y
+		std::vector<std::string> changes; // its goal's changes: tick, goal, docking phase and slot, harvester state
+		std::array<float, 2> goal{};
+		int goalSince{0}; // the tick its goal last changed
+		float last{0.0f};
+		int seen{0};
+	};
+	std::map<std::uint64_t, Track> tracks;
+	std::map<std::string, int> donuts;
+	int reported = 0;
+	for (int tick = 0; tick < 30 * 300; ++tick)
+	{
+		game.Tick();
+		ecs::Query<ecs::Read<gp::Transform>, ecs::Read<gp::MoveOrder>, ecs::Read<gp::Locomotion>, ecs::Read<gp::DefinitionRef>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			const auto transforms = chunk.template Get<gp::Transform>();
+			const auto orders = chunk.template Get<gp::MoveOrder>();
+			const auto motions = chunk.template Get<gp::Locomotion>();
+			const auto refs = chunk.template Get<gp::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < transforms.size(); ++row)
+			{
+				if (!gp::IsGroundLocomotor(motions[row].locomotor))
+					continue;
+				const std::uint64_t key = (static_cast<std::uint64_t>(entities[row].index) << 32) | entities[row].generation;
+				Track &track = tracks[key];
+				const float heading = Engine::Math::ToRadiansFloat(transforms[row].facing);
+				float delta = track.seen == 0 ? 0.0f : heading - track.last;
+				while (delta > 3.14159265f)
+					delta -= 6.2831853f;
+				while (delta < -3.14159265f)
+					delta += 6.2831853f;
+				track.last = heading;
+				const std::size_t slot = static_cast<std::size_t>(track.seen % 90);
+				const std::array<float, 2> here{Engine::Math::ToFloat(transforms[row].position.x), Engine::Math::ToFloat(transforms[row].position.y)};
+				const std::array<float, 2> then = track.at[slot];
+				const std::array<float, 2> wanted{Engine::Math::ToFloat(orders[row].destination.x), Engine::Math::ToFloat(orders[row].destination.y)};
+				if (wanted != track.goal)
+				{
+					track.goal = wanted;
+					track.goalSince = tick;
+					std::string change = "tick " + std::to_string(tick) + " goal (" + std::to_string(wanted[0]) + ", " + std::to_string(wanted[1]) + ") mode " +
+						std::to_string(static_cast<int>(orders[row].mode));
+					if (const auto *docking = game.World().Get<gp::Docking>(entities[row]))
+						change += " phase " + std::to_string(static_cast<int>(docking->phase)) + " slot " + std::to_string(docking->slot) +
+							(docking->entering ? " entering" : "");
+					if (const auto *harvester = game.World().Get<gp::Harvester>(entities[row]))
+						change += " harvester " + std::to_string(static_cast<int>(harvester->state)) + " boxes " + std::to_string(harvester->boxes);
+					track.changes.push_back(change);
+					if (track.changes.size() > 12)
+						track.changes.erase(track.changes.begin());
+				}
+				track.turn[slot] = std::abs(delta);
+				track.at[slot] = here;
+				track.log[slot] = {heading, Engine::Math::ToFloat(motions[row].speed), Engine::Math::ToFloat(orders[row].destination.x),
+					Engine::Math::ToFloat(orders[row].destination.y)};
+				++track.seen;
+				// Judged only while one goal holds the whole window (a shuttle turning at each end of its run is no circle).
+				if (track.seen < 90 || orders[row].mode == gp::MoveMode::Idle || tick - track.goalSince < 90)
+					continue;
+				float total = 0.0f;
+				for (const float step : track.turn)
+					total += step;
+				if (total < 6.2831853f || std::hypot(here[0] - then[0], here[1] - then[1]) >= 30.0f)
+					continue;
+				const std::string name = game.Definition(refs[row].index).name;
+				if (donuts[name]++ < 3 && reported++ < 20)
+				{
+					std::string doing;
+					if (const auto *docking = game.World().Get<gp::Docking>(entities[row]))
+					{
+						doing = " docking phase " + std::to_string(static_cast<int>(docking->phase)) + " slot " + std::to_string(docking->slot) +
+							(docking->reached ? " reached" : "") + (docking->granted ? " granted" : "");
+						if (const auto *dockAt = game.World().Get<gp::Transform>(docking->dock))
+							doing += " dock at (" + std::to_string(Engine::Math::ToFloat(dockAt->position.x)) + ", " +
+								std::to_string(Engine::Math::ToFloat(dockAt->position.y)) + ") " +
+								std::string(game.DefinitionName(game.World().Get<gp::DefinitionRef>(docking->dock)->index));
+					}
+					if (const auto *builder = game.World().Get<gp::Builder>(entities[row]))
+					{
+						doing += " builder atWork " + std::to_string(builder->atWork) + " repair " + std::to_string(builder->repair);
+						if (const auto *ref = game.World().IsAlive(builder->target) ? game.World().Get<gp::DefinitionRef>(builder->target) : nullptr)
+							doing += " target " + std::string(game.DefinitionName(ref->index));
+					}
+					if (const auto *harvester = game.World().Get<gp::Harvester>(entities[row]))
+						doing += " harvester state " + std::to_string(static_cast<int>(harvester->state));
+					// What stands at its goal: the nearest other object within 60 of it.
+					const float gx = Engine::Math::ToFloat(orders[row].destination.x), gy = Engine::Math::ToFloat(orders[row].destination.y);
+					std::string nearest;
+					float best = 60.0f;
+					game.Visible().ForEach([&](const gp::VisibleObject &object) {
+						if (object.entity == entities[row])
+							return;
+						const float d = std::hypot(Engine::Math::ToFloat(object.transform.position.x) - gx, Engine::Math::ToFloat(object.transform.position.y) - gy);
+						if (d < best)
+						{
+							best = d;
+							nearest = std::string(game.DefinitionName(object.definition)) + " " + std::to_string(d) + " from the goal";
+						}
+					});
+					doing += nearest.empty() ? " (nothing near the goal)" : " near the goal: " + nearest;
+					if (reported <= 3)
+						for (const std::string &change : track.changes)
+							BOOST_TEST_MESSAGE("  change " << change);
+					if (reported == 1)
+						for (int back = 89; back >= 0; back -= 30)
+						{
+							const std::size_t at = static_cast<std::size_t>((track.seen - 1 - back + 90 * 1000) % 90);
+							const auto &entry = track.log[at];
+							const float aim = std::atan2(entry[3] - track.at[at][1], entry[2] - track.at[at][0]);
+							BOOST_TEST_MESSAGE("  t-" << back << " at (" << track.at[at][0] << ", " << track.at[at][1] << ") facing " << entry[0]
+													  << " aim " << aim << " speed " << entry[1] << " goal (" << entry[2] << ", " << entry[3] << ")");
+						}
+					BOOST_TEST_MESSAGE("donut: " << name << " at tick " << tick << " at (" << here[0] << ", " << here[1] << ") going to ("
+												 << Engine::Math::ToFloat(orders[row].destination.x) << ", " << Engine::Math::ToFloat(orders[row].destination.y)
+												 << ") mode " << static_cast<int>(orders[row].mode) << ", turned " << total << " rad in 3 s, speed "
+												 << Engine::Math::ToFloat(motions[row].speed) << doing);
+				}
+				track.turn.fill(0.0f); // count it once per circle
+			}
+		});
+	}
+	std::size_t moving = 0;
+	for (const auto &[key, track] : tracks)
+		moving += track.seen >= 90 ? 1u : 0u;
+	BOOST_TEST_MESSAGE("ground units watched: " << tracks.size() << " (" << moving << " long enough to judge), " << game.EntityCount() << " entities at the end");
+	for (const auto &[name, count] : donuts)
+		BOOST_TEST_MESSAGE("donut windows: " << name << " x" << count);
+	BOOST_TEST(donuts.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

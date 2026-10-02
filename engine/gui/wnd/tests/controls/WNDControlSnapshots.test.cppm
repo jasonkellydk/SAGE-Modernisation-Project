@@ -4,13 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <filesystem>
-#include <memory>
-#include <string>
-#include <string_view>
-
 export module Engine.UI.WND.ControlSnapshot.Tests;
+import std;
 
 import Engine.UI.WND;
 import Engine.UI.WND.Controls;

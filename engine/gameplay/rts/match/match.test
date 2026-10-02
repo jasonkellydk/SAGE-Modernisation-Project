@@ -1,0 +1,207 @@
+#define BOOST_TEST_MODULE EngineGameplayMatch
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
+import engine.gameplay.rts.match.systems.victory_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+// Four players: 0 and 1 allied both ways, 2 their enemy, 3 the neutral side (its team is "team").
+struct Match
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t tick{0};
+
+	Match()
+	{
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<VictoryRole>();
+		world.RegisterComponent<Dying>();
+		world.RegisterComponent<InactiveBody>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<Transport>();
+		world.RegisterComponent<TeamMember>();
+		world.FinalizeComponents();
+		Relationships &relationships = world.EmplaceResource<Relationships>(4u);
+		relationships.Set(0, 1, Relationship::Allies);
+		relationships.Set(1, 0, Relationship::Allies);
+		for (std::uint32_t player : {0u, 1u})
+		{
+			relationships.Set(player, 2, Relationship::Enemies);
+			relationships.Set(2, player, Relationship::Enemies);
+		}
+		TeamRoster &roster = world.EmplaceResource<TeamRoster>();
+		for (const char *name : {"A", "B", "C", "Neutral"})
+			roster.AddPlayer({name});
+		roster.AddTeam({"team", 3, false, false, {}});
+		MatchOutcome &outcome = world.EmplaceResource<MatchOutcome>();
+		outcome.enabled = true;
+		outcome.players = {{0}, {1}, {2}};
+		world.EmplaceResource<Evacuations>();
+		world.EmplaceResource<KillRequests>();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Expirations>();
+		// 4 x 3 cells of 10.
+		world.EmplaceResource<ShroudMap>().Init(Engine::Math::Fixed::FromInt(40), Engine::Math::Fixed::FromInt(30), Engine::Math::Fixed::FromInt(10), 4, 0);
+	}
+
+	// The whole map as the player sees it: every cell clear.
+	bool SeesAll(std::uint32_t player)
+	{
+		const ShroudMap &shroud = world.Resource<ShroudMap>();
+		for (std::int32_t y = 0; y < 3; ++y)
+			for (std::int32_t x = 0; x < 4; ++x)
+				if (shroud.Status(player, x, y) != CellShroud::Clear)
+					return false;
+		return true;
+	}
+
+	ecs::Entity Make(std::uint32_t player, std::uint8_t role = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Owner>(entity);
+		*world.Get<Owner>(entity) = {player};
+		if (role != 0)
+		{
+			world.Add<VictoryRole>(entity);
+			world.Get<VictoryRole>(entity)->flags = role;
+		}
+		return entity;
+	}
+
+	void Tick()
+	{
+		VictorySystem victory;
+		ecs::SystemRegistry registry;
+		registry.Register(victory);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	}
+
+	bool Killed(ecs::Entity entity)
+	{
+		const auto &kills = world.Resource<KillRequests>().entities;
+		return std::find(kills.begin(), kills.end(), entity) != kills.end();
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(match)
+
+// legacy_parity: VictoryConditions::update (VICTORY_NOBUILDINGS), hasSinglePlayerBeenDefeated, multipleAlliancesExist,
+// markAllianceVictorious, Player::killPlayer / Team::killTeam / evacuateTeam. While each side has a structure that
+// counts, the match goes on. The tick the enemy's last one is dying, it is defeated (and heard of: past the first
+// tick), a single alliance is left (the match ends that tick, both allies win), its containers empty, everything of
+// its dies but its tech building, which goes to the neutral team; its ordinary structures never counted; it sees the
+// whole map from then on (PartitionManager::revealMapForPlayerPermanently).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_last_structure_lost_defeats_a_player_and_ends_the_match)
+{
+	Match match;
+	const ecs::Entity baseA = match.Make(0, victory_role::CountsForVictory);
+	match.Make(1, victory_role::CountsForVictory);
+	const ecs::Entity baseC = match.Make(2, victory_role::CountsForVictory);
+	const ecs::Entity tank = match.Make(2);
+	const ecs::Entity truck = match.Make(2);
+	match.world.Add<Transport>(truck);
+	const ecs::Entity derrick = match.Make(2, victory_role::NeutralOnDefeat);
+	match.world.Add<TeamMember>(derrick);
+	match.Tick();
+	match.Tick();
+	const MatchOutcome &outcome = match.world.Resource<MatchOutcome>();
+	BOOST_TEST(!outcome.singleAllianceRemaining);
+	BOOST_TEST(!outcome.Eliminated(2));
+	BOOST_TEST(match.world.Resource<KillRequests>().entities.empty());
+	BOOST_TEST(!match.SeesAll(2));
+
+	match.world.Add<Dying>(baseC);
+	match.Tick();
+	BOOST_TEST(outcome.Eliminated(2));
+	// revealMapForPlayerPermanently: the fallen sees the whole map, for good; the others do not.
+	BOOST_TEST(match.SeesAll(2));
+	BOOST_TEST(!match.SeesAll(0));
+	BOOST_TEST((outcome.fallen == std::vector<std::uint32_t>{2}));
+	BOOST_TEST(outcome.singleAllianceRemaining);
+	BOOST_TEST(outcome.endTick == 3u);
+	BOOST_TEST(outcome.HasWon(0));
+	BOOST_TEST(outcome.HasWon(1));
+	BOOST_TEST(!outcome.HasWon(2));
+	BOOST_TEST(outcome.HasLost(2));
+	BOOST_TEST(!outcome.HasLost(0));
+	BOOST_TEST((match.world.Resource<Evacuations>().containers == std::vector<ecs::Entity>{truck}));
+	BOOST_TEST(match.Killed(tank));
+	BOOST_TEST(match.Killed(truck));
+	BOOST_TEST(!match.Killed(baseC)); // already dying
+	BOOST_TEST(!match.Killed(derrick));
+	BOOST_TEST(!match.Killed(baseA));
+	BOOST_TEST(match.world.Get<Owner>(derrick)->player == 3u);
+	BOOST_TEST(match.world.Get<TeamMember>(derrick)->team == 0u);
+
+	// Once defeated, it is not defeated again.
+	match.world.Resource<KillRequests>().entities.clear();
+	match.Tick();
+	BOOST_TEST(outcome.fallen.empty());
+	BOOST_TEST(match.world.Resource<KillRequests>().entities.empty());
+	BOOST_TEST(outcome.endTick == 3u);
+}
+
+// markAllianceVictorious: an ally beaten first still wins with its alliance. A structure dying this very tick (killed
+// outright) no longer counts. Defeat on the first tick is not announced nor the map revealed (TheGameLogic->getFrame() > 1).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_beaten_ally_shares_the_victory_and_the_first_tick_is_silent)
+{
+	Match match;
+	match.Make(1, victory_role::CountsForVictory);
+	const ecs::Entity baseC = match.Make(2, victory_role::CountsForVictory);
+	match.Tick(); // player 0 never had one: beaten, unannounced
+	const MatchOutcome &outcome = match.world.Resource<MatchOutcome>();
+	BOOST_TEST(outcome.Eliminated(0));
+	BOOST_TEST(outcome.fallen.empty());
+	BOOST_TEST(!match.SeesAll(0)); // on the first tick the map is not revealed either
+	BOOST_TEST(!outcome.singleAllianceRemaining);
+	match.world.Resource<KillRequests>().entities.push_back(baseC);
+	match.Tick();
+	BOOST_TEST(outcome.singleAllianceRemaining);
+	BOOST_TEST(outcome.HasWon(1));
+	BOOST_TEST(outcome.HasWon(0));
+	BOOST_TEST(outcome.HasLost(0));
+	BOOST_TEST(outcome.HasLost(2));
+}
+
+// Outside a match nothing is decided.
+BOOST_AUTO_TEST_CASE(nothing_is_decided_outside_a_match)
+{
+	Match match;
+	match.world.Resource<MatchOutcome>().enabled = false;
+	match.Tick();
+	BOOST_TEST(!match.world.Resource<MatchOutcome>().Eliminated(0));
+	BOOST_TEST(!match.world.Resource<MatchOutcome>().singleAllianceRemaining);
+}
+
+// InactiveBody (effectively dead from its constructor: setEffectivelyDead) and VictoryConditions'
+// hasSinglePlayerBeenDefeated (Player::hasAnyBuildings / hasAnyUnits skip the effectively dead): a counted structure
+// with an inactive body keeps no one in the match.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_inactive_body_keeps_no_player_alive)
+{
+	Match match;
+	match.Make(0, victory_role::CountsForVictory);
+	match.Make(1, victory_role::CountsForVictory);
+	const ecs::Entity prop = match.Make(2, victory_role::CountsForVictory);
+	match.world.Add<InactiveBody>(prop);
+	match.Tick();
+	match.Tick();
+	const MatchOutcome &outcome = match.world.Resource<MatchOutcome>();
+	BOOST_TEST(outcome.Eliminated(2));
+	BOOST_TEST(outcome.singleAllianceRemaining);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

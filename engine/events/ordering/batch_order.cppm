@@ -1,7 +1,5 @@
-module;
-#include <compare>
-#include <cstdint>
 export module engine.events.ordering.batch_order;
+import std;
 
 export namespace engine::events
 {

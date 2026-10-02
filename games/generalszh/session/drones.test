@@ -1,0 +1,244 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.gameplay.upgrades.algorithms.grant_upgrade;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.producer;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.slaves.components.slaved;
+import games.generalszh.gameplay.upgrades.components.command_set_override;
+
+// Vehicles and what they carry on the live shell map: SlavedUpdate on the shipped battle drone (AmericaVehicleBattleDrone,
+// made by a Humvee's ObjectCreationUpgrade OCL_AmericanBattleDrone) and RiderChangeContain's riders. One module set per
+// translation unit keeps within the compiler's source-location limit.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(drones)
+
+// Legacy parity (SlavedUpdate::update / doRepairLogic / setRepairState / moveToNewRepairSpot / endRepair;
+// AmericaVehicleBattleDrone: RepairRange 8, RepairMinAltitude 18, RepairMaxAltitude 24, RepairRatePerSecond 10 (the
+// installed INIZH.big), RepairWhenBelowHealth% 60, RepairMinReadyTime 300 / RepairMaxReadyTime 750 (9 / 23 frames), RepairMinWeldTime 250 /
+// RepairMaxWeldTime 500 (8 / 15 frames), StayOnSameLayerAsMaster): a Humvee (240) given the drone and hurt to half
+// has it repair: on the drone's next look (within its 7-frame look) at the Humvee it unpacks (UNPACKING, 15 frames),
+// from then on it looks every frame: ready a random 9-23 frames, extending 5 (FIRING_B), then welding 8-15 frames, the
+// Humvee healed 10/30 a frame from that frame on (21845 raw: the original's float 0.33333334 rounded to fixed point),
+// retracting 5 (FIRING_C) as it zips 8 about its master on BattleDronePanicLocomotor (ultra-accurate, at a precise
+// height 18-24 over the ground). One and four workers agree; a checkpoint taken while it welds plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_battle_drone_repairs_its_humvee)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	session::Session four(shell.map->level, shell.game, session::SessionOptions{42, 4, {}});
+	std::unique_ptr<session::Session> restored;
+	const auto step = [&] {
+		game.Tick();
+		four.Tick();
+		if (restored)
+			restored->Tick();
+	};
+	step();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 site = low + FixedVector2{Fixed::FromInt(150), Fixed::FromInt(150)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	BOOST_TEST((four.Place("AmericaVehicleHumvee", site, {}, america) == humvee));
+	BOOST_TEST_REQUIRE(gameplay::GiveObjectUpgrade(game.Game(), humvee, "Upgrade_AmericaBattleDrone"));
+	BOOST_TEST_REQUIRE(gameplay::GiveObjectUpgrade(four.Game(), humvee, "Upgrade_AmericaBattleDrone"));
+	for (int tick = 0; tick < 3; ++tick)
+		step();
+	auto &world = game.World();
+	ecs::Entity drone;
+	ecs::Query<ecs::Read<gp::Slaved>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto slaves = chunk.template Get<gp::Slaved>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < slaves.size(); ++row)
+			if (slaves[row].master == humvee)
+				drone = entities[row];
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(drone));
+	BOOST_TEST(game.DefinitionName(world.Get<gp::DefinitionRef>(drone)->index) == "AmericaVehicleBattleDrone");
+	const gp::SlavedDefinition &d = world.Get<gp::Slaved>(drone)->definition;
+	BOOST_TEST((d.repairRange == Fixed::FromInt(8)));
+	BOOST_TEST((d.repairMinAltitude == Fixed::FromInt(18)));
+	BOOST_TEST((d.repairMaxAltitude == Fixed::FromInt(24)));
+	BOOST_TEST(d.repairPerTick.Raw() == 21845); // the install's RepairRatePerSecond 10 (INIZH.big), / 30
+	BOOST_TEST(d.repairBelowPercent == 60);
+	BOOST_TEST(d.minReadyTicks == 9u);
+	BOOST_TEST(d.maxReadyTicks == 23u);
+	BOOST_TEST(d.minWeldTicks == 8u);
+	BOOST_TEST(d.maxWeldTicks == 15u);
+	BOOST_TEST(d.stayOnMasterLayer == 1u);
+	const auto arm = [&](const char *condition) { return world.Get<gp::Appearance>(drone)->Test(content::ModelConditionBit(condition)); };
+	BOOST_TEST(arm("PACKING")); // onObjectCreated: a drone that repairs is packed
+	// Hurt to half, the drone come to rest over it (as though it had arrived there).
+	for (session::Session *session : {&game, &four})
+	{
+		auto &into = session->World();
+		gp::Health &health = *into.Get<gp::Health>(humvee);
+		health.current = health.maximum / Fixed::FromInt(2);
+		const gp::Transform &at = *into.Get<gp::Transform>(humvee);
+		into.Get<gp::Transform>(drone)->position.x = at.position.x;
+		into.Get<gp::Transform>(drone)->position.y = at.position.y;
+		*into.Get<gp::MoveOrder>(drone) = {};
+	}
+	const std::uint64_t hurt = game.CurrentTick();
+	const auto state = [&] { return world.Get<gp::Slaved>(drone)->repairState; };
+	std::uint64_t unpacked = 0, ready = 0, extending = 0, welding = 0, retracting = 0;
+	std::uint32_t readyTicks = 0, weldTicks = 0;
+	bool healedEachFrame = true;
+	Fixed last = world.Get<gp::Health>(humvee)->current;
+	for (int tick = 0; tick < 120 && retracting == 0; ++tick)
+	{
+		step();
+		const std::uint64_t now = game.CurrentTick();
+		const gp::SlaveRepairState is = state();
+		if (unpacked == 0 && is == gp::SlaveRepairState::Unpacking)
+		{
+			unpacked = now;
+			BOOST_TEST(arm("UNPACKING"));
+			BOOST_TEST(!arm("PACKING"));
+		}
+		if (ready == 0 && is == gp::SlaveRepairState::Ready)
+		{
+			ready = now;
+			readyTicks = world.Get<gp::Slaved>(drone)->waitTicks;
+		}
+		if (extending == 0 && is == gp::SlaveRepairState::Extending)
+		{
+			extending = now;
+			BOOST_TEST(arm("FIRING_B"));
+		}
+		if (welding == 0 && is == gp::SlaveRepairState::Welding)
+		{
+			welding = now;
+			weldTicks = world.Get<gp::Slaved>(drone)->waitTicks;
+			restored = session::Session::Restore(shell.map->level, shell.game, session::SessionOptions{42, 1, {}}, game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+		}
+		if (retracting == 0 && is == gp::SlaveRepairState::Retracting)
+		{
+			retracting = now;
+			BOOST_TEST(arm("FIRING_C"));
+		}
+		const Fixed health = world.Get<gp::Health>(humvee)->current;
+		if (welding != 0)
+			healedEachFrame = healedEachFrame && (health - last).Raw() == d.repairPerTick.Raw();
+		else
+			healedEachFrame = healedEachFrame && health == last;
+		last = health;
+	}
+	BOOST_TEST_MESSAGE("unpacked " << unpacked - hurt << " after the hurt; ready " << readyTicks << ", weld " << weldTicks);
+	BOOST_TEST((unpacked > hurt && unpacked <= hurt + gp::SlavedUpdateTicks));
+	BOOST_TEST(ready == unpacked + 15);
+	BOOST_TEST((readyTicks >= 9u && readyTicks <= 23u));
+	BOOST_TEST(extending == ready + readyTicks);
+	BOOST_TEST(welding == extending + 5);
+	BOOST_TEST((weldTicks >= 8u && weldTicks <= 15u));
+	BOOST_TEST(retracting == welding + weldTicks);
+	BOOST_TEST(healedEachFrame);
+	// Off to a new spot on its panic locomotor, ultra-accurate at a precise height 18-24 over the ground there.
+	const gp::Locomotion &motion = *world.Get<gp::Locomotion>(drone);
+	BOOST_TEST(motion.ultraAccurate == 1u);
+	BOOST_TEST(motion.preciseZ == 1u);
+	const FixedVector2 spot = world.Get<gp::MoveOrder>(drone)->destination;
+	const Fixed ground = game.Game().ground.At(spot);
+	BOOST_TEST((motion.preciseHeight >= ground + Fixed::FromInt(18) && motion.preciseHeight <= ground + Fixed::FromInt(24)));
+	BOOST_TEST((Engine::Math::Abs(Engine::Math::Length(spot - world.Get<gp::Transform>(humvee)->position.XY()) - Fixed::FromInt(8)) <= Fixed::FromRatio(1, 100)));
+	for (int tick = 0; tick < 60; ++tick)
+		step();
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// RiderChangeContain::onContaining, a rider's last two words (GLAVehicleCombatBikeTerrorist: Rider5 = GLAInfantryTerrorist
+// RIDER5 WEAPON_RIDER5 STATUS_RIDER5 GLAVehicleCombatBikeDefaultCommandSet SET_SLUGGISH): its Terrorist aboard (made on
+// its first update), the bike takes the rider's command set (setCommandSetStringOverride) and moves on its SET_SLUGGISH
+// locomotor (chooseLocomotorSet: CombatBikeTerroristGroundLocomotor); a Rebel (SET_NORMAL) leaves the plain bike on its
+// normal one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bike_takes_its_riders_command_set_and_locomotor)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 1, {}});
+	game.Tick();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	auto &world = game.World();
+	const ecs::Entity bike = game.Place("GLAVehicleCombatBikeTerrorist", centre, {}, gla);
+	const ecs::Entity plain = game.Place("GLAVehicleCombatBike", centre + FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, gla);
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->set == 0u);
+	game.Tick();
+	BOOST_TEST_REQUIRE(game.Game().manifest.Aboard(bike).size() == 1u);
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->set == 3u); // SET_SLUGGISH
+	BOOST_TEST((world.Get<gp::Locomotion>(bike)->locomotor.maxSpeed != world.Get<gp::Locomotion>(plain)->locomotor.maxSpeed));
+	const auto *swapped = world.Get<gameplay::CommandSetOverride>(bike);
+	BOOST_TEST_REQUIRE(swapped != nullptr);
+	BOOST_TEST(game.Game().templates.CommandSetName(swapped->id) == "GLAVehicleCombatBikeDefaultCommandSet");
+	BOOST_TEST_REQUIRE(game.Game().manifest.Aboard(plain).size() == 1u);
+	BOOST_TEST(world.Get<gp::Locomotion>(plain)->set == 0u);
+	BOOST_TEST(world.Get<gameplay::CommandSetOverride>(plain) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

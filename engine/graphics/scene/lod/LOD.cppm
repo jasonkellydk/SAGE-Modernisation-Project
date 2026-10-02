@@ -1,13 +1,5 @@
-module;
-
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-
 export module Graphics.Scene.LOD;
+import std;
 
 import engine.profiling;
 export import Graphics.Resources.Meshes.Mesh;

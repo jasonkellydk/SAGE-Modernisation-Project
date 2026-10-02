@@ -1,0 +1,58 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.camera.algorithms.camera_keys;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(camera_keys)
+
+// legacy_parity: CommandXlat.cpp MSG_META_BEGIN/END_CAMERA_ROTATE_LEFT/RIGHT, BEGIN/END_CAMERA_ZOOM_IN/OUT (CommandMap.ini:
+// keypad 4, 6, 8, 2 down and up) set InGameUI's flags; InGameUI::update each client frame: left alone turns the view
+// by -KeyboardCameraRotateSpeed (0.1), right alone +0.1, both nothing; zoom in alone View::zoomIn (height - 10), out
+// alone +10, both nothing. Two frames' time turns 0.2 and zooms 20.
+BOOST_AUTO_TEST_CASE(legacy_parity_held_keypad_keys_turn_and_zoom_the_view_each_frame)
+{
+	CameraKeys keys;
+	BOOST_TEST(ApplyCameraKeyMeta(keys, "BEGIN_CAMERA_ROTATE_LEFT"));
+	auto motion = CameraKeyStep(keys, 1.0f, 0.1f);
+	BOOST_TEST(motion.angle == -0.1f);
+	BOOST_TEST(motion.height == 0.0f);
+	ApplyCameraKeyMeta(keys, "BEGIN_CAMERA_ROTATE_RIGHT");
+	BOOST_TEST(CameraKeyStep(keys, 1.0f, 0.1f).angle == 0.0f);
+	ApplyCameraKeyMeta(keys, "END_CAMERA_ROTATE_LEFT");
+	BOOST_TEST(CameraKeyStep(keys, 2.0f, 0.1f).angle == 0.2f);
+	ApplyCameraKeyMeta(keys, "END_CAMERA_ROTATE_RIGHT");
+	BOOST_TEST(CameraKeyStep(keys, 1.0f, 0.1f).angle == 0.0f);
+	ApplyCameraKeyMeta(keys, "BEGIN_CAMERA_ZOOM_IN");
+	BOOST_TEST(CameraKeyStep(keys, 1.0f, 0.1f).height == -10.0f);
+	ApplyCameraKeyMeta(keys, "BEGIN_CAMERA_ZOOM_OUT");
+	BOOST_TEST(CameraKeyStep(keys, 1.0f, 0.1f).height == 0.0f);
+	ApplyCameraKeyMeta(keys, "END_CAMERA_ZOOM_IN");
+	BOOST_TEST(CameraKeyStep(keys, 2.0f, 0.1f).height == 20.0f);
+	BOOST_TEST(!ApplyCameraKeyMeta(keys, "CAMERA_RESET"));
+}
+
+// legacy_parity: LookAtXlat.cpp MSG_META_SAVE_VIEW1..8 (Ctrl+F1..F8) / VIEW_VIEW1..8 (F1..F8): slot n of
+// m_viewLocation[MAX_VIEW_LOCS 8]; saving says GUI:BookmarkXSet ("Bookmark #%d set") with the slot; an unsaved slot
+// moves nothing (ViewLocation::m_valid).
+BOOST_AUTO_TEST_CASE(legacy_parity_view_bookmarks)
+{
+	const auto save = ParseBookmarkMeta("SAVE_VIEW3");
+	BOOST_TEST_REQUIRE(save.has_value());
+	BOOST_TEST(save->slot == 3);
+	BOOST_TEST(save->save);
+	const auto view = ParseBookmarkMeta("VIEW_VIEW8");
+	BOOST_TEST_REQUIRE(view.has_value());
+	BOOST_TEST(view->slot == 8);
+	BOOST_TEST(!view->save);
+	BOOST_TEST(!ParseBookmarkMeta("VIEW_VIEW9").has_value());
+	BOOST_TEST(!ParseBookmarkMeta("VIEW_TEAM1").has_value());
+	BOOST_TEST((BookmarkSetMessage(u"Bookmark #%d set", 3) == u"Bookmark #3 set"));
+	ViewBookmarks bookmarks;
+	BOOST_TEST(!bookmarks.slots[0].valid);
+	BOOST_TEST(bookmarks.slots.size() == 8u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

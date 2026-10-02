@@ -1,20 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <bit>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <queue>
-#include <stdexcept>
-#include <tuple>
-#include <utility>
-#include <vector>
-
 export module engine.navigation.search.graph.captured_weighted;
+import std;
 import engine.navigation.movement.snapshot.cells;
 import engine.navigation.movement.snapshot.occupants;
 import engine.navigation.movement.terrain_policy;

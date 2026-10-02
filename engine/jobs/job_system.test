@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
+#include <span>
 #include <vector>
 
 import engine.jobs.job_system;
@@ -226,6 +227,49 @@ BOOST_AUTO_TEST_CASE(owner_thief_races_execute_each_submission_exactly_once)
             }
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(blocked_workers_wake_for_every_batch_after_idle_gaps)
+{
+	// Workers and the waiting caller block on atomics once their spin window
+	// passes; batches submitted after idle gaps (and back to back) must still
+	// wake them, run every job exactly once and complete promptly.
+	struct Slot
+	{
+		std::atomic<unsigned> visits{0};
+	};
+	for (unsigned workers : {1u, 3u, 8u, 15u})
+	{
+		engine::jobs::JobSystem scheduler({workers});
+		std::vector<Slot> slots(33);
+		std::vector<engine::jobs::Job> jobs;
+		for (auto &slot : slots)
+			jobs.push_back({[](void *raw) { static_cast<Slot *>(raw)->visits.fetch_add(1, std::memory_order_relaxed); }, &slot});
+		unsigned batches = 0;
+		for (unsigned round = 0; round < 40; ++round)
+		{
+			if (round % 4 == 0)
+				std::this_thread::sleep_for(std::chrono::milliseconds(2)); // long enough to block
+			const auto start = std::chrono::steady_clock::now();
+			const std::size_t size = 1 + (round * 7) % jobs.size();
+			scheduler.Execute(std::span<engine::jobs::Job>(jobs.data(), size));
+			++batches;
+			BOOST_TEST_CONTEXT("workers=" << workers << " round=" << round)
+			{
+				BOOST_TEST((std::chrono::steady_clock::now() - start < std::chrono::seconds(2)));
+			}
+		}
+		unsigned expected[33] = {};
+		for (unsigned round = 0; round < 40; ++round)
+			for (std::size_t i = 0; i < 1 + (round * 7) % jobs.size(); ++i)
+				++expected[i];
+		for (std::size_t i = 0; i < slots.size(); ++i)
+			BOOST_TEST_CONTEXT("workers=" << workers << " slot=" << i)
+			{
+				BOOST_TEST(slots[i].visits.load() == expected[i]);
+			}
+		BOOST_TEST(batches == 40u);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(shutdown_drains_a_submitted_batch_and_completion_keeps_it_closed)

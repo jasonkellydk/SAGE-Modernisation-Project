@@ -4,21 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <atomic>
-#include <bit>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <future>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <vector>
-
 export module Assets.Tests.AssetCache;
+import std;
 
 import Assets.Adapters.W3D;
 import Assets.Cache;
@@ -494,4 +481,87 @@ BOOST_AUTO_TEST_CASE(cache_destruction_waits_for_inflight_work)
 	BOOST_CHECK(destruction.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout);
 	source_gate->set_value(Make_Static_W3D());
 	destruction.wait();
+}
+
+// A skinned model names a skeleton stored in its own source, as W3D
+// infantry do (UITRST_SKN draws with the bones of UITRST_SKL).
+class SkinnedModelAdapter final : public Assets::IModelAdapter
+{
+public:
+	bool Can_Import(const Assets::AssetIdentity &identity, std::span<const std::byte>) const noexcept override
+	{
+		return identity.type == Assets::AssetType::Model;
+	}
+
+	Assets::ModelImportResult Import(const Assets::AssetIdentity &identity, std::span<const std::byte>) const override
+	{
+		auto description = std::make_unique<Assets::ModelAssetDesc>();
+		description->name = identity.canonical_name;
+		description->bounds = {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+		description->vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 1.0f, 0.0f}}};
+		description->indices = {0, 1, 2};
+		description->rig.skeleton_name = identity.canonical_name == "orphan.skn" ? "Missing_SKL" : "Soldier_SKL";
+		description->rig.attachments.push_back({"Soldier.BODY", 1});
+		return {std::move(description), {}};
+	}
+
+	bool Import_Rig(const Assets::AssetIdentity &identity, std::span<const std::byte> source, Assets::ModelRigDesc &result,
+		std::string &error) const override
+	{
+		if (identity.type != Assets::AssetType::Skeleton || source.empty()) {
+			error = "not a skeleton";
+			return false;
+		}
+		result = {};
+		result.skeleton_name = "SOLDIER_SKL";
+		result.bones.push_back({"RootTransform"});
+		result.bones.push_back({"BODY", 0, {0.0f, 0.0f, 1.0f}});
+		return true;
+	}
+};
+
+BOOST_AUTO_TEST_CASE(skinned_models_resolve_their_rig_skeleton_through_the_source)
+{
+	const auto skeleton_reads = std::make_shared<std::atomic<int>>(0);
+	Assets::AssetCache cache([skeleton_reads](const Assets::AssetIdentity &identity) {
+		if (identity.type == Assets::AssetType::Skeleton) {
+			if (identity.canonical_name != "soldier_skl")
+				return std::vector<Byte>{};
+			++*skeleton_reads;
+		}
+		return std::vector<Byte>{Byte{1}};
+	});
+	BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<SkinnedModelAdapter>()));
+
+	const auto first = cache.Request_Model("soldier.skn");
+	cache.Wait(first);
+	const auto second = cache.Request_Model("officer.skn");
+	cache.Wait(second);
+	for (const auto handle : {first, second}) {
+		BOOST_REQUIRE(cache.Get_State(handle) == Assets::AssetState::Ready);
+		const Assets::ModelAsset *model = cache.Try_Get_Model(handle);
+		BOOST_REQUIRE(model != nullptr);
+		BOOST_TEST(model->Rig().skeleton_name == "Soldier_SKL");
+		BOOST_REQUIRE(model->Rig().bones.size() == 2u);
+		BOOST_TEST(model->Rig().bones[1].name == "BODY");
+		BOOST_TEST(model->Rig().attachments.size() == 1u);
+	}
+	// Both models share one read of the skeleton's source.
+	BOOST_TEST(skeleton_reads->load() == 1);
+
+	// An unresolved skeleton leaves the rig as imported for its consumers.
+	const auto orphan = cache.Request_Model("orphan.skn");
+	cache.Wait(orphan);
+	BOOST_REQUIRE(cache.Get_State(orphan) == Assets::AssetState::Ready);
+	BOOST_TEST(cache.Try_Get_Model(orphan)->Rig().bones.empty());
+
+	std::string error;
+	BOOST_TEST(cache.Load_Rig(Assets::AssetType::Skeleton, "Missing_SKL", error) == nullptr);
+	BOOST_TEST(!error.empty());
+	BOOST_TEST(cache.Load_Rig(Assets::AssetType::Model, "soldier.skn", error) == nullptr);
+	const auto skeleton = cache.Load_Rig(Assets::AssetType::Skeleton, "soldier_skl", error);
+	BOOST_REQUIRE(skeleton != nullptr);
+	BOOST_TEST(error.empty());
+	BOOST_TEST(skeleton->bones.size() == 2u);
+	BOOST_TEST(skeleton_reads->load() == 1);
 }

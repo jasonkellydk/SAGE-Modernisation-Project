@@ -1,13 +1,5 @@
-module;
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Water.Geometry;
+import std;
 
 namespace Graphics
 {

@@ -1,16 +1,5 @@
-module;
-
-#include <cmath>
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Models.Animation;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Pools.ResourcePool;

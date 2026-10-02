@@ -1,14 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Beams.RibbonPipeline;
+import std;
 
 import Graphics.Scene.Beams.RibbonEdges;
 import Graphics.Scene.Beams.RibbonGeometry;

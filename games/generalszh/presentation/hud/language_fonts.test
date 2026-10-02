@@ -1,0 +1,266 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+import games.generalszh.presentation.hud.algorithms.language_font_choice;
+import games.generalszh.content.global.header_templates;
+import games.generalszh.content.ini.zero_hour_grammar;
+import engine.config.adapters.ini.ini_reader;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+// A document read from `text` through the Zero Hour grammar.
+struct Parsed
+{
+	engine::config::Document document;
+	engine::config::Diagnostics diagnostics;
+
+	explicit Parsed(std::string text)
+	{
+		engine::config::Diagnostics grammarDiagnostics;
+		const auto grammar = content::ZeroHourIniGrammar(grammarDiagnostics);
+		engine::config::ini::Read(document, document.AddSource("test.ini", std::move(text)), grammar, diagnostics);
+	}
+};
+
+bool Same(const content::LanguageFont &font, const std::string &name, int size, bool bold)
+{
+	return font.name == name && font.size == size && font.bold == bold;
+}
+
+// The shipped Data\INI\DrawGroupInfo.ini.
+constexpr const char *ShippedDrawGroupInfo = "DrawGroupInfo\n"
+											 "  UsePlayerColor = No\n"
+											 "  ColorForText = R:255 G:255 B:255 A:255\n"
+											 "  ColorForTextDropShadow = R:0 G:0 B:0 A:255\n"
+											 "  DropShadowOffsetX = 1\n"
+											 "  DropShadowOffsetY = 1\n"
+											 "  FontName = \"Arial\"\n"
+											 "  FontSize = 10\n"
+											 "  FontIsBold = No\n"
+											 "  DrawPositionXPercent  = -20%\n"
+											 "  DrawPositionYPixel    = -10\n"
+											 "End\n";
+}
+
+BOOST_AUTO_TEST_SUITE(language_fonts)
+
+// GlobalLanguage's TheGlobalLanguageDataFieldParseTable (GlobalLanguage.cpp): the fonts (parseFontDesc: a quoted or
+// single-word name, a size, Yes/No), UnicodeFontName, UseHardWordWrap and LocalFontFile (parseFontFileName: each pushed
+// to the front of the list).
+BOOST_AUTO_TEST_CASE(legacy_parity_language_ini_binds_as_the_global_language_parse_table)
+{
+	const Parsed language("Language\n"
+						  "  UnicodeFontName = \"Arial Unicode MS\"\n"
+						  "  UseHardWordWrap = Yes\n"
+						  "  LocalFontFile = first.ttf\n"
+						  "  LocalFontFile = second.ttf\n"
+						  "  CopyrightFont = Courier 23 Yes\n"
+						  "  DrawableCaptionFont = Arial 19 No\n"
+						  "  DefaultWindowFont = \"Times New Roman\" 27 No\n"
+						  "  NativeDebugDisplay = FixedSys 15 No\n"
+						  "  DrawGroupInfoFont = Arial 23 No\n"
+						  "  TooltipFontName = Arial 15 No\n"
+						  "End\n");
+	const content::LanguageFonts fonts = content::ReadLanguageFonts(language.document);
+	BOOST_TEST(fonts.unicodeFontName == "Arial Unicode MS");
+	BOOST_TEST(fonts.useHardWrap);
+	BOOST_TEST_REQUIRE(fonts.localFontFiles.size() == 2u);
+	BOOST_TEST(fonts.localFontFiles[0] == "second.ttf");
+	BOOST_TEST(fonts.localFontFiles[1] == "first.ttf");
+	BOOST_TEST(Same(fonts.copyright, "Courier", 23, true));
+	BOOST_TEST(Same(fonts.drawableCaption, "Arial", 19, false));
+	BOOST_TEST(Same(fonts.defaultWindow, "Times New Roman", 27, false));
+	BOOST_TEST(Same(fonts.nativeDebugDisplay, "FixedSys", 15, false));
+	BOOST_TEST(Same(fonts.drawGroupInfo, "Arial", 23, false));
+	BOOST_TEST(Same(fonts.tooltip, "Arial", 15, false));
+	// GlobalLanguage::GlobalLanguage: none named, no hard wrap.
+	const content::LanguageFonts none = content::ReadLanguageFonts(Parsed("Language\nEnd\n").document);
+	BOOST_TEST(none.drawableCaption.name.empty());
+	BOOST_TEST(!none.useHardWrap);
+	BOOST_TEST(none.localFontFiles.empty());
+}
+
+// InGameUI::init: InGameUI.ini's fonts (here its defaults: messages Arial 10, captions Arial 10, countdowns Arial 10,
+// military caption Courier 12 bold / Courier 12), each replaced whole by Language.ini's where it names one (MessageFont
+// Arial 19 Yes, DrawableCaptionFont Arial 19 No, MilitaryCaptionFont "Courier New" 23 No); Mouse::onResolutionChanged
+// the same for TooltipFontName over Mouse.ini's (Times New Roman 12).
+BOOST_AUTO_TEST_CASE(legacy_parity_language_fonts_replace_the_ini_fonts_where_named)
+{
+	const content::InGameUiContent ui;
+	const content::LanguageFonts language = content::ReadLanguageFonts(Parsed("Language\n"
+																			  "  MessageFont = Arial 19 Yes\n"
+																			  "  DrawableCaptionFont = Arial 19 No\n"
+																			  "  MilitaryCaptionFont = \"Courier New\" 23 No\n"
+																			  "End\n")
+																		   .document);
+	const InGameFonts fonts = ChooseInGameFonts(language, ui);
+	BOOST_TEST(Same(fonts.message, "Arial", 19, true));
+	BOOST_TEST(Same(fonts.drawableCaption, "Arial", 19, false));
+	BOOST_TEST(Same(fonts.militaryCaption, "Courier New", 23, false));
+	BOOST_TEST(Same(fonts.militaryCaptionTitle, "Courier", 12, true));
+	BOOST_TEST(Same(fonts.superweaponNormal, "Arial", 10, false));
+	BOOST_TEST(Same(fonts.namedTimerReady, "Arial", 10, false));
+
+	const InGameFonts own = ChooseInGameFonts(content::LanguageFonts{}, ui);
+	BOOST_TEST(Same(own.message, "Arial", 10, false));
+	BOOST_TEST(Same(own.drawableCaption, "Arial", 10, false));
+
+	BOOST_TEST(Same(LanguageFontOr(content::LanguageFont{"Arial", 15, false}, "Times New Roman", 12, false), "Arial", 15, false));
+	BOOST_TEST(Same(LanguageFontOr(content::LanguageFont{"", 0, false}, "Times New Roman", 12, false), "Times New Roman", 12, false));
+}
+
+// InGameUI.ini's DrawableCaption* (InGameUI's m_drawableCaption*): bound over the defaults (Arial 10, not bold, white).
+BOOST_AUTO_TEST_CASE(legacy_parity_in_game_ui_binds_the_drawable_caption_fields)
+{
+	const content::InGameUiContent ui = content::BindInGameUi(Parsed("InGameUI\n"
+																	 "  DrawableCaptionFont = Courier\n"
+																	 "  DrawableCaptionPointSize = 14\n"
+																	 "  DrawableCaptionBold = Yes\n"
+																	 "  DrawableCaptionColor = R:10 G:20 B:30\n"
+																	 "End\n")
+																  .document);
+	BOOST_TEST(ui.drawableCaptionFont == "Courier");
+	BOOST_TEST(ui.drawableCaptionPointSize == 14);
+	BOOST_TEST(ui.drawableCaptionBold);
+	BOOST_TEST((ui.drawableCaptionColor == std::array<std::uint8_t, 4>{10, 20, 30, 255}));
+	const content::InGameUiContent defaults;
+	BOOST_TEST(defaults.drawableCaptionFont == "Arial");
+	BOOST_TEST(defaults.drawableCaptionPointSize == 10);
+	BOOST_TEST(!defaults.drawableCaptionBold);
+}
+
+// DrawGroupInfo::DrawGroupInfo and s_fieldParseTable (DrawGroupInfo.cpp, INIDrawGroupInfo.cpp): the defaults (Arial 10,
+// the player's colour, a -1,-1 black shadow, X -5% of the width, Y -10 pixels), the shipped DrawGroupInfo.ini over them
+// (fixed white, a 1,1 shadow, X -20%), and GameClient::init's Language.ini DrawGroupInfoFont (Arial 23 No) over that.
+BOOST_AUTO_TEST_CASE(legacy_parity_draw_group_info_binds_and_takes_the_language_font)
+{
+	const content::DrawGroupInfoContent defaults;
+	BOOST_TEST(defaults.fontName == "Arial");
+	BOOST_TEST(defaults.fontSize == 10);
+	BOOST_TEST(defaults.usePlayerColor);
+	BOOST_TEST(defaults.dropShadowOffsetX == -1);
+	BOOST_TEST(!defaults.usingPixelOffsetX);
+	BOOST_TEST((defaults.percentOffsetX == Engine::Math::Fixed::FromInt(-5)));
+	BOOST_TEST(defaults.usingPixelOffsetY);
+	BOOST_TEST(defaults.pixelOffsetY == -10);
+
+	content::DrawGroupInfoContent info;
+	content::BindDrawGroupInfo(Parsed(ShippedDrawGroupInfo).document, info);
+	BOOST_TEST(!info.usePlayerColor);
+	BOOST_TEST((info.colorForText == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST((info.colorForTextDropShadow == std::array<std::uint8_t, 4>{0, 0, 0, 255}));
+	BOOST_TEST(info.dropShadowOffsetX == 1);
+	BOOST_TEST(info.dropShadowOffsetY == 1);
+	BOOST_TEST(info.fontName == "Arial");
+	BOOST_TEST(info.fontSize == 10);
+	BOOST_TEST(!info.fontIsBold);
+	BOOST_TEST(!info.usingPixelOffsetX);
+	BOOST_TEST((info.percentOffsetX == Engine::Math::Fixed::FromInt(-20)));
+	BOOST_TEST(info.usingPixelOffsetY);
+	BOOST_TEST(info.pixelOffsetY == -10);
+
+	content::ApplyLanguageFont(info, content::LanguageFont{"", 0, false});
+	BOOST_TEST(info.fontSize == 10);
+	content::ApplyLanguageFont(info, content::LanguageFont{"Arial", 23, false});
+	BOOST_TEST(info.fontName == "Arial");
+	BOOST_TEST(info.fontSize == 23);
+	BOOST_TEST(!info.fontIsBold);
+
+	// The later of a pixel and a percent line wins (the original's union and its flag).
+	content::DrawGroupInfoContent both;
+	content::BindDrawGroupInfo(Parsed("DrawGroupInfo\n  DrawPositionYPixel = 4\n  DrawPositionYPercent = 50%\nEnd\n").document, both);
+	BOOST_TEST(!both.usingPixelOffsetY);
+	BOOST_TEST((both.percentOffsetY == Engine::Math::Fixed::FromInt(50)));
+}
+
+// Drawable::drawsAnyUIText / drawUIText: squads 0..9 show; the number goes from the health region's top left by
+// DrawGroupInfo's pixels, or by its share of the region's width added to the Int position as a Real and cut back
+// (toward zero). Shipped data, a region at (100, 50) 37 wide: x 100 + 37 * -0.2 = 92.6 -> 92, y 50 - 10 = 40, white with
+// a black 1,1 shadow; at x 3: 3 - 7.4 = -4.4 -> -4. The defaults: x 100 + 37 * -0.05 = 98.15 -> 98, the player's colour.
+// A Y share is of the width too: 50 + 37 * 0.5 = 68.5 -> 68.
+BOOST_AUTO_TEST_CASE(legacy_parity_group_numbers_sit_by_the_health_bar_as_draw_ui_text)
+{
+	BOOST_TEST(!ShowsGroupNumber(-1));
+	BOOST_TEST(ShowsGroupNumber(0));
+	BOOST_TEST(ShowsGroupNumber(9));
+	BOOST_TEST(!ShowsGroupNumber(10));
+
+	content::DrawGroupInfoContent info;
+	content::BindDrawGroupInfo(Parsed(ShippedDrawGroupInfo).document, info);
+	const std::array<std::uint8_t, 4> red{255, 0, 0, 255};
+	const GroupNumberDraw shipped = PlaceGroupNumber(info, 100, 50, 37, red);
+	BOOST_TEST(shipped.x == 92);
+	BOOST_TEST(shipped.y == 40);
+	BOOST_TEST((shipped.color == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST((shipped.dropColor == std::array<std::uint8_t, 4>{0, 0, 0, 255}));
+	BOOST_TEST(shipped.dropX == 1);
+	BOOST_TEST(shipped.dropY == 1);
+	BOOST_TEST(PlaceGroupNumber(info, 3, 50, 37, red).x == -4);
+
+	const content::DrawGroupInfoContent defaults;
+	const GroupNumberDraw own = PlaceGroupNumber(defaults, 100, 50, 37, red);
+	BOOST_TEST(own.x == 98);
+	BOOST_TEST(own.y == 40);
+	BOOST_TEST((own.color == red));
+	BOOST_TEST(own.dropX == -1);
+
+	content::DrawGroupInfoContent share;
+	content::BindDrawGroupInfo(Parsed("DrawGroupInfo\n  DrawPositionYPercent = 50%\nEnd\n").document, share);
+	BOOST_TEST(PlaceGroupNumber(share, 100, 50, 37, red).y == 68);
+}
+
+// HeaderTemplateManager (HeaderTemplate.cpp): HeaderTemplate blocks (Font quoted, Point, Bold), a name met again read
+// into the same template; GameWindowManager::winCreateFromScript's END: a window naming a known template takes its font
+// in place of its FONT, "[NONE]" (no such template) keeps its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_header_templates_replace_a_windows_font)
+{
+	content::HeaderTemplates templates;
+	content::BindHeaderTemplates(Parsed("HeaderTemplate Title\n"
+										"  Font = \"Generals\"\n"
+										"  Point = 38\n"
+										"  Bold = No\n"
+										"End\n"
+										"HeaderTemplate Button\n"
+										"  Font = \"Arial\"\n"
+										"  Point = 23\n"
+										"End\n"
+										"HeaderTemplate Button\n"
+										"  Bold = Yes\n"
+										"End\n")
+									 .document,
+		templates);
+	BOOST_TEST_REQUIRE(templates.templates.size() == 2u);
+	const content::HeaderTemplate *button = templates.Find("Button");
+	BOOST_TEST_REQUIRE(button != nullptr);
+	BOOST_TEST(button->fontName == "Arial");
+	BOOST_TEST(button->point == 23);
+	BOOST_TEST(button->bold);
+	BOOST_TEST(templates.Find("[NONE]") == nullptr);
+
+	struct Window
+	{
+		std::string font_name;
+		std::uint32_t font_size;
+		bool font_bold;
+		std::string header_template;
+	};
+	std::vector<Window> windows{{"Times New Roman", 14, true, "Title"}, {"Times New Roman", 14, true, "[NONE]"}, {"Arial", 12, false, ""}};
+	content::ApplyHeaderTemplates(std::span<Window>(windows), templates);
+	BOOST_TEST(windows[0].font_name == "Generals");
+	BOOST_TEST(windows[0].font_size == 38u);
+	BOOST_TEST(!windows[0].font_bold);
+	BOOST_TEST(windows[1].font_name == "Times New Roman");
+	BOOST_TEST(windows[1].font_size == 14u);
+	BOOST_TEST(windows[1].font_bold);
+	BOOST_TEST(windows[2].font_name == "Arial");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

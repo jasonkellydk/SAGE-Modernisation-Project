@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <vector>
-#include <span>
-#include <utility>
-
 export module Graphics.Scene.Models.ModelAssetBinding;
+import std;
 
 export import Graphics.Scene.Models.ModelAssetGeometry;
 

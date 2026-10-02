@@ -1,4 +1,5 @@
 export module Engine.Core.Math.AxisAlignedBox3;
+import std;
 
 export import Engine.Core.Math.Vector3;
 export import Engine.Core.Math.CollisionResult3;

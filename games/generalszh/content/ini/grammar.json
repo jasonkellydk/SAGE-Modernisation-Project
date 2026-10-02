@@ -1,0 +1,272 @@
+{
+  "comment": "Nested block grammar of the C&C Generals Zero Hour INI dialect. Derived from GeneralsMD/Code + Core + engine/gui/wnd sources: top_level_blocks = theTypeTable in Core/GameEngine/Source/Common/INI/INI.cpp (matched case-sensitively via strcmp). nested[parent] = field names whose FieldParse proc calls ini->initFromINI/initFromINIMulti/initFromINIMultiProc (block closed by its own 'End', matched case-insensitively). Sources: ThingTemplate.cpp (Object/ObjectReskin tables: ArmorSet, WeaponSet, Prerequisites, UnitSpecificSounds/FX, Behavior/Body/Draw/ClientUpdate via Module::friend_newModuleData or MAKE_STANDARD_MODULE_DATA buildFieldParse, AddModule/ReplaceModule/InheritableModule/OverrideableByLikeKind which re-enter the Object field table so their children equal Object's; RemoveModule is a ONE-LINE field, not a block); W3DModelDraw.cpp (ConditionState/DefaultConditionState/TransitionState; AliasConditionState is ONE-LINE despite sharing parseConditionState); AIUpdate.cpp (Turret/AltTurret); RadiusDecalTemplate::parseRadiusDecalTemplate used by module fields DeliveryDecal (DeliverPayloadAIUpdate, NeutronMissileUpdate), AttackAreaDecal/TargetingReticleDecal (SpectreGunshipUpdate), GridDecalTemplate (DynamicShroudClearingRangeUpdate), OCL DeliverPayload/Attack DeliveryDecal, and InGameUI *RadiusCursor fields; FXList.cpp, ObjectCreationList.cpp nuggets; AI.cpp (SideInfo>SkillSet1-5, SkirmishBuildList>Structure); Eva.cpp (SideSounds); CampaignManager.cpp (Mission); ChallengeGenerals.cpp (GeneralPersona0-11); ControlBarScheme.cpp (ImagePart, AnimatingPart>ImagePart); ShellMenuScheme.cpp (ImagePart, LinePart); engine/gui/wnd GameWindowTransitions.cppm (Window). top_level_single_line lists top-level types whose parser consumes no 'End' (BenchProfile, LODPreset, ReallyLowMHz read their values from the same line; MapData's parser is an empty stub). ControlBarResizer's parser body is commented out in source, but shipped ControlBarResizer.ini uses normal block form (fields AltPosition/AltSize + END), so it is treated as a normal block here. legacy_unregistered_blocks are block types present in shipped data but NOT in theTypeTable (the engine never loads them): 'ButtonSet' (Data/INI/Default/ButtonSets.ini) and 'WebpageURL' (Data/INI/Webpages.ini); both are simple End-terminated blocks with no nested openers. Context-by-parent-key ambiguities: 'ParticleSystem' is a top-level block and also an FXList child (both blocks, no conflict); 'Draw' under Object vs ObjectReskin (both blocks); 'ImagePart' under ControlBarScheme and AnimatingPart; 'Science'/'Object' are one-line fields inside Prerequisites and SkillSetN but top-level block names - a parser must use nested[parent] only, never top_level_blocks, when inside a block. Behavior children (Turret, AltTurret, *Decal*) are only openers for the module types that declare them; no module type uses those names as one-line fields, so parent-key context is unambiguous. Key-value openers with arguments exist: 'Behavior = Type Tag', 'ReplaceModule Tag', 'ConditionState = FLAGS', 'TransitionState = A B', 'Mission Name', 'WeaponSet'/'ArmorSet' (no args). Tokenizer: legacy readLine treats ';' as comment start anywhere (no quoting), maps control chars (tabs) to spaces, seps are ' \n\r\t='; '//' is NOT a comment in the legacy parser. Not covered: ScriptEngine's separate Scripts.ini-style reader.",
+  "top_level_blocks": [
+    "AIData",
+    "Animation",
+    "Armor",
+    "AudioEvent",
+    "AudioSettings",
+    "BenchProfile",
+    "Bridge",
+    "Campaign",
+    "ChallengeGenerals",
+    "CommandButton",
+    "CommandMap",
+    "CommandSet",
+    "ControlBarResizer",
+    "ControlBarScheme",
+    "CrateData",
+    "Credits",
+    "DamageFX",
+    "DialogEvent",
+    "DrawGroupInfo",
+    "DynamicGameLOD",
+    "EvaEvent",
+    "FXList",
+    "GameData",
+    "HeaderTemplate",
+    "InGameUI",
+    "LODPreset",
+    "Language",
+    "Locomotor",
+    "MapCache",
+    "MapData",
+    "MappedImage",
+    "MiscAudio",
+    "Mouse",
+    "MouseCursor",
+    "MultiplayerColor",
+    "MultiplayerSettings",
+    "MultiplayerStartingMoneyChoice",
+    "MusicTrack",
+    "Object",
+    "ObjectCreationList",
+    "ObjectReskin",
+    "OnlineChatColors",
+    "ParticleSystem",
+    "PlayerTemplate",
+    "Rank",
+    "ReallyLowMHz",
+    "Road",
+    "Science",
+    "ScriptAction",
+    "ScriptCondition",
+    "ShellMenuScheme",
+    "SpecialPower",
+    "StaticGameLOD",
+    "Terrain",
+    "Upgrade",
+    "Video",
+    "WaterSet",
+    "WaterTransparency",
+    "Weapon",
+    "Weather",
+    "WindowTransition"
+  ],
+  "top_level_single_line": [
+    "BenchProfile",
+    "LODPreset",
+    "MapData",
+    "ReallyLowMHz"
+  ],
+  "nested": {
+    "AIData": [
+      "SideInfo",
+      "SkirmishBuildList"
+    ],
+    "AddModule": [
+      "AddModule",
+      "ArmorSet",
+      "Behavior",
+      "Body",
+      "ClientUpdate",
+      "Draw",
+      "InheritableModule",
+      "OverrideableByLikeKind",
+      "Prerequisites",
+      "ReplaceModule",
+      "UnitSpecificFX",
+      "UnitSpecificSounds",
+      "WeaponSet"
+    ],
+    "AnimatingPart": [
+      "ImagePart"
+    ],
+    "Attack": [
+      "DeliveryDecal"
+    ],
+    "Behavior": [
+      "AltTurret",
+      "AttackAreaDecal",
+      "DeliveryDecal",
+      "GridDecalTemplate",
+      "TargetingReticleDecal",
+      "Turret"
+    ],
+    "Campaign": [
+      "Mission"
+    ],
+    "ChallengeGenerals": [
+      "GeneralPersona0",
+      "GeneralPersona1",
+      "GeneralPersona10",
+      "GeneralPersona11",
+      "GeneralPersona2",
+      "GeneralPersona3",
+      "GeneralPersona4",
+      "GeneralPersona5",
+      "GeneralPersona6",
+      "GeneralPersona7",
+      "GeneralPersona8",
+      "GeneralPersona9"
+    ],
+    "ControlBarScheme": [
+      "AnimatingPart",
+      "ImagePart"
+    ],
+    "DeliverPayload": [
+      "DeliveryDecal"
+    ],
+    "Draw": [
+      "ConditionState",
+      "DefaultConditionState",
+      "TransitionState"
+    ],
+    "EvaEvent": [
+      "SideSounds"
+    ],
+    "FXList": [
+      "FXListAtBonePos",
+      "LightPulse",
+      "ParticleSystem",
+      "RayEffect",
+      "Sound",
+      "TerrainScorch",
+      "Tracer",
+      "ViewShake"
+    ],
+    "InGameUI": [
+      "A10StrikeRadiusCursor",
+      "AmbulanceRadiusCursor",
+      "AmbushRadiusCursor",
+      "AnthraxBombRadiusCursor",
+      "ArtilleryRadiusCursor",
+      "AttackContinueAreaRadiusCursor",
+      "AttackDamageAreaRadiusCursor",
+      "AttackScatterAreaRadiusCursor",
+      "CarpetBombRadiusCursor",
+      "ClearMinesRadiusCursor",
+      "ClusterMinesRadiusCursor",
+      "DaisyCutterRadiusCursor",
+      "EMPPulseRadiusCursor",
+      "EmergencyRepairRadiusCursor",
+      "FrenzyRadiusCursor",
+      "FriendlySpecialPowerRadiusCursor",
+      "GuardAreaRadiusCursor",
+      "HelixNapalmBombRadiusCursor",
+      "NapalmStrikeRadiusCursor",
+      "NuclearMissileRadiusCursor",
+      "OffensiveSpecialPowerRadiusCursor",
+      "ParadropRadiusCursor",
+      "ParticleCannonRadiusCursor",
+      "RadarRadiusCursor",
+      "ScudStormRadiusCursor",
+      "SpectreGunshipRadiusCursor",
+      "SpyDroneRadiusCursor",
+      "SpySatelliteRadiusCursor",
+      "SuperweaponScatterAreaRadiusCursor"
+    ],
+    "InheritableModule": [
+      "AddModule",
+      "ArmorSet",
+      "Behavior",
+      "Body",
+      "ClientUpdate",
+      "Draw",
+      "InheritableModule",
+      "OverrideableByLikeKind",
+      "Prerequisites",
+      "ReplaceModule",
+      "UnitSpecificFX",
+      "UnitSpecificSounds",
+      "WeaponSet"
+    ],
+    "Object": [
+      "AddModule",
+      "ArmorSet",
+      "Behavior",
+      "Body",
+      "ClientUpdate",
+      "Draw",
+      "InheritableModule",
+      "OverrideableByLikeKind",
+      "Prerequisites",
+      "ReplaceModule",
+      "UnitSpecificFX",
+      "UnitSpecificSounds",
+      "WeaponSet"
+    ],
+    "ObjectCreationList": [
+      "ApplyRandomForce",
+      "Attack",
+      "CreateDebris",
+      "CreateObject",
+      "DeliverPayload",
+      "FireWeapon"
+    ],
+    "ObjectReskin": [
+      "Draw"
+    ],
+    "OverrideableByLikeKind": [
+      "AddModule",
+      "ArmorSet",
+      "Behavior",
+      "Body",
+      "ClientUpdate",
+      "Draw",
+      "InheritableModule",
+      "OverrideableByLikeKind",
+      "Prerequisites",
+      "ReplaceModule",
+      "UnitSpecificFX",
+      "UnitSpecificSounds",
+      "WeaponSet"
+    ],
+    "ReplaceModule": [
+      "AddModule",
+      "ArmorSet",
+      "Behavior",
+      "Body",
+      "ClientUpdate",
+      "Draw",
+      "InheritableModule",
+      "OverrideableByLikeKind",
+      "Prerequisites",
+      "ReplaceModule",
+      "UnitSpecificFX",
+      "UnitSpecificSounds",
+      "WeaponSet"
+    ],
+    "ShellMenuScheme": [
+      "ImagePart",
+      "LinePart"
+    ],
+    "SideInfo": [
+      "SkillSet1",
+      "SkillSet2",
+      "SkillSet3",
+      "SkillSet4",
+      "SkillSet5"
+    ],
+    "SkirmishBuildList": [
+      "Structure"
+    ],
+    "WindowTransition": [
+      "Window"
+    ]
+  },
+  "legacy_unregistered_blocks": [
+    "ButtonSet",
+    "WebpageURL"
+  ]
+}

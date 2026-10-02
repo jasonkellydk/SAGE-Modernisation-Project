@@ -1,0 +1,114 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.in_game_chat;
+
+using namespace generalszh;
+
+namespace
+{
+std::u16string Label(std::string_view label)
+{
+	return std::u16string(label.begin(), label.end());
+}
+}
+
+BOOST_AUTO_TEST_SUITE(in_game_chat)
+
+// legacy_parity: InGameChat.cpp ToggleInGameChat / ShowInGameChat / SetInGameChatType / HideInGameChat: nothing in a
+// replay or outside a network game; the first toggle shows the window (label Chat:Everyone, Chat:Observers for a player
+// no longer playing); the next sends the trimmed line to whom the type says and hides it; the toggle right after a send
+// does nothing (justHid); a hidden window shows again with the line kept from Esc; an empty or "/host" line is not said.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_chat_box_shows_sends_and_hides)
+{
+	std::vector<std::pair<std::u16string, hud::InGameChatType>> said;
+	hud::InGameChatViewModel chat(Label, [&](std::u16string text, hud::InGameChatType type) { said.emplace_back(std::move(text), type); });
+	hud::ChatContext network{false, true, false, true};
+	chat.Toggle(hud::ChatContext{true, true, false, true}); // a replay
+	BOOST_TEST(!chat.Active());
+	chat.Toggle(hud::ChatContext{false, false, false, true}); // a skirmish
+	BOOST_TEST(!chat.Active());
+
+	chat.Toggle(network);
+	BOOST_TEST(chat.Active());
+	BOOST_TEST((chat.typeLabel.Get() == u"Chat:Everyone"));
+	chat.SetType(hud::InGameChatType::Allies, true); // MSG_META_CHAT_ALLIES after its toggle
+	BOOST_TEST((chat.typeLabel.Get() == u"Chat:Allies"));
+	chat.entry.Set(u"  attack now  ");
+	chat.done.Execute(); // Enter in the box (GEM_EDIT_DONE)
+	BOOST_TEST(!chat.Active());
+	BOOST_TEST_REQUIRE(said.size() == 1u);
+	BOOST_TEST((said[0].first == u"attack now"));
+	BOOST_TEST((said[0].second == hud::InGameChatType::Allies));
+	BOOST_TEST(chat.entry.Get().empty());
+	chat.Toggle(network); // the same key's meta-event: swallowed
+	BOOST_TEST(!chat.Active());
+
+	chat.Toggle(network);
+	BOOST_TEST(chat.Active());
+	chat.entry.Set(u"half typed");
+	chat.Hide(); // Esc
+	BOOST_TEST(!chat.Active());
+	chat.Toggle(hud::ChatContext{false, true, false, false}); // shown again, the line kept; an observer's label
+	BOOST_TEST((chat.entry.Get() == u"half typed"));
+	BOOST_TEST((chat.typeLabel.Get() == u"Chat:Observers"));
+	chat.entry.Set(u"/HOST");
+	chat.done.Execute();
+	BOOST_TEST(!chat.Active());
+	chat.Toggle(network); // swallowed (justHid)
+	chat.Toggle(network); // shown
+	BOOST_TEST(chat.Active());
+	chat.entry.Set(u"   ");
+	chat.done.Execute();
+	BOOST_TEST(!chat.Active());
+	BOOST_TEST(said.size() == 1u);
+}
+
+// legacy_parity: ToggleInGameChat's playerMask: EVERYONE every player's slot but the muted; ALLIES those allied both ways
+// and the local player; PLAYERS the local player alone; none without a local player.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chat_line_goes_to_whom_its_type_says)
+{
+	std::array<hud::ChatSlot, 8> slots{};
+	slots[0] = {true, true, false, false};  // the local player
+	slots[1] = {true, false, false, true};  // an ally
+	slots[2] = {true, false, true, false};  // a muted enemy
+	slots[4] = {true, false, false, false}; // an enemy
+	BOOST_TEST(hud::ChatRecipients(hud::InGameChatType::Everyone, slots, true) == 0b10011u);
+	BOOST_TEST(hud::ChatRecipients(hud::InGameChatType::Allies, slots, true) == 0b00011u);
+	BOOST_TEST(hud::ChatRecipients(hud::InGameChatType::Players, slots, true) == 0b00001u);
+	BOOST_TEST(hud::ChatRecipients(hud::InGameChatType::Everyone, slots, false) == 0u);
+}
+
+// legacy_parity: ConnectionManager::processChat: "[name] text"; for this slot, seen by an observer or from a player still
+// playing and not muted: in the sender's colour with the incoming sound; a line from an observer to a player, a muted
+// sender's or one not for this slot: nothing; a sender with no player: shown plainly whoever it was for.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_arriving_line_shows_in_its_senders_colour)
+{
+	hud::ChatArrival line{1, u"Ally", u"hello", 0b011u, true, true, false, 0xFF00FF00u};
+	const auto shown = hud::ReceiveChat(line, 0, true);
+	BOOST_TEST_REQUIRE(shown.has_value());
+	BOOST_TEST((shown->text == u"[Ally] hello"));
+	BOOST_TEST(shown->color.value_or(0u) == 0xFF00FF00u);
+	BOOST_TEST(shown->sound);
+	BOOST_TEST(!hud::ReceiveChat(line, 2, true).has_value()); // not for slot 2
+	hud::ChatArrival fromObserver = line;
+	fromObserver.senderActive = false;
+	BOOST_TEST(!hud::ReceiveChat(fromObserver, 0, true).has_value());
+	BOOST_TEST(hud::ReceiveChat(fromObserver, 0, false).has_value()); // an observer sees it
+	hud::ChatArrival muted = line;
+	muted.senderMuted = true;
+	BOOST_TEST(!hud::ReceiveChat(muted, 0, true).has_value());
+	hud::ChatArrival nobody = line;
+	nobody.senderHasPlayer = false;
+	const auto plain = hud::ReceiveChat(nobody, 7, true);
+	BOOST_TEST_REQUIRE(plain.has_value());
+	BOOST_TEST(!plain->color.has_value());
+	BOOST_TEST(!plain->sound);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

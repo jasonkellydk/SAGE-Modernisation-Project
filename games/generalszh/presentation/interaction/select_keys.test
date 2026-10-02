@@ -1,0 +1,247 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <vector>
+
+import games.generalszh.presentation.interaction.algorithms.select_keys;
+
+using namespace generalszh::presentation;
+
+namespace
+{
+KeyDrawable Unit(std::uint32_t id, std::uint32_t equivalence, bool onScreen)
+{
+	KeyDrawable d;
+	d.entity = ecs::Entity{id, 1};
+	d.equivalence = equivalence;
+	d.local = true;
+	d.mobile = true;
+	d.selectable = true;
+	d.onScreen = onScreen;
+	d.position = {static_cast<float>(id) * 10.0f, 0.0f, 0.0f};
+	return d;
+}
+
+std::vector<std::uint32_t> Ids(const std::vector<ecs::Entity> &entities)
+{
+	std::vector<std::uint32_t> ids;
+	for (const ecs::Entity entity : entities)
+		ids.push_back(entity.index);
+	return ids;
+}
+
+std::vector<std::string> Labels(const KeySelection &selection)
+{
+	std::vector<std::string> labels;
+	for (const KeyMessage &message : selection.messages)
+		labels.push_back(message.label);
+	return labels;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(select_keys)
+
+// legacy_parity: CommandXlat.cpp MSG_META_SELECT_ALL (Q) with InGameUI.cpp selectAllUnitsByType /
+// selectAllUnitsByTypeAcrossRegion / kindOfUnitSelection: across the screen first (the player's, uncontained,
+// unselected, alive, mass selectable (no structure), on the map, no DOZER / HARVESTER / IGNORES_SELECT_ALL), saying
+// GUI:SelectedAcrossScreen; when that takes nothing, across the map, saying GUI:SelectedAcrossMap. A selected structure
+// (or dozer...) drops the selection first (Patch 1.03).
+BOOST_AUTO_TEST_CASE(legacy_parity_q_selects_the_screen_then_the_map)
+{
+	KeyDrawable tank = Unit(1, 10, true);
+	KeyDrawable dozer = Unit(2, 11, true);
+	dozer.dozer = true;
+	KeyDrawable farTank = Unit(3, 10, false);
+	KeyDrawable enemy = Unit(4, 10, true);
+	enemy.local = false;
+	KeyDrawable base = Unit(5, 12, true);
+	base.structure = true;
+	base.mobile = false;
+	KeyDrawable plane = Unit(6, 13, false);
+	plane.aircraft = true;
+	std::vector<KeyDrawable> list{tank, dozer, farTank, enemy, base, plane};
+
+	auto result = SelectAllKey(list, false, 0, {});
+	BOOST_TEST(!result.deselectAll);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{1}));
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossScreen"}));
+	BOOST_TEST(result.createGroup);
+
+	list[0].selected = true;
+	result = SelectAllKey(list, false, 0, list[0].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{3, 6}));
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossMap"}));
+
+	list[0].selected = false;
+	list[4].selected = true;
+	result = SelectAllKey(list, false, 0, list[4].entity);
+	BOOST_TEST(result.deselectAll);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{1}));
+}
+
+// legacy_parity: MSG_META_SELECT_ALL_AIRCRAFT (W): AIRCRAFT required; anything selected that is not one drops the
+// selection; nothing new anywhere still says GUI:SelectedAcrossMap unless the first selected is a structure.
+BOOST_AUTO_TEST_CASE(legacy_parity_w_selects_the_aircraft)
+{
+	KeyDrawable tank = Unit(1, 10, true);
+	KeyDrawable plane = Unit(2, 13, false);
+	plane.aircraft = true;
+	std::vector<KeyDrawable> list{tank, plane};
+	list[0].selected = true;
+	auto result = SelectAllKey(list, true, 0, list[0].entity);
+	BOOST_TEST(result.deselectAll);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{2}));
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossMap"}));
+
+	list[0].selected = false;
+	list[1].selected = true;
+	result = SelectAllKey(list, true, 0, list[1].entity);
+	BOOST_TEST(!result.deselectAll);
+	BOOST_TEST(result.select.empty());
+	BOOST_TEST(!result.createGroup);
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossMap"}));
+}
+
+// legacy_parity: InGameUI MaxSelectionSize above 0 (the shipped InGameUI.ini has 0: off): once the selection holds that
+// many, the region takes no more, saying GUI:MaxSelectionSize with the cap once per region; the newest drawables first.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_selection_cap_says_so_once)
+{
+	std::vector<KeyDrawable> list{Unit(1, 10, true), Unit(2, 10, true), Unit(3, 10, true)};
+	const auto result = SelectAllKey(list, false, 2, {});
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{1, 2}));
+	BOOST_TEST_REQUIRE(result.messages.size() == 2u);
+	BOOST_TEST((result.messages[0] == KeyMessage{"GUI:MaxSelectionSize", 2}));
+	BOOST_TEST(result.messages[1].label == "GUI:SelectedAcrossScreen");
+}
+
+// legacy_parity: MSG_META_SELECT_MATCHING_UNITS (E) with selectUnitsMatchingCurrentSelection / selectMatchingAcrossRegion
+// / similarUnitSelection: the player's selected templates (isEquivalentTo), across the screen then the map; a selected
+// car bomb takes any car bomb; nothing of the player's selected says GUI:NothingSelected; no select voice (_NO_SOUND).
+BOOST_AUTO_TEST_CASE(legacy_parity_e_selects_the_same_kind)
+{
+	KeyDrawable picked = Unit(1, 10, true);
+	picked.selected = true;
+	KeyDrawable same = Unit(2, 10, true);
+	KeyDrawable sameFar = Unit(3, 10, false);
+	KeyDrawable other = Unit(4, 20, true);
+	std::vector<KeyDrawable> list{picked, same, sameFar, other};
+	auto result = SelectMatchingKey(list, 0, list[0].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{2}));
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossScreen"}));
+	BOOST_TEST(!result.createGroup);
+
+	list[1].selected = true;
+	result = SelectMatchingKey(list, 0, list[0].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{3}));
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:SelectedAcrossMap"}));
+
+	for (KeyDrawable &d : list)
+		d.selected = false;
+	result = SelectMatchingKey(list, 0, {});
+	BOOST_TEST(result.select.empty());
+	BOOST_TEST((Labels(result) == std::vector<std::string>{"GUI:NothingSelected"}));
+
+	KeyDrawable bomb = Unit(5, 30, true);
+	bomb.carBomb = true;
+	bomb.selected = true;
+	KeyDrawable otherBomb = Unit(6, 31, true);
+	otherBomb.carBomb = true;
+	result = SelectMatchingKey({bomb, otherBomb}, 0, bomb.entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{6}));
+}
+
+// legacy_parity: MSG_META_SELECT_NEXT_UNIT / SELECT_PREV_UNIT (Ctrl+Right / Ctrl+Left) over the drawable list (index 0
+// the newest): with nothing selected, next takes the last fitting drawable walking from the oldest, prev looks at the
+// first drawable only (its getPrevDrawable is none); with a selection, next walks back from the first selected (off the
+// front it starts again at the last, which the loop re-steps onto), prev walks forward (off the end it starts again at
+// the first); the found one is selected alone and looked at.
+BOOST_AUTO_TEST_CASE(legacy_parity_ctrl_arrows_step_through_the_units)
+{
+	std::vector<KeyDrawable> list{Unit(0, 1, true), Unit(1, 1, true), Unit(2, 1, true), Unit(3, 1, true), Unit(4, 1, true)};
+	auto result = StepSelectKey(list, StepKey::NextUnit, 0, {});
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{4}));
+	BOOST_TEST(!result.deselectAll);
+	BOOST_TEST(result.lookAt.has_value());
+	BOOST_TEST((*result.lookAt)[0] == 40.0f);
+	result = StepSelectKey(list, StepKey::PrevUnit, 0, {});
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{0}));
+
+	list[2].selected = true;
+	result = StepSelectKey(list, StepKey::NextUnit, 1, list[2].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{1}));
+	BOOST_TEST(result.deselectAll);
+	result = StepSelectKey(list, StepKey::PrevUnit, 1, list[2].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{3}));
+	list[2].selected = false;
+
+	list[0].selected = true;
+	result = StepSelectKey(list, StepKey::NextUnit, 1, list[0].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{4}));
+	list[0].selected = false;
+
+	list[4].selected = true;
+	result = StepSelectKey(list, StepKey::PrevUnit, 1, list[4].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{0}));
+	list[4].selected = false;
+
+	// Prev with nothing selected and an immobile first drawable: nothing.
+	list[0].mobile = false;
+	result = StepSelectKey(list, StepKey::PrevUnit, 0, {});
+	BOOST_TEST(result.select.empty());
+}
+
+// legacy_parity: MSG_META_SELECT_NEXT_WORKER / SELECT_PREV_WORKER (Ctrl+Up / Ctrl+Down): the same walks for the
+// player's DOZERs (next with nothing selected needs no mobility).
+BOOST_AUTO_TEST_CASE(legacy_parity_ctrl_up_and_down_step_through_the_workers)
+{
+	KeyDrawable worker1 = Unit(0, 1, true);
+	worker1.dozer = true;
+	KeyDrawable tank = Unit(1, 2, true);
+	KeyDrawable worker2 = Unit(2, 1, true);
+	worker2.dozer = true;
+	worker2.mobile = false;
+	std::vector<KeyDrawable> list{worker1, tank, worker2};
+	auto result = StepSelectKey(list, StepKey::NextWorker, 0, {});
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{2}));
+	list[2].selected = true;
+	result = StepSelectKey(list, StepKey::NextWorker, 1, list[2].entity);
+	BOOST_TEST((Ids(result.select) == std::vector<std::uint32_t>{0}));
+	list[2].selected = false;
+	list[0].selected = true;
+	result = StepSelectKey(list, StepKey::PrevWorker, 1, list[0].entity);
+	BOOST_TEST(result.select.empty()); // the only other worker is immobile
+}
+
+// legacy_parity: SELECT_NEXT_WORKER with nothing selected also plays the worker's own VoiceSelect (CommandXlat's
+// soundEvent with its object), besides the group's; the other step keys do not.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_next_worker_says_its_own_line)
+{
+	KeyDrawable worker = Unit(0, 1, true);
+	worker.dozer = true;
+	const std::vector<KeyDrawable> list{worker};
+	BOOST_TEST(StepSelectKey(list, StepKey::NextWorker, 0, {}).unitVoice);
+	BOOST_TEST(!StepSelectKey(list, StepKey::PrevWorker, 0, {}).unitVoice);
+	BOOST_TEST(!StepSelectKey(list, StepKey::NextUnit, 0, {}).unitVoice);
+}
+
+// legacy_parity: SelectionXlat.cpp selectFriends: with MaxSelectionSize above 0, a click or drag takes drawables (newest
+// first) while the selection is under it, and says GUI:MaxSelectionSize the first time one is refused: m_displayedMaxWarning
+// is never cleared, so only once a game. Below 1, no cap.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drag_stops_at_the_selection_cap_and_warns_once_a_game)
+{
+	const std::vector<ecs::Entity> adding{ecs::Entity{3, 1}, ecs::Entity{2, 1}, ecs::Entity{1, 1}};
+	bool displayed = false;
+	auto capped = CapSelection(adding, 1, 3, displayed);
+	BOOST_TEST((Ids(capped.taken) == std::vector<std::uint32_t>{3, 2}));
+	BOOST_TEST(capped.warn);
+	BOOST_TEST(displayed);
+	capped = CapSelection(adding, 3, 3, displayed);
+	BOOST_TEST(capped.taken.empty());
+	BOOST_TEST(!capped.warn);
+	bool fresh = false;
+	capped = CapSelection(adding, 100, 0, fresh);
+	BOOST_TEST(capped.taken.size() == 3u);
+	BOOST_TEST(!fresh);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MaterialStateTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Materials.State.Tests;
+import std;
 import Graphics.Materials.State;
 import Graphics.Materials.Ordering;
 import Graphics.Materials.W3DState;

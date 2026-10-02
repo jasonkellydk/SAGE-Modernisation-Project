@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PixelEncodingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <utility>
-#include <vector>
 export module Assets.Images.PixelEncoding.Tests;
+import std;
 import Assets.Images.PixelEncoding;
 using namespace Assets;
 

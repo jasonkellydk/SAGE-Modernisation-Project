@@ -1,0 +1,67 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+
+import games.generalszh.presentation.animation.tread_roll;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(tread_roll)
+
+BOOST_AUTO_TEST_CASE(treads_roll_back_driving_opposite_pivoting_and_stay_when_slow)
+{
+	// Driving at full speed for a quarter second at 2 a second: both back by a half (wrapped).
+	std::array<float, 2> treads{0.25f, 0.25f};
+	RollTreads(treads, {1.0f, 0, 0.25f}, 2.0f, 0.6f, 0.3f);
+	BOOST_TEST(treads[0] == 0.75f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(treads[1] == 0.75f, boost::test_tools::tolerance(1e-5f));
+	// Pivoting left in place: left forward, right back.
+	treads = {0.5f, 0.5f};
+	RollTreads(treads, {0.0f, 1000, 0.05f}, 2.0f, 0.6f, 0.3f);
+	BOOST_TEST(treads[0] == 0.6f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(treads[1] == 0.4f, boost::test_tools::tolerance(1e-5f));
+	// Creeping straight: no roll (no sliding look).
+	treads = {0.5f, 0.5f};
+	RollTreads(treads, {0.2f, 0, 0.5f}, 2.0f, 0.6f, 0.3f);
+	BOOST_TEST(treads[0] == 0.5f);
+	// Turning fast (not a pivot) while driving on: both back.
+	RollTreads(treads, {0.9f, -500, 0.1f}, 2.0f, 0.6f, 0.3f);
+	BOOST_TEST(treads[0] == 0.3f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(treads[1] == 0.3f, boost::test_tools::tolerance(1e-5f));
+}
+
+BOOST_AUTO_TEST_CASE(tires_turn_with_distance_backwards_when_reversing_and_wrap)
+{
+	// 3 a tick at 0.2 radians a unit for a second: 18 radians, wrapped into [-pi, pi).
+	const float forward = RollWheels(0.0f, 3.0f, 0.2f, 1.0f);
+	BOOST_TEST(forward >= -3.1416f);
+	BOOST_TEST(forward < 3.1416f);
+	BOOST_TEST(forward == 18.0f - 6.2831853f * 3.0f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(RollWheels(0.0f, -1.0f, 0.2f, 0.1f) == -0.6f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(RollWheels(0.5f, 0.0f, 0.2f, 1.0f) == 0.5f);
+}
+
+BOOST_AUTO_TEST_CASE(front_wheels_steer_into_a_turn_and_the_cab_swings_after_them)
+{
+	struct Wheels
+	{
+		float steer{0}, cab{0}, trailer{0};
+	} wheels;
+	// Turning left for a second: the wheels reach nearly all of their 22 degrees; the cab 1.5 times that.
+	for (int frame = 0; frame < 60; ++frame)
+		SteerWheels(wheels, {1000, 1.0f, 1.0f / 60.0f}, 0.384f, 1.5f, 0.5f, 0.7f);
+	BOOST_TEST(wheels.steer == 0.384f, boost::test_tools::tolerance(0.06f)); // a tenth of the gap each 30th: 96% there after a second
+	BOOST_TEST(wheels.cab == 0.576f, boost::test_tools::tolerance(0.06f));
+	BOOST_TEST(wheels.trailer < 0.0f); // the other way
+	// Reversing while turning left: the wheels point the other way.
+	for (int frame = 0; frame < 120; ++frame)
+		SteerWheels(wheels, {1000, -1.0f, 1.0f / 60.0f}, 0.384f, 1.5f, 0.5f, 0.7f);
+	BOOST_TEST(wheels.steer == -0.384f, boost::test_tools::tolerance(0.02f));
+	// Straight on: back to the middle.
+	for (int frame = 0; frame < 240; ++frame)
+		SteerWheels(wheels, {0, 1.0f, 1.0f / 60.0f}, 0.384f, 1.5f, 0.5f, 0.7f);
+	BOOST_TEST(std::abs(wheels.steer) < 0.01f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

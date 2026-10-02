@@ -2,11 +2,8 @@ module;
 #define BOOST_TEST_MODULE W3DCollectionTests
 #include <boost/test/included/unit_test.hpp>
 #include "W3DAssembly.test-data.h"
-#include <array>
-#include <limits>
-#include <span>
-#include <string>
 export module Assets.Adapters.W3D.Collection.Tests;
+import std;
 import Assets.Adapters.W3D.Collection;
 using namespace Assets;
 using namespace AssemblyTestData;

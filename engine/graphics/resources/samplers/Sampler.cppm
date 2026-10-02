@@ -1,8 +1,5 @@
-module;
-
-#include <cstdint>
-
 export module Graphics.Resources.Samplers.Sampler;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Pools.ResourcePool;

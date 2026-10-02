@@ -25,26 +25,10 @@
 // Modern engine navigation and deterministic movement integration.
 module;
 
-#include <cstdint>
-#include <chrono>
-#include <coroutine>
-#include <cmath>
-#include <array>
-#include <algorithm>
-#include <limits>
-#include <memory>
-#include <map>
-#include <functional>
-#include <optional>
-#include <span>
-#include <tuple>
-#include <vector>
-
 #include "Utility/CppMacros.h"
 #include "PreRTS.h"
 
 #include "engine/navigation/pathfinder_api.h"
-
 
 #include "Common/Player.h"
 #include "Common/CRCDebug.h"
@@ -83,6 +67,7 @@ module;
 #include "Common/PerfMetrics.h"
 
 export module engine.navigation.pathfinder;
+import std;
 
 import engine.debug;
 import engine.navigation;
@@ -374,7 +359,7 @@ void Pathfinder::updateLayer(Object *obj, PathfindLayerEnum layer)
  */
 void Pathfinder::classifyFence( Object *obj, Bool insert )
 {
-	IRegion2D changedCells{{INT_MAX,INT_MAX},{INT_MIN,INT_MIN}};
+	IRegion2D changedCells{{std::numeric_limits<int>::max(),std::numeric_limits<int>::max()},{std::numeric_limits<int>::min(),std::numeric_limits<int>::min()}};
 	const Coord3D *pos = obj->getPosition();
   Real angle = obj->getOrientation();
 

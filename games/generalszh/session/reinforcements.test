@@ -1,0 +1,911 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.content.objects.object_definition;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.gameplay.teams.algorithms.reinforcements;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.common.spatial.resources.ground_height;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.delivery.components.delivery;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.teams.resources.team_roster;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
+import engine.gameplay.rts.combat.components.aggression;
+import engine.gameplay.rts.combat.resources.attack_priorities;
+import engine.gameplay.rts.movement.components.formation_member;
+import engine.gameplay.rts.movement.components.desired_speed;
+import games.generalszh.gameplay.orders.components.formation_move;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.gameplay.orders.algorithms.group_orders;
+import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.identity.components.owner;
+
+// ScriptActions::doCreateReinforcements' transports (CREATE_REINFORCEMENT_TEAM with a TeamTransport) on the live shell
+// map: a Chinook's move, landing, evacuation and departure (ChinookAIUpdate), a cargo plane's paradrop (DeliverPayload
+// AIUpdate::deliverPayloadViaModuleData) and TeamStartsFull (PartitionSolver).
+using namespace generalszh;
+namespace level = engine::level;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+
+// Two named waypoints between `least` and `most` apart: {destination, origin}.
+std::pair<std::string, std::string> Waypoints(const level::Level &level, Fixed least, Fixed most)
+{
+	for (const auto &to : level.markers)
+		for (const auto &from : level.markers)
+		{
+			if (to.name.empty() || from.name.empty())
+				continue;
+			const Fixed distance = Engine::Math::Distance(to.position.XY(), from.position.XY());
+			if (distance >= least && distance <= most)
+				return {to.name, from.name};
+		}
+	return {};
+}
+
+level::Properties Team(std::string name, std::string transport, std::string unit, std::int64_t count, std::string origin)
+{
+	level::Properties team;
+	team.Set("teamName", std::move(name));
+	team.Set("teamOwner", std::string("PlyrCivilian"));
+	team.Set("teamIsSingleton", false);
+	team.Set("teamUnitType1", std::move(unit));
+	team.Set("teamUnitMaxCount1", count);
+	if (!transport.empty())
+		team.Set("teamTransport", std::move(transport));
+	team.Set("teamReinforcementOrigin", std::move(origin));
+	return team;
+}
+
+std::vector<ecs::Entity> OfType(session::Session &game, std::uint32_t team, std::string_view type)
+{
+	std::vector<ecs::Entity> found;
+	for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+		if (const auto *ref = game.World().Get<gp::DefinitionRef>(member); ref != nullptr && game.Game().templates.DefinitionAt(ref->index).name == type)
+			found.push_back(member);
+	return found;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shell_map_reinforcements)
+
+// ScriptActions::doCreateReinforcements with a Chinook (ChinookAIUpdate::aiDoCommand, retail: MOVE_TO_AND_EVAC_AND_EXIT
+// with TeamTransportsExit): the Chinook is made at the origin, the Humvee inside it (addToContain), the team inactive.
+// It flies to the waypoint (AIMoveToState); the tick after its move is over it lands (ChinookTakeoffOrLandingState);
+// the tick after it is down everyone is out at once (ChinookEvacuateState: removeAllContained), the team is active
+// (setActive) and it takes off (TAKING_OFF); then it heads for where it was made (ChinookHeadOffMapState) and stays
+// there: the origin is inside the map, so it is never outside the extent to be removed. (How fast it comes down is its
+// locomotor's height behaviour, not this machine's: only the ticks relative to its touchdown are pinned.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chinook_lands_its_reinforcements_and_heads_home)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	const auto [destination, origin] = Waypoints(level, Fixed::FromInt(300), Fixed::FromInt(500));
+	BOOST_TEST_REQUIRE(!destination.empty());
+	level.scenario.groups.push_back(Team("TestChinookDrop", "AmericaVehicleChinook", "AmericaVehicleHumvee", 1, origin));
+	level.scenario.groups.back().Set("teamTransportsExit", true);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam("TestChinookDrop");
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	game.Tick();
+	gameplay::CreateReinforcements(game.Game(), "TestChinookDrop", destination);
+	const auto instances = game.Teams().Instances(*prototype);
+	BOOST_TEST_REQUIRE(instances.size() == 1u);
+	const std::uint32_t team = instances.front();
+	const auto chinooks = OfType(game, team, "AmericaVehicleChinook");
+	const auto humvees = OfType(game, team, "AmericaVehicleHumvee");
+	BOOST_TEST_REQUIRE(chinooks.size() == 1u);
+	BOOST_TEST_REQUIRE(humvees.size() == 1u);
+	const ecs::Entity chinook = chinooks.front();
+	const ecs::Entity humvee = humvees.front();
+	const FixedVector2 start = game.World().Get<gp::Transform>(chinook)->position.XY();
+	BOOST_TEST(game.World().Get<gp::Passenger>(humvee) != nullptr);
+	BOOST_TEST(!game.Teams().TeamAt(team).active);
+	BOOST_TEST(game.World().Get<gameplay::ScriptedEvacuation>(chinook)->locked == 0);
+	std::uint64_t arrived = 0, down = 0, out = 0, active = 0, takingOff = 0;
+	for (int tick = 0; tick < 1200; ++tick)
+	{
+		game.Tick();
+		const std::uint64_t now = game.CurrentTick();
+		BOOST_TEST_REQUIRE(game.World().IsAlive(chinook));
+		const auto &at = game.World().Get<gp::Transform>(chinook)->position;
+		const auto *transport = game.World().Get<gp::Transport>(chinook);
+		if (arrived == 0 && game.World().Get<gp::MoveOrder>(chinook)->mode == gp::MoveMode::Idle)
+			arrived = now;
+		if (down == 0 && transport->landing && at.z - game.Game().ground.Surface(at.XY()) <= Fixed::FromInt(3))
+			down = now;
+		if (out == 0 && game.World().Get<gp::Passenger>(humvee) == nullptr)
+			out = now;
+		if (active == 0 && game.Teams().TeamAt(team).active)
+			active = now;
+		if (takingOff == 0 && transport->takingOff)
+			takingOff = now;
+	}
+	BOOST_TEST(arrived > 2u);
+	BOOST_TEST(down > arrived);
+	BOOST_TEST(out == down + 1);
+	BOOST_TEST(active == out);
+	BOOST_TEST(takingOff == out);
+	const auto &at = game.World().Get<gp::Transform>(chinook)->position;
+	BOOST_TEST((Engine::Math::Distance(at.XY(), start) < Fixed::FromInt(5)));
+	const auto *evacuation = game.World().Get<gameplay::ScriptedEvacuation>(chinook);
+	BOOST_TEST_REQUIRE(evacuation != nullptr);
+	BOOST_TEST((evacuation->stage == gameplay::EvacuationStage::HeadingOff));
+	BOOST_TEST(evacuation->moveEnds == 0u);
+}
+
+// ScriptActions::doCreateReinforcements with a cargo plane (DeliverPayloadAIUpdate, PutInContainer AmericaParachute):
+// each Ranger packed in its own parachute inside the plane, the plane flying its module's delivery to the waypoint
+// (deliverPayloadViaModuleData: target and move-to the waypoint, its DeliveryDistance, DropDelay and DoorDelay); the
+// run drops them all, and the team stays inactive (nothing in a delivery activates it).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cargo_plane_paradrops_its_reinforcements)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	const auto [destination, origin] = Waypoints(level, Fixed::FromInt(300), Fixed::FromInt(500));
+	BOOST_TEST_REQUIRE(!destination.empty());
+	level.scenario.groups.push_back(Team("TestParadrop", "AmericaJetCargoPlane", "AmericaInfantryRanger", 4, origin));
+	level.scenario.groups.back().Set("teamStartsFull", true);
+	level.scenario.groups.back().Set("teamTransportsExit", true);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam("TestParadrop");
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	game.Tick();
+	gameplay::CreateReinforcements(game.Game(), "TestParadrop", destination);
+	const std::uint32_t team = game.Teams().Instances(*prototype).front();
+	const auto planes = OfType(game, team, "AmericaJetCargoPlane");
+	const auto rangers = OfType(game, team, "AmericaInfantryRanger");
+	const auto chutes = OfType(game, team, "AmericaParachute");
+	BOOST_TEST_REQUIRE(planes.size() == 1u);
+	BOOST_TEST(rangers.size() == 4u);
+	BOOST_TEST(chutes.size() == 4u);
+	const ecs::Entity plane = planes.front();
+	for (const ecs::Entity chute : chutes)
+	{
+		const auto *seat = game.World().Get<gp::Passenger>(chute);
+		BOOST_TEST_REQUIRE(seat != nullptr);
+		BOOST_TEST((seat->transport == plane));
+	}
+	for (const ecs::Entity ranger : rangers)
+		BOOST_TEST(game.World().Get<gp::OffMap>(ranger) != nullptr);
+	const auto *delivery = game.World().Get<gp::Delivery>(plane);
+	BOOST_TEST_REQUIRE(delivery != nullptr);
+	const FixedVector2 waypoint = game.Game().waypoints.Position(game.Game().waypoints.Find(destination)).XY();
+	BOOST_TEST((delivery->target == waypoint));
+	BOOST_TEST((delivery->moveTo == waypoint));
+	BOOST_TEST((delivery->distance > Fixed{}));
+	const Fixed deliveryDistance = delivery->distance;
+	BOOST_TEST(game.World().Get<gameplay::ScriptedEvacuation>(plane) == nullptr);
+	BOOST_TEST(!game.Teams().TeamAt(team).active);
+	// Its approach ends within DeliveryDistance of the waypoint on the first pass (the move to it is not over before:
+	// a final goal is reached within the locomotor's CloseEnoughDist, wings included).
+	bool delivering = false;
+	std::vector<ecs::Entity> dropped; // out of the plane (off it, alive or not since: the shell map's battle goes on)
+	for (int tick = 0; tick < 1500; ++tick)
+	{
+		game.Tick();
+		for (const ecs::Entity ranger : rangers)
+			if (game.World().IsAlive(ranger) && game.World().Get<gp::OffMap>(ranger) == nullptr &&
+				std::find(dropped.begin(), dropped.end(), ranger) == dropped.end())
+				dropped.push_back(ranger);
+		const auto *run = game.World().IsAlive(plane) ? game.World().Get<gp::Delivery>(plane) : nullptr;
+		if (!delivering && run != nullptr && run->phase == gp::DeliveryPhase::Delivering)
+		{
+			delivering = true;
+			BOOST_TEST(run->attempts == 0);
+			const FixedVector2 at = game.World().Get<gp::Transform>(plane)->position.XY();
+			BOOST_TEST((Engine::Math::Distance(at, waypoint) < deliveryDistance));
+		}
+	}
+	BOOST_TEST(delivering);
+	BOOST_TEST(dropped.size() == 4u);
+	BOOST_TEST(!game.Teams().TeamAt(team).active);
+}
+
+// ScriptActions::doCreateReinforcements with TeamStartsFull and no TeamTransport (PartitionSolver, PREFER_FAST_SOLUTION):
+// the team's own Humvee (TRANSPORT) takes its Rangers, one slot each, while it has room; the rest move on foot; the team
+// is active at once and the Humvee moves to the waypoint with them inside.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_that_starts_full_loads_into_its_own_transport)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	const auto [destination, origin] = Waypoints(level, Fixed::FromInt(300), Fixed::FromInt(500));
+	BOOST_TEST_REQUIRE(!destination.empty());
+	level.scenario.groups.push_back(Team("TestStartsFull", "", "AmericaVehicleHumvee", 1, origin));
+	level.scenario.groups.back().Set("teamUnitType2", std::string("AmericaInfantryRanger"));
+	level.scenario.groups.back().Set("teamUnitMaxCount2", std::int64_t{7});
+	level.scenario.groups.back().Set("teamStartsFull", true);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam("TestStartsFull");
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	game.Tick();
+	gameplay::CreateReinforcements(game.Game(), "TestStartsFull", destination);
+	const std::uint32_t team = game.Teams().Instances(*prototype).front();
+	const ecs::Entity humvee = OfType(game, team, "AmericaVehicleHumvee").front();
+	const auto rangers = OfType(game, team, "AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(rangers.size() == 7u);
+	const std::uint32_t room = game.World().Get<gp::Transport>(humvee)->definition.slots;
+	std::uint32_t inside = 0;
+	for (const ecs::Entity ranger : rangers)
+		if (const auto *seat = game.World().Get<gp::Passenger>(ranger))
+		{
+			BOOST_TEST((seat->transport == humvee));
+			++inside;
+		}
+		else
+			BOOST_TEST((game.World().Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Point));
+	BOOST_TEST(inside == std::min<std::uint32_t>(room, 7u));
+	BOOST_TEST(game.World().Get<gp::Transport>(humvee)->occupied == inside);
+	BOOST_TEST(game.Teams().TeamAt(team).active);
+	BOOST_TEST((game.World().Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::Point));
+}
+
+// The machines are simulation state: a Chinook drop and a paradrop running together end the same on 1 and 4 workers,
+// and restored from a checkpoint taken mid-flight (the Chinook still Moving with its Humvee aboard, the plane on its
+// approach) they carry on exactly (equal state hashes after every later tick).
+BOOST_AUTO_TEST_CASE(reinforcement_transports_are_deterministic_and_checkpoint)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	const auto [destination, origin] = Waypoints(level, Fixed::FromInt(300), Fixed::FromInt(500));
+	BOOST_TEST_REQUIRE(!destination.empty());
+	level.scenario.groups.push_back(Team("TestChinookDrop", "AmericaVehicleChinook", "AmericaVehicleHumvee", 2, origin));
+	level.scenario.groups.back().Set("teamTransportsExit", true);
+	level.scenario.groups.push_back(Team("TestParadrop", "AmericaJetCargoPlane", "AmericaInfantryRanger", 4, origin));
+	const auto run = [&](std::size_t workers, bool checkpoint) {
+		auto game = std::make_unique<session::Session>(level, shell.game, session::SessionOptions{42, workers, {}});
+		game->Tick();
+		gameplay::CreateReinforcements(game->Game(), "TestChinookDrop", destination);
+		gameplay::CreateReinforcements(game->Game(), "TestParadrop", destination);
+		for (int tick = 0; tick < 60; ++tick)
+			game->Tick();
+		if (checkpoint)
+		{
+			auto restored = session::Session::Restore(level, shell.game, session::SessionOptions{42, workers, {}}, game->Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST(restored->StateHash() == game->StateHash());
+			game = std::move(restored);
+		}
+		std::vector<ecs::StateHashValue> hashes;
+		for (int tick = 0; tick < 600; ++tick)
+		{
+			game->Tick();
+			hashes.push_back(game->StateHash());
+		}
+		return hashes;
+	};
+	const auto single = run(1, false);
+	BOOST_TEST((run(4, false) == single));
+	BOOST_TEST((run(1, true) == single));
+	BOOST_TEST((run(4, true) == single));
+}
+
+namespace
+{
+// A cell corner (Pathfinder::adjustCoordToCell without centring: (cell + 0.05) * PATHFIND_CELL_SIZE) near `at`.
+FixedVector2 CellCorner(FixedVector2 at)
+{
+	const auto corner = [](Fixed value) { return Fixed::FromInt((value / Fixed::FromInt(10)).Floor()) * Fixed::FromInt(10) + Fixed::FromRatio(1, 2); };
+	return {corner(at.x), corner(at.y)};
+}
+
+std::pair<std::int64_t, std::int64_t> CellOf(FixedVector2 at) { return {(at.x / Fixed::FromInt(10)).Floor(), (at.y / Fixed::FromInt(10)).Floor()}; }
+}
+
+// AIGroup::groupMoveToPosition for a player's order (CMD_FROM_PLAYER), as EA wrote it (AIGroup.cpp): four Humvees in a row
+// ordered 300 off (past MinDistanceForGroup 100) get the group's ground path (friend_computeGroundPath: four vehicles,
+// not past DistanceRequiresGroup 500, no infantry to fail the straight-line test), but on open ground it is one straight
+// leg, whose last node six cells short of its end is its first: friend_moveVehicleToPos gives no columns. So each goes
+// to the destination offset as it stands from the Humvee nearest it (computeIndividualDestination: at most six bounding
+// radii): the first on the point, the others 30, 60 and 90 to its side, clipped. Ordered to a point inside their own
+// area (grown by GroupMoveClickToGatherAreaFactor) they tighten on it instead, all to the one point.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_players_group_order_moves_apart_or_tightens)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto team = game.Teams().FindTeam("teamPlyrCivilian");
+	BOOST_TEST_REQUIRE(team.has_value());
+	const std::uint32_t player = game.Teams().TeamAt(*team).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 start = (low + high) / Fixed::FromInt(2);
+	std::vector<ecs::Entity> humvees;
+	for (int index = 0; index < 4; ++index)
+		humvees.push_back(game.Place("AmericaVehicleHumvee", start + FixedVector2{Fixed::FromInt(index * 30), Fixed{}}, {}, *team));
+	const auto order = [&](FixedVector2 to) {
+		gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{humvees, to});
+	};
+	const FixedVector2 distant = start + FixedVector2{Fixed{}, Fixed::FromInt(300)};
+	order(distant);
+	const Fixed radius = content::BoundingCircleRadius(shell.game.objects.Find("AmericaVehicleHumvee")->geometry);
+	for (std::size_t index = 0; index < humvees.size(); ++index)
+	{
+		const auto *move = game.World().Get<gp::MoveOrder>(humvees[index]);
+		BOOST_TEST_REQUIRE((move->mode == gp::MoveMode::Point));
+		const Fixed side = (std::min)(Fixed::FromInt(static_cast<std::int64_t>(index) * 30), radius * 6);
+		BOOST_TEST((Engine::Math::Distance(move->destination, distant + FixedVector2{side, Fixed{}}) <= Fixed::FromRatio(1, 100)));
+	}
+	// Inside their own row: all to the one point.
+	const FixedVector2 inside = start + FixedVector2{Fixed::FromInt(45), Fixed{}};
+	order(inside);
+	for (const ecs::Entity humvee : humvees)
+		BOOST_TEST((game.World().Get<gp::MoveOrder>(humvee)->destination == inside));
+}
+
+// AIGroup::friend_computeGroundPath and friend_moveInfantryToPos (EA AIGroup.cpp) with the shipped AIData (MinInfantryForGroup
+// 3, MinVehiclesForGroup 3, MinDistanceForGroup 100, DistanceRequiresGroup 500) and GroupMovementPriority (Ranger
+// BasicHumanLocomotor MOVES_FRONT, Missile Defender MissileDefenderLocomotor MOVES_MIDDLE): a Ranger, a Missile Defender
+// and a Ranger 20 apart across, ordered 400 straight ahead, go as three columns from the one nearest their centre (the
+// Defender). Sorted across the path (startVectorNormal) they take columns 1, 0, -1 from left to right; evened out by
+// priority (the Rangers first) they keep them; at the end each stands 2.2 cells across the last leg per column off the
+// point (endVectorNormal (-1, 0): the right Ranger 22 right, the left 22 left), the Defender on it but a cell back (its
+// priority one short of MOVES_FRONT); each goal adjusted and claimed at once (in the goal's cell), and followed as its
+// one-point path (aiFollowPath). Two Rangers alone are under MinInfantryForGroup: no columns; each goes as it stands from
+// the one nearest the point, equally near: the later of the group (SimpleObjectIterator's front insertion), on the point,
+// the other 40 to its side, clipped to six bounding radii.
+BOOST_AUTO_TEST_CASE(legacy_parity_infantry_move_as_columns_by_group_movement_priority)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto &ai = shell.game.aiData;
+	BOOST_TEST(ai.minInfantryForGroup == 3);
+	BOOST_TEST(ai.minVehiclesForGroup == 3);
+	BOOST_TEST((ai.minDistanceForGroup == Fixed::FromInt(100)));
+	BOOST_TEST((ai.distanceRequiresGroup == Fixed::FromInt(500)));
+	const auto run = [&](bool withDefender) {
+		session::Session game(shell.map->level, shell.game, {42, 0, {}});
+		game.Tick();
+		const auto team = game.Teams().FindTeam("teamPlyrCivilian");
+		BOOST_TEST_REQUIRE(team.has_value());
+		const std::uint32_t player = game.Teams().TeamAt(*team).owner;
+		const auto [low, high] = game.Game().ground.Extent();
+		const FixedVector2 centre = CellCorner((low + high) / Fixed::FromInt(2));
+		std::vector<ecs::Entity> group;
+		group.push_back(game.Place("AmericaInfantryRanger", centre - FixedVector2{Fixed::FromInt(20), Fixed{}}, {}, *team));
+		if (withDefender)
+			group.push_back(game.Place("AmericaInfantryMissileDefender", centre, {}, *team));
+		group.push_back(game.Place("AmericaInfantryRanger", centre + FixedVector2{Fixed::FromInt(20), Fixed{}}, {}, *team));
+		const FixedVector2 to = centre + FixedVector2{Fixed{}, Fixed::FromInt(400)};
+		gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{group, to});
+		std::vector<FixedVector2> goals;
+		for (const ecs::Entity unit : group)
+		{
+			const auto *move = game.World().Get<gp::MoveOrder>(unit);
+			BOOST_TEST_REQUIRE((move->mode == gp::MoveMode::Point));
+			goals.push_back(move->destination);
+			if (withDefender)
+				BOOST_TEST((move->claim == gp::GoalClaim::Keep)); // claimed as it was ordered
+		}
+		return std::pair{goals, to};
+	};
+	{
+		const auto [goals, to] = run(true);
+		const FixedVector2 left = to - FixedVector2{Fixed::FromInt(22), Fixed{}};
+		const FixedVector2 back = to - FixedVector2{Fixed{}, Fixed::FromInt(10)};
+		const FixedVector2 right = to + FixedVector2{Fixed::FromInt(22), Fixed{}};
+		BOOST_TEST((CellOf(goals[0]) == CellOf(left)));
+		BOOST_TEST((CellOf(goals[1]) == CellOf(back)));
+		BOOST_TEST((CellOf(goals[2]) == CellOf(right)));
+	}
+	{
+		const auto [goals, to] = run(false);
+		const Fixed radius = content::BoundingCircleRadius(shell.game.objects.Find("AmericaInfantryRanger")->geometry);
+		BOOST_TEST((goals[1] == to)); // the later of two equally near
+		BOOST_TEST((Engine::Math::Distance(goals[0], to - FixedVector2{(std::min)(Fixed::FromInt(40), radius * 6), Fixed{}}) <= Fixed::FromRatio(1, 100)));
+	}
+}
+
+// User formations (EA AIGroup.cpp; GameLogicDispatch MSG_CREATE_FORMATION, CommandTranslator MSG_META_CREATE_FORMATION):
+// - groupCreateFormation: three Humvees in a row 30 apart take a new formation (AI::getNextFormationID: the first is 1),
+//   each its offset from their centre (-30, 0, 30 across); the same order again breaks it (the group is a formation:
+//   NO_FORMATION_ID, offsets kept); again, a formation once more.
+// - groupMoveToPosition as a formation (getMinMaxAndCenter: the first member's, three of them): friend_computeGroundPath
+//   finds the straight ground path from the middle Humvee, whose start node (six cells on) comes after its end node (the
+//   last six cells short of its end: its first), so friend_moveFormationToPos sends each straight (aiMoveToPosition) to
+//   the path's end (the goal cell's corner point, adjustCoordToCell) plus its offset, at the group's speed (setDesiredSpeed
+//   with AIGroup::getSpeed: the Humvees' own), the formation kept.
+// - A Humvee moved on its own (a group of one: no formation) leaves its formation (setFormationID(NO_FORMATION_ID)) and,
+//   on the tick its move starts, goes as fast as it can again; the other two stay in it at the group's speed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_formation_is_made_moved_and_broken)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto team = game.Teams().FindTeam("teamPlyrCivilian");
+	BOOST_TEST_REQUIRE(team.has_value());
+	const std::uint32_t player = game.Teams().TeamAt(*team).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 start = CellCorner((low + high) / Fixed::FromInt(2));
+	std::vector<ecs::Entity> humvees;
+	for (int index = 0; index < 3; ++index)
+		humvees.push_back(game.Place("AmericaVehicleHumvee", start + FixedVector2{Fixed::FromInt(index * 30), Fixed{}}, {}, *team));
+	const auto formationOf = [&](ecs::Entity unit) {
+		const auto *member = world.Get<gp::FormationMember>(unit);
+		return member != nullptr ? member->id : 0u;
+	};
+	const auto create = [&] { gameplay::ApplyCommand(game.Game(), player, commands::CreateFormation{humvees}); };
+	create();
+	const std::array<Fixed, 3> across{Fixed::FromInt(-30), Fixed{}, Fixed::FromInt(30)};
+	for (std::size_t index = 0; index < humvees.size(); ++index)
+	{
+		BOOST_TEST(formationOf(humvees[index]) == 1u);
+		BOOST_TEST((world.Get<gp::FormationMember>(humvees[index])->offset == FixedVector2{across[index], Fixed{}}));
+	}
+	create(); // a formation already: broken
+	for (const ecs::Entity humvee : humvees)
+		BOOST_TEST(formationOf(humvee) == 0u);
+	create();
+	for (const ecs::Entity humvee : humvees)
+		BOOST_TEST(formationOf(humvee) == 1u);
+
+	const FixedVector2 to = start + FixedVector2{Fixed{}, Fixed::FromInt(300)};
+	gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{humvees, to});
+	const Fixed speed = world.Get<gp::Locomotion>(humvees[0])->locomotor.maxSpeed;
+	for (std::size_t index = 0; index < humvees.size(); ++index)
+	{
+		const auto *move = world.Get<gp::MoveOrder>(humvees[index]);
+		BOOST_TEST_REQUIRE((move->mode == gp::MoveMode::Point));
+		BOOST_TEST((move->destination == CellCorner(to) + FixedVector2{across[index], Fixed{}}));
+		BOOST_TEST(formationOf(humvees[index]) == 1u);
+		BOOST_TEST_REQUIRE(world.Get<gp::DesiredSpeed>(humvees[index]) != nullptr);
+		BOOST_TEST((world.Get<gp::DesiredSpeed>(humvees[index])->speed == speed));
+		BOOST_TEST(world.Has<gameplay::FormationMove>(humvees[index]));
+	}
+
+	const FixedVector2 aside = start + FixedVector2{Fixed::FromInt(200), Fixed{}};
+	gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{{humvees[0]}, aside});
+	BOOST_TEST(formationOf(humvees[0]) == 0u);
+	BOOST_TEST(formationOf(humvees[1]) == 1u);
+	game.Tick();
+	BOOST_TEST(world.Get<gp::DesiredSpeed>(humvees[0]) == nullptr);
+	BOOST_TEST(!world.Has<gameplay::FormationMove>(humvees[0]));
+	BOOST_TEST(world.Get<gp::DesiredSpeed>(humvees[1]) != nullptr);
+}
+
+// ScriptActions::updateTeamAttackPrioritySet -> Team::setAttackPriorityName (on its prototype), Object's constructor and
+// Object::setTeam: a team given an attack priority set that exists keeps it; its members then, those made for it later
+// (another reinforcement of it) and a unit moved into it all take the set; it survives a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_teams_attack_priority_set_reaches_later_members)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	const auto [destination, origin] = Waypoints(level, Fixed::FromInt(300), Fixed::FromInt(500));
+	BOOST_TEST_REQUIRE(!destination.empty());
+	level.scenario.groups.push_back(Team("TestPriorities", "", "AmericaVehicleHumvee", 2, origin));
+	const auto call = [](std::string name, std::vector<level::ScriptParameter> parameters) {
+		level::ScriptCall made;
+		made.name = std::move(name);
+		made.parameters = std::move(parameters);
+		return made;
+	};
+	const auto text = [](std::string value) {
+		level::ScriptParameter parameter;
+		parameter.text = std::move(value);
+		return parameter;
+	};
+	level::ScriptParameter fifty;
+	fifty.integer = 50;
+	level::Script script;
+	script.name = "tsPriorities";
+	script.oneShot = true;
+	script.conditions = {{call("CONDITION_TRUE", {})}};
+	script.actions = {call("SET_ATTACK_PRIORITY_THING", {text("TestSet"), text("AmericaVehicleHumvee"), fifty}),
+		call("CREATE_REINFORCEMENT_TEAM", {text("TestPriorities"), text(destination)}),
+		call("TEAM_APPLY_ATTACK_PRIORITY_SET", {text("TestPriorities"), text("TestSet")})};
+	level.scenario.participants.front().scripts.scripts.push_back(script);
+	auto game = std::make_unique<session::Session>(level, shell.game, session::SessionOptions{42, 0, {}});
+	game->Tick();
+	const std::uint16_t set = std::as_const(game->World().Resource<gp::AttackPriorities>()).Find("TestSet");
+	BOOST_TEST_REQUIRE(set != 0u);
+	const auto prototype = *game->Teams().FindTeam("TestPriorities");
+	const auto first = game->Teams().Instances(prototype);
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	for (const ecs::Entity member : game->Teams().TeamAt(first.front()).members)
+		BOOST_TEST(game->World().Get<gp::Aggression>(member)->prioritySet == set);
+	// Saved and restored, the team still has it.
+	game = session::Session::Restore(level, shell.game, session::SessionOptions{42, 0, {}}, game->Checkpoint());
+	BOOST_TEST_REQUIRE(game != nullptr);
+	gameplay::CreateReinforcements(game->Game(), "TestPriorities", destination);
+	const auto instances = game->Teams().Instances(prototype);
+	BOOST_TEST_REQUIRE(instances.size() == 2u);
+	for (const std::uint32_t instance : instances)
+		for (const ecs::Entity member : game->Teams().TeamAt(instance).members)
+			BOOST_TEST(game->World().Get<gp::Aggression>(member)->prioritySet == set);
+	// One of the civilians' own, moved into it.
+	const auto civilians = *game->Teams().FindTeam("teamPlyrCivilian");
+	const ecs::Entity joiner = game->Place("AmericaVehicleHumvee", game->Game().waypoints.Position(game->Game().waypoints.Find(destination)).XY(), {}, civilians);
+	BOOST_TEST(game->World().Get<gp::Aggression>(joiner)->prioritySet == 0u);
+	gameplay::ChangeTeam(game->Game(), joiner, instances.front());
+	BOOST_TEST(game->World().Get<gp::Aggression>(joiner)->prioritySet == set);
+}
+
+// Legacy parity (ObjectCreationList.cpp, DeliverPayloadNugget::create) on the shipped SUPERWEAPON_NapalmStrike (5 MiGs,
+// FormationSpacing 35, DeliveryDistance 300, WeaponConvergenceFactor 1, StartAtMaxSpeed, StartAtPreferredHeight) and
+// SUPERWEAPON_ArtilleryBarrage1 (12 cannons, FormationSpacing 1, WeaponErrorRadius 100): transport i sits offset
+// (i + 1) / 2 * FormationSpacing (an Int, truncated) along the direction to the start turned +90 degrees plus itself
+// (odd i) or -90 degrees plus itself (even i), start and goal alike; its start pulled back 1.5 x DeliveryDistance along
+// its heading, at its locomotor's preferred height over the ground, at its locomotor's full speed (the motive force of
+// maxSpeed x mass its first physics step turns into that speed); its target the strike's target plus the offset x
+// (1 - WeaponConvergenceFactor), and (after the first) off by up to WeaponErrorRadius.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_payload_formation_lines_up_as_the_original)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 1, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const Engine::Math::FixedVector2 from = low + Engine::Math::FixedVector2{Fixed::FromInt(600), Fixed::FromInt(900)};
+	const Engine::Math::FixedVector2 to = low + Engine::Math::FixedVector2{Fixed::FromInt(1600), Fixed::FromInt(900)};
+	const auto carriers = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				found.push_back(entity);
+		});
+		std::ranges::sort(found, {}, [](ecs::Entity entity) { return entity.index; });
+		return found;
+	};
+	const auto &napalm = shell.game.powers.deliveries.at("SUPERWEAPON_NapalmStrike").front();
+	BOOST_TEST(napalm.formationSize == 5u);
+	BOOST_TEST((napalm.formationSpacing == Fixed::FromInt(35)));
+	BOOST_TEST((napalm.convergenceFactor == Fixed::One()));
+	BOOST_TEST(napalm.startAtMaxSpeed);
+	gameplay::detail::Deliver(game.Game(), napalm, {from.x, from.y, Fixed{}}, to, america);
+	const auto made = carriers();
+	BOOST_TEST_REQUIRE(made.size() == 5u);
+	// Heading east from the west: the direction to the start is (-1, 0); +90 plus itself (-1, -1), -90 plus itself (-1, 1).
+	const std::array<Engine::Math::FixedVector2, 5> offsets{{{}, {Fixed::FromInt(-35), Fixed::FromInt(-35)}, {Fixed::FromInt(-35), Fixed::FromInt(35)},
+		{Fixed::FromInt(-70), Fixed::FromInt(-70)}, {Fixed::FromInt(-70), Fixed::FromInt(70)}}};
+	auto &world = game.World();
+	for (std::size_t index = 0; index < made.size(); ++index)
+	{
+		const gp::Transform &at = *world.Get<gp::Transform>(made[index]);
+		const gp::Delivery &run = *world.Get<gp::Delivery>(made[index]);
+		const gp::Locomotion &motion = *world.Get<gp::Locomotion>(made[index]);
+		const Engine::Math::FixedVector2 start = from + offsets[index] - Engine::Math::FixedVector2{napalm.deliveryDistance * Fixed::FromRatio(3, 2), Fixed{}};
+		BOOST_TEST((Engine::Math::Length(at.position.XY() - start) <= Fixed::FromRatio(1, 100)));
+		BOOST_TEST((at.position.z == game.Game().ground.At(at.position.XY()) + motion.locomotor.preferredHeight));
+		BOOST_TEST((motion.speed == motion.locomotor.maxSpeed));
+		BOOST_TEST((Engine::Math::Length(run.moveTo - (to + offsets[index])) <= Fixed::FromRatio(1, 100)));
+		BOOST_TEST((Engine::Math::Length(run.target - to) <= Fixed::FromRatio(1, 100))); // converging on the target
+	}
+	for (const ecs::Entity carrier : made)
+		game.World().Destroy(carrier);
+	const auto &barrage = shell.game.powers.deliveries.at("SUPERWEAPON_ArtilleryBarrage1").front();
+	BOOST_TEST(barrage.formationSize == 12u);
+	BOOST_TEST((barrage.formationSpacing == Fixed::One()));
+	BOOST_TEST((barrage.errorRadius == Fixed::FromInt(100)));
+	gameplay::detail::Deliver(game.Game(), barrage, {from.x, from.y, Fixed{}}, to, america);
+	const auto cannons = carriers();
+	BOOST_TEST_REQUIRE(cannons.size() == 12u);
+	// Each cannon by its goal's offset: (i + 1) / 2 * 1 spacings, no convergence (the target moves with the offset),
+	// then off by the error; the first spot on.
+	std::vector<bool> seen(12, false);
+	for (const ecs::Entity cannon : cannons)
+	{
+		const gp::Delivery &run = *world.Get<gp::Delivery>(cannon);
+		std::optional<std::size_t> which;
+		for (std::size_t index = 0; index < 12 && !which; ++index)
+		{
+			const Fixed spacing = Fixed::FromInt(static_cast<std::int64_t>((index + 1) / 2));
+			const Engine::Math::FixedVector2 offset{Fixed{} - spacing, index % 2 != 0 ? Fixed{} - spacing : spacing};
+			if (!seen[index] && Engine::Math::Length(run.moveTo - (to + offset)) <= Fixed::FromRatio(1, 100))
+				which = index;
+		}
+		BOOST_TEST_REQUIRE(which.has_value());
+		seen[*which] = true;
+		const Fixed spacing = Fixed::FromInt(static_cast<std::int64_t>((*which + 1) / 2));
+		const Engine::Math::FixedVector2 offset{Fixed{} - spacing, *which % 2 != 0 ? Fixed{} - spacing : spacing};
+		const Fixed error = Engine::Math::Length(run.target - (to + offset));
+		if (*which == 0)
+			BOOST_TEST((error <= Fixed::FromRatio(1, 100)));
+		else
+			BOOST_TEST((error <= Fixed::FromInt(100) + Fixed::FromRatio(1, 100)));
+	}
+}
+
+// Legacy parity (OCLSpecialPower::findOCL / doSpecialPowerAtLocation; AmericaCommandCenter's SuperweaponParadropAmerica:
+// OCL SUPERWEAPON_Paradrop1, UpgradeOCL SCIENCE_Paradrop3 SUPERWEAPON_Paradrop3, UpgradeOCL SCIENCE_Paradrop2
+// SUPERWEAPON_Paradrop2): the power runs the first UpgradeOCL whose science its player has, in the module's order, else
+// its OCL: the payload carried is that list's.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_paradrop_grows_with_its_players_sciences)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 1, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const std::uint32_t player = game.Teams().TeamAt(america).owner;
+	const auto [low, high] = game.Game().ground.Extent();
+	const Engine::Math::FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity centre = game.Place("AmericaCommandCenter", low + Engine::Math::FixedVector2{Fixed::FromInt(400), Fixed::FromInt(400)}, {}, america);
+	const auto carried = [&] {
+		std::size_t riders = 0;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity carrier : chunk.Entities())
+			{
+				riders += game.Game().manifest.Aboard(carrier).size();
+				game.World().Destroy(carrier);
+			}
+		});
+		return riders;
+	};
+	const auto payload = [&](const char *list) {
+		std::size_t count = 0;
+		for (const auto &run : shell.game.powers.deliveries.at(list))
+			for (const auto &item : run.payload)
+				count += item.count * run.formationSize;
+		return count;
+	};
+	const auto fire = [&] {
+		gameplay::FireSpecialPower(game.Game(), centre, "SuperweaponParadropAmerica", target, true);
+		return carried();
+	};
+	BOOST_TEST_REQUIRE(payload("SUPERWEAPON_Paradrop1") != payload("SUPERWEAPON_Paradrop2"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop1"));
+	auto &sciences = game.World().Resource<gp::PlayerSciences>();
+	sciences.Grant(player, *shell.game.Science("SCIENCE_Paradrop2"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop2"));
+	sciences.Grant(player, *shell.game.Science("SCIENCE_Paradrop3"));
+	BOOST_TEST(fire() == payload("SUPERWEAPON_Paradrop3")); // the first listed it has
+}
+
+// Legacy parity (OCLSpecialPower::doSpecialPowerAtLocation, CreateLocation USE_OWNER_OBJECT: ObjectCreationList::create
+// with createOwner false; DeliverPayloadNugget::create: transport = primaryObj): a scripted AmericaJetCargoPlane firing its
+// SuperweaponParadropAmerica (OCL SUPERWEAPON_Paradrop1, ScriptedSpecialPowerOnly) makes no new cargo plane: it is the
+// carrier itself, left where it is, given the run to the target (deliverPayload: moveTo and target the spot) and the five
+// rangers in their parachutes into its own contain.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scripted_cargo_plane_carries_its_own_paradrop)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 1, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	const Engine::Math::FixedVector2 target = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity plane = game.Place("AmericaJetCargoPlane", low + Engine::Math::FixedVector2{Fixed::FromInt(400), Fixed::FromInt(400)}, {}, america);
+	BOOST_TEST_REQUIRE(game.World().IsAlive(plane));
+	const auto before = game.World().Get<gp::Transform>(plane)->position;
+	const auto carriers = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<gp::Delivery>> query(game.World());
+		query.ForEachChunk([&](auto chunk) {
+			for (const ecs::Entity entity : chunk.Entities())
+				found.push_back(entity);
+		});
+		return found;
+	};
+	BOOST_TEST_REQUIRE(carriers().empty());
+	gameplay::FireSpecialPower(game.Game(), plane, "SuperweaponParadropAmerica", target, true);
+	const auto made = carriers();
+	BOOST_TEST_REQUIRE(made.size() == 1u);
+	BOOST_TEST((made.front() == plane));
+	BOOST_TEST((game.World().Get<gp::Transform>(plane)->position == before));
+	const gp::Delivery &run = *game.World().Get<gp::Delivery>(plane);
+	BOOST_TEST((run.moveTo == target));
+	BOOST_TEST((run.target == target));
+	BOOST_TEST((game.World().Get<gp::MoveOrder>(plane)->destination == target));
+	BOOST_TEST(game.Game().manifest.Aboard(plane).size() == 5u);
+	BOOST_TEST(game.World().Get<gp::Transport>(plane)->occupied == 5u);
+}
+
+// The AI mood matrix as it reaches orders (EA AIUpdate.cpp): getMoodMatrixValue gives a computer player's unit
+// (MM_Controller_AI) its attitude's mood. isAllowedToRespondToAiCommands: asleep (ATTITUDE_SLEEP) it ignores every command,
+// but aiMoveToPositionEvenIfSleeping (moveObjectsForConstruction); a human player's unit has no mood and obeys.
+// getMoodMatrixActionAdjustment(MM_Action_Move): alert or aggressive, AIMoveToState::update turns a move to into
+// aiAttackMoveToPosition at the same goal; at normal it stays a plain move.
+BOOST_AUTO_TEST_CASE(legacy_parity_attitudes_shape_how_a_computers_units_take_orders)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto team = game.Teams().FindTeam("teamPlyrAmerica");
+	BOOST_TEST_REQUIRE(team.has_value());
+	const std::uint32_t player = game.Teams().TeamAt(*team).owner;
+	BOOST_TEST_REQUIRE(!game.Game().roster.PlayerAt(player).human);
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 start = (low + high) / Fixed::FromInt(2);
+	const FixedVector2 to = start + FixedVector2{Fixed{}, Fixed::FromInt(200)};
+	const auto fresh = [&](std::int8_t attitude) {
+		const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", start, {}, *team);
+		world.Get<gp::Aggression>(humvee)->attitude = attitude;
+		return humvee;
+	};
+	// Asleep: no command reaches it, but the move out of a building's way does.
+	const ecs::Entity sleeper = fresh(gp::attitude::Sleep);
+	gameplay::OrderMove(game.Game(), sleeper, to);
+	BOOST_TEST((world.Get<gp::MoveOrder>(sleeper)->mode == gp::MoveMode::Idle));
+	gameplay::GroupMoveToPosition(game.Game(), std::vector<ecs::Entity>{sleeper}, to, false);
+	BOOST_TEST((world.Get<gp::MoveOrder>(sleeper)->mode == gp::MoveMode::Idle));
+	gameplay::OrderMove(game.Game(), sleeper, to, false, false, gp::GoalClaim::Adjust, true);
+	BOOST_TEST((world.Get<gp::MoveOrder>(sleeper)->mode == gp::MoveMode::Point));
+	// Alert and aggressive: a move to becomes an attack move there; normal: a move.
+	for (const std::int8_t attitude : {gp::attitude::Alert, gp::attitude::Aggressive, gp::attitude::Normal})
+	{
+		const ecs::Entity humvee = fresh(attitude);
+		gameplay::GroupMoveToPosition(game.Game(), std::vector<ecs::Entity>{humvee}, to, false);
+		BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::Point));
+		const auto *attackMove = world.Get<gp::AttackMove>(humvee);
+		if (attitude == gp::attitude::Normal)
+			BOOST_TEST(attackMove == nullptr);
+		else
+		{
+			BOOST_TEST_REQUIRE(attackMove != nullptr);
+			BOOST_TEST((attackMove->destination == to));
+			BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->destination == to));
+		}
+	}
+	// A human player's unit has no mood: asleep, it still obeys.
+	game.Game().roster.PlayerAt(player).human = true;
+	const ecs::Entity obeys = fresh(gp::attitude::Sleep);
+	gameplay::OrderMove(game.Game(), obeys, to);
+	BOOST_TEST((world.Get<gp::MoveOrder>(obeys)->mode == gp::MoveMode::Point));
+	BOOST_TEST(world.Get<gp::AttackMove>(obeys) == nullptr);
+}
+
+// AIGroup::groupAttackObject (EA AIGroup.cpp groupAttackObjectPrivate, as doTeamAttackNamed and MSG_DO_ATTACK_OBJECT use it):
+// for each member, nearest the victim first, the riders its container lets fire (a Humvee's Ranger) attack the victim
+// too, then the member itself; the riders' attack is an order of the same source.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_group_attack_sends_firing_riders_too)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	auto &world = game.World();
+	const auto team = game.Teams().FindTeam("teamPlyrAmerica");
+	const auto enemy = game.Teams().FindTeam("teamPlyrGLA");
+	BOOST_TEST_REQUIRE(team.has_value());
+	BOOST_TEST_REQUIRE(enemy.has_value());
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 start = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", start, {}, *team);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start + FixedVector2{Fixed::FromInt(40), Fixed{}}, {}, *team);
+	game.Tick();
+	gameplay::OrderBoard(game.Game(), ranger, humvee, true);
+	for (int tick = 0; tick < 600 && !world.Has<gp::Passenger>(ranger); ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE(world.Has<gp::Passenger>(ranger));
+	BOOST_TEST_REQUIRE(world.Get<gp::OffMap>(ranger) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::OffMap>(ranger)->armed);
+	const ecs::Entity victim = game.Place("GLATankScorpion", start + FixedVector2{Fixed::FromInt(300), Fixed{}}, {}, *enemy);
+	gameplay::GroupAttackObject(game.Game(), std::vector<ecs::Entity>{humvee}, victim, 0, gp::CommandSource::Script);
+	BOOST_TEST((world.Get<gp::AttackTarget>(humvee)->target == victim));
+	BOOST_TEST((world.Get<gp::AttackTarget>(ranger)->target == victim));
+}
+
+// AI::findClosestEnemy with an attack priority set (EA AI.cpp; TEAM_APPLY_ATTACK_PRIORITY_SET's sets): a container is
+// worth the greatest priority of itself and what it holds (iterateContained with priorityFunc). A computer player's
+// Humvee whose set rates a Ranger 5, a Missile Defender 20 and a Humvee 1 picks the enemy Ranger over an empty enemy
+// Humvee; with a Missile Defender riding in that Humvee it picks the Humvee.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_priority_set_rates_a_container_by_what_it_holds)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](bool loaded) {
+		session::Session game(shell.map->level, shell.game, {42, 0, {}});
+		game.Tick();
+		auto &world = game.World();
+		const auto team = game.Teams().FindTeam("teamPlyrAmerica");
+		const auto enemy = game.Teams().FindTeam("teamPlyrGLA");
+		BOOST_TEST_REQUIRE(team.has_value());
+		BOOST_TEST_REQUIRE(enemy.has_value());
+		const auto [low, high] = game.Game().ground.Extent();
+		const FixedVector2 start = (low + high) / Fixed::FromInt(2);
+		const ecs::Entity carrier = game.Place("AmericaVehicleHumvee", start + FixedVector2{Fixed::FromInt(60), Fixed::FromInt(20)}, {}, *enemy);
+		const ecs::Entity ranger = game.Place("AmericaInfantryRanger", start + FixedVector2{Fixed::FromInt(50), Fixed::FromInt(-20)}, {}, *enemy);
+		if (loaded)
+		{
+			const ecs::Entity rider = game.Place("AmericaInfantryMissileDefender", start + FixedVector2{Fixed::FromInt(90), Fixed::FromInt(20)}, {}, *enemy);
+			game.Tick();
+			gameplay::OrderBoard(game.Game(), rider, carrier, true);
+			for (int tick = 0; tick < 600 && !world.Has<gp::Passenger>(rider); ++tick)
+				game.Tick();
+			BOOST_TEST_REQUIRE(world.Has<gp::Passenger>(rider));
+		}
+		auto &priorities = world.Resource<gp::AttackPriorities>();
+		const std::uint16_t set = priorities.Find("TestSet", true);
+		const auto definitionOf = [&](const char *name) { return game.Game().templates.Definition(*shell.game.objects.Find(name)); };
+		priorities.SetPriority(set, definitionOf("AmericaInfantryRanger"), 5);
+		priorities.SetPriority(set, definitionOf("AmericaInfantryMissileDefender"), 20);
+		priorities.SetPriority(set, definitionOf("AmericaVehicleHumvee"), 1);
+		const ecs::Entity hunter = game.Place("AmericaVehicleHumvee", start, {}, *team);
+		world.Get<gp::Aggression>(hunter)->prioritySet = set;
+		for (int tick = 0; tick < 90 && world.Get<gp::AttackTarget>(hunter)->target == ecs::Entity{}; ++tick)
+			game.Tick();
+		return std::pair{world.Get<gp::AttackTarget>(hunter)->target, std::pair{carrier, ranger}};
+	};
+	const auto [emptyPick, emptyUnits] = run(false);
+	BOOST_TEST((emptyPick == emptyUnits.second)); // the Ranger (5) over the empty Humvee (1)
+	const auto [loadedPick, loadedUnits] = run(true);
+	BOOST_TEST((loadedPick == loadedUnits.first)); // the Humvee holding a Missile Defender (20)
+}
+
+BOOST_AUTO_TEST_SUITE_END()

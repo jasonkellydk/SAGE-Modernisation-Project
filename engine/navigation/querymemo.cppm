@@ -1,15 +1,6 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.querymemo;
+import std;
+import engine.core.contracts;
 
 // This cache is deliberately independent of the game-facing navigation
 // adapter. It stores only a transient result of one occupancy query and has
@@ -38,7 +29,7 @@ public:
         ~Scope() { memo_.active_ = false; }
     };
     Scope begin(int width, int height) {
-        assert(!active_);
+        engine::core::Assert(!active_);
         if (width != width_ || height != height_ || ++epoch_ == 0) {
             for (auto& layer : layers_) layer.clear();
             width_ = width; height_ = height; epoch_ = 1;

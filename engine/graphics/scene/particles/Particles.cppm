@@ -1,17 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Particles;
+import std;
 
 import engine.profiling;
 export import Graphics.Resources.Handles.ResourceHandle;

@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <array>
-#include <span>
-
 export module Graphics.Passes.Video;
+import std;
 
 export import Graphics.RenderGraph.Execution;
 export import Graphics.RHI;

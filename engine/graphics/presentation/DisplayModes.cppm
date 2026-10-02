@@ -1,10 +1,8 @@
 module;
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <memory>
-#include <vector>
 
 export module Graphics.Presentation.DisplayModes;
+import std;
 
 namespace Graphics
 {

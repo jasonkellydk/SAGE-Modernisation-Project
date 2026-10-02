@@ -1,0 +1,2878 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <set>
+#include <memory>
+#include <span>
+#include <optional>
+#include <string>
+#include <sstream>
+#include <variant>
+#include <string_view>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.harvesting.components.harvester;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.harvesting.components.resource_store;
+import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.rts.docking.components.docking;
+import engine.gameplay.rts.docking.components.dock_look;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.ecs.query.query;
+import engine.gameplay.rts.match.systems.victory_system;
+import games.generalszh.gameplay.ai.resources.ai_players;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.match.resources.match_outcome;
+import engine.gameplay.rts.lifecycle.resources.kill_requests;
+import engine.gameplay.common.health.components.health;
+import games.generalszh.gameplay.construction.algorithms.rebuild_holes;
+import engine.gameplay.common.identity.components.definition_ref;
+import games.generalszh.gameplay.sciences.algorithms.general_ranks;
+import games.generalszh.gameplay.ai.algorithms.ai_superweapon;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.gameplay.ai.algorithms.ai_team_building;
+import engine.gameplay.rts.powers.resources.shared_power_timers;
+import games.generalszh.gameplay.ai.algorithms.ai_base_building;
+import games.generalszh.gameplay.construction.algorithms.build_legality;
+import engine.gameplay.rts.radar.resources.player_radar;
+import engine.gameplay.rts.vision.systems.vision_system;
+import engine.gameplay.rts.construction.components.builder;
+import games.generalszh.session.script_bridge;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import games.generalszh.gameplay.world.resources.map_scenery;
+import games.generalszh.gameplay.construction.algorithms.building;
+import games.generalszh.gameplay.scripts.algorithms.value_groups;
+import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.rts.vision.resources.shroud_map;
+import engine.gameplay.rts.production.components.rally_point;
+import games.generalszh.content.production.production_content;
+import games.generalszh.content.ai.ai_data;
+
+// Skirmish and LAN games' starts, apart from the shell map's tests (one module
+// set per translation unit keeps within the compiler's source-location limit).
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(skirmish_start)
+
+// GameLogic::startNewGame for a skirmish (prepareForMP_or_Skirmish, placeNetworkBuildingsForPlayer) on a
+// shipped map: the map's sides give way to player0 (a human, America) and player1 (an AI, the GLA), enemies
+// on no team; each gets the setup's cash and its faction's StartingBuilding at Player_<n>_Start with its
+// StartingUnits near it; the game runs, and a checkpoint of it restores exactly (without placing twice).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_starts_each_player_at_its_spot)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	BOOST_TEST_REQUIRE(spots == 4);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.startingCash = 20000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	BOOST_TEST_REQUIRE(skirmish.players.size() == 2u);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+	const auto &roster = game.Teams();
+	const std::uint32_t america = *roster.FindPlayer("player0");
+	const std::uint32_t gla = *roster.FindPlayer("player1");
+	BOOST_TEST(money.Balance(america) == 20000);
+	BOOST_TEST(money.Balance(gla) == 20000);
+	const auto marker = [&](std::string_view name) {
+		for (const auto &m : skirmish.level.markers)
+			if (m.name == name)
+				return m.position.XY();
+		return Engine::Math::FixedVector2{};
+	};
+	std::map<std::string, std::pair<std::uint32_t, Engine::Math::FixedVector2>> owned;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *owner = game.World().Get<engine::gameplay::Owner>(object.entity);
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (owner != nullptr && ref != nullptr && (owner->player == america || owner->player == gla))
+			owned[std::string(game.DefinitionName(ref->index))] = {owner->player, game.TransformOf(object.entity)->position.XY()};
+	});
+	for (const auto &[name, where] : owned)
+		BOOST_TEST_MESSAGE("  " << name << " (player " << where.first << ")");
+	BOOST_TEST_REQUIRE(owned.contains("AmericaCommandCenter"));
+	BOOST_TEST_REQUIRE(owned.contains("GLACommandCenter"));
+	BOOST_TEST(owned["AmericaCommandCenter"].first == america);
+	BOOST_TEST(owned["GLACommandCenter"].first == gla);
+	BOOST_TEST((owned["AmericaCommandCenter"].second == marker("Player_1_Start")));
+	BOOST_TEST((owned["GLACommandCenter"].second == marker("Player_3_Start")));
+	BOOST_TEST(owned.contains("AmericaVehicleDozer"));
+	BOOST_TEST(owned.contains("GLAInfantryWorker"));
+	// placeNetworkBuildingsForPlayer: the dozer at a legal spot between 0.7 and 1.3 of the command centre's
+	// bounding sphere from Player_1_Rally (else half that radius short of the start spot).
+	{
+		const auto *center = shell.game.objects.Find("AmericaCommandCenter");
+		const double sphere = static_cast<double>(content::BoundingSphereRadius(center->geometry).Raw()) / 65536.0;
+		Engine::Math::FixedVector2 around = marker("Player_1_Start");
+		bool rally = false;
+		for (const auto &m : skirmish.level.markers)
+			if (m.name == "Player_1_Rally")
+			{
+				around = m.position.XY();
+				rally = true;
+			}
+		if (!rally)
+			around.y -= content::BoundingSphereRadius(center->geometry) / Engine::Math::Fixed::FromInt(2);
+		const double distance = static_cast<double>(Engine::Math::Length(owned["AmericaVehicleDozer"].second - around).Raw()) / 65536.0;
+		BOOST_TEST_MESSAGE("dozer " << distance << " from its search centre (sphere " << sphere << ")");
+		BOOST_TEST(distance >= sphere * 0.7 - 0.05);
+		BOOST_TEST(distance <= sphere * 1.3 + 0.05);
+	}
+	BOOST_TEST(owned.size() >= 4u);
+	for (int tick = 0; tick < 300; ++tick)
+		game.Tick();
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+	BOOST_TEST(restored->EntityCount() == game.EntityCount());
+
+	// The player's dozer goes where it is ordered, routed over the grid (seat 0 plays America).
+	ecs::Entity dozer;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && game.DefinitionName(ref->index) == "AmericaVehicleDozer")
+			dozer = object.entity;
+	});
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const auto from = game.TransformOf(dozer)->position.XY();
+	const Engine::Math::FixedVector2 to{from.x + Engine::Math::Fixed::FromInt(60), from.y - Engine::Math::Fixed::FromInt(80)};
+	auto move = commands::Encode(commands::MoveTo{{dozer}, to});
+	move.player = 0;
+	game.Tick(std::span(&move, 1));
+	for (int tick = 0; tick < 300; ++tick)
+		game.Tick();
+	const auto *route = game.World().Get<engine::gameplay::Route>(dozer);
+	BOOST_TEST_MESSAGE("dozer route: " << (route ? int(route->count) : -1) << " points, next " << (route ? int(route->next) : -1) << ", complete "
+		<< (route ? route->complete : false));
+	BOOST_TEST((Engine::Math::Distance(game.TransformOf(dozer)->position.XY(), to) < Engine::Math::Fixed::FromInt(10)));
+}
+
+// GameLogic.cpp populateRandomSideAndColor and startNewGame's side dictionaries: a chosen colour is kept; each random
+// one is drawn again until no slot has it (GameInfo::isColorTaken), slot by slot, so no two players share a colour;
+// each side gets its MultiplayerColor's day and night RGB as playerColor / playerNightColor (Player::initFromDict ORs
+// 0xff000000). The same seed resolves the same colours; without Multiplayer.ini's colours none are set (as before).
+// The match made from them runs alike on 1 and 4 workers and restores from a checkpoint exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_resolves_random_house_colours_without_sharing)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto &colors = shell.game.multiplayer.colors;
+	BOOST_TEST_REQUIRE(colors.size() == 8u);
+	session::setup::GameSetup setup;
+	setup.seed = 4321;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].color = 2;
+	setup.slots[0].startPos = 0;
+	for (std::size_t slot = 1; slot < 4; ++slot)
+		setup.slots[slot].SetState(session::setup::SlotState::HardAI);
+	const auto colorOf = [](const session::setup::SkirmishLevel &level, std::string_view player, std::string_view key) {
+		for (const auto &side : level.level.scenario.participants)
+			if (side.properties.Get<std::string>("playerName").value_or("") == player)
+				return side.properties.Get<std::int64_t>(key);
+		return std::optional<std::int64_t>{};
+	};
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, nullptr, &colors);
+	BOOST_TEST_REQUIRE(skirmish.players.size() == 4u);
+	std::set<int> used;
+	for (const auto &player : skirmish.players)
+	{
+		BOOST_TEST_MESSAGE(player.name << " colour " << player.color);
+		BOOST_TEST(player.color >= 0);
+		BOOST_TEST(player.color < 8);
+		used.insert(player.color);
+		const auto &house = colors[static_cast<std::size_t>(player.color)];
+		const auto day = 0xFF000000ll | (std::int64_t{house.day.r} << 16) | (std::int64_t{house.day.g} << 8) | house.day.b;
+		const auto night = 0xFF000000ll | (std::int64_t{house.night.r} << 16) | (std::int64_t{house.night.g} << 8) | house.night.b;
+		BOOST_TEST((colorOf(skirmish, player.name, "playerColor") == day));
+		BOOST_TEST((colorOf(skirmish, player.name, "playerNightColor") == night));
+	}
+	BOOST_TEST(skirmish.players[0].color == 2);
+	BOOST_TEST(used.size() == 4u);
+	const auto again = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, nullptr, &colors);
+	for (std::size_t index = 0; index < 4; ++index)
+	{
+		BOOST_TEST(again.players[index].color == skirmish.players[index].color);
+		BOOST_TEST(again.players[index].playerTemplate == skirmish.players[index].playerTemplate);
+	}
+	// Colours come from their own draws: the sides and spots are those of the same setup without colours.
+	const auto plain = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	for (std::size_t index = 0; index < 4; ++index)
+	{
+		BOOST_TEST(plain.players[index].playerTemplate == skirmish.players[index].playerTemplate);
+		BOOST_TEST(plain.players[index].startPosition == skirmish.players[index].startPosition);
+		BOOST_TEST(!colorOf(plain, plain.players[index].name, "playerColor").has_value());
+	}
+
+	session::SessionOptions options{77, 1, {}, {"player0"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	session::SessionOptions wide = options;
+	wide.workers = 4;
+	session::Session game4(skirmish.level, shell.game, wide);
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game.Tick();
+		game4.Tick();
+	}
+	BOOST_TEST(game.StateHash() == game4.StateHash());
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// The supply economy on real data (SupplyTruckAIUpdate, SupplyWarehouseDockUpdate, SupplyCenterDockUpdate): a China
+// supply truck (MaxBoxes 4; SupplyWarehouseActionDelay 1000 ms and SupplyCenterActionDelay 400 ms, whole frames:
+// 30 and 12; SupplyWarehouseScanDistance 700) told to harvest fills up at a supply dock (StartingBoxes 400, a
+// boneless dock taking any number: NumberApproachPositions -1, AllowsPassthrough No) and delivers its four boxes
+// to its supply centre at ValuePerSupplyBox (75): 300 credits a round; a player's stop ends its rounds.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_truck_harvests_on_real_data)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 99;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionChina");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{5, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t china = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	const ecs::Entity center = game.Place("ChinaSupplyCenter", at(0, -180), {}, team);
+	const ecs::Entity warehouse = game.Place("SupplyDock", at(-200, -180), {}, team);
+	const ecs::Entity truck = game.Place("ChinaVehicleSupplyTruck", at(-100, -120), {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	BOOST_TEST_REQUIRE(world.IsAlive(warehouse));
+	BOOST_TEST_REQUIRE(world.IsAlive(truck));
+	const auto *harvester = world.Get<engine::gameplay::Harvester>(truck);
+	BOOST_TEST_REQUIRE(harvester != nullptr);
+	BOOST_TEST(harvester->maxBoxes == 4u);
+	BOOST_TEST(harvester->storeDelay == 30u);
+	BOOST_TEST(harvester->depotDelay == 12u);
+	BOOST_TEST(harvester->scanDistance.Raw() == Fixed::FromInt(700).Raw());
+	const auto *store = world.Get<engine::gameplay::ResourceStore>(warehouse);
+	BOOST_TEST_REQUIRE(store != nullptr);
+	BOOST_TEST(store->boxes == 400u);
+	const auto *dock = world.Get<engine::gameplay::Dock>(warehouse);
+	BOOST_TEST_REQUIRE(dock != nullptr);
+	BOOST_TEST(dock->dynamic);
+	BOOST_TEST(!dock->passthrough);
+	BOOST_TEST(world.Has<engine::gameplay::ResourceDepot>(center));
+	world.Get<engine::gameplay::Harvester>(truck)->forceWanting = true;
+	const auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	const std::int64_t before = money.Balance(china);
+	int ticks = 0;
+	while (money.Balance(china) == before && ticks < 3000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("first delivery after " << ticks << " ticks");
+	BOOST_TEST(money.Balance(china) - before == 300);
+	// Its four boxes came off the warehouse; so did any other truck's aboard (the supply centre's own truck arrives too).
+	{
+		std::uint32_t aboard = 0;
+		ecs::Query<ecs::Read<engine::gameplay::Harvester>> trucks(world);
+		trucks.ForEachChunk([&](auto chunk) {
+			const auto rows = chunk.template Get<engine::gameplay::Harvester>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < rows.size(); ++row)
+				if (entities[row] != truck && world.Get<engine::gameplay::Owner>(entities[row])->player == china)
+					aboard += rows[row].boxes;
+		});
+		BOOST_TEST(world.Get<engine::gameplay::ResourceStore>(warehouse)->boxes + aboard == 396u);
+	}
+	// Round and round: a second delivery.
+	while (money.Balance(china) - before < 600 && ticks < 6000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST(money.Balance(china) - before == 600);
+	// The player stops it: it idles and stays idle.
+	auto stop = commands::Encode(commands::Stop{{truck}});
+	stop.player = 0; // seat 0 plays China
+	game.Tick(std::span(&stop, 1));
+	for (int tick = 0; tick < 200; ++tick)
+		game.Tick();
+	BOOST_TEST((world.Get<engine::gameplay::Harvester>(truck)->state == engine::gameplay::HarvesterState::Idle));
+	BOOST_TEST(!engine::gameplay::IsDocking(*world.Get<engine::gameplay::Docking>(truck)));
+	const std::int64_t stopped = money.Balance(china);
+	// Sent back to the warehouse, it takes it as its own and goes round again.
+	auto send = commands::Encode(commands::Dock{{truck}, warehouse});
+	send.player = 0;
+	game.Tick(std::span(&send, 1));
+	for (int tick = 0; tick < 3000 && money.Balance(china) == stopped; ++tick)
+		game.Tick();
+	BOOST_TEST((world.Get<engine::gameplay::Harvester>(truck)->preferredDock == warehouse));
+	BOOST_TEST(money.Balance(china) - stopped == 300);
+}
+
+
+// The supply round is deterministic: the same on 1 and 4 workers, and a checkpoint taken mid-round (a truck at
+// its dock, boxes aboard) restores and runs on to the same state.
+BOOST_AUTO_TEST_CASE(supply_rounds_are_deterministic_and_checkpoint_exactly)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 99;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionChina");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	const auto optionsFor = [&](std::size_t workers) {
+		session::SessionOptions options{5, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	};
+	const auto build = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(skirmish.level, shell.game, optionsFor(workers));
+		const std::uint32_t team = *game->Teams().FindTeam(skirmish.players[0].team);
+		game->Place("ChinaSupplyCenter", at(0, -180), {}, team);
+		game->Place("SupplyDock", at(-200, -180), {}, team);
+		for (int truck = 0; truck < 3; ++truck)
+		{
+			const ecs::Entity entity = game->Place("ChinaVehicleSupplyTruck", at(-100 + truck * 30, -120), {}, team);
+			game->World().Get<engine::gameplay::Harvester>(entity)->forceWanting = true;
+		}
+		return game;
+	};
+	auto one = build(1);
+	auto four = build(4);
+	for (int tick = 0; tick < 200; ++tick)
+	{
+		one->Tick();
+		four->Tick();
+	}
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	std::size_t docked = 0;
+	ecs::Query<ecs::Read<engine::gameplay::Docking>> query(one->World());
+	query.ForEachChunk([&](auto chunk) {
+		for (const auto &docking : chunk.template Get<engine::gameplay::Docking>())
+			docked += engine::gameplay::IsDocking(docking) ? 1u : 0u;
+	});
+	BOOST_TEST(docked > 0u);
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, optionsFor(1), one->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == one->StateHash());
+	for (int tick = 0; tick < 400; ++tick)
+	{
+		one->Tick();
+		four->Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(one->StateHash() == four->StateHash());
+	BOOST_TEST(restored->StateHash() == one->StateHash());
+	BOOST_TEST(restored->World().Resource<engine::gameplay::PlayerMoney>().Balance(*one->Teams().FindPlayer("player0")) ==
+		one->World().Resource<engine::gameplay::PlayerMoney>().Balance(*one->Teams().FindPlayer("player0")));
+}
+
+// WorkerAIUpdate carries supplies as a supply truck does (MaxBoxes 1, SupplyWarehouseActionDelay 150 ms and
+// SupplyCenterActionDelay 150 ms: 5 frames each): a GLA worker told to harvest brings one box to its supply stash at
+// ValuePerSupplyBox (75); once its player has Upgrade_GLAWorkerShoes, each delivery brings its UpgradedSupplyBoost (8)
+// more (getUpgradedSupplyBoostValue: 8 x 1 box / 1). DockUpdate::update on the supply dock (KINDOF_SUPPLY_SOURCE): the
+// worker (DOZER and HARVESTER) shows no MOVING while DOCKING_BEGINNING there, its pick-up instead of its walk; at its
+// stash (no supply source) it walks in as it moves.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 99;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{5, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	game.Place("GLASupplyStash", at(0, -180), {}, team);
+	game.Place("SupplyDock", at(-200, -180), {}, team);
+	const ecs::Entity worker = game.Place("GLAInfantryWorker", at(-100, -120), {}, team);
+	auto *harvester = world.Get<engine::gameplay::Harvester>(worker);
+	BOOST_TEST_REQUIRE(harvester != nullptr);
+	BOOST_TEST(harvester->maxBoxes == 1u);
+	BOOST_TEST(harvester->boost == 8);
+	BOOST_TEST(harvester->boostUpgrade == *shell.game.upgrades.Find("Upgrade_GLAWorkerShoes"));
+	harvester->forceWanting = true;
+	const auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	std::int64_t before = money.Balance(gla);
+	int ticks = 0;
+	namespace mc = generalszh::content::model_condition;
+	int beginningAtDock = 0, movingWhileBeginningAtDock = 0, movingWhileBeginningAtStash = 0;
+	while (money.Balance(gla) == before && ticks < 3000)
+	{
+		game.Tick();
+		++ticks;
+		const auto &look = *world.Get<engine::gameplay::Appearance>(worker);
+		if (!look.Test(mc::DockingBeginning))
+			continue;
+		if (world.Get<engine::gameplay::Harvester>(worker)->boxes == 0) // on its way in to pick up
+		{
+			++beginningAtDock;
+			movingWhileBeginningAtDock += look.Test(mc::Moving) ? 1 : 0;
+		}
+		else // carrying its box in to the stash
+			movingWhileBeginningAtStash += look.Test(mc::Moving) ? 1 : 0;
+	}
+	BOOST_TEST(money.Balance(gla) - before == 75);
+	BOOST_TEST(beginningAtDock > 0);
+	BOOST_TEST(movingWhileBeginningAtDock == 0);
+	BOOST_TEST(movingWhileBeginningAtStash > 0);
+	world.Resource<engine::gameplay::PlayerUpgrades>().Grant(gla, *shell.game.upgrades.Find("Upgrade_GLAWorkerShoes"));
+	before = money.Balance(gla);
+	while (money.Balance(gla) == before && ticks < 6000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST(money.Balance(gla) - before == 83);
+}
+
+// ChinookAIUpdate is a SupplyTruckAIUpdate that flies: told to harvest, a supply Chinook brings its full load to its
+// supply centre at ValuePerSupplyBox (75) each, and its UpgradedSupplyBoost more once its player has Supply Lines.
+// The supply centre itself shows the docking (DockUpdate onEnterReached / onDockReached / onExitReached on `me`): DOCKING
+// and DOCKING_BEGINNING as the Chinook reaches its entry, DOCKING and DOCKING_ACTIVE (its "arm box" animation) at its
+// action point, then DOCKING_ENDING alone once it is out, kept after.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_chinook_ferries_supplies)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 99;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{5, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t usa = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	const ecs::Entity center = game.Place("AmericaSupplyCenter", at(0, -180), {}, team);
+	game.Place("SupplyDock", at(-200, -180), {}, team);
+	const ecs::Entity worker = game.Place("AmericaVehicleChinook", at(-100, -120), {}, team);
+	auto *harvester = world.Get<engine::gameplay::Harvester>(worker);
+	BOOST_TEST_REQUIRE(harvester != nullptr);
+	BOOST_TEST_MESSAGE("chinook: " << harvester->maxBoxes << " boxes, boost " << harvester->boost);
+	BOOST_TEST(harvester->boostUpgrade == *shell.game.upgrades.Find("Upgrade_AmericaSupplyLines"));
+	const std::int64_t full = static_cast<std::int64_t>(harvester->maxBoxes) * 75;
+	const std::int64_t boost = harvester->boost;
+	harvester->forceWanting = true;
+	const auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	std::int64_t before = money.Balance(usa);
+	int ticks = 0;
+	namespace dl = engine::gameplay::dock_look;
+	BOOST_TEST_REQUIRE(world.Get<engine::gameplay::DockLook>(center) != nullptr);
+	std::vector<std::uint8_t> shown{world.Get<engine::gameplay::DockLook>(center)->flags};
+	bool activeLook = false;
+	const auto watch = [&] {
+		const std::uint8_t now = world.Get<engine::gameplay::DockLook>(center)->flags;
+		if (now != shown.back())
+			shown.push_back(now);
+		activeLook = activeLook || world.Get<engine::gameplay::Appearance>(center)->Test(generalszh::content::model_condition::DockingActive);
+	};
+	while (money.Balance(usa) == before && ticks < 3000)
+	{
+		game.Tick();
+		watch();
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("first delivery after " << ticks << " ticks");
+	BOOST_TEST(money.Balance(usa) - before == full);
+	for (int tick = 0; tick < 300 && shown.back() != dl::Ending; ++tick)
+	{
+		game.Tick();
+		watch();
+	}
+	BOOST_TEST((shown == std::vector<std::uint8_t>{0, dl::Docking | dl::Beginning, dl::Docking | dl::Active, dl::Ending}));
+	BOOST_TEST(activeLook);
+	world.Resource<engine::gameplay::PlayerUpgrades>().Grant(usa, *shell.game.upgrades.Find("Upgrade_AmericaSupplyLines"));
+	before = money.Balance(usa);
+	while (money.Balance(usa) == before && ticks < 6000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST(money.Balance(usa) - before == full + boost);
+}
+
+// WorkerAIUpdate / DozerAIUpdate: a player's starting worker left alone stays where placeNetworkBuildingsForPlayer
+// put it (it harvests only when told to, supplyTruckSubMachineWantsToEnter; bored, it only looks for its own damaged
+// structures to repair, and there are none).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_starting_worker_stays_put)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	ecs::Entity worker;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *owner = game.World().Get<engine::gameplay::Owner>(object.entity);
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (owner != nullptr && owner->player == gla && ref != nullptr && game.DefinitionName(ref->index) == "GLAInfantryWorker")
+			worker = object.entity;
+	});
+	BOOST_TEST_REQUIRE((worker != ecs::Entity{}));
+	const auto placed = game.TransformOf(worker)->position.XY();
+	for (int tick = 1; tick <= 300; ++tick)
+	{
+		game.Tick();
+		const auto now = game.TransformOf(worker)->position.XY();
+		if (now != placed)
+		{
+			const auto *harvester = game.World().Get<engine::gameplay::Harvester>(worker);
+			BOOST_TEST_MESSAGE("worker moved on tick " << tick << " (harvester " << (harvester != nullptr) << ")");
+			break;
+		}
+	}
+	BOOST_TEST((game.TransformOf(worker)->position.XY() == placed));
+}
+
+// VictoryConditions::update in a skirmish (VICTORY_NOBUILDINGS) on real data: the America player's command centre is
+// its only structure that counts (KINDOF_MP_COUNT_FOR_VICTORY); killed, America is defeated on that very tick, the
+// GLA's is the single alliance left (the match ends then, the GLA won), and killPlayer takes the rest of America with
+// it (its dozer dies). The same on 1 and 4 workers; a checkpoint after it restores exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_losing_the_last_counted_structure_ends_a_skirmish)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 11;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	const auto optionsFor = [&](std::size_t workers) {
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	};
+	const auto play = [&](std::size_t workers) {
+		auto game = std::make_unique<session::Session>(skirmish.level, shell.game, optionsFor(workers));
+		for (int tick = 0; tick < 30; ++tick)
+			game->Tick();
+		return game;
+	};
+	auto game = play(1);
+	const std::uint32_t gla = *game->Teams().FindPlayer("player0");
+	const std::uint32_t america = *game->Teams().FindPlayer("player1");
+	const auto &outcome = game->World().Resource<engine::gameplay::MatchOutcome>();
+	BOOST_TEST(outcome.enabled);
+	BOOST_TEST(outcome.players.size() == 2u);
+	BOOST_TEST(!outcome.singleAllianceRemaining);
+	std::vector<ecs::Entity> counted;
+	ecs::Entity dozer;
+	const auto find = [&](session::Session &session) {
+		counted.clear();
+		session.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			const auto *owner = session.World().Get<engine::gameplay::Owner>(object.entity);
+			const auto *role = session.World().Get<engine::gameplay::VictoryRole>(object.entity);
+			const auto *ref = session.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+			if (owner == nullptr || owner->player != america)
+				return;
+			if (role != nullptr && role->Has(engine::gameplay::victory_role::CountsForVictory))
+				counted.push_back(object.entity);
+			if (ref != nullptr && session.DefinitionName(ref->index) == "AmericaVehicleDozer")
+				dozer = object.entity;
+		});
+	};
+	find(*game);
+	BOOST_TEST_REQUIRE(counted.size() == 1u); // its command centre
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const auto defeat = [&](session::Session &session) {
+		find(session);
+		for (const ecs::Entity entity : counted)
+			session.World().Resource<engine::gameplay::KillRequests>().entities.push_back(entity);
+		session.Tick();
+	};
+	defeat(*game);
+	BOOST_TEST(outcome.Eliminated(america));
+	BOOST_TEST(!outcome.Eliminated(gla));
+	BOOST_TEST(outcome.singleAllianceRemaining);
+	BOOST_TEST(outcome.endTick == 31u);
+	BOOST_TEST(outcome.HasWon(gla));
+	BOOST_TEST(outcome.HasLost(america));
+	BOOST_TEST((outcome.fallen == std::vector<std::uint32_t>{america}));
+	game->Tick();
+	BOOST_TEST((!game->World().IsAlive(dozer) || game->World().Get<engine::gameplay::Dying>(dozer) != nullptr));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, optionsFor(1), game->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game->StateHash());
+	BOOST_TEST(restored->World().Resource<engine::gameplay::MatchOutcome>().HasWon(gla));
+
+	auto wide = play(4);
+	defeat(*wide);
+	wide->Tick();
+	BOOST_TEST(wide->StateHash() == game->StateHash());
+}
+
+// The shipped Data/Scripts/MultiplayerScripts.scb reads (ReadScriptFile): its one list of victory and defeat scripts.
+BOOST_AUTO_TEST_CASE(the_multiplayer_scripts_read)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Data/Scripts/MultiplayerScripts.scb");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	const auto file = engine::level::generals_map::ReadScriptFile(*bytes);
+	BOOST_TEST_REQUIRE(file.has_value(), (file ? std::string{} : file.error()));
+	BOOST_TEST_REQUIRE(!file->lists.empty());
+	const auto dump = [](const engine::level::Script &script) {
+		std::string text = "  " + script.name + (script.active ? "" : " (inactive)") + (script.oneShot ? " once" : "") + ": if";
+		for (const auto &clause : script.conditions)
+		{
+			text += " (";
+			for (const auto &call : clause)
+			{
+				text += " " + call.name;
+				for (const auto &p : call.parameters)
+					text += " [" + std::to_string(p.integer) + "/" + p.text + "]";
+			}
+			text += " )";
+		}
+		text += " then";
+		for (const auto &call : script.actions)
+		{
+			text += " " + call.name;
+			for (const auto &p : call.parameters)
+				text += " [" + std::to_string(p.integer) + "/" + p.text + "]";
+		}
+		return text;
+	};
+	for (const auto &list : file->lists)
+	{
+		for (const auto &script : list.scripts)
+			BOOST_TEST_MESSAGE(dump(script));
+		for (const auto &group : list.groups)
+		{
+			BOOST_TEST_MESSAGE(" group " << group.name << (group.active ? "" : " (inactive)"));
+			for (const auto &script : group.scripts)
+				BOOST_TEST_MESSAGE(dump(script));
+		}
+	}
+	BOOST_TEST_MESSAGE("players: " << file->players.size() << ", teams: " << file->teams.size());
+}
+
+// The shipped Data/Scripts/SkirmishScripts.scb reads: its script lists by player, and the calls they make.
+BOOST_AUTO_TEST_CASE(the_skirmish_scripts_read)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	const auto file = engine::level::generals_map::ReadScriptFile(*bytes);
+	BOOST_TEST_REQUIRE(file.has_value(), (file ? std::string{} : file.error()));
+	BOOST_TEST(file->lists.size() == file->players.size());
+	std::map<std::string, int> conditions, actions;
+	std::size_t scripts = 0;
+	const auto count = [&](const engine::level::Script &script) {
+		++scripts;
+		for (const auto &clause : script.conditions)
+			for (const auto &call : clause)
+				++conditions[call.name];
+		for (const auto &call : script.actions)
+			++actions[call.name];
+		for (const auto &call : script.falseActions)
+			++actions[call.name];
+	};
+	for (const auto &list : file->lists)
+	{
+		for (const auto &script : list.scripts)
+			count(script);
+		for (const auto &group : list.groups)
+			for (const auto &script : group.scripts)
+				count(script);
+	}
+	for (std::size_t index = 0; index < file->players.size(); ++index)
+		BOOST_TEST_MESSAGE("player " << file->players[index] << ": " << file->lists[index].scripts.size() << " scripts, " << file->lists[index].groups.size() << " groups");
+	if (const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map"))
+		if (const auto read = engine::level::generals_map::Read(*map))
+			for (const auto &side : read->level.scenario.participants)
+				BOOST_TEST_MESSAGE("map side " << side.properties.Get<std::string>("playerName").value_or("?") << " "
+					<< side.properties.Get<std::string>("playerFaction").value_or("?") << " scripts " << side.scripts.scripts.size() + side.scripts.groups.size());
+	BOOST_TEST_MESSAGE(scripts << " scripts, " << file->teams.size() << " teams");
+	// What the skirmish teams set (keys and how many teams set each), and one full team.
+	std::map<std::string, int> keys;
+	for (const auto &team : file->teams)
+		for (const auto &[key, value] : team)
+			++keys[key];
+	for (const auto &[key, count] : keys)
+		BOOST_TEST_MESSAGE("team key " << key << " " << count);
+	for (const auto &team : file->teams)
+		if (team.Get<std::string>("teamOwner").value_or("") == "SkirmishAmerica" && team.Get<std::string>("teamName").value_or("").find("Tank") != std::string::npos)
+		{
+			for (const auto &[key, value] : team)
+				BOOST_TEST_MESSAGE("  " << key << " = " << std::visit([](const auto &v) {
+					std::ostringstream out;
+					if constexpr (std::is_same_v<std::decay_t<decltype(v)>, Engine::Math::Fixed>)
+						out << v.Raw() / 65536.0;
+					else
+						out << v;
+					return out.str();
+				}, value));
+			break;
+		}
+	for (const auto &[name, uses] : conditions)
+		BOOST_TEST_MESSAGE("condition " << name << " " << uses);
+	for (const auto &[name, uses] : actions)
+		BOOST_TEST_MESSAGE("action " << name << " " << uses);
+}
+
+// Player::initFromDict on real data (SkirmishScripts.scb, Tournament Continent): the computer player (America, start
+// spot 2) takes SkirmishAmerica's script groups and teams qualified with "2" (a SIDE parameter naming SkirmishAmerica2
+// become its own name), and its default team is teamSkirmishAmerica2; the human takes the civilian side's scripts,
+// qualified "0". The session starts and runs with them.
+BOOST_AUTO_TEST_CASE(legacy_parity_computer_players_take_their_sides_skirmish_scripts)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE((scb.has_value() && map.has_value()));
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	const engine::level::Participant *ai = nullptr, *human = nullptr;
+	for (const auto &side : skirmish.level.scenario.participants)
+	{
+		const auto name = side.properties.Get<std::string>("playerName").value_or("");
+		if (name == "player1")
+			ai = &side;
+		if (name == "player0")
+			human = &side;
+	}
+	BOOST_TEST_REQUIRE((ai != nullptr && human != nullptr));
+	BOOST_TEST(ai->scripts.groups.size() == 32u);
+	BOOST_TEST(ai->properties.Get<std::int64_t>("skirmishDifficulty").value_or(-1) == 2);
+	bool qualified = true, sideRenamed = false;
+	for (const auto &group : ai->scripts.groups)
+	{
+		qualified = qualified && group.name.ends_with("2");
+		for (const auto &script : group.scripts)
+			for (const auto &clause : script.conditions)
+				for (const auto &call : clause)
+					for (const auto &parameter : call.parameters)
+						sideRenamed = sideRenamed || (parameter.kind == 11 && parameter.text == "player1");
+	}
+	BOOST_TEST(qualified);
+	// Its scripts name their player as <This Player> and <This Player's Enemy> (resolved as they run), not by side.
+	BOOST_TEST(!sideRenamed);
+	BOOST_TEST(human->scripts.scripts.size() + human->scripts.groups.size() == 11u); // PlyrCivilian: 4 scripts, 7 groups
+	BOOST_TEST(!human->scripts.groups.empty());
+	BOOST_TEST(human->scripts.groups.front().name.ends_with("0"));
+	bool defaultTeam = false;
+	std::size_t aiTeams = 0;
+	for (const auto &team : skirmish.level.scenario.groups)
+		if (team.Get<std::string>("teamOwner").value_or("") == "player1")
+		{
+			++aiTeams;
+			defaultTeam = defaultTeam || team.Get<std::string>("teamName").value_or("") == "teamSkirmishAmerica2";
+		}
+	BOOST_TEST(defaultTeam);
+	BOOST_TEST_MESSAGE("the computer player's teams: " << aiTeams);
+	for (const auto &player : skirmish.players)
+		if (player.name == "player1")
+			BOOST_TEST(player.team == "teamSkirmishAmerica2");
+
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	for (int tick = 0; tick < 90; ++tick)
+		game.Tick();
+	BOOST_TEST_MESSAGE("unported: " << game.UnportedSummary());
+}
+
+// AISkirmishPlayer::newMap / adjustBuildList / computeCenterAndRadiusOfBase on real data: the computer player
+// (America at start spot 2 of Tournament Continent) has its starting command centre taken away and put up again from
+// its side's skirmish build list, which is moved so its command centre stands on the start spot and turned 135
+// degrees about it: the first power plant, planned at (770.43, 727.79) with the command centre at (501.22, 546.25),
+// goes to the start + (-318.73, 61.99) (to within 0.05 for fixed point); every entry but the command centre gets a
+// rebuild more; the base centre is the plan's middle; the enemy it picks is the human (its only enemy).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_lays_out_its_base)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	auto &ais = game.World().Resource<gameplay::AiPlayers>();
+	const gameplay::AiPlayer *ai = ais.Of(america);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	BOOST_TEST(ais.Of(gla) == nullptr);
+	BOOST_TEST(ai->difficulty == 0);
+	BOOST_TEST(ai->side == "America");
+	BOOST_TEST_REQUIRE(ai->buildList.size() == 18u);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_3_Start")
+			start = marker.position.XY();
+	const auto near = [](Engine::Math::FixedVector2 a, Engine::Math::FixedVector2 b) {
+		return Engine::Math::Abs(a.x - b.x) < Engine::Math::Fixed::FromRatio(5, 100) && Engine::Math::Abs(a.y - b.y) < Engine::Math::Fixed::FromRatio(5, 100);
+	};
+	const auto &center = ai->buildList[0];
+	BOOST_TEST(center.structure == "AmericaCommandCenter");
+	BOOST_TEST(center.initiallyBuilt);
+	BOOST_TEST(near(center.location, start));
+	BOOST_TEST(center.rebuilds == 0);
+	BOOST_TEST_REQUIRE(game.World().IsAlive(center.built));
+	BOOST_TEST(near(game.TransformOf(center.built)->position.XY(), start));
+	const auto &plant = ai->buildList[1];
+	BOOST_TEST(plant.structure == "AmericaPowerPlant");
+	BOOST_TEST(near(plant.location, start + Engine::Math::FixedVector2{Engine::Math::Fixed::FromRatio(-31873, 100), Engine::Math::Fixed::FromRatio(6199, 100)}));
+	BOOST_TEST(plant.rebuilds == 1);
+	BOOST_TEST(!game.World().IsAlive(plant.built));
+	BOOST_TEST(ai->baseCenterSet);
+	// computeCenterAndRadiusOfBase: the farthest plan entry's |dx| + 0.4 r, |dy| + 0.4 r from the plan's middle.
+	{
+		double best = 0;
+		for (const auto &slot : ai->buildList)
+			if (const auto *plan = shell.game.objects.Find(slot.structure))
+			{
+				const double grow = generalszh::content::BoundingSphereRadius(plan->geometry).Raw() / 65536.0 * 0.4;
+				const double dx = std::abs((slot.location.x - ai->baseCenter.x).Raw() / 65536.0) + grow;
+				const double dy = std::abs((slot.location.y - ai->baseCenter.y).Raw() / 65536.0) + grow;
+				best = std::max(best, dx * dx + dy * dy);
+			}
+		BOOST_TEST(std::abs(ai->baseRadius.Raw() / 65536.0 - std::sqrt(best)) < 0.1);
+	}
+	// The only command centre of America's is the one put up again.
+	int centers = 0;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && game.DefinitionName(ref->index) == "AmericaCommandCenter")
+			++centers;
+	});
+	BOOST_TEST(centers == 1);
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// AISkirmishPlayer::adjustBuildList with RotateSkirmishBases (shipped No): the plan is turned 135 degrees plus the turn of
+// the start's ninth of the map (TerrainLogic::getMaximumPathfindExtent: 0 to the largest boundary; past a third of the
+// width or height the next column or row; grid 0..8: 0, 45, 90, -45, 0, 135, -90, -135, 180 degrees). America at start
+// spot 2 of Tournament Continent: the first power plant, (269.21, 181.54) off the command centre in the plan, goes to the
+// start plus that offset turned so (within 0.05 for fixed point); the command centre stays on the start.
+BOOST_AUTO_TEST_CASE(legacy_parity_rotated_skirmish_bases_face_the_middle_of_the_map)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	content::GameContent rotating = shell.game;
+	rotating.aiData.rotateSkirmishBases = true;
+	session::Session game(skirmish.level, rotating, options);
+	const gameplay::AiPlayer *ai = game.World().Resource<gameplay::AiPlayers>().Of(*game.Teams().FindPlayer("player1"));
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	BOOST_TEST_REQUIRE(ai->buildList.size() >= 2u);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_3_Start")
+			start = marker.position.XY();
+	const auto real = [](Engine::Math::Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; };
+	double width = 0.0, height = 0.0;
+	for (const auto &boundary : skirmish.level.terrain.playableExtents)
+	{
+		width = (std::max)(width, boundary[0] * real(skirmish.level.terrain.cellSize));
+		height = (std::max)(height, boundary[1] * real(skirmish.level.terrain.cellSize));
+	}
+	const double x = real(start.x), y = real(start.y);
+	int grid = 0;
+	if (x > width / 3)
+		++grid;
+	if (x > 2 * width / 3)
+		++grid;
+	if (y > height / 3)
+		grid += 3;
+	if (y > 2 * height / 3)
+		grid += 3;
+	const double pi = 3.14159265358979323846;
+	const double turns[] = {0, pi / 4, pi / 2, -pi / 4, 0, 3 * pi / 4, -pi / 2, -3 * pi / 4, pi};
+	const double angle = turns[grid] + 3 * pi / 4;
+	const double dx = 770.43 - 501.22, dy = 727.79 - 546.25;
+	const double wantX = x + dx * std::cos(angle) - dy * std::sin(angle), wantY = y + dy * std::cos(angle) + dx * std::sin(angle);
+	BOOST_TEST_MESSAGE("start (" << x << ", " << y << ") of " << width << " x " << height << ": grid " << grid);
+	BOOST_TEST(ai->buildList[0].structure == "AmericaCommandCenter");
+	BOOST_TEST(std::abs(real(ai->buildList[0].location.x) - x) < 0.05);
+	BOOST_TEST(std::abs(real(ai->buildList[0].location.y) - y) < 0.05);
+	BOOST_TEST(ai->buildList[1].structure == "AmericaPowerPlant");
+	BOOST_TEST(std::abs(real(ai->buildList[1].location.x) - wantX) < 0.05);
+	BOOST_TEST(std::abs(real(ai->buildList[1].location.y) - wantY) < 0.05);
+}
+
+// SidesList.cpp BuildListInfo::parseStructure (Name, RallyPointOffset) and AIPlayer::buildStructureNow: the built
+// structure takes its entry's name (updateObjValuesFromMapProperties' objectName) and, its offset over 1 either way, its
+// natural rally point (DefaultProductionExitUpdate::getNaturalRallyPoint: NaturalRallyPoint in its frame) moved by the
+// offset (setRallyPoint). Retail never set gotOffset, so the offset never took: fixed here (a retail bug). The skirmish
+// America plan's command centre given Name ParityCommandCenter and RallyPointOffset X:40 Y:-25; its power plant an
+// offset of X:1 Y:-1 (not over 1: nothing, and it has no exit anyway).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_build_list_entry_names_its_structure_and_offsets_its_rally_point)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	content::GameContent named = shell.game;
+	content::AiBuildList *plan = nullptr;
+	for (auto &list : named.aiData.buildLists)
+		if (list.side == "America")
+			plan = &list;
+	BOOST_TEST_REQUIRE(plan != nullptr);
+	BOOST_TEST_REQUIRE(plan->structures.size() >= 2u);
+	BOOST_TEST_REQUIRE(plan->structures[0].structure == "AmericaCommandCenter");
+	plan->structures[0].name = "ParityCommandCenter";
+	plan->structures[0].rallyPointOffset = {Engine::Math::Fixed::FromInt(40), Engine::Math::Fixed::FromInt(-25)};
+	plan->structures[1].rallyPointOffset = {Engine::Math::Fixed::One(), -Engine::Math::Fixed::One()};
+	session::Session game(skirmish.level, named, options);
+	const gameplay::AiPlayer *ai = game.World().Resource<gameplay::AiPlayers>().Of(*game.Teams().FindPlayer("player1"));
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	const ecs::Entity center = ai->buildList[0].built;
+	BOOST_TEST_REQUIRE(game.World().IsAlive(center));
+	BOOST_TEST(ai->buildList[0].name == "ParityCommandCenter");
+	BOOST_TEST((game.Game().names.Find("ParityCommandCenter") == center));
+	const auto production = content::ReadObjectProduction(*named.objects.Find("AmericaCommandCenter"), engine::time::FixedStep{30});
+	BOOST_TEST_REQUIRE(production.has_value());
+	BOOST_TEST_REQUIRE(production->hasExit);
+	const auto frame = *game.TransformOf(center);
+	const Engine::Math::Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+	const Engine::Math::FixedVector2 natural{frame.position.x + production->rallyPoint.x * c - production->rallyPoint.y * s,
+		frame.position.y + production->rallyPoint.x * s + production->rallyPoint.y * c};
+	const auto *rally = game.World().Get<engine::gameplay::RallyPoint>(center);
+	BOOST_TEST_REQUIRE(rally != nullptr);
+	BOOST_TEST((rally->at == natural + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(40), Engine::Math::Fixed::FromInt(-25)}));
+	BOOST_TEST((ai->buildList[1].rallyOffset == Engine::Math::FixedVector2{Engine::Math::Fixed::One(), -Engine::Math::Fixed::One()}));
+}
+
+// The computer player at work on real data (Tournament Continent, a hard America on start spot 2 against a GLA human,
+// SkirmishScripts.scb): its scripts ask for buildings (SKIRMISH_BUILD_BUILDING) and it puts them up with its dozers
+// (processBaseBuilding, buildStructureWithDozer), a dozer ordered when it has none free. Four minutes: since units put
+// out of the way of a new building walk out of it (moveObjectsForConstruction, tunnelling) instead of the dozers being
+// teleported from inside footprints, its war factory comes at about 150 s (after the airfield the scripts ask for).
+BOOST_AUTO_TEST_CASE(a_computer_player_builds_its_base)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	const auto owned = [&] {
+		std::map<std::string, int> counts;
+		game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+			const auto *owner = game.World().Get<engine::gameplay::Owner>(object.entity);
+			const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+			if (owner != nullptr && ref != nullptr && owner->player == america)
+				++counts[std::string(game.DefinitionName(ref->index))];
+		});
+		return counts;
+	};
+	for (int second = 1; second <= 240; ++second)
+	{
+		for (int tick = 0; tick < 30; ++tick)
+			game.Tick();
+		if (second % 20 == 0)
+		{
+			std::string line;
+			for (const auto &[name, count] : owned())
+				line += " " + name + "x" + std::to_string(count);
+			BOOST_TEST_MESSAGE(second << "s: $" << game.World().Resource<engine::gameplay::PlayerMoney>().Balance(america) << line);
+		}
+	}
+	const auto final = owned();
+	BOOST_TEST(final.contains("AmericaSupplyCenter"));
+	BOOST_TEST(final.contains("AmericaBarracks"));
+	BOOST_TEST(final.contains("AmericaWarFactory"));
+	BOOST_TEST(final.contains("AmericaPowerPlant"));
+	BOOST_TEST_MESSAGE("unported: " << game.UnportedSummary());
+
+	// The same on 4 workers; a checkpoint taken mid-build restores and plays on the same.
+	session::SessionOptions wide = options;
+	wide.workers = 4;
+	session::Session other(skirmish.level, shell.game, wide);
+	for (int tick = 0; tick < 240 * 30; ++tick)
+		other.Tick();
+	BOOST_TEST(other.StateHash() == game.StateHash());
+	session::Session again(skirmish.level, shell.game, options);
+	for (int tick = 0; tick < 100 * 30; ++tick)
+		again.Tick();
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, again.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	for (int tick = 0; tick < 20 * 30; ++tick)
+	{
+		again.Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(restored->StateHash() == again.StateHash());
+}
+
+// AIPlayer / AISkirmishPlayer team building (AIPlayer.cpp: doTeamBuilding, selectTeamToBuild, buildSpecificAITeam,
+// queueUnits, queueSupplyTruck, onUnitProduced, checkQueuedTeams, checkReadyTeams; AISkirmishPlayer.cpp:
+// doTeamBuilding): the team timer starts at 2 (AIPlayer's constructor) and the look delay at 0, so tick 1 looks
+// (delay back to 2 s = 60) without being ready, tick 2 runs the timer out and looks again at once (ready), and the looks
+// then come every 60 ticks. A hard America on Tournament Continent then orders its supply centre's trucks and picks
+// teams its SkirmishScripts production conditions allow, builds each as a new inactive instance whose units join it as
+// they come out of its factories, and starts it (active) once built; deterministic on 1 and 4 workers and across a
+// checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_builds_its_teams)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	const auto &roster = game.Teams();
+	{
+		const auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+		BOOST_TEST_REQUIRE(ais.Of(america) != nullptr);
+		BOOST_TEST(ais.Of(america)->skirmish);
+		BOOST_TEST(ais.Of(america)->teamTimer == 2);
+		BOOST_TEST(ais.Of(america)->teamDelay == 0);
+		game.Tick(); // tick 1
+		BOOST_TEST(!ais.Of(america)->readyToBuildTeam);
+		BOOST_TEST(ais.Of(america)->teamTimer == 1);
+		BOOST_TEST(ais.Of(america)->teamDelay == 60);
+		game.Tick(); // tick 2: ready, and it looks at once
+		BOOST_TEST(ais.Of(america)->teamDelay == 60);
+		const bool picked = !ais.Of(america)->readyToBuildTeam;
+		for (int tick = 3; tick <= 60; ++tick)
+			game.Tick();
+		BOOST_TEST(ais.Of(america)->teamDelay == 2); // the next look on tick 62
+		BOOST_TEST_MESSAGE("a team picked on tick 2: " << picked);
+	}
+	std::set<std::string> started;
+	std::size_t mostQueued = 0;
+	for (int second = 3; second <= 300; ++second)
+	{
+		for (int tick = 0; tick < 30; ++tick)
+		{
+			game.Tick();
+			for (std::uint32_t team = 0; team < roster.TeamCount(); ++team)
+			{
+				const auto &record = roster.TeamAt(team);
+				if (record.owner == america && record.prototype != engine::gameplay::Team::Own && record.active && !record.members.empty())
+					started.insert(record.name);
+			}
+		}
+		const auto *ai = game.World().Resource<generalszh::gameplay::AiPlayers>().Of(america);
+		BOOST_TEST_REQUIRE(ai != nullptr);
+		mostQueued = std::max(mostQueued, ai->buildQueue.size());
+		if (second % 30 == 0)
+		{
+			std::string queued;
+			for (const auto &entry : ai->buildQueue)
+				queued += " " + roster.TeamAt(entry.team).name;
+			std::string ready;
+			for (const auto &entry : ai->readyQueue)
+				ready += " " + roster.TeamAt(entry.team).name;
+			std::string out;
+			for (const auto &name : started)
+				out += " " + name;
+			BOOST_TEST_MESSAGE(second << "s: $" << game.World().Resource<engine::gameplay::PlayerMoney>().Balance(america) << " building:" << queued
+									  << " ready:" << ready << " started:" << out);
+		}
+	}
+	BOOST_TEST(mostQueued > 0u);
+	BOOST_TEST(!started.empty());
+	BOOST_TEST_MESSAGE("unported: " << game.UnportedSummary());
+
+	session::SessionOptions wide = options;
+	wide.workers = 4;
+	session::Session other(skirmish.level, shell.game, wide);
+	for (int tick = 0; tick < 300 * 30; ++tick)
+		other.Tick();
+	BOOST_TEST(other.StateHash() == game.StateHash());
+	session::Session again(skirmish.level, shell.game, options);
+	for (int tick = 0; tick < 150 * 30; ++tick)
+		again.Tick();
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, again.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == again.StateHash());
+	for (int tick = 0; tick < 60 * 30; ++tick)
+	{
+		again.Tick();
+		restored->Tick();
+	}
+	BOOST_TEST(restored->StateHash() == again.StateHash());
+}
+
+// AISkirmishPlayer::buildAIBaseDefense / buildAIBaseDefenseStructure: front defences go on the circle of the base's reach
+// plus SkirmishBaseDefenseExtraDistance, the first aimed at the start's "Center" approach waypoint nearest the base, the
+// next ones alternately right and left of it by 4 x bounding radius / that radius (radians), each into the plan first,
+// flagged for priority; a flank one takes the "Backdoor" path first. Float sin/cos versus fixed point: within a unit.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_places_its_base_defenses)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+	auto &ai = *ais.Of(america);
+	const std::size_t planned = ai.buildList.size();
+	const std::string patriot = shell.game.aiData.Side("America")->baseDefenseStructure;
+	const auto *plan = shell.game.objects.Find(patriot);
+	BOOST_TEST_REQUIRE(plan != nullptr);
+	for (int count = 0; count < 3; ++count)
+		generalszh::gameplay::BuildAiBaseDefense(game.Game(), ais, ai, 2, false);
+	BOOST_TEST_REQUIRE(ai.buildList.size() >= planned + 1);
+	// The reference geometry, in doubles.
+	const auto &waypoints = game.Game().waypoints;
+	const auto way = waypoints.ClosestOnPath(ai.baseCenter, "Center3");
+	BOOST_TEST_REQUIRE(way != engine::gameplay::WaypointGraph::None);
+	const double cx = ai.baseCenter.x.Raw() / 65536.0, cy = ai.baseCenter.y.Raw() / 65536.0;
+	const double gx = waypoints.Position(way).x.Raw() / 65536.0 - cx, gy = waypoints.Position(way).y.Raw() / 65536.0 - cy;
+	const double distance = ai.baseRadius.Raw() / 65536.0 + shell.game.aiData.skirmishBaseDefenseExtraDistance.Raw() / 65536.0;
+	const double length = std::sqrt(gx * gx + gy * gy);
+	const double ox = gx / length * distance, oy = gy / length * distance;
+	const double step = 4 * generalszh::content::BoundingSphereRadius(plan->geometry).Raw() / 65536.0 / distance;
+	// Tries 1, 2, 3 at angles 0, -step, +step; each legal one is prepended.
+	std::vector<std::pair<double, double>> expected;
+	for (const double angle : {0.0, -step, step})
+		expected.emplace_back(cx + ox * std::cos(angle) - oy * std::sin(angle), cy + oy * std::cos(angle) + ox * std::sin(angle));
+	BOOST_TEST(ai.frontDefenses >= 3);
+	std::size_t matched = 0;
+	for (std::size_t index = 0; index + planned < ai.buildList.size(); ++index)
+	{
+		const auto &slot = ai.buildList[ai.buildList.size() - planned - 1 - index];
+		BOOST_TEST(slot.priorityBuild);
+		BOOST_TEST(slot.structure == patriot);
+		const bool found = std::any_of(expected.begin(), expected.end(), [&](const auto &point) {
+			return std::abs(slot.location.x.Raw() / 65536.0 - point.first) < 1.0 && std::abs(slot.location.y.Raw() / 65536.0 - point.second) < 1.0;
+		});
+		BOOST_TEST(found);
+		matched += found ? 1 : 0;
+	}
+	BOOST_TEST_MESSAGE("front defences placed: " << matched << " of 3 tries");
+}
+
+// Player::resetRank / resetSciences at the start, AIPlayer::doUpgradesAndSkills: every general starts at rank 1 with
+// rank 1's purchase point (Rank.ini) and its side's sciences plus SCIENCE_Rank1; from tick 2 the skirmish AI, having a
+// point to spend, picks one of its side's skill sets (AIData.ini SkillSet1..5) and buys, in the set's order, what it can
+// afford and has the prerequisites for; the human's point stays unspent.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_general_spends_its_first_point)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	BOOST_TEST_REQUIRE(shell.game.ranks.size() >= 5u);
+	BOOST_TEST(shell.game.ranks[1].skillPointsNeeded == 800);
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t human = *game.Teams().FindPlayer("player0");
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	BOOST_TEST_REQUIRE(game.RankOf(america) != nullptr);
+	BOOST_TEST(game.RankOf(america)->level == 1);
+	const std::int32_t start = game.RankOf(america)->purchasePoints;
+	BOOST_TEST(start >= 1);
+	BOOST_TEST(game.KnowsScience(america, "SCIENCE_Rank1"));
+	BOOST_TEST(game.KnowsScience(america, "SCIENCE_AMERICA"));
+	game.Tick(); // tick 1: too early
+	BOOST_TEST(game.RankOf(america)->purchasePoints == start);
+	game.Tick(); // tick 2
+	const auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(america);
+	BOOST_TEST_REQUIRE(ai.skillset >= 0);
+	const auto &set = shell.game.aiData.Side("America")->skillSets[static_cast<std::size_t>(ai.skillset)];
+	std::vector<std::string> bought;
+	for (const std::string &science : set)
+		if (game.KnowsScience(america, science))
+			bought.push_back(science);
+	BOOST_TEST(!bought.empty());
+	BOOST_TEST(game.RankOf(america)->purchasePoints < start);
+	BOOST_TEST_MESSAGE("skill set " << ai.skillset + 1 << " bought " << (bought.empty() ? std::string("nothing") : bought.front()));
+	BOOST_TEST(game.RankOf(human)->purchasePoints == 1);
+}
+
+// AIPlayer::getPlayerSuperweaponValue / computeSuperweaponTarget and ScriptActions::doSkirmishFireSpecialPowerAtMostCost:
+// the value around the GLA command centre is its objects' build costs scaled from 1 at the middle to 0.5 at the edge
+// (the command centre a tenth), which a double reference matches within one credit per object; with SCIENCE_Paradrop1
+// learnt (the power ready at once) the American AI's paradrop goes to a spot inside the GLA's structure bounds, and the
+// shared timer then waits the full 240 s.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_aims_its_power_at_the_richest_spot)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	// The value around the GLA command centre.
+	Engine::Math::FixedVector2 center;
+	double reference = 0;
+	const double radius = 100;
+	std::vector<std::pair<Engine::Math::FixedVector2, std::string>> objects;
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (game.Teams().TeamAt(team).owner == gla)
+			for (const auto member : game.Teams().TeamAt(team).members)
+				if (game.World().IsAlive(member))
+					objects.emplace_back(game.TransformOf(member)->position.XY(), std::string(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(member)->index)));
+	for (const auto &[at, name] : objects)
+		if (name == "GLACommandCenter")
+			center = at;
+	for (const auto &[at, name] : objects)
+	{
+		const double dx = (center.x - at.x).Raw() / 65536.0, dy = (center.y - at.y).Raw() / 65536.0;
+		const double distance = std::sqrt(dx * dx + dy * dy);
+		if (distance >= radius)
+			continue;
+		const auto *kind = shell.game.objects.Find(name);
+		double value = kind->buildCost;
+		if (kind->Is("COMMANDCENTER") || kind->Is("FS_SUPERWEAPON"))
+			value /= 10;
+		reference += (1.0 - distance / (2 * radius)) * value;
+	}
+	const std::int64_t value = generalszh::gameplay::PlayerSuperweaponValue(game.Game(), center, gla, Engine::Math::Fixed::FromInt(100), true);
+	BOOST_TEST(std::abs(static_cast<double>(value) - reference) <= static_cast<double>(objects.size()) + 1.0);
+	BOOST_TEST(value > 0);
+	// The paradrop, aimed.
+	const auto science = shell.game.Science("SCIENCE_Paradrop1");
+	BOOST_TEST_REQUIRE(science.has_value());
+	generalszh::gameplay::GrantScience(game.Game(), america, *science);
+	auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+	const auto bounds = generalszh::gameplay::PlayerStructureBounds(game.Game(), gla);
+	const auto target = generalszh::gameplay::ComputeSuperweaponTarget(game.Game(), false, gla, Engine::Math::Fixed::FromInt(50));
+	BOOST_TEST_REQUIRE(target.has_value());
+	BOOST_TEST((target->x >= bounds[0].x - Engine::Math::Fixed::FromInt(60) && target->x <= bounds[1].x + Engine::Math::Fixed::FromInt(60)));
+	BOOST_TEST((target->y >= bounds[0].y - Engine::Math::Fixed::FromInt(60) && target->y <= bounds[1].y + Engine::Math::Fixed::FromInt(60)));
+	const std::int64_t planes = game.PlayerObjectCount("player1", "AmericaJetCargoPlane");
+	generalszh::gameplay::SkirmishFireSpecialPowerAtMostCost(game.Game(), ais, america, america, "SuperweaponParadropAmerica");
+	BOOST_TEST(game.PlayerObjectCount("player1", "AmericaJetCargoPlane") > planes);
+	const auto power = shell.game.powers.Template("SuperweaponParadropAmerica");
+	auto &shared = game.World().Resource<engine::gameplay::SharedPowerTimers>();
+	BOOST_TEST_REQUIRE(shared.Find(america, *power) != nullptr);
+	BOOST_TEST(shared.Find(america, *power)->readyOn == game.CurrentTick() + 7200u);
+}
+
+// AIPlayer::recruitSpecificAITeam (RECRUIT_TEAM) with Team::tryToRecruit, and TeamPrototype::increaseAIPriorityForSuccess /
+// decreaseAIPriorityForFailure: recruiting the AI's "USA Replace Dozer" team from anywhere (radius 0) takes its dozer
+// from the default team when the team outranks it (the default team is always recruitable), into a new instance put
+// first in the ready queue; with nothing taken the instance goes. Success raises the priority by its
+// ProductionPrioritySuccessIncrease, failure lowers it by its ProductionPriorityFailureDecrease.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_recruits_a_team)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+	auto &ai = *ais.Of(america);
+	const auto dozers = game.Teams().FindTeam("USA Replace Dozer2");
+	BOOST_TEST_REQUIRE(dozers.has_value());
+	const auto &info = game.Game().teams.At(*dozers);
+	const std::int64_t priority = info.Get<std::int64_t>("teamProductionPriority").value_or(0);
+	const auto defaultTeam = *game.Teams().DefaultTeam(america);
+	const std::int64_t defaultPriority = game.Game().teams.At(defaultTeam).Get<std::int64_t>("teamProductionPriority").value_or(0);
+	const auto before = game.Teams().TeamCount();
+	const std::size_t ready = ai.readyQueue.size();
+	generalszh::gameplay::AiScriptHooks hooks;
+	hooks.actions = [](const std::string &, std::optional<std::uint32_t>) {};
+	generalszh::gameplay::RecruitSpecificAiTeam(game.Game(), ais, ai, *dozers, Engine::Math::Fixed{}, hooks);
+	BOOST_TEST_MESSAGE("priorities: team " << priority << " default " << defaultPriority);
+	if (priority > defaultPriority)
+	{
+		BOOST_TEST_REQUIRE(ai.readyQueue.size() == ready + 1);
+		const std::uint32_t instance = ai.readyQueue.front().team;
+		BOOST_TEST(game.Teams().PrototypeOf(instance) == *dozers);
+		BOOST_TEST(!game.Teams().TeamAt(instance).members.empty());
+	}
+	else
+	{
+		BOOST_TEST(ai.readyQueue.size() == ready);
+		BOOST_TEST(game.Teams().TeamCount() == before + 1);
+		BOOST_TEST(!game.Teams().TeamAt(before).alive); // the instance made went again
+	}
+	// Raised above the default team (as successes would), it takes the dozer: into a new instance, ready first.
+	ais.Production(*dozers) = {true, static_cast<std::int32_t>(defaultPriority) + 5, ais.Production(*dozers).evaluateAt};
+	generalszh::gameplay::RecruitSpecificAiTeam(game.Game(), ais, ai, *dozers, Engine::Math::Fixed{}, hooks);
+	BOOST_TEST_REQUIRE(!ai.readyQueue.empty());
+	const std::uint32_t recruited = ai.readyQueue.front().team;
+	BOOST_TEST(game.Teams().PrototypeOf(recruited) == *dozers);
+	BOOST_TEST_REQUIRE(game.Teams().TeamAt(recruited).members.size() == 1u);
+	BOOST_TEST(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(game.Teams().TeamAt(recruited).members.front())->index) == "AmericaVehicleDozer");
+	ais.Production(*dozers).priorityChanged = false;
+	const std::int64_t up = info.Get<std::int64_t>("teamProductionPrioritySuccessIncrease").value_or(0);
+	const std::int64_t down = info.Get<std::int64_t>("teamProductionPriorityFailureDecrease").value_or(0);
+	generalszh::gameplay::ChangeProductionPriority(game.Game(), ais, *dozers, true);
+	BOOST_TEST(ais.Production(*dozers).priority == priority + up);
+	generalszh::gameplay::ChangeProductionPriority(game.Game(), ais, *dozers, false);
+	BOOST_TEST(ais.Production(*dozers).priority == priority + up - down);
+}
+
+// RebuildHoleExposeDie / RebuildHoleBehavior: the GLA command centre killed leaves a GLAHoleCommandCenter where it stood
+// (its health 500 of HoleMaxHealth 500 at most); WorkerRespawnDelay later a worker comes out of the hole and starts the
+// command centre again, free; once it stands, the hole and its worker are gone. The hole counts for victory (the
+// original checks at the tick's end), so its player is not defeated meanwhile.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_structure_leaves_a_hole_that_rebuilds_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player0");
+	game.Tick();
+	ecs::Entity center;
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (game.Teams().TeamAt(team).owner == gla)
+			for (const auto member : game.Teams().TeamAt(team).members)
+				if (game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(member)->index) == "GLACommandCenter")
+					center = member;
+	BOOST_TEST_REQUIRE(game.World().IsAlive(center));
+	const auto where = game.TransformOf(center)->position;
+	game.World().Resource<engine::gameplay::KillRequests>().entities.push_back(center);
+	game.Tick();
+	const std::uint64_t killed = game.CurrentTick();
+	const auto hole = generalszh::gameplay::HoleOf(game.Game(), center);
+	BOOST_TEST_REQUIRE(game.World().IsAlive(hole));
+	// VictoryConditions::update at the tick's end: the hole counts for victory, so GLA is still in.
+	for (const auto &standing : game.World().Resource<engine::gameplay::MatchOutcome>().players)
+		if (standing.player == gla)
+			BOOST_TEST(!standing.defeated);
+	BOOST_TEST(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(hole)->index) == "GLAHoleCommandCenter");
+	BOOST_TEST((game.TransformOf(hole)->position.XY() == where.XY()));
+	const auto &health = *game.World().Get<engine::gameplay::Health>(hole);
+	BOOST_TEST((health.maximum == Engine::Math::Fixed::FromInt(500)));
+	BOOST_TEST_MESSAGE("hole health " << health.current.Floor() << "/" << health.maximum.Floor() << ", worker due in " << game.World().Get<generalszh::gameplay::RebuildHole>(hole)->workerWait);
+	// The worker comes, and the command centre goes up again, free.
+	const std::int64_t money = game.World().Resource<engine::gameplay::PlayerMoney>().Balance(gla);
+	std::uint64_t workerAt = 0, rebuilt = 0;
+	ecs::Entity again;
+	for (int tick = 0; tick < 30 * 240 && rebuilt == 0; ++tick)
+	{
+		game.Tick();
+		if (workerAt == 0 && game.World().IsAlive(hole) && game.World().IsAlive(game.World().Get<generalszh::gameplay::RebuildHole>(hole)->worker))
+		{
+			workerAt = game.CurrentTick();
+			again = game.World().Get<generalszh::gameplay::RebuildHole>(hole)->reconstructing;
+			BOOST_TEST(game.World().IsAlive(again));
+			BOOST_TEST(game.World().Resource<engine::gameplay::PlayerMoney>().Balance(gla) == money);
+		}
+		if (workerAt != 0 && !game.World().IsAlive(hole))
+			rebuilt = game.CurrentTick();
+	}
+	BOOST_TEST_MESSAGE("killed at " << killed << ", worker at " << workerAt << ", standing again at " << rebuilt);
+	BOOST_TEST_REQUIRE(workerAt > killed);
+	BOOST_TEST(workerAt == killed + 599u); // WorkerRespawnDelay 20 s: 600 ticks counted down from the hole's first tick
+	BOOST_TEST_REQUIRE(rebuilt > workerAt);
+	BOOST_TEST(game.World().IsAlive(again));
+	BOOST_TEST(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(again)->index) == "GLACommandCenter");
+}
+
+// AIPlayer::repairStructure / updateBridgeRepair (PLAYER_REPAIR_NAMED_STRUCTURE): the AI's damaged command centre (half
+// health: not pristine) joins its repair list once. Asked before its first tick, its dozer is still idle: the first look
+// (the countdown starts at 0) sends it to repair; once it has no task left and the building is pristine the list is
+// empty and it goes back to the base.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_repairs_a_damaged_structure)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(america);
+	const ecs::Entity center = ai.buildList.front().built;
+	BOOST_TEST_REQUIRE(game.World().IsAlive(center));
+	auto &health = *game.World().Get<engine::gameplay::Health>(center);
+	health.current = health.maximum / Engine::Math::Fixed::FromInt(2);
+	// A pristine one is not taken; a damaged one once.
+	generalszh::gameplay::RepairStructure(game.Game(), ai, center);
+	generalszh::gameplay::RepairStructure(game.Game(), ai, center);
+	BOOST_TEST(ai.toRepair.size() == 1u);
+	game.Tick(); // tick 1: the look
+	BOOST_TEST_REQUIRE(game.World().IsAlive(ai.repairDozer));
+	BOOST_TEST(ai.dozerIsRepairing);
+	std::uint64_t done = 0;
+	for (int tick = 0; tick < 30 * 180 && done == 0; ++tick)
+	{
+		game.Tick();
+		if (ai.toRepair.empty())
+			done = game.CurrentTick();
+	}
+	BOOST_TEST_MESSAGE("repaired by tick " << done << " health " << game.World().Get<engine::gameplay::Health>(center)->current.Floor());
+	BOOST_TEST_REQUIRE(done > 0u);
+	const auto &after = *game.World().Get<engine::gameplay::Health>(center);
+	BOOST_TEST((after.current > after.maximum * shell.game.gameData.unitDamaged));
+	const auto *order = game.World().Get<engine::gameplay::MoveOrder>(ai.repairDozer);
+	BOOST_TEST_REQUIRE(order != nullptr);
+	BOOST_TEST((order->mode != engine::gameplay::MoveMode::Idle));
+}
+
+// AIPlayer::onUnitProduced / updateBridgeRepair: asked while its dozer is busy, the AI queues a dozer for the repair
+// and hands it the job as it is made. (The retail VS6 build started onUnitProduced's supplyTruck flag true, an
+// uninitialised value, so the new dozer never got the job and the repair waited for good; fixed as the original's
+// later builds have it.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_queued_for_a_repair_takes_the_job)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(america);
+	game.Tick();
+	game.Tick(); // its dozer is off building
+	const ecs::Entity center = ai.buildList.front().built;
+	auto &health = *game.World().Get<engine::gameplay::Health>(center);
+	health.current = health.maximum / Engine::Math::Fixed::FromInt(2);
+	generalszh::gameplay::RepairStructure(game.Game(), ai, center);
+	game.Tick();
+	BOOST_TEST_REQUIRE(ai.dozerQueuedForRepair);
+	bool handed = false;
+	std::uint64_t repaired = 0;
+	for (int tick = 0; tick < 30 * 240 && repaired == 0; ++tick)
+	{
+		game.Tick();
+		handed = handed || (!ai.dozerQueuedForRepair && game.World().IsAlive(ai.repairDozer));
+		if (ai.toRepair.empty())
+			repaired = game.CurrentTick();
+	}
+	BOOST_TEST(handed);
+	BOOST_TEST(repaired > 0u);
+	const auto &after = *game.World().Get<engine::gameplay::Health>(center);
+	BOOST_TEST((after.current > after.maximum * shell.game.gameData.unitDamaged));
+}
+
+// GrantUpgradeCreate (Upgrade_AmericaRadar) -> RadarUpgrade::upgradeImplementation -> Player::addRadar / hasRadar:
+// America's command centre gives it radar from the start; the GLA's has no RadarUpgrade (its radar van would): none.
+BOOST_AUTO_TEST_CASE(legacy_parity_command_centres_give_radar)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	game.Tick();
+	const auto &radar = game.World().Resource<engine::gameplay::PlayerRadar>();
+	BOOST_TEST(radar.Has(*game.Teams().FindPlayer("player0")));
+	BOOST_TEST(!radar.Has(*game.Teams().FindPlayer("player1")));
+}
+
+// Object::look at the start (PartitionManager::update after the starting objects are placed): each player's command
+// centre and dozer clear the shroud around them for their own player (and allies: none here), not for the enemy across
+// the map, whose own start is clear to it alone; the shroud rides through a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_starting_objects_clear_their_own_shroud)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t us = *game.Teams().FindPlayer("player0");
+	const std::uint32_t them = *game.Teams().FindPlayer("player1");
+	const auto &shroud = game.World().Resource<engine::gameplay::ShroudMap>();
+	BOOST_TEST((shroud.CellSize() == Engine::Math::Fixed::FromInt(40))); // PartitionCellSize
+	BOOST_TEST(shroud.UnlookPersist() == 150u); // UnlookPersistDuration 5000 ms
+	std::uint32_t lookers = 0;
+	ecs::Query<ecs::Read<engine::gameplay::Vision>, ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Transform>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto visions = chunk.template Get<engine::gameplay::Vision>();
+		const auto owners = chunk.template Get<engine::gameplay::Owner>();
+		const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+		for (std::size_t row = 0; row < visions.size(); ++row)
+		{
+			const std::uint32_t owner = owners[row].player;
+			if ((owner != us && owner != them) || visions[row].clearingRange <= Engine::Math::Fixed{})
+				continue;
+			++lookers;
+			const auto &at = transforms[row].position;
+			BOOST_TEST((shroud.StatusAt(owner, at.x, at.y) == engine::gameplay::CellShroud::Clear));
+			// GameLogic::startNewGame: a seat's player sees the whole map fogged at once (revealMapForPlayer; Multiplayer.ini
+			// UseShroud = No): the other's base is fog to it, not black.
+			BOOST_TEST((shroud.StatusAt(owner == us ? them : us, at.x, at.y) == engine::gameplay::CellShroud::Fogged));
+		}
+	});
+	BOOST_TEST(lookers >= 4u); // a command centre and a dozer (or worker) each
+	// Nobody looks at the map's corner: fogged for both seats (explored), not shrouded.
+	BOOST_TEST((shroud.Status(us, 0, 0) == engine::gameplay::CellShroud::Fogged));
+	BOOST_TEST((shroud.Status(them, 0, 0) == engine::gameplay::CellShroud::Fogged));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+}
+
+// The shroud's script actions through the session (ScriptActions doRevealMapEntire / doRevealMapEntirePermanently /
+// doShroudMapEntire over PartitionManager's revealMapForPlayer and the rest, doRevealMapAtWaypoint, and
+// ScriptEngine's named reveals): the map revealed for every human fogs the far corner nobody looks at; shrouded for
+// one player, only its corner goes back; a permanent reveal clears and its undo fogs again; a quick reveal at a
+// waypoint leaves fog; a named reveal holds the cells clear until undone (and a second of the same name changes nothing).
+BOOST_AUTO_TEST_CASE(legacy_parity_script_shroud_actions)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t us = *game.Teams().FindPlayer("player0");
+	const std::uint32_t them = *game.Teams().FindPlayer("player1");
+	BOOST_TEST_REQUIRE(game.Teams().PlayerAt(us).human);
+	BOOST_TEST_REQUIRE(game.Teams().PlayerAt(them).human);
+	const auto &shroud = game.World().Resource<engine::gameplay::ShroudMap>();
+	using engine::gameplay::CellShroud;
+	session::ScriptBridge bridge(game.Game());
+	using MapShroud = generalszh::scripting::PlayerScriptHost::MapShroud;
+	// A skirmish starts with the map fogged for its seats (startNewGame's revealMapForPlayer); the script shrouds it
+	// first (doShroudMapEntire), then reveals it (doRevealMapEntire).
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
+	bridge.ShroudEntireMap(std::nullopt, MapShroud::ShroudAll);
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Shrouded));
+	bridge.ShroudEntireMap(std::nullopt, MapShroud::RevealAll);
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
+	BOOST_TEST((shroud.Status(them, 0, 0) == CellShroud::Fogged));
+	bridge.ShroudEntireMap(them, MapShroud::ShroudAll);
+	BOOST_TEST((shroud.Status(them, 0, 0) == CellShroud::Shrouded));
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
+	bridge.ShroudEntireMap(us, MapShroud::RevealAllPermanently);
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Clear));
+	bridge.ShroudEntireMap(us, MapShroud::UndoRevealAllPermanently);
+	BOOST_TEST((shroud.Status(us, 0, 0) == CellShroud::Fogged));
+
+	// Player 2's start, far from ours: a quick look fogs it for us; a named reveal clears it until undone.
+	const auto &waypoints = game.World().Resource<engine::gameplay::WaypointGraph>();
+	const std::uint32_t start = waypoints.Find("Player_2_Start");
+	BOOST_TEST_REQUIRE(start != engine::gameplay::WaypointGraph::None);
+	const auto at = waypoints.Position(start);
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Fogged)); // the whole map fogged above
+	bridge.ShroudEntireMap(us, MapShroud::ShroudAll);
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Shrouded));
+	bridge.ShroudAtWaypoint("Player_2_Start", Engine::Math::Fixed::FromInt(100), us, false);
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Fogged));
+	bridge.RevealNamed("Look", "Player_2_Start", Engine::Math::Fixed::FromInt(100), us);
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Clear));
+	bridge.RevealNamed("Look", "Player_1_Start", Engine::Math::Fixed::FromInt(100), them); // the name is taken: the first reveal again
+	bridge.UndoRevealNamed("Look");
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Clear)); // looked at twice, undone once
+	BOOST_TEST(shroud.FindNamedReveal("Look") == nullptr);
+	bridge.UndoRevealNamed("Look"); // gone: nothing
+	BOOST_TEST((shroud.StatusAt(us, at.x, at.y) == CellShroud::Clear));
+}
+
+
+// AIPlayer::buildSpecificBuildingNearestTeam (AI_PLAYER_BUILD_TYPE_NEAREST_TEAM): the structure is planned, at the front of
+// the plan and for priority, where the team's newest member stands (getEstimateTeamPosition) when nothing is in the way
+// there (the original then built nothing: its `valid` only came from the wiggle; fixed); a member standing in the way of
+// such a spot (a Ranger on a Command Center's footprint) makes it the first legal spot of the wiggle (rings of two cells,
+// bottom row first), which is legal with a clear path; an empty team plans nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_builds_nearest_a_team)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t america = *game.Teams().FindPlayer("player1");
+	auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(america);
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[1].team);
+	const std::string patriot = shell.game.aiData.Side("America")->baseDefenseStructure;
+	const auto *plan = shell.game.objects.Find(patriot);
+	BOOST_TEST_REQUIRE(plan != nullptr);
+	auto &world = game.World();
+	const auto start = world.Get<engine::gameplay::Transform>(game.Teams().TeamAt(team).members.front())->position.XY();
+	const Engine::Math::FixedVector2 open{start.x + Engine::Math::Fixed::FromInt(300), start.y + Engine::Math::Fixed::FromInt(300)};
+	const ecs::Entity scout = game.Place("AmericaInfantryRanger", open, {}, team);
+	generalszh::gameplay::BuildNearestTeam(game.Game(), ai, patriot, team);
+	BOOST_TEST_REQUIRE(!ai.buildList.empty());
+	BOOST_TEST(ai.buildList.front().structure == patriot);
+	BOOST_TEST(ai.buildList.front().priorityBuild);
+	BOOST_TEST(ai.buildList.front().rebuilds == 1);
+	BOOST_TEST((ai.buildList.front().location == open));
+
+	// In the way: on a Command Center (its footprint) the Ranger makes the wiggle's first legal spot the one.
+	const std::size_t planned = ai.buildList.size();
+	const ecs::Entity blocker = game.Place("AmericaCommandCenter", {open.x + Engine::Math::Fixed::FromInt(400), open.y}, {}, team);
+	world.Get<engine::gameplay::Transform>(scout)->position = world.Get<engine::gameplay::Transform>(blocker)->position;
+	generalszh::gameplay::BuildNearestTeam(game.Game(), ai, patriot, team);
+	BOOST_TEST_REQUIRE(ai.buildList.size() == planned + 1);
+	const auto spot = ai.buildList.front().location;
+	BOOST_TEST(!(spot == world.Get<engine::gameplay::Transform>(blocker)->position.XY()));
+	const auto angle = Engine::Math::TurnFromDegrees(plan->placementViewAngleDegrees);
+	namespace bc = generalszh::gameplay::build_check;
+	BOOST_TEST((generalszh::gameplay::CheckBuildLocation(game.Game(), *plan, spot, angle, {}, bc::ClearPath | bc::TerrainRestrictions | bc::NoObjectOverlap) ==
+		generalszh::gameplay::LegalBuild::Ok));
+
+	// An empty team: nothing planned.
+	std::optional<std::uint32_t> idle;
+	for (std::uint32_t other = 0; other < game.Teams().TeamCount() && !idle; ++other)
+		if (game.Teams().TeamAt(other).members.empty())
+			idle = other;
+	BOOST_TEST_REQUIRE(idle.has_value());
+	generalszh::gameplay::BuildNearestTeam(game.Game(), ai, patriot, *idle);
+	BOOST_TEST(ai.buildList.size() == planned + 1);
+}
+
+// Legacy parity (QuitMenu.cpp surrenderQuitMenu -> GameLogic::onSelfDestruct, Player::transferAssetsFromThat,
+// Player::killPlayer): two humans on one team against a hard AI. The first surrenders: on that tick its command centre
+// and dozer go to its ally (onto its default team) with all its money, the ally's own money not counted as earned, and it
+// has nothing left: the next victory check beats it. Then the ally surrenders with no ally left standing: everything of
+// its (its own and what it was given) dies on that tick (what their deaths leave, their debris, is still its).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_surrender_hands_everything_to_an_ally_else_kills_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"First");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[0].team = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Second");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	setup.slots[1].team = 0;
+	setup.slots[2].SetState(session::setup::SlotState::HardAI);
+	setup.slots[2].playerTemplate = templateOf("FactionGLA");
+	setup.slots[2].startPos = 2;
+	setup.slots[2].team = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{5, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t first = *game.Teams().FindPlayer("player0");
+	const std::uint32_t second = *game.Teams().FindPlayer("player1");
+	const std::uint32_t secondHome = *game.Teams().DefaultTeam(second);
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	const auto ownedBy = [&](std::uint32_t player) {
+		std::vector<ecs::Entity> owned;
+		for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+			if (game.Teams().TeamAt(team).owner == player)
+				for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+					if (world.IsAlive(member) && !world.Has<engine::gameplay::Dying>(member))
+						owned.push_back(member);
+		return owned;
+	};
+	const std::vector<ecs::Entity> firsts = ownedBy(first);
+	const std::vector<ecs::Entity> seconds = ownedBy(second);
+	BOOST_TEST_REQUIRE(firsts.size() == 2u); // its command centre and dozer
+	BOOST_TEST_REQUIRE(seconds.size() == 2u);
+	auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	const std::int64_t firstMoney = money.Balance(first), secondMoney = money.Balance(second), secondEarned = money.Earned(second);
+	BOOST_TEST(firstMoney == 10000);
+
+	auto surrender = commands::Encode(commands::SelfDestruct{true});
+	surrender.player = 0; // seat 0 plays the first
+	game.Tick(std::span(&surrender, 1));
+	BOOST_TEST(ownedBy(first).empty());
+	BOOST_TEST(ownedBy(second).size() == 4u);
+	for (const ecs::Entity entity : firsts)
+	{
+		BOOST_TEST(world.Get<engine::gameplay::Owner>(entity)->player == second);
+		BOOST_TEST(world.Get<engine::gameplay::TeamMember>(entity)->team == secondHome);
+	}
+	BOOST_TEST(money.Balance(first) == 0);
+	BOOST_TEST(money.Balance(second) == secondMoney + firstMoney);
+	BOOST_TEST(money.Earned(second) == secondEarned);
+	game.Tick();
+	const auto *standing = world.Resource<engine::gameplay::MatchOutcome>().Of(first);
+	BOOST_TEST_REQUIRE(standing != nullptr);
+	BOOST_TEST(standing->defeated);
+
+	// The second has no ally standing: it is killed.
+	surrender.player = 1;
+	game.Tick(std::span(&surrender, 1));
+	for (const ecs::Entity entity : firsts)
+		BOOST_TEST((!world.IsAlive(entity) || world.Has<engine::gameplay::Dying>(entity)));
+	for (const ecs::Entity entity : seconds)
+		BOOST_TEST((!world.IsAlive(entity) || world.Has<engine::gameplay::Dying>(entity)));
+	BOOST_TEST(money.Balance(second) == secondMoney + firstMoney); // killPlayer takes no money
+}
+
+// The kill-all-enemies cheat (MSG_META_DEMO_KILL_ALL_ENEMIES, a debug build's) on a skirmish against an easy AI:
+// everything of the AI dies on the tick it is applied, and at that tick's end VictoryConditions::update looks at what
+// stands. America's command centre leaves nothing: the AI is defeated, the human's is the single alliance left and has
+// won. GLA's leaves a hole that counts for victory (KINDOF_MP_COUNT_FOR_VICTORY, as legacy_parity_a_gla_structure_
+// leaves_a_hole_that_rebuilds_it): the match goes on until the cheat kills the hole too.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_kill_all_enemies_cheat_ends_a_skirmish_once_nothing_counted_stands)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	// The number of cheats it takes until the match is over (0: not over after three).
+	const auto killsToWin = [&](std::string_view enemy) {
+		session::setup::GameSetup setup;
+		setup.seed = 7;
+		setup.startingCash = 10000;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Human");
+		setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+		setup.slots[1].playerTemplate = templateOf(enemy);
+		setup.slots[1].startPos = 1;
+		const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 2);
+		session::SessionOptions options{7, 1, {}, {"player0"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		session::Session game(skirmish.level, shell.game, options);
+		const std::uint32_t human = *game.Teams().FindPlayer("player0");
+		const std::uint32_t computer = *game.Teams().FindPlayer("player1");
+		for (int tick = 0; tick < 60; ++tick)
+			game.Tick();
+		const auto &outcome = game.World().Resource<engine::gameplay::MatchOutcome>();
+		BOOST_TEST_REQUIRE(outcome.enabled);
+		BOOST_TEST(!outcome.singleAllianceRemaining);
+		auto kill = commands::Encode(commands::KillAllEnemies{});
+		kill.player = 0;
+		for (int kills = 1; kills <= 3; ++kills)
+		{
+			game.Tick(std::span(&kill, 1));
+			if (outcome.singleAllianceRemaining)
+			{
+				BOOST_TEST(outcome.Eliminated(computer));
+				BOOST_TEST(!outcome.Eliminated(human));
+				BOOST_TEST(outcome.HasWon(human));
+				BOOST_TEST(outcome.endTick == game.CurrentTick());
+				return kills;
+			}
+			BOOST_TEST(!outcome.Eliminated(computer));
+			for (int tick = 0; tick < 5; ++tick)
+				game.Tick();
+		}
+		return 0;
+	};
+	BOOST_TEST(killsToWin("FactionAmerica") == 1);
+	BOOST_TEST(killsToWin("FactionGLA") == 2);
+}
+
+// Legacy parity (GameLogic.cpp GameLogic::startNewGame and createOptimizedTree, W3DTerrainVisual::addProp,
+// BuildAssistant::clearRemovableForConstruction): an OPTIMIZED_TREE is never a logic object (the client's tree buffer
+// keeps it), nor a PROP; fluff (CLEARED_BY_BUILD with no FenceWidth) only while fluff is forced to props; shrubbery
+// is not placed at all while trees are off. Twilight Flame places 320 dogwoods (TreeDogwood1/3/4/8): none is in the
+// game. A structure placed (buildObjectNow) tells the client its footprint to clear the scenery under it.
+BOOST_AUTO_TEST_CASE(legacy_parity_map_trees_and_props_are_the_clients_alone)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	using gameplay::MapObjectRole;
+	const auto role = [&](std::string_view name, gameplay::MapSceneryRules rules) {
+		const auto *object = shell.game.objects.Find(name);
+		BOOST_TEST_REQUIRE(object != nullptr);
+		return gameplay::MapObjectRoleOf(*object, rules);
+	};
+	const gameplay::MapSceneryRules high{true, false}, low{true, true}, noTrees{false, false};
+	BOOST_TEST((role("TreeDogwood8", high) == MapObjectRole::Tree));
+	BOOST_TEST((role("TreeDogwood8", noTrees) == MapObjectRole::Skipped));
+	BOOST_TEST((role("DesertShrub09", high) == MapObjectRole::Prop));
+	BOOST_TEST((role("GenericTree", noTrees) == MapObjectRole::Skipped));
+	BOOST_TEST((role("GenericTree", high) == MapObjectRole::Object));
+	BOOST_TEST((role("StreetLamp", high) == MapObjectRole::Object));
+	BOOST_TEST((role("StreetLamp", low) == MapObjectRole::Prop));
+	BOOST_TEST((role("ChainLinkFence01", low) == MapObjectRole::Object));
+	BOOST_TEST((role("AmericaCommandCenter", low) == MapObjectRole::Object));
+
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::size_t trees = 0;
+	for (const auto &placement : read->level.placements)
+		if (const auto *object = shell.game.objects.Find(placement.type); object != nullptr && gameplay::MapObjectRoleOf(*object, high) == MapObjectRole::Tree)
+			++trees;
+	BOOST_TEST(trees == 320u);
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	std::size_t placedTrees = 0;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && shell.game.objects.Find(game.DefinitionName(ref->index)) != nullptr &&
+			shell.game.objects.Find(game.DefinitionName(ref->index))->Is("OPTIMIZED_TREE"))
+			++placedTrees;
+	});
+	BOOST_TEST(placedTrees == 0u);
+	BOOST_TEST(game.World().Resource<gameplay::MapSceneryRules>().useTrees);
+	BOOST_TEST(!game.World().Resource<gameplay::MapSceneryRules>().forceFluffToProp);
+
+	// A power plant placed by a dozer: its footprint is the client's to clear.
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", {Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {},
+		*game.Teams().FindTeam(skirmish.players[0].team));
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const Engine::Math::FixedVector2 at{Engine::Math::Fixed::FromInt(340), Engine::Math::Fixed::FromInt(300)};
+	gameplay::BeginConstruction(game.Game(), dozer, "AmericaPowerPlant", at, Engine::Math::TurnAngle{});
+	const auto &clearings = game.World().Resource<gameplay::SceneryClearings>().list;
+	BOOST_TEST_REQUIRE(clearings.size() == 1u);
+	BOOST_TEST((clearings[0].at == at));
+	const auto *plant = shell.game.objects.Find("AmericaPowerPlant");
+	BOOST_TEST((clearings[0].footprint.major == plant->geometry.majorRadius));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->World().Resource<gameplay::SceneryClearings>().list.size() == 1u);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+	// The same game on four workers ends in the same state.
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const ecs::Entity fourDozer = four.Place("AmericaVehicleDozer", {Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {},
+		*four.Teams().FindTeam(skirmish.players[0].team));
+	gameplay::BeginConstruction(four.Game(), fourDozer, "AmericaPowerPlant", at, Engine::Math::TurnAngle{});
+	for (int tick = 0; tick < 30; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ScriptActions.cpp doSkirmishAttackNearestGroupWithValue; PartitionManager.cpp getNearestGroupWithValue,
+// cellValueProc, iterateCellsBreadthFirst, doValueAffect / hLineAddValue; Object.cpp addValue): on Twilight Flame the
+// human's Crusader team is told to attack the nearest enemy group worth more than 1000. The GLA's command centre is
+// worth its BuildCost at its own cell (a share of 1) and less further out; the walk from the team's centre stops at
+// the first cell above 1000, whose corner the Crusader attack-moves to. A value of 0 (the original's "greater" flag
+// off: below 0 asked) or a LESS_THAN comparison orders nothing. One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_attacks_the_nearest_group_worth_more_than_a_value)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::EasyAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session game(skirmish.level, shell.game, options);
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const std::string teamName = skirmish.players[0].team;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	const FixedVector2 spot{start.x + Fixed::FromInt(80), start.y};
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", spot, {}, *game.Teams().FindTeam(teamName));
+	four.Place("AmericaTankCrusader", spot, {}, *four.Teams().FindTeam(teamName));
+	game.Tick();
+	four.Tick();
+	(void)america;
+
+	// The GLA's values: its command centre's cell holds at least its cost.
+	const auto &shroud = game.World().Resource<engine::gameplay::ShroudMap>();
+	const auto values = gameplay::CellCashValues(game.Game(), std::uint64_t{1} << gla);
+	ecs::Entity center;
+	game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+		if (ref != nullptr && game.DefinitionName(ref->index) == "GLACommandCenter")
+			center = object.entity;
+	});
+	BOOST_TEST_REQUIRE((center != ecs::Entity{}));
+	const auto ccCell = shroud.CellOf(game.TransformOf(center)->position.x, game.TransformOf(center)->position.y);
+	const std::int64_t cost = shell.game.objects.Find("GLACommandCenter")->buildCost;
+	BOOST_TEST(values[static_cast<std::size_t>(ccCell[1] * shroud.CellsX() + ccCell[0])] >= cost);
+
+	// Nothing for a value of 0 or a LESS_THAN.
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 4, 0);
+	BOOST_TEST(!game.World().Has<engine::gameplay::AttackMove>(tank));
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 0, 1000);
+	BOOST_TEST(!game.World().Has<engine::gameplay::AttackMove>(tank));
+
+	const auto place = gameplay::NearestCellWithValue(game.Game(), game.Teams().TeamAt(*game.Teams().FindTeam(teamName)).owner, spot, 1000);
+	BOOST_TEST_REQUIRE(place.has_value());
+	const auto placeCell = shroud.CellOf(place->x, place->y);
+	BOOST_TEST(values[static_cast<std::size_t>(placeCell[1] * shroud.CellsX() + placeCell[0])] > 1000);
+	BOOST_TEST((place->x == shroud.CellSize() * Fixed::FromInt(placeCell[0])));
+	gameplay::SkirmishAttackNearestGroupWithValue(game.Game(), teamName, 4, 1000);
+	gameplay::SkirmishAttackNearestGroupWithValue(four.Game(), teamName, 4, 1000);
+	BOOST_TEST_REQUIRE(game.World().Has<engine::gameplay::AttackMove>(tank));
+	BOOST_TEST((game.World().Get<engine::gameplay::AttackMove>(tank)->destination == *place));
+	for (int tick = 0; tick < 60; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ScriptActions.cpp doSkirmishFireSpecialPowerAtMostCost; AIPlayer.cpp computeSuperweaponTarget,
+// getPlayerSuperweaponValue, calcClosestConstructionZoneLocation; OCLSpecialPower.cpp getReferenceThingTemplate,
+// doSpecialPowerAtLocation): on Twilight Flame the GLA computer player, with SCIENCE_SneakAttack, fires its sneak attack
+// (SuperweaponSneakAttack) at the American base: the richest poorly defended spot (military units count five times
+// against), moved to where its ReferenceObject (GLASneakAttackTunnelNetwork) may stand nearest it. The tunnel start
+// (OCL_CreateSneakAttackTunnelStart, CREATE_AT_LOCATION) appears exactly there, on the GLA's side, and the shared timer
+// then waits the full 150 s (4500 ticks). A spot already clear is kept as it is (the retail code zeroed it and fired
+// nothing: its `valid` was never set for the unmoved spot; fixed). A human player's objects aim nothing
+// (Player::computeSuperweaponTarget with no AI). One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_fires_its_sneak_attack_where_the_tunnel_may_stand)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session game(skirmish.level, shell.game, options);
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	const auto science = shell.game.Science("SCIENCE_SneakAttack");
+	BOOST_TEST_REQUIRE(science.has_value());
+	for (session::Session *each : {&game, &four})
+	{
+		each->Tick();
+		generalszh::gameplay::GrantScience(each->Game(), gla, *science);
+	}
+	const auto *network = shell.game.objects.Find("GLASneakAttackTunnelNetwork");
+	BOOST_TEST_REQUIRE(network != nullptr);
+	const auto power = shell.game.powers.Template("SuperweaponSneakAttack");
+	BOOST_TEST_REQUIRE(power.has_value());
+	const auto tunnelStarts = [&](session::Session &session) {
+		std::vector<std::pair<FixedVector2, std::uint32_t>> found;
+		for (std::uint32_t team = 0; team < session.Teams().TeamCount(); ++team)
+			for (const auto member : session.Teams().TeamAt(team).members)
+			{
+				const auto *ref = session.World().IsAlive(member) ? session.World().Get<engine::gameplay::DefinitionRef>(member) : nullptr;
+				if (ref != nullptr && session.DefinitionName(ref->index) == "GLASneakAttackTunnelNetworkStart")
+					found.emplace_back(session.TransformOf(member)->position.XY(), session.World().Get<engine::gameplay::Owner>(member)->player);
+			}
+		return found;
+	};
+
+	// Where it will go, worked out on a copy (the same random draws).
+	const auto probe = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(probe != nullptr);
+	const auto aim = generalszh::gameplay::ComputeSuperweaponTarget(probe->Game(), true, america, Fixed::FromInt(50));
+	BOOST_TEST_REQUIRE(aim.has_value());
+	const auto zone = generalszh::gameplay::ClosestConstructionZoneLocation(probe->Game(), *network, *aim);
+	BOOST_TEST_REQUIRE(zone.has_value());
+	const Engine::Math::TurnAngle facing = Engine::Math::TurnFromDegrees(network->placementViewAngleDegrees);
+	BOOST_TEST((gameplay::CheckBuildLocation(probe->Game(), *network, *zone, facing, {}, gameplay::build_check::NoObjectOverlap) == gameplay::LegalBuild::Ok));
+	// A spot clear at once is kept (the retail bug fixed).
+	const auto again = generalszh::gameplay::ClosestConstructionZoneLocation(probe->Game(), *network, *zone);
+	BOOST_TEST_REQUIRE(again.has_value());
+	BOOST_TEST((*again == *zone));
+	BOOST_TEST_MESSAGE("sneak attack aimed at (" << aim->x.Raw() / 65536.0 << ", " << aim->y.Raw() / 65536.0 << "), placed at ("
+												 << zone->x.Raw() / 65536.0 << ", " << zone->y.Raw() / 65536.0 << ")");
+
+	// The human's objects aim nothing; the GLA's fire.
+	auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+	generalszh::gameplay::SkirmishFireSpecialPowerAtMostCost(game.Game(), ais, gla, america, "SuperweaponSneakAttack", 0);
+	BOOST_TEST(tunnelStarts(game).empty());
+	for (session::Session *each : {&game, &four})
+		generalszh::gameplay::SkirmishFireSpecialPowerAtMostCost(each->Game(), each->World().Resource<generalszh::gameplay::AiPlayers>(), gla, gla,
+			"SuperweaponSneakAttack", 1);
+	const auto starts = tunnelStarts(game);
+	BOOST_TEST_REQUIRE(starts.size() == 1u);
+	BOOST_TEST((starts.front().first == *zone));
+	BOOST_TEST(starts.front().second == gla);
+	auto &shared = game.World().Resource<engine::gameplay::SharedPowerTimers>();
+	BOOST_TEST_REQUIRE(shared.Find(gla, *power) != nullptr);
+	BOOST_TEST(shared.Find(gla, *power)->readyOn == game.CurrentTick() + 4500u);
+	// Not ready again: nothing more.
+	for (session::Session *each : {&game, &four})
+		generalszh::gameplay::SkirmishFireSpecialPowerAtMostCost(each->Game(), each->World().Resource<generalszh::gameplay::AiPlayers>(), gla, gla,
+			"SuperweaponSneakAttack", 1);
+	BOOST_TEST(tunnelStarts(game).size() == 1u);
+	for (int tick = 0; tick < 90; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (AISkirmishPlayer.cpp computeSuperweaponTarget's SPECIAL_CLUSTER_MINES branch, getMyEnemyPlayerIndex):
+// a Chinese computer player on Twilight Flame mines its own base's entrances: of its "Center", "Flank" and "Backdoor"
+// paths (by its start position) one is picked at random (GameLogicRandomValue(0, 2)), its waypoint closest to the base's
+// middle aimed at, and the mines go the base's reach out from the middle towards it. Every spot is one of those (exactly)
+// and lies the base's reach from the middle (within the fixed-point rounding of a normalised vector: 1/64 of a unit).
+// Over 30 draws each path the map has is picked.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_mines_its_base_entrances)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	const auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(china);
+	const auto power = shell.game.powers.Template("SuperweaponClusterMines");
+	BOOST_TEST_REQUIRE(power.has_value());
+	const auto &info = shell.game.powers.templates[*power];
+	std::vector<FixedVector2> candidates;
+	for (const std::string path : {"Center2", "Flank2", "Backdoor2"})
+	{
+		const std::uint32_t way = game.Game().waypoints.ClosestOnPath(ai.baseCenter, path);
+		BOOST_TEST_MESSAGE(path << (way == engine::gameplay::WaypointGraph::None ? " missing" : " found"));
+		if (way != engine::gameplay::WaypointGraph::None)
+			candidates.push_back(ai.baseCenter + Engine::Math::Normalize(game.Game().waypoints.Position(way).XY() - ai.baseCenter) * ai.baseRadius);
+	}
+	BOOST_TEST_REQUIRE(!candidates.empty());
+	std::set<std::size_t> picked;
+	for (int draw = 0; draw < 30; ++draw)
+	{
+		const auto target = generalszh::gameplay::AiSuperweaponTarget(game.Game(), &ai, info, 0, Fixed::FromInt(100), 1);
+		BOOST_TEST_REQUIRE(target.has_value());
+		const auto match = std::find_if(candidates.begin(), candidates.end(), [&](const FixedVector2 &spot) { return spot == *target; });
+		BOOST_TEST_REQUIRE((match != candidates.end()));
+		picked.insert(static_cast<std::size_t>(match - candidates.begin()));
+		const Fixed reach = Engine::Math::Distance(*target, ai.baseCenter);
+		BOOST_TEST(Engine::Math::Abs(reach - ai.baseRadius).Raw() <= 1024);
+	}
+	BOOST_TEST(picked.size() == candidates.size());
+}
+
+// Legacy parity (AIPlayer.cpp aiPreTeamDestroy, Player.cpp preTeamDestroy, Team.cpp ~Team / TeamPrototype::updateState):
+// on Twilight Flame the GLA computer player has a reinforcement queued for an active team of its own (one Rebel short)
+// when the team's only Rebel is killed. On the tick TeamPrototype::updateState deletes the emptied active team, the
+// queued reinforcement leaves the build queue (Team's destructor: Player::preTeamDestroy for every player). (When the
+// team empties is the teams and death domains' business: the port's retirement takes a killed unit off its team as it
+// dies, the original as it is destroyed; not pinned here.) A queued reinforcement for another, living team of the
+// GLA's stays. One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_drops_a_deleted_team_from_its_queues)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE((scb.has_value() && bytes.has_value()));
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots, &*file);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session game(skirmish.level, shell.game, options);
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	four.Tick();
+	// A GLA level team that is no singleton (its own record and further instances may be deleted).
+	std::optional<std::uint32_t> prototype;
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount() && !prototype; ++team)
+	{
+		const auto &record = game.Teams().TeamAt(team);
+		if (record.owner == gla && record.prototype == engine::gameplay::Team::Own && !record.singleton && game.Teams().DefaultTeam(gla) != team)
+			prototype = team;
+	}
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	BOOST_TEST_MESSAGE("team " << game.Teams().TeamAt(*prototype).name);
+	FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_2_Start")
+			start = marker.position.XY();
+	const auto rebel = shell.game.objects.Find("GLAInfantryRebel");
+	BOOST_TEST_REQUIRE(rebel != nullptr);
+	struct Made
+	{
+		std::uint32_t doomed, living;
+		ecs::Entity victim;
+	};
+	const auto prepare = [&](session::Session &session) {
+		auto &roster = session.Game().roster;
+		Made made{roster.CreateInstance(*prototype), roster.CreateInstance(*prototype), {}};
+		made.victim = session.Place("GLAInfantryRebel", {start.x + Fixed::FromInt(120), start.y}, {}, made.doomed);
+		session.Place("GLAInfantryRebel", {start.x + Fixed::FromInt(140), start.y}, {}, made.living);
+		roster.SetActive(made.doomed);
+		roster.SetActive(made.living);
+		auto &ai = *session.World().Resource<generalszh::gameplay::AiPlayers>().Of(gla);
+		for (const std::uint32_t team : {made.living, made.doomed})
+		{
+			generalszh::gameplay::AiTeamInQueue entry;
+			entry.team = team;
+			entry.reinforcement = true;
+			entry.started = session.CurrentTick();
+			entry.orders.push_back({session.Game().templates.Definition(*rebel), {}, 0, 1, true, false});
+			ai.buildQueue.insert(ai.buildQueue.begin(), std::move(entry));
+		}
+		session.World().Resource<engine::gameplay::KillRequests>().entities.push_back(made.victim);
+		return made;
+	};
+	const Made made = prepare(game);
+	prepare(four);
+	const auto queued = [&](std::uint32_t team) {
+		const auto &ai = *game.World().Resource<generalszh::gameplay::AiPlayers>().Of(gla);
+		const auto has = [team](const auto &queue) {
+			return std::any_of(queue.begin(), queue.end(), [team](const generalszh::gameplay::AiTeamInQueue &entry) { return entry.team == team; });
+		};
+		return has(ai.buildQueue) || has(ai.readyQueue);
+	};
+	BOOST_TEST_REQUIRE(queued(made.doomed));
+	std::optional<std::uint64_t> gone, dropped;
+	for (int tick = 0; tick < 600 && !dropped; ++tick)
+	{
+		game.Tick();
+		four.Tick();
+		if (!gone && !game.Teams().TeamAt(made.doomed).alive)
+			gone = game.CurrentTick();
+		if (!dropped && !queued(made.doomed))
+			dropped = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(gone.has_value());
+	BOOST_TEST_REQUIRE(dropped.has_value());
+	BOOST_TEST_MESSAGE("team deleted and its entry dropped on tick " << *gone);
+	BOOST_TEST(*dropped == *gone);
+	BOOST_TEST(queued(made.living));
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

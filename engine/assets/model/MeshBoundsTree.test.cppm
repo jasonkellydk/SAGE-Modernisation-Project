@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MeshBoundsTreeTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cstdint>
-#include <limits>
-#include <vector>
 export module Assets.MeshBoundsTree.Tests;
+import std;
 import Assets.Math;
 import Assets.MeshBoundsTree;
 using namespace Assets;

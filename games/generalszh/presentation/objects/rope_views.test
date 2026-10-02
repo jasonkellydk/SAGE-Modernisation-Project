@@ -1,0 +1,55 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+
+import games.generalszh.presentation.objects.systems.rope_view_systems;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(rope_views)
+
+// Legacy parity (W3DRopeDraw.cpp: initRopeParms, buildSegments, doDrawModule; the shipped Chinook's rope: RopeWidth 0.5,
+// RopeColor black, RopeWobbleLen 10, RopeWobbleAmplitude 0.25, RopeWobbleRate 180 degrees a second): a rope 92.16 at
+// full length hangs in ceil(92.16 / 10) = 10 segments, each a tenth of its length now, straight down from its top while
+// sin(phase) is 0; each segment is a core line half its width, opaque, and a soft one its width at half opacity. A
+// quarter of a wobble on (phase pi / 2: half a second at pi a second) each joint is 0.25 off its line. Let go a second
+// ago it has dropped 64 + 960 (64 a second, speeding up 1920 a second a second).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_rope_hangs_in_segments_wobbles_and_falls_away)
+{
+	rope_view_detail::RopeLook look;
+	look.width = 0.5f;
+	look.color = {0.0f, 0.0f, 0.0f};
+	look.wobbleLen = 10.0f;
+	look.wobbleAmplitude = 0.25f;
+	look.wobbleRate = 3.14159265f / 30.0f;
+	RopeViews views;
+	const std::array<float, 3> top{100.0f, 200.0f, 110.0f};
+	rope_view_detail::DrawRope(views, look, top, 50.0f, 92.16f, 0.0f, 0.0f, 7);
+	BOOST_TEST_REQUIRE(views.Size() == 20u);
+	for (std::size_t line = 0; line < views.Size(); ++line)
+	{
+		const std::size_t segment = line / 2;
+		BOOST_TEST(views.starts[line][2] == 110.0f - 5.0f * static_cast<float>(segment), boost::test_tools::tolerance(1e-4f));
+		BOOST_TEST(views.ends[line][2] == 110.0f - 5.0f * static_cast<float>(segment + 1), boost::test_tools::tolerance(1e-4f));
+		BOOST_TEST(views.ends[line][0] == 100.0f);
+		BOOST_TEST(views.ends[line][1] == 200.0f);
+		BOOST_TEST(views.widths[line] == (line % 2 == 0 ? 0.25f : 0.5f));
+		BOOST_TEST(views.colors[line][3] == (line % 2 == 0 ? 1.0f : 0.5f));
+	}
+	views.Clear();
+	rope_view_detail::DrawRope(views, look, top, 50.0f, 92.16f, 0.0f, 0.5f, 7);
+	BOOST_TEST_REQUIRE(views.Size() == 20u);
+	// Float sine of pi / 2 and the axis' unit length: within 1e-4.
+	for (std::size_t line = 0; line < views.Size(); ++line)
+	{
+		const float dx = views.ends[line][0] - 100.0f, dy = views.ends[line][1] - 200.0f;
+		BOOST_TEST(std::sqrt(dx * dx + dy * dy) == 0.25f, boost::test_tools::tolerance(1e-4f));
+	}
+	views.Clear();
+	rope_view_detail::DrawRope(views, look, top, 50.0f, 92.16f, -64.0f * 1.0f - 960.0f * 1.0f, 0.0f, 7);
+	BOOST_TEST(views.starts[0][2] == 110.0f - 1024.0f, boost::test_tools::tolerance(1e-4f));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

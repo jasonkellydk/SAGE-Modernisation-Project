@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE Renderer2DDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Renderer2D.Drawing.Tests;
+import std;
 import Graphics.Renderer2D;
 import Graphics.Tests.Device;
 using namespace Graphics;

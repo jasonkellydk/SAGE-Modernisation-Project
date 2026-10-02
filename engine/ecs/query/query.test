@@ -106,6 +106,25 @@ BOOST_AUTO_TEST_CASE(query_requires_explicit_finalization)
 	BOOST_TEST(world.IsAlive(entity));
 }
 
+BOOST_AUTO_TEST_CASE(optional_and_excluded_terms_may_name_unregistered_components)
+{
+	// A world without tags: optional tags are never there, excluded ones never exclude.
+	ecs::World world;
+	world.RegisterComponent<query_test::QueryPosition>();
+	world.FinalizeComponents();
+	world.Create<query_test::QueryPosition>();
+	ecs::Query<ecs::Read<query_test::QueryPosition>, ecs::Optional<query_test::QueryTag>, ecs::Exclude<query_test::QueryExcludedTag>> query(world);
+	std::size_t visited = 0, tagged = 0;
+	query.ForEachChunk([&](auto chunk) {
+		visited += chunk.Count();
+		tagged += chunk.template Get<query_test::QueryTag>().size();
+	});
+	BOOST_TEST(visited == 1u);
+	BOOST_TEST(tagged == 0u);
+	// A required term still must be registered.
+	BOOST_CHECK_THROW((ecs::Query<ecs::Read<query_test::QueryVelocity>>(world)), std::logic_error);
+}
+
 BOOST_AUTO_TEST_CASE(typed_chunk_iteration_and_filters)
 {
 	ecs::World world{ecs::WorldConfig{256}};

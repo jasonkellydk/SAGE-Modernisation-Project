@@ -17,8 +17,8 @@
 */
 
 module;
-#include <cstdint>
 export module Graphics.Materials.State;
+import std;
 
 namespace Graphics {
 // Compact material identity shared by model channels and draw preparation.

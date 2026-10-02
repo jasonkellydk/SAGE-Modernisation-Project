@@ -1,14 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Surfaces.Renderer;
+import std;
 export import Graphics.Scene.Surfaces.Geometry;
 export import Graphics.RHI;
 import Graphics.Resources.Pools.ResourcePool;

@@ -1,7 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <utility>
 export module engine.platform.adapters.sdl3.threading.thread;
+import std;
 import engine.platform.threading.thread;
 export namespace engine::platform::sdl3
 {

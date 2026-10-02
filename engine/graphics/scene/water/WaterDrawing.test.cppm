@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE WaterDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Water.Drawing.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Frame.AttachmentBindings;
 import Graphics.Scene.Water.Renderer;

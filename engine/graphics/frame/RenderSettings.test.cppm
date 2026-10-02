@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Graphics.Frame.RenderSettings.Tests;
+import std;
 
 import Graphics.Frame.RenderSettings;
 

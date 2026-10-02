@@ -1,0 +1,169 @@
+#define BOOST_TEST_MODULE EngineGameplayAreas
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.areas.systems.area_presence_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Two areas: A the square (0,0)-(100,100), B a triangle (50,0), (150,0), (100,100).
+TriggerAreas TwoAreas()
+{
+	TriggerAreas areas;
+	areas.Add("A", {{0, 0}, {100, 0}, {100, 100}, {0, 100}});
+	areas.Add("B", {{50, 0}, {150, 0}, {100, 100}});
+	return areas;
+}
+
+struct Field
+{
+	explicit Field(std::size_t workers)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<AreaPresence>();
+		world.FinalizeComponents();
+		world.EmplaceResource<TriggerAreas>(TwoAreas());
+		world.EmplaceResource<AreaActivity>();
+		world.EmplaceResource<AreaChanges>();
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+	ecs::Entity Walker(int x, int y)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<AreaPresence>(entity);
+		Place(entity, Fixed::FromInt(x), Fixed::FromInt(y));
+		return entity;
+	}
+	void Place(ecs::Entity entity, Fixed x, Fixed y) { world.Get<Transform>(entity)->position = {x, y, {}}; }
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	const AreaPresence &Presence(ecs::Entity entity) { return *world.Get<AreaPresence>(entity); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	AreaPresenceSystem system;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(areas)
+
+// PolygonTrigger::pointInTrigger: inside the square and the triangle; a point on a left edge is outside (its ray
+// crosses both sides: intersectionX >= x), one on a right edge inside; nothing beyond the bounds; outside the
+// triangle's slanted sides.
+BOOST_AUTO_TEST_CASE(legacy_parity_points_in_polygons)
+{
+	const TriggerAreas areas = TwoAreas();
+	const TriggerArea &square = areas.areas[0], &triangle = areas.areas[1];
+	BOOST_TEST(square.Contains(50, 50));
+	BOOST_TEST(!square.Contains(0, 50));
+	BOOST_TEST(square.Contains(1, 50));
+	BOOST_TEST(square.Contains(100, 50));
+	BOOST_TEST(!square.Contains(101, 50));
+	BOOST_TEST(!square.Contains(50, 101));
+	BOOST_TEST(triangle.Contains(100, 50));
+	BOOST_TEST(!triangle.Contains(60, 80)); // left of the slanted side from (50,0) to (100,100)
+	BOOST_TEST(triangle.Contains(90, 70));
+	BOOST_TEST(!triangle.Contains(140, 90));
+	BOOST_TEST(areas.Find("B") == 1u);
+	BOOST_TEST(areas.Find("C") == TriggerAreas::None);
+}
+
+// Object::setTriggerAreaFlagsForChangeInPosition: made at (20,50) it has entered A on tick 1 (seen on ticks 1 and 2);
+// moved to (80,50) on tick 3 it enters B, still in A; to (125,20) on tick 4 it exits A (at once, where the original
+// waited for the next move) and stays in B (kept: the original's compaction dropped it); by tick 6, with no move, the
+// entry and exit are old news; a sub-unit move changes nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_objects_enter_and_exit_areas_as_they_move)
+{
+	Field field(2);
+	const ecs::Entity walker = field.Walker(20, 50);
+	field.Step(); // 1
+	BOOST_TEST(field.Presence(walker).Inside(0));
+	BOOST_TEST(field.Presence(walker).Entered(0, 1));
+	BOOST_TEST(field.Presence(walker).Entered(0, 2));
+	BOOST_TEST(!field.Presence(walker).Entered(0, 3));
+	field.Step(); // 2
+	field.Place(walker, Fixed::FromInt(80), Fixed::FromInt(50));
+	field.Step(); // 3
+	BOOST_TEST(field.Presence(walker).Inside(0));
+	BOOST_TEST(field.Presence(walker).Inside(1));
+	BOOST_TEST(field.Presence(walker).Entered(1, 3));
+	BOOST_TEST(!field.Presence(walker).Entered(0, 3)); // tick 1's entry dropped as it moved
+	field.Place(walker, Fixed::FromInt(125), Fixed::FromInt(20));
+	field.Step(); // 4
+	BOOST_TEST(!field.Presence(walker).Inside(0));
+	BOOST_TEST(field.Presence(walker).Exited(0, 4));
+	BOOST_TEST(field.Presence(walker).Inside(1));
+	field.Step(); // 5
+	field.Step(); // 6
+	BOOST_TEST(!field.Presence(walker).Exited(0, 6));
+	BOOST_TEST(field.Presence(walker).Inside(1));
+	field.Place(walker, Fixed::FromInt(125) + Fixed::FromRaw(100), Fixed::FromInt(20));
+	field.Step(); // 7: the same whole position
+	BOOST_TEST(field.Presence(walker).changedTick == 4u);
+	field.Place(walker, Fixed::FromInt(125), Fixed::FromInt(20));
+	field.Place(walker, Fixed::FromInt(60), Fixed::FromInt(50));
+	field.Step(); // 8: out of B, back into A
+	BOOST_TEST(field.Presence(walker).Inside(0));
+	BOOST_TEST(!field.Presence(walker).Inside(1));
+	BOOST_TEST(field.Presence(walker).Entered(0, 8));
+	BOOST_TEST(field.Presence(walker).Exited(1, 8));
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(area_presence_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Field field(workers);
+		std::vector<ecs::Entity> walkers;
+		for (int index = 0; index < 60; ++index)
+			walkers.push_back(field.Walker(index * 3, 50));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 20; ++step)
+		{
+			for (std::size_t index = 0; index < walkers.size(); ++index)
+				field.Place(walkers[index], Fixed::FromInt(static_cast<std::int64_t>(index) * 3 + step * 5), Fixed::FromInt(50 - step));
+			field.Step();
+			hashes.push_back(field.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Field saved(2);
+	const ecs::Entity walker = saved.Walker(20, 50);
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Field loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int step = 0; step < 4; ++step) // to (110,50): in B
+	{
+		saved.Place(walker, Fixed::FromInt(20 + step * 30), Fixed::FromInt(50));
+		loaded.Place(walker, Fixed::FromInt(20 + step * 30), Fixed::FromInt(50));
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+	BOOST_TEST(loaded.Presence(walker).Inside(1));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

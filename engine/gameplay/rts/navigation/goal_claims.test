@@ -1,0 +1,199 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <set>
+#include <utility>
+
+import engine.gameplay.rts.navigation.algorithms.goal_claims;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+// An open grid of `size` cells a side, with the ground's clearance (the zones clientSafeQuickDoesPathExist reads).
+struct Field
+{
+	NavigationGrid grid;
+	GoalCells cells;
+	explicit Field(std::int32_t size) : grid(size, size)
+	{
+		grid.Clearance().push_back(ClearancePlane{locomotor_surface::Ground});
+		BuildClearance(grid, grid.Clearance().front());
+		cells.Fit(size, size);
+	}
+	void Claim(ecs::Entity owner, std::int32_t x, std::int32_t y) { cells.Set(x, y, owner); }
+};
+
+// checkDestination's claimants: `allies` are the mover's allies, `standing` those standing on their claims, `crushable`
+// those it may run over.
+struct Rules
+{
+	std::set<std::uint32_t> allies, standing, crushable;
+	bool Blocks(ecs::Entity owner, std::int32_t x, std::int32_t y) const
+	{
+		if (allies.contains(owner.index))
+			return true;
+		return Standing(owner, x, y) && !crushable.contains(owner.index);
+	}
+	bool Standing(ecs::Entity owner, std::int32_t, std::int32_t) const { return standing.contains(owner.index); }
+};
+
+ecs::Entity Unit(std::uint32_t index)
+{
+	ecs::Entity entity;
+	entity.index = index;
+	entity.generation = 1;
+	return entity;
+}
+
+GoalSeeker Seeker(ecs::Entity self, FixedVector2 from, std::int32_t radius = 0, bool centered = true, bool human = true)
+{
+	return {self, {}, {radius, centered}, locomotor_surface::Ground, human, from};
+}
+
+FixedVector2 Point(int x, int y) { return {Fixed::FromInt(x), Fixed::FromInt(y)}; }
+}
+
+BOOST_AUTO_TEST_SUITE(goal_claims)
+
+// Pathfinder::updateGoal / removeGoal (AIPathfind.cpp): a footprint of reach r claims the cells from r before its cell to
+// r after it when centred (3 x 3 for reach 1), to r - 1 after when about a corner (2 x 2); its cell is the one its point
+// is in when centred, else the nearest corner's (floor(0.5 + x / 10)). The last claim on a cell wins; a removal clears
+// only the cells still the mover's own, and the same cell claimed again changes nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_update_goal_claims_the_footprint_and_remove_goal_clears_only_its_own)
+{
+	Field field(20);
+	const ecs::Entity a = Unit(1), b = Unit(2);
+	PathfindGoal goalA, goalB;
+	UpdateGoal(field.cells, a, goalA, {1, true}, Point(55, 55));
+	BOOST_TEST(goalA.x == 5);
+	BOOST_TEST(goalA.y == 5);
+	for (std::int32_t y = 3; y <= 7; ++y)
+		for (std::int32_t x = 3; x <= 7; ++x)
+			BOOST_TEST((field.cells.At(x, y) == ((x >= 4 && x <= 6 && y >= 4 && y <= 6) ? a : ecs::Entity{})), "cell " << x << "," << y);
+	// About a corner: (68, 68) is nearest the corner of cell (7, 7); it takes 6..7 on each axis, (6, 6) from a.
+	UpdateGoal(field.cells, b, goalB, {1, false}, Point(68, 68));
+	BOOST_TEST(goalB.x == 7);
+	BOOST_TEST(goalB.y == 7);
+	BOOST_TEST((field.cells.At(6, 6) == b));
+	BOOST_TEST((field.cells.At(7, 7) == b));
+	BOOST_TEST((field.cells.At(8, 8) == ecs::Entity{}));
+	RemoveGoal(field.cells, a, goalA, {1, true});
+	BOOST_TEST(!goalA.Claimed());
+	BOOST_TEST((field.cells.At(5, 5) == ecs::Entity{}));
+	BOOST_TEST((field.cells.At(6, 6) == b)); // not a's to clear
+	// The same cell again: nothing changes (a cell of b's footprint cleared by hand stays clear).
+	field.cells.Set(6, 7, ecs::Entity{});
+	UpdateGoal(field.cells, b, goalB, {1, false}, Point(66, 72));
+	BOOST_TEST((field.cells.At(6, 7) == ecs::Entity{}));
+}
+
+// Pathfinder::adjustDestination: the goal's own cell first, then a square spiral out from it -- one right, one up, two
+// left, two down, three right, ... -- and the first cell that will do. Here the goal cell and the three cells the spiral
+// meets first are an ally's; the fourth, two left of the start of the second leg, is the goal.
+BOOST_AUTO_TEST_CASE(legacy_parity_adjust_destination_spirals_right_up_left_down)
+{
+	Field field(20);
+	const ecs::Entity self = Unit(1), ally = Unit(2);
+	Rules rules;
+	rules.allies.insert(ally.index);
+	for (const auto &[x, y] : {std::pair{5, 5}, std::pair{6, 5}, std::pair{6, 6}, std::pair{5, 6}})
+		field.Claim(ally, x, y);
+	const auto adjusted = AdjustDestination(field.grid, field.cells, Seeker(self, Point(150, 150)), LogicalExtent{0, 0, 19, 19}, Point(55, 55), rules);
+	BOOST_TEST_REQUIRE(adjusted.has_value());
+	BOOST_TEST((*adjusted == Point(45, 65))); // cell (4, 6)'s centre
+	// Its own claims and the obstacle it ignores are no bar; an unclaimed goal is its cell's centre.
+	field.Claim(self, 5, 5);
+	const auto own = AdjustDestination(field.grid, field.cells, Seeker(self, Point(150, 150)), LogicalExtent{0, 0, 19, 19}, Point(52, 58), rules);
+	BOOST_TEST_REQUIRE(own.has_value());
+	BOOST_TEST((*own == Point(55, 55)));
+}
+
+// checkDestination: an ally's claim is never usurped; an enemy's only when the enemy stands on it (UNIT_PRESENT_FIXED)
+// and cannot be crushed; an enemy on its way there does not keep the mover off.
+BOOST_AUTO_TEST_CASE(legacy_parity_check_destination_respects_allies_and_standing_enemies)
+{
+	Field field(20);
+	const ecs::Entity self = Unit(1), ally = Unit(2), moving = Unit(3), standing = Unit(4), infantry = Unit(5);
+	Rules rules;
+	rules.allies.insert(ally.index);
+	rules.standing.insert(standing.index);
+	rules.standing.insert(infantry.index);
+	rules.crushable.insert(infantry.index);
+	field.Claim(ally, 2, 2);
+	field.Claim(moving, 4, 4);
+	field.Claim(standing, 6, 6);
+	field.Claim(infantry, 8, 8);
+	const GoalSeeker seeker = Seeker(self, Point(150, 150));
+	BOOST_TEST(!CheckDestination(field.grid, field.cells, seeker, 2, 2, rules));
+	BOOST_TEST(CheckDestination(field.grid, field.cells, seeker, 4, 4, rules));
+	BOOST_TEST(!CheckDestination(field.grid, field.cells, seeker, 6, 6, rules));
+	BOOST_TEST(CheckDestination(field.grid, field.cells, seeker, 8, 8, rules));
+	// A footprint of reach 1 takes in the claims about it; off the map it will not do.
+	const GoalSeeker wide = Seeker(self, Point(150, 150), 1);
+	BOOST_TEST(!CheckDestination(field.grid, field.cells, wide, 3, 3, rules));
+	BOOST_TEST(!CheckDestination(field.grid, field.cells, wide, 0, 10, rules));
+	BOOST_TEST(CheckDestination(field.grid, field.cells, wide, 10, 10, rules));
+}
+
+// checkForAdjust: a human player's unit ends only inside the playable area (m_logicalExtent), a computer's anywhere on
+// the grid; and no goal is ever a cliff.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_humans_goal_stays_in_the_playable_area_and_off_cliffs)
+{
+	Field field(20);
+	const ecs::Entity self = Unit(1), ally = Unit(2);
+	Rules rules;
+	rules.allies.insert(ally.index);
+	field.Claim(ally, 9, 5);
+	const LogicalExtent playable{0, 0, 9, 19};
+	// The spiral's first cell, (10, 5), is outside the playable area: a human's unit goes on to (10, 6), outside too,
+	// then (9, 6).
+	const auto human = AdjustDestination(field.grid, field.cells, Seeker(self, Point(50, 50)), playable, Point(95, 55), rules);
+	BOOST_TEST_REQUIRE(human.has_value());
+	BOOST_TEST((*human == Point(95, 65)));
+	const auto computer = AdjustDestination(field.grid, field.cells, Seeker(self, Point(50, 50), 0, true, false), playable, Point(95, 55), rules);
+	BOOST_TEST_REQUIRE(computer.has_value());
+	BOOST_TEST((*computer == Point(105, 55)));
+	// A cliff cell is passed over (the goal's own, here).
+	field.grid.SetType(3, 3, PathfindCellType::Cliff);
+	BuildClearance(field.grid, field.grid.Clearance().front());
+	const auto cliff = AdjustDestination(field.grid, field.cells, Seeker(self, Point(150, 150)), LogicalExtent{0, 0, 19, 19}, Point(35, 35), rules);
+	BOOST_TEST_REQUIRE(cliff.has_value());
+	BOOST_TEST((*cliff == Point(45, 35)));
+}
+
+// adjustCoordToCell: a mover about a cell corner (an even number of cells across) goes to the cell's low corner plus
+// 0.05 of a cell; its goal's cell is taken from the goal half a cell up and right (adjustDestination).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_corner_footprints_goal_is_its_cells_corner_point)
+{
+	Field field(20);
+	const ecs::Entity self = Unit(1);
+	const Rules rules;
+	const auto adjusted = AdjustDestination(field.grid, field.cells, Seeker(self, Point(150, 150), 1, false), LogicalExtent{0, 0, 19, 19}, Point(50, 50), rules);
+	BOOST_TEST_REQUIRE(adjusted.has_value());
+	BOOST_TEST((*adjusted == FixedVector2{Fixed::FromRatio(101, 2), Fixed::FromRatio(101, 2)}));
+}
+
+// snapClosestGoalPosition, what a failed adjustment settles for: nothing within 400 cells will do (every cell of this
+// small map an ally's), so a one-cell mover takes the first cell of the 3 x 3 about its goal (x outer, y inner) where
+// nobody stands on a claim.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_failed_adjustment_snaps_to_the_first_cell_without_a_standing_unit)
+{
+	Field field(5);
+	const ecs::Entity self = Unit(1), ally = Unit(2), other = Unit(3);
+	Rules rules;
+	rules.allies.insert(ally.index);
+	rules.allies.insert(other.index);
+	rules.standing.insert(ally.index);
+	for (std::int32_t y = 0; y < 5; ++y)
+		for (std::int32_t x = 0; x < 5; ++x)
+			field.Claim(ally, x, y);
+	field.Claim(other, 2, 3); // an ally on its way there, not standing on it
+	const GoalSeeker seeker = Seeker(self, Point(5, 5));
+	BOOST_TEST(!AdjustDestination(field.grid, field.cells, seeker, LogicalExtent{0, 0, 4, 4}, Point(25, 25), rules).has_value());
+	BOOST_TEST((SnapClosestGoal(field.grid, field.cells, seeker, Point(25, 25), rules) == Point(25, 35)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

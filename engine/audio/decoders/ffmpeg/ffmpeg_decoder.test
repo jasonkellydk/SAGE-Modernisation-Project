@@ -1,0 +1,96 @@
+#define BOOST_TEST_MODULE EngineAudioFfmpeg
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+import engine.audio.decoders.ffmpeg.ffmpeg_decoder;
+
+using namespace engine::audio;
+
+namespace
+{
+void Put16(std::vector<std::byte> &out, std::uint16_t value)
+{
+	out.push_back(static_cast<std::byte>(value & 0xFF));
+	out.push_back(static_cast<std::byte>(value >> 8));
+}
+void Put32(std::vector<std::byte> &out, std::uint32_t value)
+{
+	Put16(out, static_cast<std::uint16_t>(value & 0xFFFF));
+	Put16(out, static_cast<std::uint16_t>(value >> 16));
+}
+void Tag(std::vector<std::byte> &out, const char *tag)
+{
+	for (int index = 0; index < 4; ++index)
+		out.push_back(static_cast<std::byte>(tag[index]));
+}
+
+// A mono 16-bit PCM WAV of `frames` samples at `rate`, a 440 Hz tone at half scale.
+std::vector<std::byte> Wav(std::uint32_t rate, std::uint32_t frames)
+{
+	std::vector<std::byte> out;
+	Tag(out, "RIFF");
+	Put32(out, 36 + frames * 2);
+	Tag(out, "WAVE");
+	Tag(out, "fmt ");
+	Put32(out, 16);
+	Put16(out, 1); // PCM
+	Put16(out, 1); // mono
+	Put32(out, rate);
+	Put32(out, rate * 2);
+	Put16(out, 2);
+	Put16(out, 16);
+	Tag(out, "data");
+	Put32(out, frames * 2);
+	for (std::uint32_t frame = 0; frame < frames; ++frame)
+	{
+		const double value = 0.5 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / rate);
+		Put16(out, static_cast<std::uint16_t>(static_cast<std::int16_t>(value * 32767.0)));
+	}
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_CASE(a_wav_decodes_to_stereo_at_the_mixer_rate)
+{
+	const auto buffer = DecodeAll(Wav(22050, 22050), 48000);
+	BOOST_TEST_REQUIRE(buffer.has_value());
+	BOOST_TEST(buffer->sampleRate == 48000u);
+	// One second in, one second out (give or take the resampler's edges).
+	BOOST_TEST(std::abs(static_cast<long>(buffer->Frames()) - 48000L) < 200L);
+	float peak = 0.0f;
+	for (std::size_t frame = 0; frame < buffer->Frames(); ++frame)
+	{
+		BOOST_TEST_REQUIRE(buffer->samples[frame * 2] == buffer->samples[frame * 2 + 1]); // mono on both sides
+		peak = (std::max)(peak, std::fabs(buffer->samples[frame * 2]));
+	}
+	BOOST_TEST(std::fabs(peak - 0.5f) < 0.02f);
+}
+
+BOOST_AUTO_TEST_CASE(a_stream_is_fed_ahead_and_finishes)
+{
+	auto decoder = AudioDecoder::Open(Wav(22050, 11025), 48000);
+	BOOST_TEST_REQUIRE(decoder != nullptr);
+	DecoderFeed feed(std::move(decoder), 48000, 0.25f);
+	feed.Pump();
+	const auto stream = feed.Output();
+	BOOST_TEST(stream->Available() > 11000u); // filled to its quarter second
+	std::size_t played = 0;
+	for (int round = 0; round < 20 && !stream->Ended(); ++round)
+	{
+		float l = 0, r = 0;
+		while (stream->Available() > 0)
+		{
+			stream->Pop(l, r);
+			++played;
+		}
+		feed.Pump();
+	}
+	BOOST_TEST(stream->Ended());
+	BOOST_TEST(std::abs(static_cast<long>(played) - 24000L) < 200L);
+	BOOST_TEST(AudioDecoder::Open(std::vector<std::byte>(64, std::byte{7}), 48000) == nullptr);
+}

@@ -12,6 +12,7 @@ module;
 #include "W3DDevice/GameClient/W3DGadget.h"
 
 export module Engine.UI.WND.Runtime.Renderer.Gadget.VerticalSlider;
+import std;
 import Engine.UI.WND;
 
 namespace

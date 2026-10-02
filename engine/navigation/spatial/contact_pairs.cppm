@@ -1,11 +1,5 @@
-module;
-#include <algorithm>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module engine.navigation.spatial.contact_pairs;
+import std;
 export namespace navigation {
 // Membership only: clients retain their own processing order. Keys are opaque
 // identities and are never dereferenced, including during removal callbacks.

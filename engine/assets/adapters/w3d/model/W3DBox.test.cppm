@@ -2,14 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE W3DBoxTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
 
 export module Assets.Adapters.W3D.Box.Tests;
+import std;
 
 import Assets.Adapters.W3D.Box;
 

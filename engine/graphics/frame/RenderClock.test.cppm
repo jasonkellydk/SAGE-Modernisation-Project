@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstdint>
-
 export module Graphics.Frame.RenderClock.Tests;
+import std;
 
 import Graphics.Frame.RenderClock;
 

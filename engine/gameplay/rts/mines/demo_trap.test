@@ -1,0 +1,181 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.mines.systems.demo_trap_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// The original's GLADemoTrap (DemoTrapUpdate: DefaultProximityMode, DetonationWeaponSlot PRIMARY, ProximityModeWeaponSlot
+// SECONDARY, ManualModeWeaponSlot TERTIARY, TriggerDetonationRange 40, IgnoreTargetTypes PROJECTILE UNATTACKABLE,
+// AutoDetonationWithFriendsInvolved) of player 0, player 1 its enemy.
+struct Street
+{
+	explicit Street(std::size_t workers, bool build = true)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<ObjectShroud>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<WeaponSlots>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<Sale>();
+		world.RegisterComponent<DemoTrap>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(100));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(2u);
+		relationships.Set(0, 1, Relationship::Enemies);
+		relationships.Set(1, 0, Relationship::Enemies);
+		world.EmplaceResource<KillRequests>();
+		world.EmplaceResource<ShotQueue>();
+		if (build)
+			trap = Trap(500);
+		registry.Register(index);
+		registry.Register(traps);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Body(std::uint32_t player, int x, std::uint32_t classes, int z = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), Fixed::FromInt(z)};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), classes};
+		world.Get<Owner>(entity)->player = player;
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		return entity;
+	}
+
+	ecs::Entity Trap(int x)
+	{
+		const ecs::Entity entity = Body(0, x, target_class::Structure);
+		world.Add<WeaponSlots>(entity);
+		world.Get<WeaponSlots>(entity)->locked = 1; // DefaultProximityMode: its proximity slot
+		world.Add<DemoTrap>(entity);
+		DemoTrap &data = *world.Get<DemoTrap>(entity);
+		data.range = Fixed::FromInt(40);
+		data.detonationSlot = 0;
+		data.proximitySlot = 1;
+		data.manualSlot = 2;
+		data.ignoreClasses = target_class::Projectile | target_class::Unattackable;
+		data.friendlyDetonation = 1;
+		data.detonateWhenKilled = 1;
+		data.defaultSlot = 1;
+		return entity;
+	}
+
+	// One tick; whether the trap asked to die.
+	bool Step()
+	{
+		world.Resource<KillRequests>().entities.clear();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		const auto &killed = world.Resource<KillRequests>().entities;
+		return std::find(killed.begin(), killed.end(), trap) != killed.end();
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::Entity trap;
+	SpatialIndexSystem index;
+	DemoTrapSystem traps;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(demo_traps)
+
+// DemoTrapUpdate::update: in proximity mode (ScanRate 0: every frame) an enemy on the ground within 40 (centre to
+// centre) sets it off that tick, one at 45 does not, an aircraft over it does not, a projectile does not; an ally beside
+// it does not stop it (AutoDetonationWithFriendsInvolved). Manual mode (TERTIARY) waits; switched to its detonation slot
+// (PRIMARY) it goes off at once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_demo_trap_goes_off_by_its_mode)
+{
+	Street street(2);
+	street.Body(0, 510, target_class::Infantry);
+	const ecs::Entity distant = street.Body(1, 545, target_class::Vehicle);
+	const ecs::Entity plane = street.Body(1, 500, target_class::AirborneVehicle | target_class::Aircraft, 150);
+	const ecs::Entity missile = street.Body(1, 505, target_class::Projectile);
+	BOOST_TEST(!street.Step());
+	BOOST_TEST(!street.Step());
+	street.world.Destroy(distant);
+	street.world.Destroy(plane);
+	street.world.Destroy(missile);
+	street.Body(1, 538, target_class::Vehicle);
+	BOOST_TEST(street.Step());
+	BOOST_TEST(street.world.Get<DemoTrap>(street.trap)->detonated == 1u);
+
+	Street manual(1);
+	manual.world.Get<WeaponSlots>(manual.trap)->locked = 2;
+	manual.Body(1, 520, target_class::Vehicle);
+	for (int step = 0; step < 5; ++step)
+		BOOST_TEST(!manual.Step());
+	manual.world.Get<WeaponSlots>(manual.trap)->locked = 0;
+	BOOST_TEST(manual.Step());
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(demo_traps_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Street street(workers, false);
+		std::vector<ecs::Entity> tanks;
+		for (int index = 0; index < 10; ++index)
+			street.Trap(100 + index * 80);
+		for (int index = 0; index < 10; ++index)
+			tanks.push_back(street.Body(1, 60 + index * 83, target_class::Vehicle));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 30; ++step)
+		{
+			for (const ecs::Entity tank : tanks)
+				street.world.Get<Transform>(tank)->position.x += Fixed::FromInt(3);
+			street.Step();
+			hashes.push_back(street.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Street saved(2);
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Street loaded(3, false);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	loaded.trap = saved.trap;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	const ecs::Entity a = saved.Body(1, 530, target_class::Vehicle);
+	const ecs::Entity b = loaded.Body(1, 530, target_class::Vehicle);
+	BOOST_TEST((a == b));
+	BOOST_TEST(saved.Step() == loaded.Step());
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

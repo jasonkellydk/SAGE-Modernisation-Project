@@ -1,9 +1,6 @@
-module;
-#include <cassert>
-#include <cstddef>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Dazzles.Layer;
+import std;
+import engine.core.contracts;
 
 namespace Graphics {
 // Membership is independent of draw state: assignment and re-preparation must
@@ -19,7 +16,7 @@ public:
     DazzleLayer& operator=(const DazzleLayer&) = delete;
     template<class Retain>
     void Queue(std::size_t type, DazzleMembership& membership, Retain&& retain) {
-        assert(type < m_types.size());
+        engine::core::Assert(type < m_types.size());
         if (membership.queued) return;
         m_types[type].push_back({&membership, retain()});
         membership.queued = true;

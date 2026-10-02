@@ -1,9 +1,5 @@
-module;
-
-#include <cstdint>
-#include <limits>
-
 export module engine.ecs.core.entity;
+import std;
 
 export namespace ecs
 {

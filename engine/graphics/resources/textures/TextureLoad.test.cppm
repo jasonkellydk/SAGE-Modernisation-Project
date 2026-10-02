@@ -2,15 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE TextureLoadTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <thread>
-#include <vector>
 export module Graphics.Resources.Textures.Load.Tests;
+import std;
 import Graphics.Resources.Textures.Load;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;

@@ -1,19 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <cstring>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <numeric>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.MeshDrawing;
+import std;
+import engine.core.contracts;
 import engine.profiling;
 import Graphics.Materials.State;
 import Graphics.Materials.MeshMaterial;
@@ -113,7 +100,7 @@ struct ModelMeshState final {
     std::array<ModelMaterialGroups<TextureOwner>, 4> groups;
     std::vector<PropMaterialPreparation> additional_materials;
     std::span<const std::uint32_t> Complete_Polygons(std::size_t count) {
-        assert(count <= (std::numeric_limits<std::uint32_t>::max)());
+        engine::core::Assert(count <= (std::numeric_limits<std::uint32_t>::max)());
         if (m_polygons.size() != count) {
             m_polygons.resize(count);
             std::iota(m_polygons.begin(),m_polygons.end(),std::uint32_t{0});
@@ -164,7 +151,7 @@ public:
           m_materials(materials), m_state(state), m_renderer(renderer), m_context(context.get()),
           m_cache(cache)
     {
-        assert(m_context.bone_links.empty() || m_context.bone_links.size()==positions.size());
+        engine::core::Assert(m_context.bone_links.empty() || m_context.bone_links.size()==positions.size());
         m_bone_revision=m_state.Update_Bone_Links(m_context.bone_links);
         m_bones=m_state.Bone_Links();
         if (m_bones) m_bone_links=*m_bones;
@@ -389,7 +376,7 @@ public:
                 return vertex;
             };
             for (const auto polygon : polygons) {
-                assert(static_cast<std::size_t>(polygon) < m_triangles.size());
+                engine::core::Assert(static_cast<std::size_t>(polygon) < m_triangles.size());
                 for (unsigned corner = 0; corner < 3; ++corner)
                     batch.Append_Validated(m_triangles[polygon][corner], extract);
             }
@@ -415,7 +402,7 @@ public:
         draw.deferred_pass = m_context.additional_only;
         draw.mesh = mesh;
         const auto* geometry = m_renderer.Mesh_Geometry(mesh);
-        assert(geometry != nullptr);
+        engine::core::Assert(geometry != nullptr);
         return submit(geometry->Vertices(), geometry->Indices(), description.shader,
             description.textures, parameters, draw);
     }
@@ -425,7 +412,7 @@ private:
         if (!m_source.empty()) return;
         engine::profiling::Scope profile_scope_425("Graphics.Mesh.TransformVertices");
         if (!m_workspace) m_workspace.emplace(m_cache.Acquire());
-        assert(m_normals.empty() || m_normals.size() == m_positions.size());
+        engine::core::Assert(m_normals.empty() || m_normals.size() == m_positions.size());
         const auto prepare = [&]<bool HasNormals>() {
             m_source = m_workspace->Workspace().Prepare_Source(m_positions.size(), [&](PropSourceVertex& vertex, std::size_t i) {
                 vertex.position = {m_positions[i][0], m_positions[i][1], m_positions[i][2]};

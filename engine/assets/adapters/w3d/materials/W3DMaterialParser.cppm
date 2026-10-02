@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Assets.Adapters.W3D.Materials;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 export import Assets.Adapters.W3D.ShaderMaterials;
@@ -42,6 +32,11 @@ export struct W3DMaterialPass final
 	std::uint32_t texture_index = W3DInvalidIndex;
 	std::vector<Vector2f> texcoords;
 	bool uses_shader_material = false;
+	// The whole id chunks (the fields above hold their first entries): W3D_CHUNK_VERTEX_MATERIAL_IDS (one per vertex, or
+	// one for all), W3D_CHUNK_SHADER_IDS and stage 0's W3D_CHUNK_TEXTURE_IDS (one per polygon, or one for all).
+	std::vector<std::uint32_t> vertex_material_ids;
+	std::vector<std::uint32_t> shader_ids;
+	std::vector<std::uint32_t> texture_ids;
 };
 
 export struct W3DVertexMaterialData final
@@ -376,15 +371,34 @@ bool Parse_Shaders(W3DByteSpan bytes, std::vector<W3DShaderSettings> &shaders)
 	return true;
 }
 
-bool Parse_Texture_Stage(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMaterialPass &pass)
+// A chunk of 32-bit ids, whole.
+bool Read_Id_Array(W3DByteSpan payload, std::vector<std::uint32_t> &ids)
 {
-	return W3DVisit_Chunks(bytes, [&pass, vertex_count](const W3DChunkView &chunk) {
+	if (payload.size() < 4 || payload.size() % 4 != 0)
+		return false;
+	ids.resize(payload.size() / 4);
+	for (std::size_t index = 0; index < ids.size(); ++index)
+		if (!W3DRead_U32(payload, index * 4, ids[index]))
+			return false;
+	return true;
+}
+
+bool Parse_Texture_Stage(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMaterialPass &pass, bool first_stage)
+{
+	return W3DVisit_Chunks(bytes, [&pass, vertex_count, first_stage](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkTextureIds:
 				if (chunk.payload.size() < 4 || chunk.payload.size() % 4 != 0)
 					return false;
+				// Stage 0 is the pass's base map (stage 1, the detail map, is not drawn by this importer).
+				if (!first_stage)
+					return true;
+				if (!Read_Id_Array(chunk.payload, pass.texture_ids))
+					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.texture_index);
 			case W3DChunkStageTextureCoords:
+				if (!first_stage)
+					return true;
 				return Read_UV_Array(chunk.payload, vertex_count, pass.texcoords);
 			case W3DChunkPerFaceTextureCoordIds:
 				return chunk.payload.size() % 12 == 0;
@@ -404,21 +418,29 @@ bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 		}
 		return true;
 	})) return false;
-	return W3DVisit_Chunks(bytes, [&pass, vertex_count](const W3DChunkView &chunk) {
+	std::size_t stage_count = 0;
+	return W3DVisit_Chunks(bytes, [&pass, vertex_count, &stage_count](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkVertexMaterialIds:
 				if (chunk.payload.size() < 4 || chunk.payload.size() % 4 != 0)
+					return false;
+				if (!Read_Id_Array(chunk.payload, pass.vertex_material_ids))
 					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.vertex_material_index);
 			case W3DChunkShaderIds:
 				if (chunk.payload.size() < 4 || chunk.payload.size() % 4 != 0)
 					return false;
+				if (!Read_Id_Array(chunk.payload, pass.shader_ids))
+					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.shader_index);
 			case W3DChunkTextureStage:
+			{
 				// Full indexed UVs for shader passes are decoded by PassBindings
 				// once the mesh's face count is known.
 				if (pass.uses_shader_material) return chunk.contains_children;
-				return chunk.contains_children && Parse_Texture_Stage(chunk.payload, vertex_count, pass);
+				const bool first_stage = stage_count++ == 0;
+				return chunk.contains_children && Parse_Texture_Stage(chunk.payload, vertex_count, pass, first_stage);
+			}
 			default:
 				return true;
 		}

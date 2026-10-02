@@ -1,0 +1,443 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.audio.systems.unit_voice_system;
+import games.generalszh.presentation.interaction.algorithms.hotkey_teams;
+import games.generalszh.presentation.objects.systems.waypoint_path_system;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.content.objects.object_status;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.FixedPresentation;
+
+// The selection's answers (CommandXlat.cpp pickAndPlayUnitVoiceResponse) and the cheer (MSG_META_ALL_CHEER,
+// GameLogic::onDoCheer) over a shipped skirmish: America (player0) and the GLA (player1) on Tournament Continent.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// The session keeps the level it was made from: the map read and the skirmish level live beside it.
+struct Skirmish
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	std::unique_ptr<session::Session> game;
+};
+
+std::unique_ptr<Skirmish> TwoPlayerSkirmish(Install &shell)
+{
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!map)
+		return nullptr;
+	auto read = engine::level::generals_map::Read(*map);
+	if (!read)
+		return nullptr;
+	auto made = std::make_unique<Skirmish>();
+	made->read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	made->skirmish = session::setup::PrepareSkirmishLevel(made->read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : made->skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	options.presentationComponents = [](ecs::World &world) { world.RegisterComponent<presentation::Selected>(); };
+	made->game = std::make_unique<session::Session>(made->skirmish.level, shell.game, options);
+	return made;
+}
+
+std::uint32_t TeamOf(session::Session &game, std::uint32_t player)
+{
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (game.Teams().TeamAt(team).owner == player && !game.Teams().TeamAt(team).members.empty())
+			return team;
+	return 0u;
+}
+
+// The presentation's voice resources as the composition makes them (MiscAudio's car bomb lines and cheer), America the
+// one at the keys, and the unit voice system on its own.
+struct Voices
+{
+	explicit Voices(Install &shell, session::Session &game, std::uint32_t local) : world(game.World())
+	{
+		world.EmplaceResource<presentation::UnitVoiceCues>();
+		auto &misc = world.EmplaceResource<presentation::UnitVoiceSounds>();
+		misc.carBombAttack = shell.game.miscAudio.at("TerroristInCarAttackVoice");
+		misc.carBombMove = shell.game.miscAudio.at("TerroristInCarMoveVoice");
+		misc.carBombSelect = shell.game.miscAudio.at("TerroristInCarSelectVoice");
+		misc.allCheer = shell.game.miscAudio.at("AllCheerSound");
+		world.EmplaceResource<presentation::LocalPlayer>(presentation::LocalPlayer{local, true});
+		world.EmplaceResource<presentation::SoundRequests>();
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// The cue answered this frame: what was heard.
+	std::vector<presentation::SoundRequest> Answer(presentation::UnitVoiceCue cue)
+	{
+		auto &sounds = world.Resource<presentation::SoundRequests>().pending;
+		sounds.clear();
+		world.Resource<presentation::UnitVoiceCues>().pending.push_back(std::move(cue));
+		scheduler->Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+		BOOST_TEST(world.Resource<presentation::UnitVoiceCues>().pending.empty());
+		return sounds;
+	}
+
+	void Select(std::initializer_list<ecs::Entity> entities)
+	{
+		auto &selected = world.Side<presentation::Selected>();
+		selected.Clear();
+		for (const ecs::Entity entity : entities)
+			selected.Emplace(entity);
+	}
+
+	ecs::World &world;
+	presentation::UnitVoiceSystem system;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t frame{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(unit_voice_system)
+
+// pickAndPlayUnitVoiceResponse on the shipped AmericaInfantryRanger (VoiceSelect RangerVoiceSelect, VoiceMove
+// RangerVoiceMove, UnitSpecificSounds VoiceGarrison RangerVoiceGarrison, VoiceSecondaryWeaponMode RangerVoiceModeFlashBang,
+// its SpecialAbility's InitiateSound RangerVoiceCapture): two of America's Rangers selected one after the other, the
+// one selected last answers (InGameUI's list: newest first), on itself (setObjectID: where it stands, America's): a
+// selection, a move, garrisoning America's own barracks, the flash-bang mode, the capture power. A GLA Rebel selected
+// last does not answer America's selection (only what the player controls), but does answer an order.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_last_selected_ranger_answers_on_the_shipped_data)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	const ecs::Entity first = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	const ecs::Entity second = game.Place("AmericaInfantryRanger", {Fixed::FromInt(930), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	const ecs::Entity barracks = game.Place("AmericaBarracks", {Fixed::FromInt(1100), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	const ecs::Entity rebel = game.Place("GLAInfantryRebel", {Fixed::FromInt(960), Fixed::FromInt(500)}, {}, TeamOf(game, gla));
+	for (const ecs::Entity entity : {first, second, barracks, rebel})
+		BOOST_TEST_REQUIRE(game.World().IsAlive(entity));
+	game.Tick();
+	Voices voices(shell, game, america);
+	voices.Select({first, second});
+	const auto at = game.TransformOf(second)->position;
+	auto heard = voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::CreateGroup});
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceSelect");
+	BOOST_TEST(heard[0].at[0] == Engine::Math::ToFloat(at.x));
+	BOOST_TEST(heard[0].at[1] == Engine::Math::ToFloat(at.y));
+	BOOST_TEST(heard[0].owner == america);
+	heard = voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::Move});
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceMove");
+	presentation::UnitVoiceCue garrison{presentation::VoiceOrder::Enter};
+	garrison.target = barracks;
+	heard = voices.Answer(garrison);
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceGarrison");
+	presentation::UnitVoiceCue flashBang{presentation::VoiceOrder::SwitchWeapons};
+	flashBang.weaponSlot = 1;
+	heard = voices.Answer(flashBang);
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceModeFlashBang");
+	presentation::UnitVoiceCue capture{presentation::VoiceOrder::SpecialPower};
+	capture.specialPower = "SpecialAbilityRangerCaptureBuilding";
+	heard = voices.Answer(capture);
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceCapture");
+	// The Rebel selected last: not America's, so the Ranger before it answers the selection; an order it answers itself.
+	voices.Select({first, rebel});
+	heard = voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::CreateGroup});
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceSelect");
+	BOOST_TEST(heard[0].at[0] == Engine::Math::ToFloat(game.TransformOf(first)->position.x));
+	heard = voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::Move});
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].owner == gla);
+	// Nothing of America's selected: a selection goes unanswered.
+	voices.Select({rebel});
+	BOOST_TEST(voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::CreateGroup}).empty());
+}
+
+// The car bomb's line (CommandXlat.cpp, after the answer of an OBJECT_STATUS_IS_CARBOMB thing): a car bomb told to move
+// adds MiscAudio's TerroristInCarMoveVoice (CarBombVoiceMove) on itself, told to attack TerroristInCarAttackVoice
+// (CarBombVoiceAttack), selected TerroristInCarSelectVoice (CarBombVoiceSelect); the same car not a car bomb, none.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_car_bomb_adds_the_terrorists_line_on_the_shipped_data)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	const ecs::Entity car = game.Place("CarTaxiCab02", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, gla));
+	const ecs::Entity tank = game.Place("AmericaTankCrusader", {Fixed::FromInt(1000), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	BOOST_TEST_REQUIRE(game.World().IsAlive(car));
+	game.Tick();
+	Voices voices(shell, game, gla);
+	BOOST_TEST(game.World().Resource<presentation::UnitVoiceSounds>().carBombMove == "CarBombVoiceMove");
+	voices.Select({car});
+	const auto lines = [&](presentation::UnitVoiceCue cue) {
+		std::vector<std::string> names;
+		for (const auto &sound : voices.Answer(std::move(cue)))
+			names.push_back(sound.sound);
+		return names;
+	};
+	const auto has = [](const std::vector<std::string> &names, std::string_view name) { return std::ranges::find(names, name) != names.end(); };
+	BOOST_TEST(!has(lines(presentation::UnitVoiceCue{presentation::VoiceOrder::Move}), "CarBombVoiceMove"));
+	if (!game.World().Has<gp::StatusFlags>(car))
+		game.World().Add<gp::StatusFlags>(car);
+	game.World().Get<gp::StatusFlags>(car)->bits |= std::uint64_t{1} << content::ObjectStatusBit("IS_CARBOMB");
+	BOOST_TEST(has(lines(presentation::UnitVoiceCue{presentation::VoiceOrder::Move}), "CarBombVoiceMove"));
+	presentation::UnitVoiceCue attack{presentation::VoiceOrder::AttackObject};
+	attack.target = tank;
+	BOOST_TEST(has(lines(attack), "CarBombVoiceAttack"));
+	BOOST_TEST(has(lines(presentation::UnitVoiceCue{presentation::VoiceOrder::CreateGroup}), "CarBombVoiceSelect"));
+	BOOST_TEST(!has(lines(presentation::UnitVoiceCue{presentation::VoiceOrder::Guard}), "CarBombVoiceMove"));
+}
+
+// SelectionTranslator's MSG_META_SELECT_TEAMn: the group selected (not a double press), CommandTranslator's
+// MSG_SELECT_TEAMn has the selection answer; adding a group (MSG_META_ADD_TEAMn) is silent.
+BOOST_AUTO_TEST_CASE(legacy_parity_selecting_a_control_group_is_answered)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	game.Tick();
+	Voices voices(shell, game, america);
+	auto &world = game.World();
+	world.EmplaceResource<presentation::HotkeyTaps>();
+	world.EmplaceResource<presentation::SelectionCatalog>();
+	voices.Select({ranger});
+	const auto create = presentation::ApplyTeamMeta(world, presentation::TeamMeta::Create, 1, game.CurrentTick());
+	BOOST_TEST_REQUIRE(create.command.has_value());
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(*create.command)};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	voices.Select({});
+	auto &cues = world.Resource<presentation::UnitVoiceCues>().pending;
+	presentation::ApplyTeamMeta(world, presentation::TeamMeta::Add, 1, game.CurrentTick() + 100);
+	BOOST_TEST(cues.empty());
+	voices.Select({});
+	presentation::ApplyTeamMeta(world, presentation::TeamMeta::Select, 1, game.CurrentTick() + 200);
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].order == presentation::VoiceOrder::CreateGroup));
+}
+
+// GameLogic::onDoCheer -> AIGroup::groupCheer -> Object::setSpecialModelConditionState(MODELCONDITION_SPECIAL_CHEERING,
+// LOGICFRAMES_PER_SECOND * 3), ObjectSMCHelper clearing it then: CommandTranslator's MSG_META_ALL_CHEER plays
+// AllCheerSound (UI_AllCheerSound, no place) and sends MSG_DO_CHEER for the selection; America's selected Ranger cheers
+// from the tick the order is carried out for 90 ticks, not one more; a GLA Rebel in the same order (not the sender's)
+// does not.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_cheer_holds_ninety_frames)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	const ecs::Entity rebel = game.Place("GLAInfantryRebel", {Fixed::FromInt(960), Fixed::FromInt(500)}, {}, TeamOf(game, gla));
+	game.Tick();
+	Voices voices(shell, game, america);
+	auto &world = game.World();
+	BOOST_TEST(world.Resource<presentation::UnitVoiceSounds>().allCheer == "UI_AllCheerSound");
+	voices.Select({ranger, rebel});
+	world.Resource<presentation::SoundRequests>().pending.clear();
+	const commands::Cheer cheer = presentation::AllCheer(world);
+	const auto &sounds = world.Resource<presentation::SoundRequests>().pending;
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0].sound == "UI_AllCheerSound");
+	BOOST_TEST(!sounds[0].positioned);
+	BOOST_TEST(cheer.units.size() == 2u);
+	const std::uint32_t cheering = content::ModelConditionBit("SPECIAL_CHEERING");
+	const auto cheers = [&](ecs::Entity entity) {
+		const auto *look = world.Get<gp::Appearance>(entity);
+		return look != nullptr && look->Test(cheering);
+	};
+	BOOST_TEST(!cheers(ranger));
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(cheer)};
+	orders.front().player = 0;
+	game.Tick(std::span(orders));
+	BOOST_TEST_REQUIRE(cheers(ranger));
+	BOOST_TEST(!cheers(rebel));
+	int ticks = 1;
+	while (cheers(ranger) && ticks < 200)
+	{
+		game.Tick();
+		if (cheers(ranger))
+			++ticks;
+	}
+	BOOST_TEST(ticks == 90);
+	BOOST_TEST(!cheers(ranger));
+}
+
+// W3DWaypointBuffer::drawWaypoints, a path's line and nodes: from where the thing stands through each point it has still
+// to go, one segment a point (EXLaser.tga tiled along the line, carried on from segment to segment, 1.5 wide, colour
+// (0.25, 0.5, 1)), the SCMNode model at every point; the line stops after MAX_DISPLAY_NODES (512) points, the nodes do not.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_waypoint_path_is_drawn_as_the_buffer_draws_it)
+{
+	presentation::WaypointPaths paths;
+	const std::vector<std::array<float, 3>> points{{3.0f, 4.0f, 0.0f}, {3.0f, 10.0f, 0.0f}};
+	presentation::AppendWaypointPath(paths, {0.0f, 0.0f, 0.0f}, points, 7u);
+	BOOST_TEST_REQUIRE(paths.segments.size() == 2u);
+	BOOST_TEST(paths.segments[0].end[0] == 3.0f);
+	BOOST_TEST(paths.segments[0].width == 1.5f);
+	BOOST_TEST(paths.segments[0].color[0] == 0.25f);
+	BOOST_TEST(paths.segments[0].color[1] == 0.5f);
+	BOOST_TEST(paths.segments[0].color[2] == 1.0f);
+	BOOST_TEST(paths.segments[0].texture == "EXLaser.tga");
+	BOOST_TEST(paths.segments[0].uvScale == 5.0f / 1.5f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(paths.segments[0].uvOffset == 0.0f);
+	BOOST_TEST(paths.segments[1].uvScale == 6.0f / 1.5f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(paths.segments[1].uvOffset == 5.0f / 1.5f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST_REQUIRE(paths.nodes.size() == 2u);
+	BOOST_TEST(paths.nodes[1].look == 7u);
+	BOOST_TEST(paths.nodes[1].world[7] == 10.0f);
+	presentation::WaypointPaths many;
+	const std::vector<std::array<float, 3>> long_path(600, std::array<float, 3>{1.0f, 1.0f, 0.0f});
+	presentation::AppendWaypointPath(many, {0.0f, 0.0f, 0.0f}, long_path, 7u);
+	BOOST_TEST(many.segments.size() == 512u);
+	BOOST_TEST(many.nodes.size() == 600u);
+}
+
+// drawWaypoints only in waypoint mode (Alt held), for each selected thing following a path (AI_FOLLOW_PATH): a Ranger of
+// America's given two waypoints (an idle one moving to the first, the second making its path the first then the second)
+// shows its line through both and their nodes while Alt is held, nothing when it is not.
+BOOST_AUTO_TEST_CASE(legacy_parity_waypoint_paths_show_in_waypoint_mode)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto made = TwoPlayerSkirmish(shell);
+	BOOST_TEST_REQUIRE(made != nullptr);
+	session::Session &game = *made->game;
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	game.Tick();
+	const auto order = [&](Engine::Math::FixedVector2 spot) {
+		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::AddWaypoint{{ranger}, spot})};
+		orders.front().player = 0;
+		game.Tick(std::span(orders));
+	};
+	order({Fixed::FromInt(900), Fixed::FromInt(600)});
+	order({Fixed::FromInt(1000), Fixed::FromInt(600)});
+	auto &world = game.World();
+	world.Side<presentation::Selected>().Emplace(ranger);
+	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
+	presentation::KnowLooks(looks, game);
+	BOOST_TEST_REQUIRE(looks.waypointNodeLook != presentation::LookCatalog::NoLook);
+	BOOST_TEST(looks.lookModels[looks.waypointNodeLook] == "SCMNode");
+	auto &pointer = world.EmplaceResource<presentation::PointerInput>();
+	world.EmplaceResource<presentation::TerrainHeightHandle>();
+	auto &paths = world.EmplaceResource<presentation::WaypointPaths>();
+	presentation::WaypointPathSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t frame = 0;
+	scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	BOOST_TEST(paths.segments.empty());
+	BOOST_TEST(paths.nodes.empty());
+	pointer.alt = true;
+	scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(paths.segments.size() == 2u);
+	BOOST_TEST(paths.segments[1].end[0] == 1000.0f);
+	BOOST_TEST(paths.segments[1].end[1] == 600.0f);
+	BOOST_TEST_REQUIRE(paths.nodes.size() == 2u);
+	BOOST_TEST(paths.nodes[0].look == looks.waypointNodeLook);
+	// The same points as a way out of a factory (AI_FOLLOW_EXITPRODUCTION_PATH): friend_getWaypointGoalPathSize is 0, nothing drawn.
+	world.Get<engine::gameplay::MovePath>(ranger)->kind = engine::gameplay::MovePathKind::ExitProduction;
+	scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	BOOST_TEST(paths.segments.empty());
+	BOOST_TEST(paths.nodes.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE LineGroupGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <limits>
 export module Graphics.Scene.Particles.LineGroupGeometry.Tests;
+import std;
 import Graphics.Scene.Particles.LineGroupGeometry;
 using namespace Graphics;
 constexpr std::array<float,9> identity{1,0,0,0,1,0,0,0,1};

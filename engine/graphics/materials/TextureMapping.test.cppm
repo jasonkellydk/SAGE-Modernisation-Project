@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TextureMappingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
-#include <stdexcept>
-#include <variant>
 export module Graphics.Materials.TextureMapping.Tests;
+import std;
 import Assets.Math;
 import Assets.Materials.TextureMapping;
 import Assets.Adapters.W3D.TextureMapping;
@@ -110,7 +102,7 @@ BOOST_AUTO_TEST_CASE(grid_offsets_retain_frame_remainders_and_backward_unsigned_
     Near(result.transform[3],0); Near(result.transform[7],.25f);
     description.frames_per_second=-4;
     auto backward=TextureMapping::Create(description,0);
-    result=backward->Evaluate(2500); // 9 - 10 -> UINT_MAX % 10 == 5.
+    result=backward->Evaluate(2500); // 9 - 10 -> std::numeric_limits<unsigned int>::max() % 10 == 5.
     Near(result.transform[3],.25f); Near(result.transform[7],.25f);
     backward->Reset(2500);
     result=backward->Evaluate(2500);

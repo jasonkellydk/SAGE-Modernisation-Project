@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ScreenFilterDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Scene.Screen.Filters.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Scene.Screen.Filters;
 using namespace Graphics;

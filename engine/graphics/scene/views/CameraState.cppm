@@ -1,9 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-
 export module Graphics.Scene.Views.CameraState;
+import std;
 
 import Assets.Math;
 export import Graphics.Scene.AffineTransform;

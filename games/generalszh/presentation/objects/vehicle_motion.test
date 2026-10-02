@@ -1,0 +1,3320 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationObjects
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <numbers>
+#include <cstddef>
+#include <string_view>
+#include <cstdint>
+#include <memory>
+#include <set>
+#include <map>
+#include <filesystem>
+#include <cstdlib>
+#include <vector>
+
+#ifdef FindResource
+#undef FindResource // windows.h (via Boost.Test) renames it
+#endif
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import engine.gameplay.rts.match.resources.match_outcome;
+import engine.gameplay.rts.construction.components.sale;
+import engine.gameplay.rts.construction.components.construction_progress;
+import engine.gameplay.common.appearance.components.indicator_color;
+import engine.gameplay.common.appearance.components.occlusion_safe;
+import games.generalszh.presentation.objects.systems.vehicle_motion_systems;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.common.spatial.components.object_shroud;
+import engine.gameplay.rts.stealth.resources.detections;
+import engine.gameplay.rts.parachute.components.parachute;
+import engine.gameplay.rts.parachute.definitions.parachute_definition;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+import games.generalszh.presentation.objects.algorithms.vehicle_motion_setup;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.systems.object_presentation_systems;
+import games.generalszh.presentation.objects.systems.effect_attachment_systems;
+import games.generalszh.presentation.objects.algorithms.presentation_schedule;
+import games.generalszh.presentation.objects.systems.hit_fx_systems;
+import games.generalszh.presentation.objects.systems.chassis_systems;
+import games.generalszh.presentation.objects.algorithms.track_laying;
+import games.generalszh.presentation.objects.algorithms.tree_breeze_sway;
+import games.generalszh.presentation.objects.algorithms.tree_bending;
+import games.generalszh.presentation.objects.algorithms.debris_animation;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.presentation.objects.systems.harvest_presentation_systems;
+import games.generalszh.presentation.objects.systems.script_flash_systems;
+import engine.ecs.core.world;
+import engine.gameplay.common.health.components.health;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import games.generalszh.content.objects.model_conditions;
+
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+
+namespace
+{
+// A simulation-like world (Transform, DefinitionRef) with presentation's
+// side tables on the same entities: a tank (definition 0) and a truck
+// (definition 1); the tick and frame schedules run on `workers` threads.
+struct Street
+{
+	explicit Street(std::size_t workers)
+	{
+		world.RegisterComponent<engine::gameplay::Transform>();
+		world.RegisterComponent<engine::gameplay::DefinitionRef>();
+		world.RegisterComponent<engine::gameplay::Appearance>();
+		world.RegisterComponent<engine::gameplay::Owner>();
+		world.RegisterComponent<engine::gameplay::ObjectShroud>();
+		world.RegisterComponent<engine::gameplay::OffMap>();
+		world.RegisterComponent<engine::gameplay::Stealth>();
+		world.RegisterComponent<engine::gameplay::MoveOrder>();
+		world.RegisterComponent<engine::gameplay::Locomotion>();
+		RegisterVehicleMotion(world);
+		world.FinalizeComponents();
+		world.EmplaceResource<PresentationFrame>(PresentationFrame{1.0f / 60.0f, 0});
+		world.EmplaceResource<engine::gameplay::Relationships>(8u);
+		MotionLooks &looks = world.EmplaceResource<MotionLooks>();
+		MotionLook tank;
+		tank.treadRate = 2.0f;
+		tank.treadPivot = 0.6f;
+		tank.treadDrive = 0.3f;
+		tank.maxSpeed = 1.0f;
+		MotionLook truck;
+		truck.wheelBones = {"Tire01"};
+		truck.wheelMultiplier = 0.2f;
+		truck.maxSpeed = 2.0f;
+		looks.byDefinition = {tank, truck};
+		looks.known = {1, 1};
+		world.EmplaceResource<ParticleWorldHandle>();
+		tickSystems.Register(sample);
+		frameSystems.Register(treads);
+		frameSystems.Register(wheels);
+		frameSystems.Register(emitters);
+		frameSystems.OrderBefore<WheelRollSystem, MotionEmitterSystem>();
+		world.EmplaceResource<SoundRequests>();
+		tickSystems.Finalize(world.Components());
+		frameSystems.Finalize(world.Components());
+		tick = std::make_unique<ecs::Scheduler>(world, tickSystems, engine::jobs::JobSystemConfig{workers});
+		frame = std::make_unique<ecs::Scheduler>(world, frameSystems, engine::jobs::JobSystemConfig{workers});
+		tick->Finalize(engine::time::FixedStep{30});
+		frame->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Vehicle(std::uint32_t definition)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		*world.Get<engine::gameplay::DefinitionRef>(entity) = {definition};
+		return entity;
+	}
+
+	// The simulation moves it on (by `step` along x, turning by `turn`), then presentation samples the tick.
+	void Tick(ecs::Entity vehicle, int step, std::uint32_t turn)
+	{
+		auto &transform = *world.Get<engine::gameplay::Transform>(vehicle);
+		transform.position.x += Fixed::FromInt(step);
+		transform.facing = transform.facing + Engine::Math::TurnAngle{turn};
+	}
+	void Sample() { tick->Execute(engine::time::SimulationTime{++ticks, engine::time::FixedStep{30}}); }
+	void Frame() { frame->Execute(engine::time::SimulationTime{++frames, engine::time::FixedStep{30}}); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	MotionSampleSystem sample;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	MotionEmitterSystem emitters;
+	ecs::SystemRegistry tickSystems;
+	ecs::SystemRegistry frameSystems;
+	std::unique_ptr<ecs::Scheduler> tick;
+	std::unique_ptr<ecs::Scheduler> frame;
+	std::uint64_t ticks{0};
+	std::uint64_t frames{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(vehicle_motion)
+
+BOOST_AUTO_TEST_CASE(side_tables_on_the_simulations_entities_roll_treads_and_turn_tires_on_frame_time)
+{
+	Street street(2);
+	const ecs::Entity driving = street.Vehicle(0);
+	const ecs::Entity pivoting = street.Vehicle(0);
+	const ecs::Entity truck = street.Vehicle(1);
+	street.Sample(); // first seen: their side tables are added
+	BOOST_TEST_REQUIRE(street.world.Side<TreadRoll>().Get(driving) != nullptr);
+	BOOST_TEST(street.world.Side<WheelRoll>().Get(driving) == nullptr);
+	BOOST_TEST_REQUIRE(street.world.Side<WheelRoll>().Get(truck) != nullptr);
+	street.Tick(driving, 1, 0);        // full speed ahead
+	street.Tick(pivoting, 0, 1000000); // turning left in place
+	street.Tick(truck, 2, 0);
+	street.Sample();
+	for (int frame = 0; frame < 15; ++frame) // a quarter second at 60 frames a second
+		street.Frame();
+	const auto &drive = street.world.Side<TreadRoll>().Get(driving)->offsets;
+	BOOST_TEST(drive[0] == 0.5f, boost::test_tools::tolerance(1e-3f)); // back by 0.5, wrapped
+	BOOST_TEST(drive[0] == drive[1], boost::test_tools::tolerance(1e-5f));
+	const auto &pivot = street.world.Side<TreadRoll>().Get(pivoting)->offsets;
+	BOOST_TEST(pivot[0] == 0.5f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(pivot[1] == 0.5f, boost::test_tools::tolerance(1e-3f));
+	// 2 a tick at 0.2 radians a unit for a quarter second (7.5 ticks): 3 radians.
+	BOOST_TEST(street.world.Side<WheelRoll>().Get(truck)->angle == 3.0f, boost::test_tools::tolerance(1e-3f));
+	// Side tables are presentation only: the simulation's hash does not see them.
+	const auto hash = street.world.StateHash();
+	street.Frame();
+	BOOST_TEST(street.world.StateHash() == hash);
+	// A vehicle that goes takes its presentation state with it.
+	street.world.Destroy(truck);
+	BOOST_TEST(street.world.Side<WheelRoll>().Size() == 0u);
+}
+
+// PhysicsBehavior::isMotive (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/PhysicsUpdate.cpp: applyMotiveForce
+// sets m_motiveForceExpires = frame + MOTIVE_FRAMES, 10) and getTurning, as W3DTruckDraw reads them for its wheel
+// emitters: driven by its locomotor on tick 1, it counts as pushed through tick 10 after it stops (10 down to 1), not on
+// tick 11; moved without an order (pushed about) it is not; turning is its locomotor's.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_truck_is_under_way_while_its_locomotor_pushed_it_in_the_last_ten_ticks)
+{
+	Street street(1);
+	const ecs::Entity truck = street.Vehicle(1);
+	street.world.Add<engine::gameplay::MoveOrder>(truck);
+	street.world.Add<engine::gameplay::Locomotion>(truck);
+	street.Sample();
+	street.world.Get<engine::gameplay::MoveOrder>(truck)->mode = engine::gameplay::MoveMode::Point;
+	street.world.Get<engine::gameplay::Locomotion>(truck)->turning = -1;
+	street.Tick(truck, 2, 0);
+	street.Sample();
+	const MotionSample *sample = street.world.Side<MotionSample>().Get(truck);
+	BOOST_TEST_REQUIRE(sample != nullptr);
+	BOOST_TEST(sample->motiveTicks == 10u);
+	BOOST_TEST(sample->turning == -1);
+	street.world.Get<engine::gameplay::MoveOrder>(truck)->mode = engine::gameplay::MoveMode::Idle;
+	street.world.Get<engine::gameplay::Locomotion>(truck)->turning = 0;
+	for (int tick = 0; tick < 9; ++tick)
+	{
+		street.Tick(truck, 1, 0); // coasting / shoved: not its locomotor
+		street.Sample();
+	}
+	BOOST_TEST(street.world.Side<MotionSample>().Get(truck)->motiveTicks == 1u);
+	BOOST_TEST(street.world.Side<MotionSample>().Get(truck)->turning == 0);
+	street.Sample();
+	BOOST_TEST(street.world.Side<MotionSample>().Get(truck)->motiveTicks == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(many_vehicles_roll_the_same_on_any_number_of_workers)
+{
+	const auto run = [](std::size_t workers) {
+		Street street(workers);
+		std::vector<ecs::Entity> vehicles;
+		for (int index = 0; index < 300; ++index)
+			vehicles.push_back(street.Vehicle(static_cast<std::uint32_t>(index % 2)));
+		street.Sample();
+		for (int index = 0; index < 300; ++index)
+			street.Tick(vehicles[static_cast<std::size_t>(index)], index % 3, static_cast<std::uint32_t>((index % 5) * 100000));
+		street.Sample();
+		for (int frame = 0; frame < 20; ++frame)
+			street.Frame();
+		std::vector<float> state;
+		for (const ecs::Entity vehicle : vehicles)
+			if (const auto *treads = street.world.Side<TreadRoll>().Get(vehicle))
+				state.insert(state.end(), treads->offsets.begin(), treads->offsets.end());
+			else
+				state.push_back(street.world.Side<WheelRoll>().Get(vehicle)->angle);
+		return state;
+	};
+	BOOST_TEST((run(1) == run(4)));
+}
+
+// Legacy parity (W3DScienceModelDraw.cpp, doDrawModule): a salvage crate (RequiredScience SCIENCE_GLA: here science 3)
+// is drawn for a viewer with the science, for an observer (no viewer) and for a viewer no longer playing (defeated);
+// hidden from one still playing without it; one whose science is unknown is drawn for no one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_science_models_draw_shows_only_to_those_with_its_science)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	auto &sciences = world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	sciences.Resize(4);
+	sciences.Grant(0, 3);
+	auto &outcome = world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	outcome.players = {{0, false, false}, {1, false, false}, {2, true, false}};
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks crate;
+	crate.states.states.resize(1);
+	crate.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	crate.stateLooks = {0};
+	crate.needsScience = true;
+	crate.requiredScience = 3;
+	DefinitionLooks unknown = crate;
+	unknown.requiredScience = 0xFFFFFFFFu;
+	catalog.byDefinition = {crate, unknown};
+	catalog.known = {1, 1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"PMJnkCrate"};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		world.Add<engine::gameplay::Owner>(entity);
+		world.Add<engine::gameplay::Appearance>(entity);
+		return entity;
+	};
+	make(0);
+	make(1);
+	tick.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+	const auto drawnFor = [&](std::uint32_t viewer) {
+		frame.viewer = viewer;
+		draw.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		std::vector<ObjectInstance> drawn;
+		world.Resource<ObjectInstances>().AppendTo(drawn);
+		return drawn.size();
+	};
+	BOOST_TEST(drawnFor(0) == 1u);                           // has it (the crate; the unknown one never)
+	BOOST_TEST(drawnFor(1) == 0u);                           // playing without it
+	BOOST_TEST(drawnFor(2) == 1u);                           // defeated
+	BOOST_TEST(drawnFor(PresentationFrame::NoViewer) == 1u); // an observer
+}
+
+BOOST_AUTO_TEST_CASE(objects_are_drawn_between_ticks_in_their_look_restarting_its_animation_when_it_changes)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	// One definition, two model states (the second while stealthed), each its own look.
+	DefinitionLooks looks;
+	looks.states.states.resize(2);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.states.states[1].conditions = {generalszh::content::ConditionBits{std::uint64_t{1} << 5, 0}};
+	looks.stateLooks = {0, 1};
+	looks.stealth = true;
+	looks.stealthMin = 0.25f;
+	looks.stealthMax = 0.25f;
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}, {0, 1, 0}};
+	catalog.lookModels = {"A", "B"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	catalog.bits.stealthed = 5;
+	catalog.bits.detected = 6;
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	world.EmplaceResource<MotionLooks>();
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+
+	const ecs::Entity tank = world.Create();
+	world.Add<engine::gameplay::Transform>(tank);
+	world.Add<engine::gameplay::DefinitionRef>(tank);
+	world.Add<engine::gameplay::Owner>(tank);
+	world.Add<engine::gameplay::Appearance>(tank);
+	run(tick); // first tick: its pose starts here
+	world.Get<engine::gameplay::Transform>(tank)->position.x = Fixed::FromInt(10);
+	run(tick);
+	frame.alpha = 0.5f;
+	frame.clock = 1.0;
+	run(draw); // first frame: its look starts
+	frame.clock = 2.0;
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].world[3] == 5.0f, boost::test_tools::tolerance(1e-4f)); // halfway between the ticks
+	BOOST_TEST(drawn[0].look == 0u);
+	BOOST_TEST(drawn[0].teamColor[0] == 1.0f);
+	const float before = drawn[0].animationSeconds;
+	// Stealthed: the other state, its animation from now, seen through.
+	world.Get<engine::gameplay::Appearance>(tank)->flags[0] |= std::uint64_t{1} << 5;
+	frame.clock = 3.0;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].look == 1u);
+	BOOST_TEST(drawn[0].animationSeconds == 0.0f);
+	BOOST_TEST(before > 0.0f);
+	BOOST_TEST(drawn[0].opacity == 0.25f, boost::test_tools::tolerance(1e-5f));
+	// StealthUpdate::calcStealthedStatusForPlayer (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/StealthUpdate.cpp):
+	// seen through by its allies and by an observer (no viewer, above), not seen at all by anyone else.
+	frame.viewer = 1;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn.empty());
+	world.Resource<engine::gameplay::Relationships>().Set(0, 1, engine::gameplay::Relationship::Allies);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].opacity == 0.25f, boost::test_tools::tolerance(1e-5f));
+	// Drawable::setStealthLook / draw (GeneralsMD/Code/GameEngine/Source/GameClient/Drawable.cpp): turning detected it
+	// glows (second material pass 1), faded by 0.8 a logic frame before it is drawn; to an enemy only the glow shows.
+	frame.seconds = 1.0f / 30.0f;
+	world.Get<engine::gameplay::Appearance>(tank)->flags[0] |= std::uint64_t{1} << 6;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].heatVision == 0.8f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(!drawn[0].heatOnly);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn[0].heatVision == 0.64f, boost::test_tools::tolerance(1e-5f));
+	world.Resource<engine::gameplay::Relationships>().Set(0, 1, engine::gameplay::Relationship::Enemies);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].heatOnly);
+	BOOST_TEST(drawn[0].heatVision == 0.8f, boost::test_tools::tolerance(1e-5f));
+	for (int step = 0; step < 40; ++step)
+		run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn[0].heatVision == 0.0f); // under 0.001: gone
+	world.Get<engine::gameplay::Appearance>(tank)->flags[0] &= ~(std::uint64_t{1} << 6);
+	frame.seconds = 0.0f;
+	frame.viewer = PresentationFrame::NoViewer;
+	// Presentation never touches the simulation's hash.
+	const auto hash = world.StateHash();
+	run(draw);
+	BOOST_TEST(world.StateHash() == hash);
+}
+
+// W3DModelDraw::showSubObject (SubObjectsUpgrade, W3DSupplyDraw::updateDrawModuleSupplyStatus): parts shown or hidden on
+// the render object it already has; its model state and animation go on untouched (no setModelState). A truck that took
+// on a part set is drawn through its look's copy with those parts, and its animation keeps running from where it
+// started instead of starting over every frame.
+BOOST_AUTO_TEST_CASE(legacy_parity_upgraded_parts_leave_the_animation_running)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::Appearance>();
+	world.RegisterComponent<gp::Attitude>();
+	world.RegisterComponent<gp::ModelOverride>();
+	world.RegisterComponent<gp::DebrisLook>();
+	world.RegisterComponent<gp::Parachute>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::ParachuteRider>();
+	world.RegisterComponent<gp::OffMap>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Mounted>();
+	world.RegisterComponent<gp::EmpPulse>();
+	world.RegisterComponent<gp::IndicatorColor>();
+	world.RegisterComponent<gp::PartOverrides>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<gp::Relationships>(8u);
+	world.EmplaceResource<gp::Detections>();
+	world.EmplaceResource<gp::ParachuteCatalog>();
+	world.EmplaceResource<gp::PlayerSciences>();
+	world.EmplaceResource<gp::MatchOutcome>();
+	world.EmplaceResource<gp::WeaponCatalog>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.stateLooks = {0};
+	looks.ownLookFirst = 0;
+	looks.ownLookCount = 1;
+	looks.partSets = {{{"Bombload02", true}, {"Bombload01", false}}};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"TRUCK"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const ecs::Entity truck = world.Create();
+	world.Add<gp::Transform>(truck);
+	world.Add<gp::DefinitionRef>(truck);
+	world.Add<gp::Owner>(truck);
+	world.Add<gp::Appearance>(truck);
+	world.Add<gp::PartOverrides>(truck);
+	world.Get<gp::PartOverrides>(truck)->Apply(0);
+	KnowPartLooks(catalog, world);
+	const std::uint32_t copy = catalog.byDefinition[0].WithParts(0, std::vector<std::uint8_t>{0});
+	BOOST_TEST_REQUIRE(copy != 0u);
+	run(tick);
+	run(tick);
+	const auto drawnAt = [&](double clock) {
+		frame.clock = clock;
+		run(draw);
+		std::vector<ObjectInstance> drawn;
+		world.Resource<ObjectInstances>().AppendTo(drawn);
+		BOOST_TEST_REQUIRE(drawn.size() == 1u);
+		return drawn[0];
+	};
+	drawnAt(1.0); // its look starts
+	const ObjectInstance first = drawnAt(2.0);
+	const ObjectInstance second = drawnAt(3.5);
+	BOOST_TEST(first.look == copy);
+	BOOST_TEST(second.look == copy);
+	BOOST_TEST(first.animationSeconds > 0.0f);
+	BOOST_TEST(second.animationSeconds == first.animationSeconds + 1.5f, boost::test_tools::tolerance(1e-4f));
+}
+
+// W3DModelDraw with several Animation (or IdleAnimation) lines in a condition state: each object picks one of them
+// at random as it takes the state (so a crowd does not move in step), and keeps it while it stays.
+// FloatUpdate::update on a drawable (Enabled = No: swayed, not lifted): its turn kept, then Ry by
+// sin(frame * 0.0291) * 0.05 and Rx by sin(frame * 0.0515) * 0.05, the frame being the game clock in 1/30 s (here
+// 1 s: frame 30, pitch sin(0.873) * 0.05 = 0.03832, roll sin(1.545) * 0.05 = 0.04998, to a float's rounding).
+// W3DModelDraw (Core/GameEngineDevice/Source/W3DDevice/GameClient/Drawable/Draw/W3DModelDraw.cpp): the model is made in its
+// object's indicator colour (the constructor's m_hexColor) and keeps it; a later colour (Drawable::setIndicatorColor on a
+// capture or a script's colour: replaceIndicatorColor) takes only where OkToChangeModelColor lets it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_model_keeps_the_colour_it_was_made_with_unless_it_may_change)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	// Two definitions, one model state each: the first's draw keeps its colour, the second's may change it.
+	DefinitionLooks keeps;
+	keeps.states.states.resize(1);
+	keeps.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	keeps.stateLooks = {0};
+	DefinitionLooks changes = keeps;
+	changes.states.okToChangeColor = true;
+	catalog.byDefinition = {keeps, changes};
+	catalog.known = {1, 1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"A"};
+	catalog.playerColors = {{1, 0, 0, 1}, {0, 0, 1, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	world.EmplaceResource<MotionLooks>();
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+
+	const auto tank = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Add<engine::gameplay::Owner>(entity);
+		world.Add<engine::gameplay::Appearance>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		return entity;
+	};
+	const ecs::Entity kept = tank(0), changed = tank(1);
+	run(tick);
+	run(tick);
+	frame.clock = 1.0;
+	run(draw);
+	world.Get<engine::gameplay::Owner>(kept)->player = 1; // captured
+	world.Get<engine::gameplay::Owner>(changed)->player = 1;
+	run(tick);
+	frame.clock = 2.0;
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 2u);
+	const auto colourOf = [&](std::size_t index) { return drawn[index].teamColor; };
+	// Instances come in chunk order: the one that keeps its colour first (made first).
+	BOOST_TEST((colourOf(0) == std::array<float, 4>{1, 0, 0, 1}));
+	BOOST_TEST((colourOf(1) == std::array<float, 4>{0, 0, 1, 1}));
+}
+
+// W3DModelDraw::adjustTransformMtx (Core/GameEngineDevice/Source/W3DDevice/GameClient/Drawable/Draw/W3DModelDraw.cpp,
+// ADJUST_HEIGHT_BY_CONSTRUCTION_PERCENT): while under construction the model is drawn lowered by what is left to build,
+// -height + height * percent / 100 (GeometryInfo::getMaxHeightAbovePosition): 40 high at 25%: 30 down; at 100%: level.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_building_rises_out_of_the_ground_as_it_is_built)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	world.RegisterComponent<engine::gameplay::ConstructionProgress>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	// One definition whose state sinks it by what is left to build, 40 high.
+	DefinitionLooks building;
+	building.states.states.resize(1);
+	building.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	building.states.states[0].adjustHeightByConstruction = true;
+	building.stateLooks = {0};
+	building.constructionHeight = 40.0f;
+	catalog.byDefinition = {building};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"A"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	world.EmplaceResource<MotionLooks>();
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+
+	const ecs::Entity site = world.Create();
+	world.Add<engine::gameplay::Transform>(site);
+	world.Add<engine::gameplay::DefinitionRef>(site);
+	world.Add<engine::gameplay::Owner>(site);
+	world.Add<engine::gameplay::Appearance>(site);
+	world.Add<engine::gameplay::ConstructionProgress>(site);
+	world.Get<engine::gameplay::ConstructionProgress>(site)->percent = Fixed::FromInt(25);
+	run(tick);
+	run(tick);
+	frame.clock = 1.0;
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].world[11] == -30.0f, boost::test_tools::tolerance(1e-4f));
+	world.Get<engine::gameplay::ConstructionProgress>(site)->percent = Fixed::FromInt(100);
+	frame.clock = 2.0;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].world[11] == 0.0f, boost::test_tools::tolerance(1e-4f));
+}
+
+// W3DModelDraw::setAnimationLoopDuration / setCurAnimDurationInMsec (Core/GameEngineDevice/Source/W3DDevice/GameClient/
+// Drawable/Draw/W3DModelDraw.cpp): the animation showing plays at natural / ceil(frames * 1000 / 30) ms. Object::
+// adjustModelConditionForWeaponStatus asks it as a weapon turns PREATTACK for the frames left of its wind-up (15: a one
+// second clip at twice its speed); BuildAssistant::sellObject as a sale starts, for TOTAL_FRAMES_TO_SELL_OBJECT / 2 (45:
+// 1000 / 1500 of its speed).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_wind_up_or_a_sale_stretches_the_animation_to_its_time)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	world.RegisterComponent<engine::gameplay::Armament>();
+	world.RegisterComponent<engine::gameplay::Sale>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>().byLook = {{30, 30}}; // one second at its natural speed
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	// One definition, one looping model state.
+	DefinitionLooks gun;
+	gun.states.states.resize(1);
+	gun.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	gun.states.states[0].animationMode = generalszh::content::ModelAnimationMode::Loop;
+	gun.stateLooks = {0};
+	catalog.byDefinition = {gun};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"A"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	world.EmplaceResource<MotionLooks>();
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+
+	const ecs::Entity unit = world.Create();
+	world.Add<engine::gameplay::Transform>(unit);
+	world.Add<engine::gameplay::DefinitionRef>(unit);
+	world.Add<engine::gameplay::Owner>(unit);
+	world.Add<engine::gameplay::Appearance>(unit);
+	world.Add<engine::gameplay::Armament>(unit);
+	run(tick);
+	run(tick);
+	frame.clock = 1.0;
+	run(draw);
+	const ShownLook *shown = world.Side<ShownLook>().Get(unit);
+	BOOST_TEST_REQUIRE(shown != nullptr);
+	BOOST_TEST(shown->speed == 1.0f);
+	// Winding up on tick 10 until tick 25.
+	frame.tick = 10;
+	world.Get<engine::gameplay::Armament>(unit)->preAttackUntil = 25;
+	world.Get<engine::gameplay::Appearance>(unit)->flags[0] |= std::uint64_t{1} << generalszh::content::model_condition::PreattackA;
+	frame.clock = 1.1;
+	run(draw);
+	shown = world.Side<ShownLook>().Get(unit);
+	BOOST_TEST(shown->speed == 2.0f, boost::test_tools::tolerance(1e-5f));
+	frame.clock = 1.2;
+	run(draw); // once, as it comes on
+	BOOST_TEST(world.Side<ShownLook>().Get(unit)->speed == 2.0f, boost::test_tools::tolerance(1e-5f));
+	// Sold.
+	world.Add<engine::gameplay::Sale>(unit);
+	frame.clock = 1.3;
+	run(draw);
+	BOOST_TEST(world.Side<ShownLook>().Get(unit)->speed == 1000.0f / 1500.0f, boost::test_tools::tolerance(1e-5f));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tree_sways_in_the_breeze)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.states.states[0].animations = {"Rest"};
+	looks.treeSway = true;
+	looks.stateLooks = {0};
+	looks.stateVariants = {1};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0, 0, 0}};
+	catalog.lookModels = {"Tree"};
+	world.Resource<Breeze>().randomness = 0.0f; // every tree alike
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const ecs::Entity boat = world.Create();
+	world.Add<engine::gameplay::Transform>(boat);
+	world.Add<engine::gameplay::DefinitionRef>(boat);
+	world.Add<engine::gameplay::Owner>(boat);
+	world.Add<engine::gameplay::Appearance>(boat);
+	run(tick);
+	run(tick);
+	// SwayClientUpdate::clientUpdate: the first frame it is seen it gets its sway; then each 1/30 s its sway moves on
+	// 2 pi / 150 (BreezePeriod 5 s), the tree leaning cos(value) * intensity + lean along the breeze (direction pi / 3).
+	const Breeze &breeze = world.Resource<Breeze>();
+	frame.seconds = 1.0f / 30.0f;
+	run(draw);
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	const float angle = std::cos(2.0f * 3.14159265358979f / 150.0f) * breeze.intensity + breeze.lean;
+	const float pitch = angle * breeze.directionY, roll = -angle * breeze.directionX;
+	BOOST_TEST(drawn[0].world[8] == -std::sin(pitch), boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(drawn[0].world[9] == std::cos(pitch) * std::sin(roll), boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(angle == 0.1100f, boost::test_tools::tolerance(1e-3f));
+	// Burned (SMOLDERING), it stands where it stopped.
+	world.Get<engine::gameplay::Appearance>(boat)->Set(generalszh::content::ModelConditionBit("SMOLDERING"));
+	run(draw);
+	const float stopped = world.Side<TreeSway>().Get(boat)->angle;
+	run(draw);
+	run(draw);
+	BOOST_TEST(world.Side<TreeSway>().Get(boat)->angle == stopped);
+	BOOST_TEST(world.Side<TreeSway>().Get(boat)->swaying == 0u);
+	// W3DTreeBuffer: a map tree pushed aside darkens, its colour scaled by 1 - DarkeningFactor x pushAside (0.5 x 0.4).
+	catalog.byDefinition[0].bufferTree = true;
+	catalog.byDefinition[0].treeMotion.darkening = 0.5f;
+	world.Side<TreeBend>().Emplace(boat)->pushAside = 0.4f;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(drawn[0].shade == 0.8f, boost::test_tools::tolerance(1e-6f));
+}
+// The frame's dynamic lights (W3DDynamicLight on each drawn frame): a police car shows its light bar 8 above where it
+// is drawn, coloured by its light-bar clip's frame; a light pulse ages a frame each 1/30 s, out on its last.
+BOOST_AUTO_TEST_CASE(legacy_parity_police_light_bars_and_light_pulses_are_the_frames_lights)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>().byLook = {{15, 15}};
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	world.EmplaceResource<LightPulses>().live.push_back({{1, 2, 3}, {1, 1, 1}, 1.0f, 31.0f, 0.0f, 15.0f, 0.0f});
+	const DynamicLights &lights = world.EmplaceResource<DynamicLights>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.states.states[0].animations = {"CVPoliceCar2.CVPoliceCar2"};
+	looks.states.states[0].animationMode = generalszh::content::ModelAnimationMode::Loop;
+	looks.policeLights = true;
+	looks.stateLooks = {0};
+	looks.stateVariants = {1};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0, 0, 0}};
+	catalog.lookModels = {"CVPoliceCar2"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	DynamicLightSystem shine;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	frameSystems.Register(shine);
+	frameSystems.OrderBefore<ObjectPresentationSystem, DynamicLightSystem>();
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const ecs::Entity car = world.Create();
+	world.Add<engine::gameplay::Transform>(car);
+	world.Get<engine::gameplay::Transform>(car)->position = {Engine::Math::Fixed::FromInt(100), Engine::Math::Fixed::FromInt(50), {}};
+	world.Add<engine::gameplay::DefinitionRef>(car);
+	world.Add<engine::gameplay::Owner>(car);
+	world.Add<engine::gameplay::Appearance>(car);
+	run(tick);
+	run(tick);
+	frame.seconds = 1.0f / 30.0f;
+	frame.realSeconds = 1.0f / 30.0f; // the pulse's frames (W3DDynamicLight::On_Frame_Update: per rendered frame)
+	frame.clock = 1.0;
+	run(draw); // the car's look starts
+	run(draw);
+	BOOST_TEST_REQUIRE(lights.shown.size() == 2u);
+	BOOST_TEST(lights.shown[0].diffuse[0] == 13.0f / 15.0f, boost::test_tools::tolerance(1e-5f)); // the pulse, two frames on
+	const ShownLight &bar = lights.shown[1];
+	BOOST_TEST((bar.at == std::array<float, 3>{100.0f, 50.0f, 8.0f}));
+	const ShownLook &shown = *world.Side<ShownLook>().Get(car);
+	const double at = ShownClipFrame(shown, LookClip{15, 15}, generalszh::content::ModelAnimationMode::Loop, frame.clock);
+	BOOST_TEST(at >= 0.0);
+	BOOST_TEST(at <= 14.0); // somewhere on its loop
+	const auto color = PoliceLightColor(static_cast<float>(at));
+	BOOST_TEST(bar.diffuse[0] == color[0]);
+	BOOST_TEST(bar.diffuse[2] == color[2]);
+	// It casts a shadow (its looks say so), but not while detected in stealth (STEALTHLOOK_VISIBLE_DETECTED).
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	BOOST_TEST(!drawn[0].castsShadow); // its looks cast none
+	catalog.byDefinition[0].castsShadow = true;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn[0].castsShadow);
+	world.Get<engine::gameplay::Appearance>(car)->Set(catalog.bits.stealthed);
+	world.Get<engine::gameplay::Appearance>(car)->Set(catalog.bits.detected);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(!drawn[0].castsShadow);
+	for (int later = 0; later < 10; ++later)
+		run(draw);
+	BOOST_TEST(lights.shown.size() == 2u); // the pulse on its 14th frame
+	run(draw);
+	BOOST_TEST(lights.shown.size() == 1u); // out on its 15th: only the light bar
+	// SlowDeathBehavior::beginSlowDeath: infantry dying a death that sinks it casts no shadow (setShadowsEnabled(false));
+	// a death that does not sink it keeps it.
+	world.Get<engine::gameplay::Appearance>(car)->Set(catalog.bits.stealthed, false);
+	world.Get<engine::gameplay::Appearance>(car)->Set(catalog.bits.detected, false);
+	catalog.byDefinition[0].infantry = true;
+	world.Add<engine::gameplay::Dying>(car);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn[0].castsShadow); // no sink rate
+	world.Get<engine::gameplay::Dying>(car)->sinkRate = Engine::Math::Fixed::FromRatio(1, 30);
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(!drawn[0].castsShadow);
+	world.Remove<engine::gameplay::Dying>(car);
+	catalog.byDefinition[0].infantry = false;
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fishing_boat_rocks_like_a_buoy)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.states.states[0].animations = {"Rest"};
+	looks.sways = true;
+	looks.stateLooks = {0};
+	looks.stateVariants = {1};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0, 0, 0}};
+	catalog.lookModels = {"Boat"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const ecs::Entity boat = world.Create();
+	world.Add<engine::gameplay::Transform>(boat);
+	world.Add<engine::gameplay::DefinitionRef>(boat);
+	world.Add<engine::gameplay::Owner>(boat);
+	world.Add<engine::gameplay::Appearance>(boat);
+	run(tick);
+	run(tick);
+	frame.clock = 1.0;
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 1u);
+	const float pitch = static_cast<float>(std::sin(30.0 * 0.0291) * 0.05), roll = static_cast<float>(std::sin(30.0 * 0.0515) * 0.05);
+	// Rz(0) Ry(pitch) Rx(roll): row 2 is (-sin pitch, cos pitch sin roll, cos pitch cos roll).
+	BOOST_TEST(drawn[0].world[8] == -std::sin(pitch), boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(drawn[0].world[9] == std::cos(pitch) * std::sin(roll), boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(pitch == 0.03832f, boost::test_tools::tolerance(1e-3f));
+	BOOST_TEST(roll == 0.04998f, boost::test_tools::tolerance(1e-3f));
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_state_with_several_animations_picks_one_per_object)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.states.states[0].animations = {"IdleA", "IdleB", "IdleC"};
+	looks.stateLooks = {0};
+	looks.stateVariants = {3};
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0, 0, 0}, {0, 0, 0, 0, 1}, {0, 0, 0, 0, 2}};
+	catalog.lookModels = {"Soldier", "Soldier", "Soldier"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	for (int index = 0; index < 30; ++index)
+	{
+		const ecs::Entity soldier = world.Create();
+		world.Add<engine::gameplay::Transform>(soldier);
+		world.Add<engine::gameplay::DefinitionRef>(soldier);
+		world.Add<engine::gameplay::Owner>(soldier);
+		world.Add<engine::gameplay::Appearance>(soldier);
+	}
+	run(tick);
+	run(tick);
+	const auto looksDrawn = [&] {
+		frame.clock += 1.0;
+		++frame.frame;
+		run(draw);
+		std::vector<ObjectInstance> drawn;
+		world.Resource<ObjectInstances>().AppendTo(drawn);
+		std::map<std::uint32_t, std::uint32_t> byEntity;
+		for (std::size_t index = 0; index < drawn.size(); ++index)
+			byEntity[static_cast<std::uint32_t>(index)] = drawn[index].look;
+		return byEntity;
+	};
+	looksDrawn();
+	const auto first = looksDrawn();
+	const auto second = looksDrawn();
+	BOOST_TEST(first == second); // kept while in the state
+	std::set<std::uint32_t> used;
+	for (const auto &[index, look] : first)
+	{
+		BOOST_TEST(look < 3u);
+		used.insert(look);
+	}
+	BOOST_TEST(used.size() > 1u); // not all in step
+}
+
+// W3DModelDraw::setModelState, doDrawModule and adjustAnimation, frame by frame (clips at 32 frames a second so
+// the times are exact; W3D's Is_Animation_Complete: a ONCE clip of n frames completes on reaching frame n - 1):
+// - standing (TransitionKey trans_stand) asked to stand hurt (trans_standinjured) plays their 17-frame transition
+//   first: still showing at 16 frames less a 32nd, the hurt stand at exactly 16 frames (0.5 s);
+// - asked back to standing mid-transition, it stands at once (a transition has no key of its own);
+// - firing (trans_firinga, 11 frames) asked to wait between shots (WaitForStateToFinishIfPossible trans_firinga)
+//   keeps firing until frame 10 (0.3125 s), then waits between shots; asked to fire again while waiting, it
+//   starts firing over;
+// - a loop at frame 10 of 21 (fraction 0.5) taken by a state sharing its MAINTAIN_FRAME flag starts that one at
+//   REAL_TO_INT(0.5 * 21 - 1) = frame 9 (a backwards clip plays down from where it is put the same way); not
+//   sharing the flag, at its first frame;
+// - an idle animation that finishes gives way to another of its state's three (never itself again), and
+//   RESTART_ANIM_WHEN_COMPLETE starts its clip over as it finishes.
+BOOST_AUTO_TEST_CASE(legacy_parity_model_states_transition_wait_and_keep_their_frame)
+{
+	using generalszh::content::ModelAnimationMode;
+	DefinitionLooks looks;
+	const auto state = [&](ModelAnimationMode mode, std::string key, std::string wait, std::uint8_t maintain, bool idle, std::uint32_t variants) {
+		generalszh::content::ModelState made;
+		made.animationMode = mode;
+		made.transitionKey = std::move(key);
+		made.waitKey = std::move(wait);
+		made.maintainFrame = maintain;
+		made.idleAnimation = idle;
+		made.conditions.push_back({});
+		made.animations.assign(variants, "clip");
+		looks.stateLooks.push_back(looks.stateLooks.empty() ? 0u : looks.stateLooks.back() + looks.stateVariants.back());
+		looks.stateVariants.push_back(variants);
+		looks.states.states.push_back(std::move(made));
+	};
+	state(ModelAnimationMode::Once, "trans_stand", "", 0, true, 3);             // 0 standing: looks 0..2
+	state(ModelAnimationMode::Once, "trans_standinjured", "", 0, true, 1);      // 1 hurt: look 3
+	state(ModelAnimationMode::Once, "", "", 0, false, 1);                        // 2 the transition: look 4
+	looks.states.states[2].transitionFrom = "trans_stand";
+	looks.states.states[2].transitionTo = "trans_standinjured";
+	looks.states.states[2].conditions.clear();
+	state(ModelAnimationMode::Once, "trans_firinga", "", 0, false, 1);           // 3 firing: look 5
+	state(ModelAnimationMode::Manual, "", "trans_firinga", 0, false, 1);         // 4 between shots: look 6
+	state(ModelAnimationMode::Loop, "", "", 1, false, 1);                        // 5 loop A: look 7
+	state(ModelAnimationMode::Loop, "", "", 1, false, 1);                        // 6 loop B (same flag): look 8
+	state(ModelAnimationMode::Loop, "", "", 2, false, 1);                        // 7 loop C (another flag): look 9
+	state(ModelAnimationMode::OnceBackwards, "", "", 1, false, 1);               // 8 backwards (same flag): look 10
+	state(ModelAnimationMode::Once, "", "", 0, false, 1);                        // 9 restarting: look 11
+	looks.states.states[9].restartWhenComplete = true;
+	LookClips clips;
+	clips.byLook = {{33, 32}, {33, 32}, {33, 32}, {33, 32}, {17, 32}, {11, 32}, {11, 32}, {21, 32}, {21, 32}, {21, 32}, {21, 32}, {17, 32}};
+	const ModelStateRolls rolls{(std::uint64_t{7} << 32) | 1u, 1};
+
+	ShownLook shown;
+	ShowModelState(shown, looks, clips, 0, 0.25, rolls, false);
+	shown.state = 0;
+	BOOST_TEST(shown.shown == 0u);
+	BOOST_TEST(shown.look < 3u);
+	StepModelState(shown, looks, clips, 1, 0.25, rolls);
+	BOOST_TEST(shown.shown == 2u);
+	BOOST_TEST(shown.look == 4u);
+	BOOST_TEST(shown.pending == 1u);
+	StepModelState(shown, looks, clips, 1, 0.75 - 1.0 / 32.0, rolls);
+	BOOST_TEST(shown.shown == 2u);
+	StepModelState(shown, looks, clips, 1, 0.75, rolls);
+	BOOST_TEST(shown.shown == 1u);
+	BOOST_TEST(shown.look == 3u);
+	BOOST_TEST(shown.pending == ShownLook::NoState);
+	BOOST_TEST(shown.since == 0.75);
+	// Back to standing mid-transition: at once.
+	StepModelState(shown, looks, clips, 0, 1.0, rolls);
+	StepModelState(shown, looks, clips, 1, 1.25, rolls);
+	BOOST_TEST(shown.shown == 2u);
+	StepModelState(shown, looks, clips, 0, 1.5, rolls);
+	BOOST_TEST(shown.shown == 0u);
+	BOOST_TEST(shown.pending == ShownLook::NoState);
+	BOOST_TEST(shown.since == 1.5);
+
+	// Firing finishes before the wait between shots.
+	StepModelState(shown, looks, clips, 3, 2.0, rolls);
+	BOOST_TEST(shown.shown == 3u);
+	StepModelState(shown, looks, clips, 4, 2.125, rolls);
+	BOOST_TEST(shown.shown == 3u);
+	BOOST_TEST(shown.pending == 4u);
+	StepModelState(shown, looks, clips, 4, 2.3125 - 1.0 / 64.0, rolls);
+	BOOST_TEST(shown.shown == 3u);
+	StepModelState(shown, looks, clips, 4, 2.3125, rolls);
+	BOOST_TEST(shown.shown == 4u);
+	BOOST_TEST(shown.look == 6u);
+	// Firing again: at once; asked to wait again while firing, then to fire before it finished: it starts over.
+	StepModelState(shown, looks, clips, 3, 3.0, rolls);
+	StepModelState(shown, looks, clips, 4, 3.125, rolls);
+	BOOST_TEST(shown.pending == 4u);
+	StepModelState(shown, looks, clips, 3, 3.1875, rolls);
+	BOOST_TEST(shown.shown == 3u);
+	BOOST_TEST(shown.pending == ShownLook::NoState);
+	BOOST_TEST(shown.since == 3.1875);
+
+	// Keeping the frame across states.
+	StepModelState(shown, looks, clips, 5, 4.0, rolls);
+	BOOST_TEST(shown.start == 0.0f);
+	StepModelState(shown, looks, clips, 6, 4.3125, rolls); // loop A at frame 10 of 21
+	BOOST_TEST(shown.shown == 6u);
+	BOOST_TEST(shown.start == 9.0f / 20.0f);
+	// (The start is a float share of the clip: 9 / 20 comes back within a float's rounding.)
+	BOOST_TEST(ShownClipFrame(shown, clips.At(shown.look), ModelAnimationMode::Loop, 4.3125) == 9.0, boost::test_tools::tolerance(1e-6));
+	// Back to loop A 22 frames on (B at 9 + 22 = frame 10 of its loop): A keeps it too, from frame 9; 10 frames
+	// later (frame 19, fraction 0.95) the backwards clip plays down from REAL_TO_INT(0.95 * 21 - 1) = 18.
+	StepModelState(shown, looks, clips, 5, 5.0, rolls);
+	BOOST_TEST(shown.start == 9.0f / 20.0f);
+	StepModelState(shown, looks, clips, 8, 5.3125, rolls);
+	BOOST_TEST(ShownClipFrame(shown, clips.At(shown.look), ModelAnimationMode::OnceBackwards, 5.3125) == 18.0, boost::test_tools::tolerance(1e-6));
+	StepModelState(shown, looks, clips, 5, 6.0, rolls);
+	StepModelState(shown, looks, clips, 7, 6.3125, rolls);
+	BOOST_TEST(shown.start == 0.0f);
+
+	// Idle animations take turns; a restarting clip starts over.
+	StepModelState(shown, looks, clips, 0, 7.0, rolls);
+	const std::uint32_t idle = shown.look;
+	StepModelState(shown, looks, clips, 0, 8.0 - 1.0 / 64.0, rolls);
+	BOOST_TEST(shown.look == idle);
+	StepModelState(shown, looks, clips, 0, 8.0, rolls);
+	BOOST_TEST(shown.look != idle);
+	BOOST_TEST(shown.look < 3u);
+	BOOST_TEST(shown.since == 8.0);
+	StepModelState(shown, looks, clips, 9, 9.0, rolls);
+	StepModelState(shown, looks, clips, 9, 9.5, rolls);
+	BOOST_TEST(shown.shown == 9u);
+	BOOST_TEST(shown.since == 9.5);
+}
+
+// W3DModelDraw::adjustAnimSpeedToMovementSpeed and setCurAnimDurationInMsec: a run covering 26 (Colonel Burton's
+// "Animation = AIHERO_SKL.AIHERO_RNA 26"), 32 frames at 32 a second (1 s), moving 1.3 a logic frame, takes
+// 26 / 1.3 = 20 frames of 1/30 s: frame rate multiplier 1 s / (2/3 s) = 1.5 (to a float's rounding). The clip goes
+// on from the frame it was at; standing still keeps the multiplier; an animation covering nothing is left alone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_run_keeps_pace_with_the_runner)
+{
+	using generalszh::content::ModelAnimationMode;
+	DefinitionLooks looks;
+	generalszh::content::ModelState run;
+	run.animationMode = ModelAnimationMode::Loop;
+	run.conditions.push_back({});
+	run.animations = {"AIHERO_SKL.AIHERO_RNA"};
+	run.distances = {Engine::Math::Fixed::FromInt(26)};
+	looks.states.states.push_back(run);
+	generalszh::content::ModelState fire = run;
+	fire.distances = {Engine::Math::Fixed{}};
+	looks.states.states.push_back(fire);
+	looks.stateLooks = {0, 1};
+	looks.stateVariants = {1, 1};
+	LookClips clips;
+	clips.byLook = {{32, 32}, {32, 32}};
+	ShownLook shown;
+	ShowModelState(shown, looks, clips, 0, 1.0, ModelStateRolls{1, 1}, false);
+	BOOST_TEST(shown.speed == 1.0f);
+	const double before = ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 1.25);
+	MatchMovementSpeed(shown, looks, clips, 1.3f, 1.25);
+	BOOST_TEST(shown.speed == 1.5f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 1.25) == before, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 1.5) == before + 0.25 * 1.5 * 32.0, boost::test_tools::tolerance(1e-4));
+	MatchMovementSpeed(shown, looks, clips, 0.0f, 1.5);
+	BOOST_TEST(shown.speed == 1.5f, boost::test_tools::tolerance(1e-6f));
+	ShownLook firing;
+	ShowModelState(firing, looks, clips, 1, 1.0, ModelStateRolls{1, 1}, false);
+	MatchMovementSpeed(firing, looks, clips, 1.3f, 1.25);
+	BOOST_TEST(firing.speed == 1.0f);
+}
+
+// W3DPoliceCarDraw::doDrawModule: the light bar's clip (CVPoliceCar2, 15 frames at 30 a second here) steps 0.25 frames
+// every 1/30 s from a random frame in 0..10: 7.5 frames a second whatever the clip's own rate, so a second on it is
+// 7.5 frames further (wrapping on the loop's last frame).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_police_cars_lights_turn_a_quarter_frame_a_frame)
+{
+	using generalszh::content::ModelAnimationMode;
+	DefinitionLooks looks;
+	looks.policeLights = true;
+	generalszh::content::ModelState lights;
+	lights.animationMode = ModelAnimationMode::Loop;
+	lights.conditions.push_back({});
+	lights.animations = {"CVPoliceCar2.CVPoliceCar2"};
+	looks.states.states.push_back(lights);
+	looks.stateLooks = {0};
+	looks.stateVariants = {1};
+	LookClips clips;
+	clips.byLook = {{15, 30}};
+	for (std::uint64_t car = 1; car <= 20; ++car)
+	{
+		ShownLook shown;
+		ShowModelState(shown, looks, clips, 0, 2.0, ModelStateRolls{car, 1}, false);
+		BOOST_TEST(shown.speed == 0.25f, boost::test_tools::tolerance(1e-6f));
+		const double first = ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 2.0);
+		BOOST_TEST(first >= 0.0);
+		BOOST_TEST(first <= 10.0 + 1e-4);
+		const double later = ShownClipFrame(shown, clips.At(0), ModelAnimationMode::Loop, 2.4);
+		BOOST_TEST(std::fmod(later - first + 14.0, 14.0) == 3.0, boost::test_tools::tolerance(1e-3));
+	}
+	// Shown before its model (and clip) loaded, it settles on the same rate once the clip is known: still 7.5 frames a
+	// second, not its clip's own 30 (the original never runs it at the clip's rate).
+	LookClips unknown;
+	ShownLook early;
+	ShowModelState(early, looks, unknown, 0, 2.0, ModelStateRolls{7, 1}, false);
+	BOOST_TEST(!SettlePoliceLights(early, looks, unknown, 2.5, ModelStateRolls{7, 2}));
+	BOOST_TEST(SettlePoliceLights(early, looks, clips, 3.0, ModelStateRolls{7, 3}));
+	BOOST_TEST(early.speed == 0.25f, boost::test_tools::tolerance(1e-6f));
+	const double settled = ShownClipFrame(early, clips.At(0), ModelAnimationMode::Loop, 3.0);
+	BOOST_TEST(settled <= 10.0 + 1e-4);
+	BOOST_TEST(std::fmod(ShownClipFrame(early, clips.At(0), ModelAnimationMode::Loop, 3.4) - settled + 14.0, 14.0) == 3.0,
+		boost::test_tools::tolerance(1e-3));
+	BOOST_TEST(!SettlePoliceLights(early, looks, clips, 3.5, ModelStateRolls{7, 4}));
+}
+
+// Object::createVeterancyLevelFX for a promotion earned in play: GameData's LevelGainedAnimation where the unit is
+// (LevelGainAnimationTime 4 s, rising LevelGainAnimationZRise 15 a second, fading its last second) and MiscAudio's
+// UnitPromoted on it; nothing for an IGNORED_IN_GUI object nor with icon UI off (getDrawIconUI); world animations go
+// once past their time.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_promotion_shows_chevrons_and_is_heard)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(2);
+	catalog.known.assign(2, 1);
+	catalog.byDefinition[1].ignoredInGui = true;
+	catalog.unitPromotedSound = "UnitPromoted";
+	catalog.levelGainAnimation = "LevelGainedAnimation";
+	catalog.levelGainSeconds = 4.0f;
+	catalog.levelGainRise = 15.0f;
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	auto &animations = world.EmplaceResource<WorldAnimations>().shown;
+	auto &sounds = world.EmplaceResource<SoundRequests>().pending;
+	auto &promotions = world.EmplaceResource<engine::gameplay::Promotions>().list;
+	const auto unit = [&](std::uint32_t definition, int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::Transform>(entity)->position = {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed{}, Engine::Math::Fixed::FromInt(2)};
+		*world.Get<engine::gameplay::DefinitionRef>(entity) = {definition};
+		return entity;
+	};
+	const ecs::Entity ranger = unit(0, 50);
+	const ecs::Entity ignored = unit(1, 70);
+	PromotionPresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	frame.clock = 2.0;
+	promotions = {{ranger, 0, 1}, {ignored, 0, 1}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(animations.size() == 1u);
+	BOOST_TEST(animations[0].animation == "LevelGainedAnimation");
+	BOOST_TEST(animations[0].at[0] == 50.0f);
+	BOOST_TEST(animations[0].PositionAt(3.0)[2] == 17.0f);
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0].sound == "UnitPromoted");
+	// With icon UI off (as the shell map sets it) a promotion shows and sounds nothing.
+	promotions = {{ranger, 1, 2}};
+	frame.drawIconUi = false;
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(animations.size() == 1u);
+	BOOST_TEST(sounds.size() == 1u);
+	frame.drawIconUi = true;
+	promotions.clear();
+	frame.clock = 5.9;
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(animations.size() == 1u);
+	frame.clock = 6.0;
+	scheduler.Execute(engine::time::SimulationTime{3, engine::time::FixedStep{30}});
+	BOOST_TEST(animations.empty());
+}
+
+// W3DModelDraw::setPauseAnimation(!Drawable::getShouldAnimate): an unmanned (hacked, paralyzed, EMPed,
+// subdued; underpowered when its draw requires power) object's animation holds its frame, and runs on from it
+// once it is enabled again; a PRODUCED_AT_HELIPAD object ("helicopters just look goofy") keeps animating.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_disabled_objects_animation_holds_its_frame)
+{
+	const auto run = [](bool helicopter) {
+		ecs::World world{ecs::WorldConfig{4}};
+		world.RegisterComponent<engine::gameplay::Transform>();
+		world.RegisterComponent<engine::gameplay::DefinitionRef>();
+		world.RegisterComponent<engine::gameplay::Owner>();
+		world.RegisterComponent<engine::gameplay::Appearance>();
+		world.RegisterComponent<engine::gameplay::Attitude>();
+		world.RegisterComponent<engine::gameplay::ModelOverride>();
+		world.RegisterComponent<engine::gameplay::DebrisLook>();
+		world.RegisterComponent<engine::gameplay::Parachute>();
+		world.RegisterComponent<engine::gameplay::Dying>();
+		world.RegisterComponent<engine::gameplay::ParachuteRider>();
+		world.RegisterComponent<engine::gameplay::OffMap>();
+		world.RegisterComponent<engine::gameplay::Health>();
+		world.RegisterComponent<engine::gameplay::Mounted>();
+		world.RegisterComponent<engine::gameplay::EmpPulse>();
+		world.RegisterComponent<engine::gameplay::IndicatorColor>();
+		world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+		world.RegisterComponent<engine::gameplay::Disabled>();
+	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
+	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
+		RegisterVehicleMotion(world);
+		RegisterObjectPresentation(world);
+		world.FinalizeComponents();
+		PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+		LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+		world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+		DefinitionLooks looks;
+		looks.stateLooks = {0};
+		looks.animatesWhileDisabled = helicopter;
+		catalog.byDefinition = {looks};
+		catalog.known = {1};
+		catalog.looks = {{0, 0, 0}};
+		catalog.lookModels = {"A"};
+		catalog.playerColors = {{1, 1, 1, 1}};
+		world.EmplaceResource<ObjectInstances>();
+		world.EmplaceResource<MountedInstances>();
+		if (world.FindResource<BonePoses>() == nullptr)
+			world.EmplaceResource<BonePoses>();
+		world.EmplaceResource<PresentedObjects>();
+		world.EmplaceResource<MotionLooks>();
+		ecs::SystemRegistry tickSystems, frameSystems;
+		PoseSampleSystem sample;
+		ObjectPresentationSystem present;
+		TreadRollSystem treads;
+		WheelRollSystem wheels;
+		tickSystems.Register(sample);
+		frameSystems.Register(treads);
+		frameSystems.Register(wheels);
+		frameSystems.Register(present);
+		tickSystems.Finalize(world.Components());
+		frameSystems.Finalize(world.Components());
+		ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{1});
+		ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{1});
+		tick.Finalize(engine::time::FixedStep{30});
+		draw.Finalize(engine::time::FixedStep{30});
+		std::uint64_t serial = 0;
+		const ecs::Entity unit = world.Create();
+		world.Add<engine::gameplay::Transform>(unit);
+		world.Add<engine::gameplay::DefinitionRef>(unit);
+		world.Add<engine::gameplay::Owner>(unit);
+		world.Add<engine::gameplay::Appearance>(unit);
+		tick.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		std::vector<float> seconds;
+		const auto frameAt = [&](double clock) {
+			frame.clock = clock;
+			draw.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+			std::vector<ObjectInstance> drawn;
+			world.Resource<ObjectInstances>().AppendTo(drawn);
+			seconds.push_back(drawn.empty() ? -1.0f : drawn[0].animationSeconds);
+		};
+		frameAt(1.0);
+		frameAt(2.0);
+		world.Add<engine::gameplay::Disabled>(unit);
+		world.Get<engine::gameplay::Disabled>(unit)->mask = engine::gameplay::disabled_type::Unmanned;
+		frameAt(3.0);
+		frameAt(4.0);
+		world.Get<engine::gameplay::Disabled>(unit)->mask = 0;
+		frameAt(5.0);
+		frameAt(6.0);
+		return seconds;
+	};
+	const auto unit = run(false);
+	BOOST_TEST_REQUIRE(unit.size() == 6u);
+	const float atDisable = unit[1] + 1.0f; // where it had got to when it stopped
+	BOOST_TEST(unit[2] == atDisable, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(unit[3] == atDisable, boost::test_tools::tolerance(1e-4f)); // held
+	BOOST_TEST(unit[5] == atDisable + 1.0f, boost::test_tools::tolerance(1e-4f)); // runs on from there
+	const auto helicopter = run(true);
+	BOOST_TEST(helicopter[3] == helicopter[1] + 2.0f, boost::test_tools::tolerance(1e-4f));
+}
+
+// W3DDependencyModelDraw (Core/GameEngineDevice/Source/W3DDevice/GameClient/Drawable/Draw/W3DDependencyModelDraw.cpp):
+// a portable structure mounted on its carrier (off the map as a mounted rider) is drawn on the carrier's
+// AttachToBoneInContainer bone as the carrier's model poses it: FIREPOINT01 at (2, 0, 5) in an Overlord at x 10 facing a
+// quarter turn is drawn at (10, 2, 5), facing the carrier's way; anything else off the map is not drawn.
+BOOST_AUTO_TEST_CASE(a_mounted_portable_structure_is_drawn_on_its_carriers_bone)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks overlord;
+	overlord.states.states.resize(1);
+	overlord.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	overlord.stateLooks = {0};
+	DefinitionLooks cannon = overlord;
+	cannon.stateLooks = {1};
+	cannon.attachToBone = "FIREPOINT01";
+	catalog.byDefinition = {overlord, cannon};
+	catalog.known = {1, 1};
+	catalog.looks = {{0, 0, 0}, {1, 0, 0}};
+	catalog.lookModels = {"OVERLORD", "GATTLING"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	world.EmplaceResource<BonePoses>(BonePoses{[](std::string_view model, std::string_view bone) {
+		BoneLookup lookup;
+		lookup.ready = true;
+		lookup.found = model == "OVERLORD" && bone == "FIREPOINT01";
+		lookup.position = {2, 0, 5};
+		return lookup;
+	}});
+	world.EmplaceResource<PresentedObjects>();
+	world.EmplaceResource<MotionLooks>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	MountedDrawSystem mounted;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	frameSystems.Register(mounted);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{2});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&](ecs::Scheduler &scheduler) { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Add<engine::gameplay::Owner>(entity);
+		world.Add<engine::gameplay::Appearance>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		*world.Get<engine::gameplay::Transform>(entity) = {{Fixed::FromInt(10), Fixed{}, Fixed{}}, Engine::Math::TurnAngle::Quarter_Turn()};
+		return entity;
+	};
+	const ecs::Entity tank = make(0);
+	const ecs::Entity gun = make(1);
+	world.Add<engine::gameplay::Mounted>(gun);
+	world.Get<engine::gameplay::Mounted>(gun)->carrier = tank;
+	world.Add<engine::gameplay::OffMap>(gun);
+	*world.Get<engine::gameplay::OffMap>(gun) = engine::gameplay::OffMap{2, true, {}, tank};
+	const ecs::Entity rider = make(1); // a passenger inside: off the map, not drawn
+	world.Add<engine::gameplay::OffMap>(rider);
+	*world.Get<engine::gameplay::OffMap>(rider) = engine::gameplay::OffMap{1, false, {}, tank};
+	run(tick);
+	run(tick);
+	frame.alpha = 1.0f;
+	frame.clock = 1.0;
+	run(draw);
+	std::vector<ObjectInstance> drawn;
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST_REQUIRE(drawn.size() == 2u);
+	const auto &gunDrawn = drawn[0].look == 1u ? drawn[0] : drawn[1];
+	BOOST_TEST(gunDrawn.look == 1u);
+	BOOST_TEST(gunDrawn.world[3] == 10.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(gunDrawn.world[7] == 2.0f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(gunDrawn.world[11] == 5.0f, boost::test_tools::tolerance(1e-4f));
+	// Stealthed out of the viewer's sight, the Overlord is not drawn, nor is its cannon (doDrawModule waits on it).
+	catalog.bits.stealthed = 5;
+	catalog.bits.detected = 6;
+	world.Get<engine::gameplay::Owner>(tank)->player = 1;
+	world.Get<engine::gameplay::Appearance>(tank)->flags[0] |= std::uint64_t{1} << 5;
+	frame.viewer = 2;
+	frame.clock = 2.0;
+	run(draw);
+	drawn.clear();
+	world.Resource<ObjectInstances>().AppendTo(drawn);
+	BOOST_TEST(drawn.empty());
+}
+
+BOOST_AUTO_TEST_CASE(condition_states_run_their_particle_systems_on_bones_as_side_tables)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>(); // EffectAttachmentSystem's shroud lookups
+	world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("Smoke");
+	effects.particles.Define("Dirt");
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks dozer;
+	dozer.states.states.resize(2);
+	dozer.states.states[0].particleBones = {{"EXHAUST", "Smoke"}};
+	dozer.states.states[1].particleBones = {{"EXHAUST", "Smoke"}, {"NOSUCHBONE", "Dirt"}};
+	catalog.byDefinition = {dozer};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}, {0, 1, 0}};
+	catalog.lookModels = {"DOZER", "DOZER"};
+	bool loaded = false;
+	world.EmplaceResource<BonePoses>(BonePoses{[&](std::string_view, std::string_view bone) {
+		BoneLookup lookup;
+		lookup.ready = loaded;
+		lookup.found = bone == "EXHAUST";
+		lookup.position = {5, 0, 3};
+		return lookup;
+	}});
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry systems;
+	EffectAttachmentSystem attach;
+	systems.Register(attach);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(entity);
+	const auto show = [&](std::uint32_t look, bool visible) {
+		presented.Reset(1);
+		if (visible)
+			presented.SlotAt(0).push_back({entity, 0, 0, look, look, {50, 50, 0}, 0.0f, 1.0f, {}, false});
+		++frame.frame;
+		scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+	};
+	const auto attached = [&] {
+		const auto *emission = world.Side<ConditionEmission>().Get(entity);
+		return emission != nullptr ? emission->systems.size() : std::size_t{0};
+	};
+	show(0, true); // first seen: its side table is added
+	show(0, true);
+	BOOST_TEST(attached() == 0u); // its model is still loading
+	loaded = true;
+	show(0, true);
+	BOOST_TEST(attached() == 1u);
+	BOOST_TEST(world.Side<ConditionEmission>().Get(entity)->systems[0].local[0] == 5.0f);
+	show(1, true); // another state: its systems replace the old ones (dirt at the origin: no such bone)
+	BOOST_TEST(attached() == 2u);
+	show(1, false); // no longer presented
+	BOOST_TEST(attached() == 0u);
+	show(1, true);
+	BOOST_TEST(attached() == 2u);
+	world.Destroy(entity); // gone: the side table goes with it
+	BOOST_TEST(world.Side<ConditionEmission>().Size() == 0u);
+}
+
+// Legacy parity (AnimatedParticleSysBoneClientUpdate.cpp: clientUpdate; W3DModelDraw.cpp:
+// updateBonesForClientParticleSystems): with the client update (or ParticlesAttachedToAnimatedBones) each of a state's
+// particle systems sitting at a bone is put where that bone is in the model's current animated pose each frame (its
+// Get_Bone_Transform), not where it was at rest as it started; without it the systems stay where the bones were at rest.
+BOOST_AUTO_TEST_CASE(legacy_parity_bone_particle_systems_follow_the_animated_bones)
+{
+	for (const bool animatedBones : {true, false})
+	{
+		ecs::World world{ecs::WorldConfig{4}};
+		world.RegisterComponent<engine::gameplay::DefinitionRef>();
+		world.RegisterComponent<engine::gameplay::DebrisLook>();
+		world.RegisterComponent<engine::gameplay::ObjectShroud>(); // EffectAttachmentSystem's shroud lookups
+		world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
+		RegisterObjectPresentation(world);
+		world.FinalizeComponents();
+		EffectsContent effects;
+		effects.particles.Define("Smoke");
+		engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+		PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+		LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+		DefinitionLooks mill;
+		mill.states.states.resize(1);
+		mill.states.states[0].particleBones = {{"EXHAUST", "Smoke"}};
+		mill.animatedParticleBones = animatedBones;
+		catalog.byDefinition = {mill};
+		catalog.known = {1};
+		catalog.looks = {{0, 0, 0}};
+		catalog.lookModels = {"MILL"};
+		BonePoses poses{[&](std::string_view, std::string_view bone) {
+			BoneLookup lookup;
+			lookup.ready = true;
+			lookup.found = bone == "EXHAUST";
+			lookup.position = {5, 0, 3};
+			return lookup;
+		}};
+		// The bone sweeps along x as the animation runs: 5 + its seconds.
+		poses.animated = [](std::uint32_t, float seconds, float, std::string_view bone) {
+			BoneLookup lookup;
+			lookup.ready = true;
+			lookup.found = bone == "EXHAUST";
+			lookup.position = {5 + seconds, 0, 3};
+			lookup.yaw = seconds;
+			return lookup;
+		};
+		world.EmplaceResource<BonePoses>(std::move(poses));
+		world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+		PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+		ecs::SystemRegistry systems;
+		EffectAttachmentSystem attach;
+		systems.Register(attach);
+		systems.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		const auto show = [&](float seconds) {
+			presented.Reset(1);
+			presented.SlotAt(0).push_back({entity, 0, 0, 0, 0, {50, 50, 0}, 0.0f, 1.0f, {}, false, false, true, seconds, 0.0f});
+			++frame.frame;
+			scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+		};
+		show(0.0f); // first seen: its side table is added
+		show(1.0f); // started at the bone at rest, then (animated) moved onto it as it is now
+		const auto *emission = world.Side<ConditionEmission>().Get(entity);
+		BOOST_TEST_REQUIRE(emission != nullptr);
+		BOOST_TEST_REQUIRE(emission->systems.size() == 1u);
+		BOOST_TEST(emission->systems[0].local[0] == (animatedBones ? 6.0f : 5.0f));
+		show(2.5f);
+		BOOST_TEST(emission->systems[0].local[0] == (animatedBones ? 7.5f : 5.0f));
+		BOOST_TEST(emission->systems[0].yaw == (animatedBones ? 2.5f : 0.0f));
+		BOOST_TEST(particles.Alive(emission->systems[0].id));
+	}
+}
+
+// BoneFXUpdate's particle systems (BoneFXUpdate.cpp: initTimes, update, doParticleSystemAtBone, computeNextClientFXTime,
+// changeBodyDamageState -> killRunningParticleSystems, stopAllBoneFX) as the Dragon Tank's flame projectile's and a
+// tower's slots have them: a slot at bone NULL with no delay starts its system on the tick the simulation first times
+// its slots, at the object's origin, once (OnlyOnce); a repeating slot 3 ticks on starts one every 3 ticks at its bone
+// turned with the object; new timings (a damage state change) destroy what runs and time the new state's slots; a stop
+// destroys them and nothing starts again; a hidden (contained) object's systems start stopped; a last damage of a type
+// the module does not play for skips a due slot (and re-times it).
+BOOST_AUTO_TEST_CASE(legacy_parity_bone_fx_particle_systems_follow_the_simulations_timings)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<generalszh::gameplay::BoneFx>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("FlameThrowerTrail01");
+	effects.particles.Define("StructureToppleSmokeTrail");
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<PresentationRandom>();
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	DefinitionLooks looks;
+	generalszh::content::BoneFxTable table;
+	table[0][0] = {"NULL", "FlameThrowerTrail01", {}, {}, {}, true};
+	table[0][1] = {"NULL", "FlameThrowerTrail01", {}, {}, {}, true};
+	table[0][2] = {"Fire02", "StructureToppleSmokeTrail", {Fixed::FromInt(10), {}, Fixed::FromInt(3)}, Fixed::FromInt(3), Fixed::FromInt(3), false};
+	looks.boneParticles = table;
+	looks.boneParticleTypes = ~(std::uint64_t{1} << 5);
+	catalog.byDefinition = {looks};
+	catalog.known = {1};
+	ecs::SystemRegistry systems;
+	BoneParticleSystem bones;
+	systems.Register(bones);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(entity);
+	world.Add<engine::gameplay::Transform>(entity);
+	world.Get<engine::gameplay::Transform>(entity)->position = {Fixed::FromInt(50), Fixed::FromInt(60), {}};
+	world.Get<engine::gameplay::Transform>(entity)->facing = Engine::Math::TurnAngle{0x40000000u}; // a quarter turn
+	world.Add<engine::gameplay::Health>(entity);
+	world.Add<generalszh::gameplay::BoneFx>(entity);
+	auto &fx = *world.Get<generalszh::gameplay::BoneFx>(entity);
+	fx.timings = 1; // its first update timed its slots
+	fx.active = 1;
+	std::uint64_t tick = 10;
+	const auto step = [&] { scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); };
+	const auto emission = [&] { return world.Side<BoneFxEmission>().Get(entity); };
+	step(); // tick 11: both NULL slots start at its origin; the Fire02 slot is due on tick 14
+	BOOST_TEST_REQUIRE(emission() != nullptr);
+	BOOST_TEST(emission()->systems.size() == 2u);
+	BOOST_TEST(emission()->systems[0].local[0] == 0.0f);
+	BOOST_TEST(emission()->next[0] == BoneFxEmission::Off);
+	BOOST_TEST(emission()->next[2] == 14);
+	step();
+	step();
+	BOOST_TEST(emission()->systems.size() == 2u);
+	step(); // tick 14
+	BOOST_TEST(emission()->systems.size() == 3u);
+	BOOST_TEST(emission()->systems[2].local[0] == 10.0f);
+	BOOST_TEST(emission()->next[2] == 17);
+	for (int n = 0; n < 3; ++n)
+		step(); // tick 17: another
+	BOOST_TEST(emission()->systems.size() == 4u);
+	// A last damage of a type it does not play for: the due slot is skipped and re-timed.
+	world.Get<engine::gameplay::Health>(entity)->lastDamageType = 5;
+	for (int n = 0; n < 3; ++n)
+		step(); // tick 20
+	BOOST_TEST(emission()->systems.size() == 4u);
+	BOOST_TEST(emission()->next[2] == 23);
+	world.Get<engine::gameplay::Health>(entity)->lastDamageType = 0;
+	// A new damage state (no slots there): what runs is destroyed.
+	const std::uint64_t first = emission()->systems[0].id;
+	fx.state = 1;
+	fx.timings = 2;
+	step();
+	BOOST_TEST(emission()->systems.empty());
+	particles.Step(); // (destroyed systems leave with the particle world's next step)
+	BOOST_TEST(!particles.Alive(first));
+	BOOST_TEST(emission()->next[2] == BoneFxEmission::Off);
+	// Back to pristine, hidden: its systems start stopped.
+	world.Add<engine::gameplay::OffMap>(entity);
+	auto &moved = *world.Get<generalszh::gameplay::BoneFx>(entity); // (another archetype now)
+	moved.state = 0;
+	moved.timings = 3;
+	step();
+	BOOST_TEST_REQUIRE(emission()->systems.size() == 2u);
+	BOOST_TEST(particles.Alive(emission()->systems[0].id));
+	BOOST_TEST(!particles.Running(emission()->systems[0].id));
+	// stopAllBoneFX: they go and nothing starts again.
+	moved.stops = 1;
+	step();
+	BOOST_TEST(emission()->systems.empty());
+	for (int n = 0; n < 10; ++n)
+		step();
+	BOOST_TEST(emission()->systems.empty());
+}
+
+BOOST_AUTO_TEST_CASE(the_hosts_presentation_schedules_compose_without_conflicts)
+{
+	// The simulation's world, as the session registers it, with presentation's side tables.
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	world.RegisterComponent<engine::gameplay::Disabled>();
+	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
+	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
+	world.RegisterComponent<engine::gameplay::MissileFlight>();
+	world.RegisterComponent<generalszh::gameplay::AbilityLaser>();
+	world.RegisterComponent<engine::gameplay::GrantStealth>();
+	world.RegisterComponent<generalszh::gameplay::BattlePlan>();
+	world.RegisterComponent<generalszh::gameplay::LauncherDoor>();
+	world.RegisterComponent<engine::gameplay::Stealth>();
+	world.RegisterComponent<generalszh::gameplay::SpectreGunship>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>();
+	world.RegisterComponent<engine::gameplay::Lifetime>();
+	world.RegisterComponent<engine::gameplay::Transport>();
+	world.RegisterComponent<engine::gameplay::Targetable>();
+	world.RegisterComponent<engine::gameplay::Experience>();
+	world.RegisterComponent<generalszh::gameplay::ParticleCannon>();
+	world.RegisterComponent<generalszh::gameplay::WaveGuide>();
+	world.RegisterComponent<engine::gameplay::Sale>();
+	world.RegisterComponent<engine::gameplay::UnderConstruction>();
+	world.RegisterComponent<engine::gameplay::Subdual>();
+	RegisterPresentationComponents(world);
+	world.FinalizeComponents();
+	ecs::SystemRegistry tick, frame;
+	MotionSampleSystem motion;
+	PoseSampleSystem pose;
+	DetectorPingSystem pings;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	MotionEmitterSystem emitters;
+	ObjectPresentationSystem objects;
+	DamageEffectSystem damage;
+	FireFxPlacementSystem fire;
+	FxPlaybackSystem fx;
+	HitFxSystem hitFx;
+	MissileIgnitionSystem ignitions;
+	PromotionPresentationSystem promotions;
+	DynamicLightSystem lights;
+	DebrisAnimationSystem debris;
+	RegisterPresentationTick(tick);
+	TintStatusSystem tintStatus;
+	RegisterPresentationFrame(frame);
+	tick.Finalize(world.Components());
+	frame.Finalize(world.Components());
+	// Building the schedules checks every conflict is ordered.
+	ecs::Scheduler ticks(world, tick, engine::jobs::JobSystemConfig{2});
+	ecs::Scheduler frames(world, frame, engine::jobs::JobSystemConfig{2});
+	for (ecs::Scheduler *scheduler : {&ticks, &frames})
+		try
+		{
+			scheduler->Finalize(engine::time::FixedStep{30});
+		}
+		catch (const std::exception &error)
+		{
+			BOOST_ERROR(error.what());
+		}
+}
+
+BOOST_AUTO_TEST_CASE(damage_states_start_their_effects_on_bones_and_stop_them_as_side_tables)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>(); // FxPlaybackSystem's sound owners
+	world.RegisterComponent<engine::gameplay::ObjectShroud>(); // DamageEffectSystem's shroud lookups
+	world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("Smoke");
+	FxList flash;
+	flash.name = "FX_Hurt";
+	flash.nuggets.push_back(SoundNugget{"Crunch"});
+	effects.fx.Define("FX_Hurt") = flash;
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	DefinitionLooks tank;
+	DamageEffect smoke{DamageEffect::Kind::Particles, "Smoke", {"Smoke", true, {}}};
+	DamageEffect hurt{DamageEffect::Kind::FxList, "FX_Hurt", {"", false, {0, 0, 5}}};
+	tank.damage.byLevel[static_cast<std::size_t>(DamageLevel::ReallyDamaged)] = {smoke, hurt};
+	catalog.byDefinition = {tank};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"TANK"};
+	catalog.bits.damaged = 1;
+	catalog.bits.reallyDamaged = 2;
+	catalog.bits.rubble = 3;
+	std::vector<std::string> asked;
+	world.EmplaceResource<BonePoses>(BonePoses{{}, [&](std::string_view model, std::string_view bone, bool family) {
+		asked.push_back(std::string(model) + "/" + std::string(bone) + (family ? "*" : ""));
+		return std::vector<std::array<float, 3>>{{1, 2, 3}, {4, 5, 6}};
+	}});
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<SoundRequests>();
+	world.EmplaceResource<ShakeRequests>();
+	world.EmplaceResource<LightPulses>();
+	world.EmplaceResource<Tracers>();
+	world.EmplaceResource<DynamicLights>();
+	world.EmplaceResource<ScorchMarks>();
+	world.EmplaceResource<TrackSettings>();
+	world.EmplaceResource<PresentationRandom>();
+	world.EmplaceResource<TerrainHeightHandle>();
+	EffectStats &stats = world.EmplaceResource<EffectStats>();
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry systems;
+	DamageEffectSystem damage;
+	FxPlaybackSystem fx;
+	systems.Register(damage);
+	systems.Register(fx);
+	systems.OrderBefore<DamageEffectSystem, FxPlaybackSystem>();
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(entity);
+	engine::gameplay::Appearance look;
+	const auto show = [&](std::uint32_t bit, bool visible) {
+		look = {};
+		if (bit != 0)
+			look.flags[0] = std::uint64_t{1} << bit;
+		presented.Reset(1);
+		if (visible)
+			presented.SlotAt(0).push_back({entity, 0, 0, 0, 0, {100, 100, 10}, 0.0f, 1.0f, look, false});
+		++frame.frame;
+		scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+	};
+	const auto attached = [&] {
+		const auto *emission = world.Side<DamageEmission>().Get(entity);
+		return emission != nullptr ? emission->systems.size() : std::size_t{0};
+	};
+	show(0, true); // first seen: its side table is added
+	show(0, true);
+	BOOST_TEST(attached() == 0u);
+	show(2, true); // really damaged: smoke on a random bone of the family, the FX list played
+	BOOST_TEST(attached() == 1u);
+	BOOST_TEST((asked == std::vector<std::string>{"TANK/Smoke*"}));
+	BOOST_TEST(stats.fxPlayed == 1u);
+	BOOST_TEST(world.Resource<SoundRequests>().pending.size() == 1u);
+	show(1, true); // better: the smoke stops, nothing new starts
+	BOOST_TEST(attached() == 0u);
+	BOOST_TEST(stats.fxPlayed == 1u);
+	show(2, true); // worse again
+	BOOST_TEST(attached() == 1u);
+	show(2, false); // no longer presented: its effects stop
+	BOOST_TEST(attached() == 0u);
+	BOOST_TEST(stats.hurt == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(a_detectors_scan_pings_louder_and_brighter_when_it_finds_something)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("Ping");
+	effects.particles.Define("Bright");
+	effects.particles.Define("Beacon");
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	DefinitionLooks crawler;
+	crawler.detector = DefinitionLooks::DetectorLook{"Ping", "Bright", "Beacon", "", "", "IRPing", "IRPingLoud"};
+	catalog.byDefinition = {crawler};
+	catalog.known = {1};
+	world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	auto &sounds = world.EmplaceResource<SoundRequests>().pending;
+	auto &pings = world.EmplaceResource<engine::gameplay::DetectorPings>();
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	ecs::SystemRegistry systems;
+	DetectorPingSystem ping;
+	systems.Register(ping);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity detector = world.Create();
+	world.Add<engine::gameplay::Transform>(detector);
+	world.Add<engine::gameplay::DefinitionRef>(detector);
+	std::uint64_t tick = 0;
+	const auto scan = [&](bool found) {
+		pings.Reset(1);
+		pings.SlotAt(0).push_back({detector, found ? 1u : 0u, 0});
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	};
+	scan(false);
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0].sound == "IRPing");
+	BOOST_TEST(particles.SystemCount() == 2u); // the ping and the beacon
+	scan(true);
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1].sound == "IRPingLoud");
+	BOOST_TEST(particles.SystemCount() == 4u);
+}
+
+// Legacy parity (Core W3DModelDraw.cpp, W3DModelDraw::handleClientRecoil with
+// the module defaults: InitialRecoilSpeed 2, MaxRecoilDistance 3, RecoilDamping
+// 0.4, RecoilSettleSpeed 0.065 per frame). A frame shows the flash while the
+// barrel is still RECOIL_START, then steps it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_barrel_recoils_flashes_and_settles_on_the_original_frames)
+{
+	const RecoilMotion motion{2.0f, 3.0f, 0.4f, 0.065f, true};
+	BarrelRecoil recoil;
+	StartRecoil(recoil, 1, motion);
+	std::vector<bool> flashes;
+	std::vector<float> shifts;
+	for (int frame = 0; frame < 60; ++frame)
+	{
+		flashes.push_back(recoil.state[1] == BarrelRecoil::Start);
+		StepRecoil(recoil, 1, motion);
+		shifts.push_back(recoil.shift[1]);
+	}
+	// Frames 1-3 flash: 2.0, 2.8, then 3.12 clamps to 3 and settles.
+	BOOST_TEST(flashes[0]);
+	BOOST_TEST(flashes[1]);
+	BOOST_TEST(flashes[2]);
+	BOOST_TEST(!flashes[3]);
+	BOOST_TEST(shifts[0] == 2.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shifts[1] == 2.8f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shifts[2] == 3.0f);
+	BOOST_TEST(shifts[3] == 2.935f, boost::test_tools::tolerance(1e-5f));
+	// 3 / 0.065 = 46.2: resting 47 settling frames later, on frame 50.
+	BOOST_TEST(shifts[48] > 0.0f);
+	BOOST_TEST(shifts[49] == 0.0f);
+	BOOST_TEST(recoil.state[1] == BarrelRecoil::Idle);
+	BOOST_TEST(recoil.shift[0] == 0.0f); // the other barrels never moved
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_a_barrel_without_a_recoil_bone_flashes_one_frame)
+{
+	const RecoilMotion motion{2.0f, 3.0f, 0.4f, 0.065f, false};
+	BarrelRecoil recoil;
+	StartRecoil(recoil, 0, motion);
+	BOOST_TEST(recoil.state[0] == BarrelRecoil::Start); // this frame flashes
+	StepRecoil(recoil, 0, motion);
+	BOOST_TEST(recoil.state[0] == BarrelRecoil::Idle); // the next does not
+	BOOST_TEST(recoil.shift[0] == 0.0f);
+}
+
+// W3DModelDraw::handleWeaponFireFX: the fire FX plays at the firing barrel's FireFX bone as drawn
+// (barrels NAME01, NAME02... as ModelConditionInfo numbers them, NAME itself when unnumbered),
+// turned with the turret when the bone hangs below it; a hull bone stays put. Floats: 1e-4.
+BOOST_AUTO_TEST_CASE(legacy_parity_fire_fx_plays_at_the_firing_barrel)
+{
+	struct Bone
+	{
+		const char *name;
+		std::array<float, 3> at;
+		const char *parent;
+	};
+	static constexpr Bone Bones[] = {{"TURRET", {0, 0, 5}, ""}, {"TURRETFX01", {10, 0, 5}, "TURRET"}, {"TURRETFX02", {10, 2, 5}, "TURRET"},
+		{"HULLFX", {4, 0, 1}, ""}};
+	const auto find = [](std::string_view name) -> const Bone * {
+		for (const Bone &bone : Bones)
+			if (name == bone.name || (name.size() == std::string_view(bone.name).size() &&
+					std::equal(name.begin(), name.end(), bone.name, [](char a, char b) { return std::toupper(static_cast<unsigned char>(a)) == b; })))
+				return &bone;
+		return nullptr;
+	};
+	BonePoses poses;
+	poses.pose = [&](std::string_view, std::string_view name) {
+		const Bone *bone = find(name);
+		return bone == nullptr ? BoneLookup{true, false} : BoneLookup{true, true, bone->at, 0.0f};
+	};
+	poses.descends = [&](std::string_view, std::string_view name, std::string_view ancestor) {
+		const Bone *bone = find(name);
+		return bone != nullptr && find(ancestor) != nullptr && std::string_view(bone->parent) == find(ancestor)->name;
+	};
+	PresentedObject object;
+	object.position = {100, 50, 10};
+	object.facing = 1.5707963f;
+	generalszh::content::ModelState state;
+	state.fireFxBone = "TurretFX";
+	state.turretBone = "Turret";
+	const float quarter = 1.5707963f;
+	const auto close = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+	// The second barrel, the turret a quarter round: (10, 2) -> (-2, 10) about the pivot, then the body's quarter turn.
+	auto place = PlaceOnBarrel(object, state, "tank", poses, quarter, 0.0f, 1);
+	BOOST_REQUIRE(place.has_value());
+	BOOST_TEST(close(place->at[0], 90.0f));
+	BOOST_TEST(close(place->at[1], 48.0f));
+	BOOST_TEST(close(place->at[2], 15.0f));
+	BOOST_TEST(close(place->yaw, 2.0f * quarter));
+	// A barrel past the numbered ones: the first's (no unnumbered TurretFX).
+	place = PlaceOnBarrel(object, state, "tank", poses, quarter, 0.0f, 4);
+	BOOST_REQUIRE(place.has_value());
+	BOOST_TEST(close(place->at[0], 90.0f));
+	BOOST_TEST(close(place->at[1], 50.0f));
+	// A hull bone ignores the turret.
+	state.fireFxBone = "HullFX";
+	place = PlaceOnBarrel(object, state, "tank", poses, quarter, 0.0f, 0);
+	BOOST_REQUIRE(place.has_value());
+	BOOST_TEST(close(place->at[0], 100.0f));
+	BOOST_TEST(close(place->at[1], 54.0f));
+	BOOST_TEST(close(place->at[2], 11.0f));
+	// No FireFX bone: the caller keeps the drawable's position (handled == false).
+	state.fireFxBone.clear();
+	BOOST_TEST(!PlaceOnBarrel(object, state, "tank", poses, quarter, 0.0f, 0).has_value());
+}
+
+
+// ActiveBody::doDamageFX: a hit plays its DamageFX list on the object (major at or above AmountForMajorFX, else
+// minor; a heroic attacker its own list); the same damage type again waits out ThrottleTime (here 3 frames), a
+// different type plays at once; no DamageFX (or no damage type entry) plays nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_hits_play_their_damage_fx_throttled_by_type)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Targetable>();
+	world.RegisterComponent<engine::gameplay::Experience>();
+	world.RegisterComponent<HitFxThrottle>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	world.EmplaceResource<FxRequests>();
+	auto &hits = world.EmplaceResource<engine::gameplay::Hits>();
+	world.EmplaceResource<engine::gameplay::SecondLives>();
+	world.EmplaceResource<engine::gameplay::GarrisonClears>();
+	generalszh::content::DamageFxTable table;
+	for (auto &byLevel : table.byType)
+		for (auto &entry : byLevel)
+			entry = {Fixed::FromInt(10), "Major", "Minor", 3};
+	table.byType[0][3].major = "HeroicMajor";
+	table.byType[5] = {};
+	catalog.byDefinition.resize(1);
+	catalog.known.assign(1, 1);
+	catalog.byDefinition[0].hitFx.push_back({"", &table});
+	const ecs::Entity tank = world.Create();
+	world.Add<engine::gameplay::Transform>(tank);
+	world.Add<engine::gameplay::DefinitionRef>(tank);
+	const ecs::Entity hero = world.Create();
+	world.Add<engine::gameplay::Experience>(hero);
+	world.Get<engine::gameplay::Experience>(hero)->level = 3;
+	HitFxSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto run = [&](std::vector<engine::gameplay::Hit> tickHits) {
+		hits.Reset(1);
+		for (const auto &hit : tickHits)
+			hits.SlotAt(0).push_back(hit);
+		world.Resource<FxRequests>().pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<std::string> played;
+		for (const FxRequest &request : world.Resource<FxRequests>().pending)
+			played.push_back(request.fx);
+		return played;
+	};
+	const auto hit = [&](std::uint32_t type, int amount, ecs::Entity source = {}) {
+		return engine::gameplay::Hit{tank, source, type, 0, Fixed::FromInt(amount), 0, type};
+	};
+	BOOST_TEST(run({hit(0, 20)}) == (std::vector<std::string>{"Major"}), boost::test_tools::per_element());
+	// Frames 2 and 3 fall within the 3-frame throttle; another type is not throttled.
+	BOOST_TEST(run({hit(0, 20), hit(1, 5)}) == (std::vector<std::string>{"Minor"}), boost::test_tools::per_element());
+	BOOST_TEST(run({hit(1, 5)}).empty());
+	BOOST_TEST(run({hit(1, 5)}).empty());
+	BOOST_TEST(run({hit(1, 5)}) == (std::vector<std::string>{"Minor"}), boost::test_tools::per_element());
+	BOOST_TEST(run({hit(0, 20, hero)}) == (std::vector<std::string>{"HeroicMajor"}), boost::test_tools::per_element());
+	BOOST_TEST(run({hit(5, 20)}).empty());
+}
+
+
+// MissileAIUpdate::doIgnitionState plays IgnitionFX once, the tick the motor lights (after IgnitionDelay): not
+// before, and not again while it burns.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_plays_its_ignition_fx_once_when_it_lights)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::MissileFlight>();
+	world.RegisterComponent<ExhaustState>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	world.EmplaceResource<FxRequests>();
+	catalog.byDefinition.resize(1);
+	catalog.known.assign(1, 1);
+	catalog.byDefinition[0].ignitionFX = "FX_BuggyMissileIgnition";
+	const ecs::Entity missile = world.Create();
+	world.Add<engine::gameplay::Transform>(missile);
+	world.Add<engine::gameplay::DefinitionRef>(missile);
+	world.Add<engine::gameplay::MissileFlight>(missile);
+	MissileIgnitionSystem ignitions;
+	ExhaustSampleSystem sample;
+	ecs::SystemRegistry registry;
+	registry.Register(ignitions);
+	registry.Register(sample);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto run = [&] {
+		world.Resource<FxRequests>().pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		return world.Resource<FxRequests>().pending.size();
+	};
+	BOOST_TEST(run() == 0u);
+	BOOST_TEST(run() == 0u);
+	world.Get<engine::gameplay::MissileFlight>(missile)->exhaustLit = true;
+	BOOST_TEST(run() == 1u);
+	BOOST_TEST(world.Resource<FxRequests>().pending.front().fx == "FX_BuggyMissileIgnition");
+	BOOST_TEST(run() == 0u);
+	BOOST_TEST(run() == 0u);
+}
+
+
+// SupplyCenterDockUpdate::action's floating text and InGameUI::updateFloatingText: a delivery floats GUI:AddCash
+// with the amount in the depot player's colour at alpha 230; after FloatingTextTimeOut (10 frames) it fades by
+// REAL_TO_INT((frame - timeout) * FloatingTextVanishRate) each frame (0.1 a frame): still there, alpha 6, 81
+// frames on, gone the next. A truck that emptied its warehouse says its SuppliesDepletedVoice.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_delivery_floats_its_cash_and_fades)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	catalog.playerColors = {{1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}};
+	catalog.byDefinition.resize(1);
+	catalog.known.assign(1, 1);
+	catalog.byDefinition[0].suppliesDepletedVoice = "SupplyTruckVoiceSuppliesDepleted";
+	world.EmplaceResource<FloatingTextSettings>().addCash = u"+$%d";
+	FloatingTexts &texts = world.EmplaceResource<FloatingTexts>();
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &events = world.EmplaceResource<engine::gameplay::HarvestEvents>();
+	const ecs::Entity truck = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(truck);
+	HarvestPresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const auto run = [&](std::vector<engine::gameplay::HarvestEvent> happened) {
+		events.Reset(1);
+		for (const auto &event : happened)
+			events.SlotAt(0).push_back(event);
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+	};
+	using Kind = engine::gameplay::HarvestEvent::Kind;
+	run({{truck, Kind::Delivered, 300, 1, {}}, {truck, Kind::Depleted, 0, 1, {}}});
+	BOOST_TEST_REQUIRE(texts.shown.size() == 1u);
+	BOOST_TEST((texts.shown.front().text == u"+$300"));
+	BOOST_TEST(texts.shown.front().color[2] == 1.0f);
+	BOOST_TEST(texts.shown.front().alpha == 230);
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending.front().sound == "SupplyTruckVoiceSuppliesDepleted");
+	for (int step = 0; step < 20; ++step)
+		run({});
+	BOOST_TEST(texts.shown.front().alpha == 229); // 20 frames: the first fading frame took 1
+	for (int step = 0; step < 61; ++step)
+		run({});
+	BOOST_TEST_REQUIRE(texts.shown.size() == 1u);
+	BOOST_TEST(texts.shown.front().ticks == 81u);
+	BOOST_TEST(texts.shown.front().alpha == 6);
+	run({});
+	BOOST_TEST(texts.shown.empty());
+}
+
+
+// Crates picked up (SalvageCrateCollide::executeCrateBehavior / doMoney, MoneyCrateCollide, CrateCollide::onCollide):
+// salvage fitted plays MiscAudio's CrateSalvage on the picker; a salvage crate's money plays CrateMoney and floats
+// GUI:AddCash 10 above the crate in the picker's colour at alpha 230; a money crate's plays CrateMoney and floats
+// nothing; a level plays nothing here; the crate's ExecuteFX plays on the picker.
+BOOST_AUTO_TEST_CASE(legacy_parity_crate_pickups_sound_and_float_their_cash)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	catalog.playerColors = {{1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f}};
+	catalog.crateSalvageSound = "SalvageUpgrade";
+	catalog.crateMoneySound = "CrateMoney";
+	catalog.unitPromotedSound = "UnitPromoted";
+	catalog.levelGainAnimation = "LevelGainedAnimation";
+	catalog.levelGainSeconds = 4.0f;
+	catalog.levelGainRise = 15.0f;
+	world.EmplaceResource<PresentationFrame>().clock = 10.0;
+	auto &animations = world.EmplaceResource<WorldAnimations>().shown;
+	world.EmplaceResource<FloatingTextSettings>().addCash = u"+$%d";
+	FloatingTexts &texts = world.EmplaceResource<FloatingTexts>();
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &fx = world.EmplaceResource<FxRequests>();
+	auto &pickups = world.EmplaceResource<generalszh::gameplay::CratePickups>();
+	const ecs::Entity picker = world.Create();
+	world.Add<engine::gameplay::Transform>(picker);
+	world.Get<engine::gameplay::Transform>(picker)->position = {Engine::Math::Fixed::FromInt(100), Engine::Math::Fixed::FromInt(50), Engine::Math::Fixed{}};
+	CratePresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	using Kind = generalszh::gameplay::CratePickup::Kind;
+	const Engine::Math::FixedVector3 crate{Engine::Math::Fixed::FromInt(104), Engine::Math::Fixed::FromInt(50), Engine::Math::Fixed::FromInt(5)};
+	pickups.list = {{picker, Kind::Salvage, 0, 1, crate, ""}, {picker, Kind::Money, 60, 1, crate, "FX_CratePickup", true},
+		{picker, Kind::Money, 250, 1, crate, "", false}, {picker, Kind::Level, 0, 1, crate, ""}};
+	// A money crate's ExecuteAnimation (MoneyPickUp for 4 s, rising 15 a second, fading).
+	pickups.list[2].animation = "MoneyPickUp";
+	pickups.list[2].animationSeconds = Engine::Math::Fixed::FromInt(4);
+	pickups.list[2].animationRise = Engine::Math::Fixed::FromInt(15);
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 4u);
+	BOOST_TEST(sounds.pending[0].sound == "SalvageUpgrade");
+	BOOST_TEST(sounds.pending[1].sound == "CrateMoney");
+	BOOST_TEST(sounds.pending[2].sound == "CrateMoney");
+	BOOST_TEST(sounds.pending[3].sound == "UnitPromoted"); // the level: createVeterancyLevelFX
+	BOOST_TEST_REQUIRE(animations.size() == 2u);
+	BOOST_TEST(animations[0].animation == "MoneyPickUp");
+	BOOST_TEST(animations[0].at[0] == 104.0f); // where the crate was
+	BOOST_TEST(animations[0].PositionAt(11.0)[2] == 5.0f + 15.0f);
+	BOOST_TEST(animations[0].AlphaAt(12.5) == 1.0f);
+	BOOST_TEST(animations[0].AlphaAt(13.5) == 0.5f, boost::test_tools::tolerance(1e-5f)); // the last second fades
+	BOOST_TEST(animations[1].animation == "LevelGainedAnimation");
+	BOOST_TEST(animations[1].at[0] == 100.0f); // on the picker
+	BOOST_TEST(animations[1].expire == 14.0);
+	BOOST_TEST(sounds.pending[0].at[0] == 100.0f);
+	BOOST_TEST_REQUIRE(texts.shown.size() == 1u);
+	BOOST_TEST((texts.shown.front().text == u"+$60"));
+	BOOST_TEST(texts.shown.front().at[0] == 104.0f);
+	BOOST_TEST(texts.shown.front().at[2] == 15.0f);
+	BOOST_TEST(texts.shown.front().color[1] == 1.0f);
+	BOOST_TEST(texts.shown.front().alpha == 230);
+	BOOST_TEST_REQUIRE(fx.pending.size() == 1u);
+	BOOST_TEST(fx.pending.front().fx == "FX_CratePickup");
+	BOOST_TEST((fx.pending.front().object == picker));
+	BOOST_TEST(fx.pending.front().at[0] == 100.0f);
+}
+
+// UnitCrateCollide::executeCrateBehavior: MiscAudio's CrateFreeUnit on the collector (setObjectID); HealCrateCollide::
+// executeCrateBehavior: CrateHeal where the collector is (setPosition); ShroudCrateCollide::executeCrateBehavior:
+// CrateShroud on the collector (setObjectID). Each is heard the tick the crate is taken, once, and nothing else is.
+BOOST_AUTO_TEST_CASE(legacy_parity_unit_heal_and_shroud_crates_sound_on_their_collector)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.crateFreeUnitSound = "CrateFreeUnit";
+	catalog.crateHealSound = "CrateHeal";
+	catalog.crateShroudSound = "CrateShroud";
+	catalog.crateMoneySound = "CrateMoney";
+	world.EmplaceResource<PresentationFrame>().clock = 1.0;
+	world.EmplaceResource<WorldAnimations>();
+	world.EmplaceResource<FloatingTextSettings>();
+	FloatingTexts &texts = world.EmplaceResource<FloatingTexts>();
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &fx = world.EmplaceResource<FxRequests>();
+	auto &pickups = world.EmplaceResource<generalszh::gameplay::CratePickups>();
+	const auto make = [&](int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Get<engine::gameplay::Transform>(entity)->position = {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(40), Engine::Math::Fixed::FromInt(2)};
+		return entity;
+	};
+	const ecs::Entity first = make(100), second = make(200), third = make(300);
+	CratePresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	using Kind = generalszh::gameplay::CratePickup::Kind;
+	const Engine::Math::FixedVector3 crate{Engine::Math::Fixed::FromInt(7), Engine::Math::Fixed::FromInt(8), Engine::Math::Fixed{}};
+	pickups.list = {{first, Kind::Unit, 0, 1, crate, ""}, {second, Kind::Heal, 0, 1, crate, ""}, {third, Kind::Shroud, 0, 1, crate, ""}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 3u);
+	BOOST_TEST(sounds.pending[0].sound == "CrateFreeUnit");
+	BOOST_TEST(sounds.pending[0].at[0] == 100.0f); // on the collector, not where the crate lay
+	BOOST_TEST(sounds.pending[0].at[2] == 2.0f);
+	BOOST_TEST(sounds.pending[1].sound == "CrateHeal");
+	BOOST_TEST(sounds.pending[1].at[0] == 200.0f);
+	BOOST_TEST(sounds.pending[2].sound == "CrateShroud");
+	BOOST_TEST(sounds.pending[2].at[0] == 300.0f);
+	BOOST_TEST(texts.shown.empty());
+	BOOST_TEST(fx.pending.empty());
+	// The next tick took no crate: nothing more is heard.
+	sounds.pending.clear();
+	pickups.list.clear();
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(sounds.pending.empty());
+}
+
+// JetTakeoffOrLandingState::update (JetAIUpdate.cpp): a jet touching down plays MiscAudio's AircraftWheelScreech (the
+// shipped JetSkid) at its position (setPosition), for anyone in earshot; a tick without a touchdown plays nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_touching_down_screeches_where_it_is)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.FinalizeComponents();
+	world.EmplaceResource<LookCatalog>().aircraftWheelScreechSound = "JetSkid";
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &touchdowns = world.EmplaceResource<engine::gameplay::JetTouchdowns>();
+	JetTouchdownSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	touchdowns.list = {{ecs::Entity{}, {Engine::Math::Fixed::FromInt(1100), Engine::Math::Fixed::FromInt(1000), Engine::Math::Fixed::FromRatio(1, 4)}}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "JetSkid");
+	BOOST_TEST(sounds.pending[0].at[0] == 1100.0f);
+	BOOST_TEST(sounds.pending[0].at[1] == 1000.0f);
+	BOOST_TEST(sounds.pending[0].at[2] == 0.25f);
+	BOOST_TEST(sounds.pending[0].positioned);
+	BOOST_TEST(sounds.pending[0].owner == SoundRequest::NoOwner);
+	sounds.pending.clear();
+	touchdowns.list.clear();
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(sounds.pending.empty());
+}
+
+// Cash that changed hands floats up as it shows in the original: Player::doBountyForKill's bounty GUI:AddCash in
+// yellow, CashHackSpecialPower::doSpecialPowerAtObject's take GUI:AddCash in green and loss GUI:LoseCash in red, each
+// where the simulation put it (already raised over its object), at alpha 230, newest first.
+BOOST_AUTO_TEST_CASE(legacy_parity_cash_notices_float_in_their_colours)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.FinalizeComponents();
+	auto &settings = world.EmplaceResource<FloatingTextSettings>();
+	settings.addCash = u"+$%d";
+	settings.loseCash = u"-$%d";
+	FloatingTexts &texts = world.EmplaceResource<FloatingTexts>();
+	auto &notices = world.EmplaceResource<generalszh::gameplay::CashNotices>();
+	CashPresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	using Kind = generalszh::gameplay::CashNotice::Kind;
+	const auto at = [](int x, int z) { return Engine::Math::FixedVector3{Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed{}, Engine::Math::Fixed::FromInt(z)}; };
+	notices.list = {{Kind::Bounty, 200, at(1, 10)}, {Kind::Stolen, 1000, at(2, 20)}, {Kind::Lost, 1000, at(3, 30)}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(texts.shown.size() == 3u);
+	BOOST_TEST((texts.shown[2].text == u"+$200"));
+	BOOST_TEST((texts.shown[2].color == std::array<float, 3>{1.0f, 1.0f, 0.0f}));
+	BOOST_TEST(texts.shown[2].at[2] == 10.0f);
+	BOOST_TEST((texts.shown[1].text == u"+$1000"));
+	BOOST_TEST((texts.shown[1].color == std::array<float, 3>{0.0f, 1.0f, 0.0f}));
+	BOOST_TEST((texts.shown[0].text == u"-$1000"));
+	BOOST_TEST((texts.shown[0].color == std::array<float, 3>{1.0f, 0.0f, 0.0f}));
+	BOOST_TEST(texts.shown[0].at[0] == 3.0f);
+	BOOST_TEST(texts.shown[0].alpha == 230);
+}
+
+
+// Drawable::calcPhysicsXformTreads, frame by frame (stiffness 0.1, damping 0.9, ForwardAccelerationPitchFactor 1):
+// a frame of forward acceleration 0.1 kicks the acceleration pitch rate to -0.1 after that frame's pose; the next
+// frame the spring and damper take it to -0.01 (rate -0.1 + 0.09), then it holds (rate -0.01 + 0.001 + 0.009 = 0);
+// the pitch stays within AccelerationPitchLimit. On a slope the suspension pitches toward the ground's slope
+// (groundPitch = dot(normal, direction) * pi / 2), pitching up (toward a negative slope) at half the rate.
+BOOST_AUTO_TEST_CASE(legacy_parity_treads_rock_with_acceleration_and_follow_the_slope)
+{
+	ChassisTuning look;
+	look.kind = generalszh::content::ChassisKind::Treads;
+	look.forwardAccel = 1.0f;
+	look.accelPitchLimit = 0.3f;
+	look.decelPitchLimit = 0.3f;
+	ChassisState state;
+	ChassisInput in;
+	in.acceleration = {0.1f, 0.0f, 0.0f};
+	BOOST_TEST(StepChassis(state, look, in).pitch == 0.0f);
+	BOOST_TEST(state.accelPitchRate == -0.1f, boost::test_tools::tolerance(1e-6f));
+	in.acceleration = {};
+	BOOST_TEST(StepChassis(state, look, in).pitch == -0.01f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(StepChassis(state, look, in).pitch == -0.01f, boost::test_tools::tolerance(1e-6f));
+	// Hard acceleration is held at the limit.
+	ChassisState hard;
+	in.acceleration = {-5.0f, 0.0f, 0.0f};
+	for (int frame = 0; frame < 5; ++frame)
+		StepChassis(hard, look, in);
+	BOOST_TEST(hard.accelPitch == 0.3f, boost::test_tools::tolerance(1e-6f));
+	// Facing east up a slope rising to the east (the normal leans west): it settles nose up at the slope's pitch.
+	ChassisState slope;
+	in.acceleration = {};
+	in.groundNormal = {-0.2f, 0.0f, std::sqrt(1.0f - 0.04f)};
+	for (int frame = 0; frame < 400; ++frame)
+		StepChassis(slope, look, in);
+	BOOST_TEST(slope.pitch == -0.2f * 1.5707963f, boost::test_tools::tolerance(1e-3f));
+	// Its first frame there: rate -0.1 * (0 - groundPitch) = -0.0314... (nose up, at full rate); downhill the rate
+	// is positive (nose down) and halved: +0.0157...
+	ChassisState first;
+	BOOST_TEST(StepChassis(first, look, in).pitch == -0.1f * 0.2f * 1.5707963f, boost::test_tools::tolerance(1e-5f));
+	ChassisState downhill;
+	in.groundNormal = {0.2f, 0.0f, std::sqrt(1.0f - 0.04f)};
+	BOOST_TEST(StepChassis(downhill, look, in).pitch == 0.1f * 0.2f * 1.5707963f * 0.5f, boost::test_tools::tolerance(1e-5f));
+}
+
+// ChassisLook from Locomotor.ini: the Crusader's treads, the Humvee's four wheels, their suspension values.
+BOOST_AUTO_TEST_CASE(shipped_locomotors_carry_their_chassis_values)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	engine::config::Diagnostics grammarDiagnostics;
+	generalszh::content::ContentLoader loader(files, generalszh::content::ZeroHourIniGrammar(grammarDiagnostics));
+	const auto looks = generalszh::content::ReadChassisLooks(loader.Load({"Data/INI/Locomotor"}));
+	const auto crusader = looks.find("CrusaderLocomotor");
+	BOOST_TEST_REQUIRE((crusader != looks.end()));
+	BOOST_TEST((crusader->second.kind == generalszh::content::ChassisKind::Treads));
+	const ChassisTuning tuning = TuningOf(crusader->second);
+	BOOST_TEST(tuning.pitchStiffness > 0.0f);
+	BOOST_TEST(tuning.accelPitchLimit > 0.0f);
+	const auto humvee = looks.find("HumveeLocomotor");
+	BOOST_TEST_REQUIRE((humvee != looks.end()));
+	BOOST_TEST((humvee->second.kind == generalszh::content::ChassisKind::Wheels));
+	BOOST_TEST(TuningOf(humvee->second).pitchStiffness == 0.35f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(TuningOf(humvee->second).rollStiffness == 0.05f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(TuningOf(humvee->second).pitchDamping == 0.96f, boost::test_tools::tolerance(1e-4f));
+	const auto buggy = looks.find("RocketBuggyLocomotor");
+	BOOST_TEST_REQUIRE((buggy != looks.end()));
+	BOOST_TEST(TuningOf(buggy->second).bounceKick > 0.0f);
+}
+
+// W3DDebrisDraw::doDrawModule, a drawn frame at a time (frames of 1/30 s): a thrown Rebel (OCL_RebelFlyingOffBikeDeathStart:
+// UITech_Man_DTA1 once, DTA2 looping, DTA3 once, FXFinal) starts its initial animation on the first frame; when that
+// animation is on its last frame (10 frames: the 9th drawn after it started) it moves on to its flying one; once on the
+// ground after more than three frames it goes to its final one at once and plays its landing effect, once. Landing on its
+// first frames waits for the fourth. "STOP": the final state holds the flying animation's first frame (manual), restarted
+// as the state changes. A state without an animation keeps the last one showing and moves on when that one finishes.
+BOOST_AUTO_TEST_CASE(legacy_parity_debris_animations_step_as_it_flies_and_lands)
+{
+	engine::gameplay::DebrisLook look;
+	look.animations = {11, 12, 13};
+	look.finalEffect = 5;
+	const LookClip clip{10.0f, 30.0f};
+	const auto frame = [&](DebrisMotion &motion, bool above, int index) {
+		const double clock = index / 30.0;
+		return StepDebris(motion, look, above, DebrisAnimationComplete(motion, clip, clock), clock, 1.0f / 30.0f);
+	};
+	DebrisMotion motion;
+	BOOST_TEST(!frame(motion, true, 0));
+	BOOST_TEST(motion.state == DebrisMotion::Initial);
+	BOOST_TEST(motion.animation == 11u);
+	BOOST_TEST(motion.mode == static_cast<std::uint8_t>(generalszh::content::ModelAnimationMode::Once));
+	int flyingAt = -1;
+	for (int index = 1; index < 20; ++index)
+	{
+		BOOST_TEST(!frame(motion, true, index));
+		if (flyingAt < 0 && motion.state == DebrisMotion::Flying)
+			flyingAt = index;
+	}
+	BOOST_TEST(flyingAt == 9); // on its last frame (the 9th after it started): done
+	BOOST_TEST(motion.animation == 12u);
+	BOOST_TEST(motion.mode == static_cast<std::uint8_t>(generalszh::content::ModelAnimationMode::Loop));
+	BOOST_TEST(!DebrisAnimationComplete(motion, clip, 100.0)); // a loop never finishes
+	BOOST_TEST(frame(motion, false, 20)); // lands: its final animation and its effect
+	BOOST_TEST(motion.state == DebrisMotion::Final);
+	BOOST_TEST(motion.animation == 13u);
+	for (int index = 21; index < 60; ++index)
+		BOOST_TEST(!frame(motion, false, index)); // once
+
+	// On the ground from the start: the final state waits until more than three frames were drawn.
+	DebrisMotion early;
+	int finalAt = -1;
+	for (int index = 0; index < 8 && finalAt < 0; ++index)
+		if (frame(early, false, index))
+			finalAt = index;
+	BOOST_TEST(finalAt == 4);
+
+	// STOP: its flying animation, held at its first frame.
+	look.animations = {11, 12, 12};
+	look.finalStop = 1;
+	DebrisMotion stop;
+	for (int index = 0; index < 15; ++index)
+		frame(stop, true, index);
+	BOOST_TEST(stop.state == DebrisMotion::Flying);
+	BOOST_TEST(frame(stop, false, 15));
+	BOOST_TEST(stop.animation == 12u);
+	BOOST_TEST(stop.mode == static_cast<std::uint8_t>(generalszh::content::ModelAnimationMode::Manual));
+	BOOST_TEST(stop.since == 15 / 30.0);
+
+	// No flying animation: the initial one keeps showing, and being done moves it on to the final one in the air.
+	look.animations = {11, 0, 13};
+	look.finalStop = 0;
+	DebrisMotion gap;
+	int gapFinal = -1;
+	for (int index = 0; index < 20 && gapFinal < 0; ++index)
+		if (frame(gap, true, index))
+			gapFinal = index;
+	BOOST_TEST(gapFinal == 10); // done on frame 9 (flying: nothing new), still done on 10: final
+}
+
+// Object::adjustModelConditionForWeaponStatus -> Drawable::updateDrawableClipStatus -> W3DModelDraw::
+// updateProjectileClipStatus, as sampled each tick: a slot with a 4-shot clip shows 4 projectiles loaded, hides one per
+// shot fired (the first ones: doHideShowProjectileObjects), hides them all while its clip reloads (Weapon::
+// getRemainingAmmo is 0 while RELOADING_CLIP) and shows them again once it is loaded; out of ammo it shows none; a
+// weapon without a clip hides nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_loaded_projectiles_hide_as_the_clip_empties)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Armament>();
+	world.RegisterComponent<engine::gameplay::WeaponSlots>();
+	world.RegisterComponent<engine::gameplay::Turret>();
+	world.RegisterComponent<engine::gameplay::AltTurret>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	auto &weapons = world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	engine::gameplay::WeaponDefinition clipped;
+	clipped.clipSize = 4;
+	const std::uint32_t missiles = weapons.Add(clipped);
+	const std::uint32_t gun = weapons.Add(engine::gameplay::WeaponDefinition{});
+	ecs::SystemRegistry systems;
+	PoseSampleSystem sample;
+	systems.Register(sample);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	const ecs::Entity launcher = world.Create();
+	world.Add<engine::gameplay::Transform>(launcher);
+	world.Add<engine::gameplay::DefinitionRef>(launcher);
+	world.Add<engine::gameplay::Armament>(launcher);
+	world.Add<engine::gameplay::WeaponSlots>(launcher);
+	auto &slots = *world.Get<engine::gameplay::WeaponSlots>(launcher);
+	slots.slots[0].weapon = missiles;
+	slots.slots[1].weapon = gun;
+	world.Get<engine::gameplay::Armament>(launcher)->weapon = missiles;
+	const auto step = [&] {
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		const WeaponPose *pose = world.Side<WeaponPose>().Get(launcher);
+		return pose != nullptr ? pose->projectilesHidden : std::array<std::uint8_t, 3>{};
+	};
+	step();
+	auto &arm = *world.Get<engine::gameplay::Armament>(launcher);
+	BOOST_TEST(step()[0] == 0u); // loaded: all four show
+	arm.clip = 3;                // one fired
+	BOOST_TEST(step()[0] == 1u);
+	arm.clip = 1;
+	BOOST_TEST(step()[0] == 3u);
+	// The last one fired: the clip reloads (the port refills it at once, the original reports none while reloading).
+	arm.clip = 4;
+	arm.reloading = true;
+	arm.readyTick = tick + 10;
+	BOOST_TEST(step()[0] == 4u);
+	while (tick + 1 < arm.readyTick)
+		BOOST_TEST(step()[0] == 4u);
+	BOOST_TEST(step()[0] == 0u); // loaded again
+	arm.readyTick = engine::gameplay::OutOfAmmo;
+	arm.clip = 0;
+	BOOST_TEST(step()[0] == 4u); // out of ammo: none
+	BOOST_TEST(step()[1] == 0u); // the gun has no clip
+}
+
+// GameClient::update / W3DScene's shroud (GeneralsMD/Code/GameEngine/Source/GameClient/GameClient.cpp,
+// GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/W3DScene.cpp) and PartitionData::getShroudedStatus's
+// ghost objects: an enemy tank fogged to the viewer is still drawn for 2 seconds after it was last clear, then not; a
+// ghost-leaving (immobile) one stays in the fog once seen, is forgotten when wholly shrouded, and always stays where the
+// viewer is neutral to it. Nobody's eyes (an observer): everything shows.
+BOOST_AUTO_TEST_CASE(legacy_parity_what_the_shroud_hides)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::Appearance>();
+	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::ModelOverride>();
+	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::Parachute>();
+	world.RegisterComponent<engine::gameplay::Dying>();
+	world.RegisterComponent<engine::gameplay::ParachuteRider>();
+	world.RegisterComponent<engine::gameplay::OffMap>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>();
+	RegisterVehicleMotion(world);
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	auto &relationships = world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	relationships.Set(1, 0, engine::gameplay::Relationship::Enemies);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	world.EmplaceResource<MotionLooks>();
+	DefinitionLooks looks;
+	looks.states.states.resize(1);
+	looks.states.states[0].conditions = {generalszh::content::ConditionBits{}};
+	looks.stateLooks = {0};
+	DefinitionLooks bunker = looks;
+	bunker.ghost = true;
+	catalog.byDefinition = {looks, bunker};
+	catalog.known = {1, 1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"A"};
+	catalog.playerColors = {{1, 0, 0, 1}};
+	world.EmplaceResource<ObjectInstances>();
+	world.EmplaceResource<MountedInstances>();
+	if (world.FindResource<BonePoses>() == nullptr)
+		world.EmplaceResource<BonePoses>();
+	world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry tickSystems, frameSystems;
+	PoseSampleSystem sample;
+	ObjectPresentationSystem present;
+	TreadRollSystem treads;
+	WheelRollSystem wheels;
+	tickSystems.Register(sample);
+	frameSystems.Register(treads);
+	frameSystems.Register(wheels);
+	frameSystems.Register(present);
+	tickSystems.Finalize(world.Components());
+	frameSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{1});
+	ecs::Scheduler draw(world, frameSystems, engine::jobs::JobSystemConfig{1});
+	tick.Finalize(engine::time::FixedStep{30});
+	draw.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		world.Add<engine::gameplay::Owner>(entity);
+		world.Add<engine::gameplay::Appearance>(entity);
+		world.Add<engine::gameplay::ObjectShroud>(entity);
+		return entity;
+	};
+	const ecs::Entity tank = make(0);
+	const ecs::Entity base = make(1);
+	tick.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+	const auto drawnAt = [&](double clock) {
+		frame.clock = clock;
+		draw.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		std::vector<PresentedObject> presented;
+		world.Resource<PresentedObjects>().AppendTo(presented);
+		std::pair<bool, bool> shown{false, false};
+		for (const PresentedObject &object : presented)
+		{
+			shown.first = shown.first || object.entity == tank;
+			shown.second = shown.second || object.entity == base;
+		}
+		return shown;
+	};
+	const auto set = [&](ecs::Entity entity, std::uint64_t clear, std::uint64_t fogged) { *world.Get<engine::gameplay::ObjectShroud>(entity) = {clear, 0, fogged}; };
+	frame.viewer = 1;
+	set(tank, 0b10, 0);
+	set(base, 0b10, 0);
+	BOOST_TEST(drawnAt(1.0).first);
+	BOOST_TEST(drawnAt(1.1).second);
+	set(tank, 0, 0b10);
+	set(base, 0, 0b10);
+	BOOST_TEST(drawnAt(2.9).first); // within 2 s of 1.0
+	auto shown = drawnAt(3.2);
+	BOOST_TEST(!shown.first);
+	BOOST_TEST(shown.second); // a ghost, seen before
+	set(base, 0, 0); // wholly shrouded: forgotten
+	BOOST_TEST(!drawnAt(3.3).second);
+	set(base, 0, 0b10);
+	BOOST_TEST(!drawnAt(6.0).second); // fogged, never seen since
+	relationships.Set(1, 0, engine::gameplay::Relationship::Neutral);
+	shown = drawnAt(6.1);
+	BOOST_TEST(shown.second); // neutral ghosts stay
+	BOOST_TEST(!shown.first); // a neutral unit does not
+	frame.viewer = PresentationFrame::NoViewer;
+	BOOST_TEST(drawnAt(6.2).first);
+}
+
+// Legacy parity (ScriptActions::doNamedFlash, Drawable::updateDrawable, colorFlash): two seconds of flashing is
+// 30 * 2 / 15 = 4 flashes, one on each tick the frame count is a multiple of DRAWABLE_FRAMES_PER_FLASH (15, 30, 45, 60),
+// each playing the tint in the script's colour (an object without a tint yet gets one); then no more.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scripted_flash_flashes_every_half_second)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Owner>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	ecs::SystemRegistry tickSystems;
+	ScriptFlashSystem flashing;
+	tickSystems.Register(flashing);
+	tickSystems.Finalize(world.Components());
+	ecs::Scheduler tick(world, tickSystems, engine::jobs::JobSystemConfig{1});
+	tick.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity unit = world.Create();
+	world.Add<engine::gameplay::Owner>(unit);
+	ScriptFlash flash{30 * 2 / 15, {1.0f, 0.0f, 0.0f}};
+	world.Side<ScriptFlash>().Insert(unit, &flash);
+	std::vector<std::uint64_t> flashed;
+	std::int32_t before = 4;
+	for (std::uint64_t serial = 1; serial <= 100; ++serial)
+	{
+		tick.Execute(engine::time::SimulationTime{serial, engine::time::FixedStep{30}});
+		const std::int32_t left = world.Side<ScriptFlash>().Get(unit)->count;
+		if (left != before)
+			flashed.push_back(serial);
+		before = left;
+	}
+	BOOST_TEST((flashed == std::vector<std::uint64_t>{15, 30, 45, 60}));
+	const TintEnvelope *tint = world.Side<TintEnvelope>().Get(unit);
+	BOOST_TEST_REQUIRE(tint != nullptr);
+	BOOST_TEST(tint->peak[0] == 1.0f);
+	BOOST_TEST(tint->peak[1] == 0.0f);
+}
+
+// W3DTankDraw::doDrawModule / setHidden / setFullyObscuredByShroud: a moving tank's tread debris runs while it is seen;
+// inside something (hidden) it stops, and so it does fogged or shrouded to the viewer (fully obscured) and stealthed
+// out of the viewer's sight; seen again, moving, it starts again. An ally's stealthed tank still throws debris.
+BOOST_AUTO_TEST_CASE(legacy_parity_tread_debris_stops_while_hidden_or_obscured)
+{
+	Street street(1);
+	auto &world = street.world;
+	EffectsContent effects;
+	effects.particles.Define("TrackDebrisDirtLeft");
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	world.Resource<ParticleWorldHandle>() = ParticleWorldHandle{&particles, &effects};
+	auto &looks = world.Resource<MotionLooks>();
+	looks.byDefinition[0].motionSystems = {"TrackDebrisDirtLeft"};
+	looks.byDefinition[0].motionRoles = {static_cast<std::uint8_t>(generalszh::content::MotionEmitterRole::TreadDebris)};
+	PresentationFrame &frame = world.Resource<PresentationFrame>();
+	frame.viewer = 0;
+	const ecs::Entity tank = street.Vehicle(0);
+	world.Add<engine::gameplay::Owner>(tank);
+	world.Get<engine::gameplay::Owner>(tank)->player = 1;
+	world.Add<engine::gameplay::ObjectShroud>(tank);
+	const auto clearTo = [&](bool clear) {
+		engine::gameplay::ObjectShroud &s = *world.Get<engine::gameplay::ObjectShroud>(tank);
+		s = engine::gameplay::ObjectShroud{};
+		if (!clear)
+			s.clear = 0; // fogged: not even partially clear
+	};
+	clearTo(true);
+	const auto drive = [&] {
+		street.Tick(tank, 3, 0);
+		street.Sample();
+		street.Frame();
+		const MotionEmission *emission = world.Side<MotionEmission>().Get(tank);
+		return emission != nullptr && emission->count > 0 && particles.Running(emission->systems[0]);
+	};
+	drive();
+	BOOST_TEST(drive());
+	world.Add<engine::gameplay::OffMap>(tank);
+	BOOST_TEST(!drive());
+	world.Remove<engine::gameplay::OffMap>(tank);
+	BOOST_TEST(drive());
+	clearTo(false);
+	BOOST_TEST(!drive());
+	clearTo(true);
+	BOOST_TEST(drive());
+	world.Add<engine::gameplay::Stealth>(tank);
+	world.Get<engine::gameplay::Stealth>(tank)->flags = engine::gameplay::stealth_flag::Stealthed;
+	BOOST_TEST(!drive());
+	world.Resource<engine::gameplay::Relationships>().Set(1, 0, engine::gameplay::Relationship::Allies);
+	world.Resource<engine::gameplay::Relationships>().Set(0, 1, engine::gameplay::Relationship::Allies);
+	BOOST_TEST(drive());
+}
+
+// W3DOverlordAircraftDraw / W3DOverlordTankDraw::doDrawModule: the portable structure riding a carrier drawn by one of
+// them takes the carrier's colour tint whole each drawn frame (Drawable::setColorTintEnvelope), only when it has a tint
+// of its own; a carrier with another draw (W3DModelDraw) passes nothing on.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_overlord_riders_tint_follows_its_carrier)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	DefinitionLooks overlord;
+	overlord.ridersTakeTint = true;
+	DefinitionLooks plain;
+	catalog.byDefinition = {overlord, plain, plain};
+	catalog.known = {1, 1, 1};
+	world.EmplaceResource<PresentationFrame>();
+	ecs::SystemRegistry systems;
+	TintStatusSystem tintStatus;
+	RiderTintSystem riders;
+	systems.Register(tintStatus);
+	systems.Register(riders);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&] { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::DefinitionRef>(entity);
+		world.Get<engine::gameplay::DefinitionRef>(entity)->index = definition;
+		return entity;
+	};
+	const ecs::Entity carrier = make(0);
+	const ecs::Entity other = make(1);
+	const ecs::Entity gun = make(2), lone = make(2), onOther = make(2);
+	for (const auto &[rider, on] : {std::pair{gun, carrier}, std::pair{lone, carrier}, std::pair{onOther, other}})
+	{
+		world.Add<engine::gameplay::Mounted>(rider);
+		world.Get<engine::gameplay::Mounted>(rider)->carrier = on;
+	}
+	auto &tints = world.Side<TintEnvelope>();
+	TintEnvelope dark;
+	dark.state = TintEnvelope::Sustain;
+	dark.current = {-0.5f, -0.5f, -0.5f};
+	dark.status = 1;
+	tints.Emplace(carrier, dark);
+	tints.Emplace(other, dark);
+	tints.Emplace(gun);
+	tints.Emplace(onOther);
+	run();
+	// The carrier's tint as stepped this frame (not disabled, it began to fade back), copied whole.
+	BOOST_TEST(tints.Get(gun)->state == tints.Get(carrier)->state);
+	BOOST_TEST(tints.Get(gun)->current == tints.Get(carrier)->current);
+	BOOST_TEST(tints.Get(gun)->status == tints.Get(carrier)->status);
+	BOOST_TEST(tints.Get(gun)->current[0] < 0.0f);
+	BOOST_TEST(tints.Get(lone) == nullptr);
+	BOOST_TEST(tints.Get(onOther)->current[0] == 0.0f);
+}
+
+// Legacy parity (GeneralsMD Drawable.cpp, Drawable::handleWeaponFireFX; Weapon.cpp fireWeaponTemplate's reAngle/reDir):
+// a shot kicks its firer's acceleration pitch and roll rates by its WeaponRecoil turned about from the way it fired,
+// relative to its facing: firing dead ahead pitches it back by the whole recoil (the Marauder's 10 degrees), firing to
+// its left rolls it; no recoil, nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shot_rocks_its_firer_back)
+{
+	const float recoil = 10.0f * 3.14159265358979f / 180.0f;
+	ChassisState ahead;
+	Recoil(ahead, recoil, 0.0f, 0.0f);
+	BOOST_TEST(std::fabs(ahead.accelPitchRate + recoil) < 1e-6f);
+	BOOST_TEST(std::fabs(ahead.accelRollRate) < 1e-6f);
+	ChassisState left;
+	Recoil(left, recoil, 1.57079632679f, 0.0f);
+	BOOST_TEST(std::fabs(left.accelPitchRate) < 1e-6f);
+	BOOST_TEST(std::fabs(left.accelRollRate + recoil) < 1e-6f);
+	// Facing the way it fires: the same as dead ahead.
+	ChassisState turned;
+	Recoil(turned, recoil, 1.0f, 1.0f);
+	BOOST_TEST(std::fabs(turned.accelPitchRate + recoil) < 1e-6f);
+	ChassisState none;
+	Recoil(none, 0.0f, 0.3f, 0.0f);
+	BOOST_TEST(none.accelPitchRate == 0.0f);
+	BOOST_TEST(none.accelRollRate == 0.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,310 @@
+#define BOOST_TEST_MODULE EngineGameplayHealing
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.health.algorithms.max_health;
+import engine.gameplay.common.healing.systems.healing_system;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Two allied players and an enemy on flat ground, with the healing systems.
+struct Field
+{
+	explicit Field(std::size_t workers)
+	{
+		Register(world);
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(3u);
+		relationships.Set(0, 1, Relationship::Allies);
+		relationships.Set(1, 0, Relationship::Allies);
+		relationships.Set(0, 2, Relationship::Enemies);
+		relationships.Set(2, 0, Relationship::Enemies);
+		world.EmplaceResource<IncomingDamage>();
+		world.EmplaceResource<ArmorCatalog>();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Hits>();
+		world.EmplaceResource<SecondLives>();
+		world.EmplaceResource<HealOffers>();
+		world.EmplaceResource<HealPulses>();
+		registry.Register(index);
+		registry.Register(health);
+		registry.Register(self);
+		registry.Register(area);
+		registry.Register(healing);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Targetable>();
+		target.RegisterComponent<Owner>();
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<HealthFloor>();
+		target.RegisterComponent<Subdual>();
+		target.RegisterComponent<HealLock>();
+		target.RegisterComponent<SelfHealing>();
+		target.RegisterComponent<AreaHealing>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<Disabled>();
+		target.RegisterComponent<DefinitionRef>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Unit(std::uint32_t player, int x, int hitPoints, int maximum, std::uint32_t classes = target_class::Infantry)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Add<HealLock>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(5), classes};
+		*world.Get<Owner>(entity) = {player};
+		*world.Get<Health>(entity) = {Fixed::FromInt(hitPoints), Fixed::FromInt(maximum), 0};
+		return entity;
+	}
+
+	ecs::Entity Healer(std::uint32_t player, int x, AreaHealProgram program)
+	{
+		const ecs::Entity entity = Unit(player, x, 100, 100, target_class::Vehicle);
+		world.Add<AreaHealing>(entity);
+		world.Get<AreaHealing>(entity)->Add(program);
+		return entity;
+	}
+
+	int HitPoints(ecs::Entity entity) const { return static_cast<int>(world.Get<Health>(entity)->current.Floor()); }
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	SpatialIndexSystem index;
+	HealthSystem health;
+	SelfHealingSystem self;
+	AreaHealingSystem area;
+	HealingSystem healing;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+
+AreaHealProgram Medic(int amount, std::uint64_t delay, int radius)
+{
+	AreaHealProgram healing;
+	healing.amount = Fixed::FromInt(amount);
+	healing.delay = delay;
+	healing.radius = Fixed::FromInt(radius);
+	healing.classes = target_class::Infantry;
+	return healing;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(healing)
+
+BOOST_AUTO_TEST_CASE(a_self_healer_heals_while_hurt_and_waits_after_a_hit)
+{
+	Field field(2);
+	const ecs::Entity truck = field.Unit(0, 100, 50, 100);
+	field.world.Add<SelfHealing>(truck);
+	field.world.Get<SelfHealing>(truck)->Add({Fixed::FromInt(2), 30, 60, 0});
+	for (int step = 0; step < 90; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(truck) == 56); // ticks 1, 31, 61
+	// A hit holds healing off for its start delay.
+	field.world.Resource<IncomingDamage>().Add({truck, {}, Fixed::FromInt(20), 0, 0});
+	field.world.Resource<IncomingDamage>().Seal();
+	field.Step();
+	field.world.Resource<IncomingDamage>().Clear();
+	const int hit = field.HitPoints(truck);
+	BOOST_TEST(hit == 36);
+	for (int step = 0; step < 58; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(truck) == hit);
+	for (int step = 0; step < 3; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(truck) == hit + 2);
+	// Never past the maximum.
+	for (int step = 0; step < 3000; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(truck) == 100);
+}
+
+// Update modules run while disabled only by the types they process: AutoHealBehavior while held
+// (DISABLED_HELD), BaseRegenerateUpdate while underpowered (DISABLED_UNDERPOWERED) and not held.
+BOOST_AUTO_TEST_CASE(legacy_parity_self_healing_runs_only_while_disabled_the_ways_it_may)
+{
+	Field field(1);
+	const ecs::Entity healer = field.Unit(0, 100, 50, 100);
+	const ecs::Entity plant = field.Unit(0, 300, 50, 100);
+	field.world.Add<SelfHealing>(healer);
+	field.world.Get<SelfHealing>(healer)->Add({Fixed::FromInt(2), 3, 0, 0});
+	field.world.Add<SelfHealing>(plant);
+	field.world.Get<SelfHealing>(plant)->Add({Fixed::FromInt(2), 3, 0, 0, disabled_type::Underpowered});
+	for (const ecs::Entity entity : {healer, plant})
+		field.world.Add<Disabled>(entity);
+	field.world.Get<Disabled>(healer)->mask = disabled_type::Underpowered;
+	field.world.Get<Disabled>(plant)->mask = disabled_type::Underpowered;
+	field.Step();
+	BOOST_TEST(field.HitPoints(healer) == 50);
+	BOOST_TEST(field.HitPoints(plant) == 52);
+	field.world.Get<Disabled>(healer)->mask = disabled_type::Held;
+	field.world.Get<Disabled>(plant)->mask = disabled_type::Held;
+	for (int step = 0; step < 3; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(healer) == 52);
+	BOOST_TEST(field.HitPoints(plant) == 52);
+}
+
+BOOST_AUTO_TEST_CASE(an_area_healer_heals_hurt_allies_of_its_classes_in_range)
+{
+	Field field(2);
+	field.Healer(0, 100, Medic(4, 30, 100));
+	const ecs::Entity own = field.Unit(0, 150, 50, 100);
+	const ecs::Entity ally = field.Unit(1, 50, 50, 100);
+	const ecs::Entity enemy = field.Unit(2, 120, 50, 100);
+	const ecs::Entity distant = field.Unit(0, 400, 50, 100);
+	const ecs::Entity tank = field.Unit(0, 110, 50, 100, target_class::Vehicle);
+	for (int step = 0; step < 61; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(own) == 62); // three pulses
+	BOOST_TEST(field.HitPoints(ally) == 62);
+	BOOST_TEST(field.HitPoints(enemy) == 50);
+	BOOST_TEST(field.HitPoints(distant) == 50);
+	BOOST_TEST(field.HitPoints(tank) == 50);
+}
+
+BOOST_AUTO_TEST_CASE(a_healer_runs_each_of_its_programs)
+{
+	Field field(2);
+	AreaHealProgram vehicles = Medic(8, 30, 100);
+	vehicles.classes = target_class::Vehicle;
+	vehicles.flags = area_healing::SkipSelf;
+	const ecs::Entity ambulance = field.Healer(0, 100, Medic(4, 30, 100));
+	field.world.Get<AreaHealing>(ambulance)->Add(vehicles);
+	field.world.Get<Health>(ambulance)->current = Fixed::FromInt(50);
+	const ecs::Entity soldier = field.Unit(0, 120, 50, 100);
+	const ecs::Entity tank = field.Unit(0, 80, 50, 100, target_class::Vehicle);
+	for (int step = 0; step < 31; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(soldier) == 58);
+	BOOST_TEST(field.HitPoints(tank) == 66);
+	BOOST_TEST(field.HitPoints(ambulance) == 50); // skips itself
+}
+
+BOOST_AUTO_TEST_CASE(heals_from_two_healers_do_not_stack)
+{
+	Field field(3);
+	field.Healer(0, 90, Medic(4, 30, 100));
+	field.Healer(0, 110, Medic(4, 30, 100));
+	const ecs::Entity soldier = field.Unit(0, 100, 10, 100);
+	for (int step = 0; step < 61; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(soldier) == 22); // one healer's three pulses
+}
+
+BOOST_AUTO_TEST_CASE(a_single_burst_heals_once_and_a_whole_player_heal_reaches_everywhere)
+{
+	Field field(2);
+	AreaHealProgram burst = Medic(300, 1, 100);
+	burst.classes = target_class::Vehicle;
+	burst.flags = area_healing::SingleBurst | area_healing::SkipSelf;
+	field.Healer(0, 100, burst);
+	const ecs::Entity tank = field.Unit(0, 120, 10, 500, target_class::Vehicle);
+	AreaHealProgram everywhere = Medic(2, 30, 0);
+	everywhere.flags = area_healing::WholePlayer;
+	field.Healer(1, 900, everywhere);
+	const ecs::Entity ally = field.Unit(0, 10, 10, 100);   // an ally, not the healer's player
+	const ecs::Entity own = field.Unit(1, 10, 10, 100);
+	for (int step = 0; step < 61; ++step)
+		field.Step();
+	BOOST_TEST(field.HitPoints(tank) == 310);
+	BOOST_TEST(field.HitPoints(own) == 16);
+	BOOST_TEST(field.HitPoints(ally) == 10);
+}
+
+BOOST_AUTO_TEST_CASE(healing_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto populate = [](Field &field) {
+		for (int index = 0; index < 20; ++index)
+			field.Healer(index % 2, 50 * index, Medic(1 + index % 4, 10 + index % 7, 80));
+		for (int index = 0; index < 300; ++index)
+			field.Unit(index % 3, (index * 37) % 990, 1 + index % 90, 100);
+	};
+	Field one(1), four(4);
+	populate(one);
+	populate(four);
+	for (int step = 0; step < 30; ++step)
+	{
+		one.Step();
+		four.Step();
+	}
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Field loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 60; ++step)
+	{
+		one.Step();
+		four.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == one.world.StateHash());
+	}
+	BOOST_TEST(four.world.StateHash() == one.world.StateHash());
+}
+
+// ActiveBody::setMaxHealth (ActiveBody.cpp), its own examples: PRESERVE_RATIO 400/500 + 100 becomes 480/600 and 200/500 - 100
+// 160/400; ADD_CURRENT_HEALTH_TOO 400/500 + 100 becomes 500/600 and 200/500 - 100 100/400; FULLY_HEAL 600/600 and 400/400;
+// SAME_CURRENTHEALTH keeps it, clipped down to a lower maximum (450/500 - 100: 400/400), and nothing goes below zero.
+BOOST_AUTO_TEST_CASE(legacy_parity_max_health_changes_as_active_body_set_max_health)
+{
+	using engine::gameplay::MaxHealthChange;
+	using Engine::Math::Fixed;
+	const auto set = [](int current, int maximum, int to, MaxHealthChange change) {
+		engine::gameplay::Health health;
+		health.current = Fixed::FromInt(current);
+		health.maximum = Fixed::FromInt(maximum);
+		engine::gameplay::SetMaxHealth(health, Fixed::FromInt(to), change);
+		BOOST_TEST((health.maximum == Fixed::FromInt(to)));
+		return health.current;
+	};
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::PreserveRatio) == Fixed::FromInt(480)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::PreserveRatio) == Fixed::FromInt(160)));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::AddCurrentToo) == Fixed::FromInt(500)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::AddCurrentToo) == Fixed::FromInt(100)));
+	BOOST_TEST((set(50, 500, 400, MaxHealthChange::AddCurrentToo) == Fixed{}));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::FullyHeal) == Fixed::FromInt(600)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::FullyHeal) == Fixed::FromInt(400)));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::SameCurrent) == Fixed::FromInt(400)));
+	BOOST_TEST((set(450, 500, 400, MaxHealthChange::SameCurrent) == Fixed::FromInt(400)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

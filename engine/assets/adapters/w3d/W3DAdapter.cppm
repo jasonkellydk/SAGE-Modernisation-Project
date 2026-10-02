@@ -1,14 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-
 export module Assets.Adapters.W3D;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Mesh;
@@ -129,6 +120,34 @@ public:
 			return {nullptr, "W3D mesh has invalid bounds"};
 		return {std::move(description), {}};
 	}
+
+	// Skeleton (hierarchy) and animation files: the hierarchy's bones and the
+	// file's clips, as the original catalog published them on demand.
+	bool Import_Rig(const AssetIdentity &identity, std::span<const std::byte> source, ModelRigDesc &result,
+		std::string &error) const override;
 };
+
+bool W3DAdapter::Import_Rig(const AssetIdentity &, std::span<const std::byte> source, ModelRigDesc &result,
+	std::string &error) const
+{
+	if (source.empty()) {
+		error = "W3D source is empty";
+		return false;
+	}
+	if (!W3D::W3DValidate_Chunk_Tree(source)) {
+		error = "W3D source contains a malformed or truncated chunk";
+		return false;
+	}
+	ModelRigDesc rig;
+	if (!W3D::W3DRead_Model_Rig(source, rig, error))
+		return false;
+	if (rig.bones.empty() && rig.animations.empty()) {
+		error = "W3D source contains no hierarchy or animation";
+		return false;
+	}
+	result = std::move(rig);
+	error.clear();
+	return true;
+}
 
 }

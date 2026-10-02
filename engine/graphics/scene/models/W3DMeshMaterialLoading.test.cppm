@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DMeshMaterialLoadingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 export module Graphics.Scene.Models.W3DMaterialLoading.Tests;
+import std;
 import Assets.Math;
 import Assets.Models;
 import Assets.Adapters.W3D.MeshData;

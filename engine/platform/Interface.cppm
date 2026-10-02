@@ -1,4 +1,5 @@
 export module engine.platform.interface;
+import std;
 export import engine.platform.core.types;
 export import engine.platform.application;
 export import engine.platform.window.interface;

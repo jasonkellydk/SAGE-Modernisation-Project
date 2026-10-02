@@ -1,13 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
-
 export module Graphics.Resources.Residency.GPUResourceResidency;
+import std;
 
 export import Graphics.Resources.Materials.Material;
 export import Graphics.Resources.Meshes.Mesh;

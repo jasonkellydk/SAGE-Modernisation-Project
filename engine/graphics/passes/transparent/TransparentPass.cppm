@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Passes.Transparent;
+import std;
 
 export import Graphics.Passes.Opaque;
 export import Graphics.RenderGraph.Execution;

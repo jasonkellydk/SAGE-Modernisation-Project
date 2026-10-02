@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstdint>
-
 export module Graphics.Scene.Environment;
+import std;
 
 export import Graphics.Scene.Lighting;
 export import Graphics.Scene.Views.View;

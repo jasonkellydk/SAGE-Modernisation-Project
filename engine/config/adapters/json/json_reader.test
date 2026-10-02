@@ -1,0 +1,82 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+
+import engine.config.adapters.json.json_reader;
+import engine.config.adapters.ini.ini_reader;
+
+using namespace engine::config;
+
+namespace
+{
+struct Parsed
+{
+	Document document;
+	Diagnostics diagnostics;
+};
+
+Parsed Parse(std::string text)
+{
+	Parsed parsed;
+	const auto source = parsed.document.AddSource("test.json", std::move(text));
+	json::Read(parsed.document, source, parsed.diagnostics);
+	return parsed;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(json_reader)
+
+BOOST_AUTO_TEST_CASE(maps_json_onto_the_shared_document_tree)
+{
+	const auto parsed = Parse(R"({
+  "name": "Crusader",
+  "speed": 30.5,
+  "armed": true,
+  "tags": ["tank", "usa"],
+  "turret": { "rate": 60, "pitch": [1, 2] },
+  "weapons": [ { "slot": "PRIMARY" }, { "slot": "SECONDARY" } ],
+  "escaped": "a\"b\\cé"
+})");
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	const auto &roots = parsed.document.Roots();
+	BOOST_TEST_REQUIRE(roots.size() == 8u);
+	BOOST_TEST(roots[0].key == "name");
+	BOOST_TEST(roots[0].Value() == "Crusader");
+	BOOST_TEST(roots[1].Value() == "30.5");
+	BOOST_TEST(roots[2].Value() == "true");
+	BOOST_TEST(roots[3].values.size() == 2u);
+	BOOST_TEST(roots[3].text == "tank usa");
+	BOOST_TEST(roots[4].block);
+	BOOST_TEST(roots[4].Find("pitch")->Value(1) == "2");
+	BOOST_TEST(roots[5].key == "weapons");
+	BOOST_TEST(roots[5].block);
+	BOOST_TEST(roots[6].Find("slot")->Value() == "SECONDARY");
+	BOOST_TEST(roots[7].Value() == "a\"b\\c\xC3\xA9");
+	BOOST_TEST(roots[4].location.line == 6u);
+}
+
+BOOST_AUTO_TEST_CASE(syntax_errors_are_reported)
+{
+	BOOST_TEST(Parse("[1, 2]").diagnostics.HasErrors());
+	BOOST_TEST(Parse(R"({"a": 1,})").diagnostics.HasErrors());
+	BOOST_TEST(Parse(R"({"a" 1})").diagnostics.HasErrors());
+	BOOST_TEST(Parse(R"({"a": "unterminated})").diagnostics.HasErrors());
+	BOOST_TEST(!Parse("{}").diagnostics.HasErrors());
+}
+
+BOOST_AUTO_TEST_CASE(ini_grammar_can_be_described_in_json)
+{
+	auto parsed = Parse(R"({
+  "comment": "provenance",
+  "top_level_blocks": ["Object", "Weapon"],
+  "nested": { "Object": ["Draw", "Behavior"], "Draw": ["ConditionState"] }
+})");
+	const ini::Grammar grammar = ini::GrammarFromDocument(parsed.document, parsed.diagnostics);
+	BOOST_TEST(parsed.diagnostics.Entries().empty());
+	BOOST_TEST(grammar.IsTopLevelBlock("Weapon"));
+	BOOST_TEST(!grammar.IsTopLevelBlock("Draw"));
+	BOOST_TEST(grammar.OpensNestedBlock("Draw", "ConditionState"));
+	BOOST_TEST(!grammar.OpensNestedBlock("Weapon", "Draw"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

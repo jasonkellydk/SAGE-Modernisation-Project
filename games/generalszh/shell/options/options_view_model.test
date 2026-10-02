@@ -1,0 +1,131 @@
+#include <boost/test/unit_test.hpp>
+
+import games.generalszh.shell.options.options_view_model;
+
+using namespace generalszh::shell;
+using engine::config::Preferences;
+
+BOOST_AUTO_TEST_SUITE(options_view_model)
+
+// Legacy parity (Core OptionPreferences getters, AudioSettings.ini defaults:
+// music 55%, sounds 80% with Relative2DVolume -10% lowering the 2D ones, speech 70%).
+BOOST_AUTO_TEST_CASE(legacy_parity_options_read_with_the_original_defaults)
+{
+	const OptionDefaults defaults;
+	const UserOptions none = ReadUserOptions(Preferences::Parse(""), defaults);
+	BOOST_TEST(none.musicVolume == 55);
+	BOOST_TEST(none.sound2DVolume == 72);
+	BOOST_TEST(none.sound3DVolume == 80);
+	BOOST_TEST(none.speechVolume == 70);
+	BOOST_TEST(none.gamma == 50);
+	BOOST_TEST(none.retaliation);
+	BOOST_TEST(none.SoundSlider() == 80); // OptionsMenuInit: the louder of the two
+	// A player's own file (the shape of a real Options.ini).
+	const UserOptions own = ReadUserOptions(Preferences::Parse("MusicVolume = 13\nSFXVolume = 12\nSFX3DVolume = 14\nScrollFactor = 94\n"
+															   "Retaliation = no\nUseShadowVolumes = no\nVoiceVolume = -5\n"), defaults);
+	BOOST_TEST(own.musicVolume == 13);
+	BOOST_TEST(own.SoundSlider() == 14);
+	BOOST_TEST(own.scrollFactor == 94);
+	BOOST_TEST(own.speechVolume == 0); // negative volumes read as 0
+	BOOST_TEST(!own.retaliation);
+	BOOST_TEST(!own.shadowVolumes);
+}
+
+// Legacy parity (OptionsMenu.cpp saveOptions): the one sound slider becomes a 2D
+// volume lowered by the relative volume (truncated) and an untouched 3D one.
+BOOST_AUTO_TEST_CASE(legacy_parity_accept_splits_the_sound_slider_and_writes_the_keys)
+{
+	ShellModel model;
+	UserOptions options = ReadUserOptions(Preferences::Parse("MusicVolume = 13\n"), OptionDefaults{});
+	OptionsViewModel menu(model, options, OptionDefaults{});
+	model.optionsOpen.Set(true);
+	BOOST_TEST(menu.musicVolume.Get() == 13);
+	menu.musicVolume.Set(40);
+	menu.soundVolume.Set(55);
+	menu.retaliation.Set(false);
+	menu.accept.Execute();
+	BOOST_TEST(!model.optionsOpen.Get());
+	BOOST_TEST(model.optionsSaved.Get() == 1u);
+	BOOST_TEST(options.musicVolume == 40);
+	BOOST_TEST(options.sound2DVolume == 49); // 55 * 0.9 = 49.5, truncated
+	BOOST_TEST(options.sound3DVolume == 55);
+	Preferences file = Preferences::Parse("Resolution = 800 600\n");
+	WriteUserOptions(file, options);
+	const Preferences back = Preferences::Parse(file.Write());
+	BOOST_TEST(back.Number("MusicVolume", 0) == 40);
+	BOOST_TEST(back.Number("SFXVolume", 0) == 49);
+	BOOST_TEST(back.Number("SFX3DVolume", 0) == 55);
+	BOOST_TEST(!back.Flag("Retaliation", true));
+	BOOST_TEST(back.Find("Resolution").value_or("") == "800 600"); // keys it does not own are kept
+}
+
+BOOST_AUTO_TEST_CASE(back_drops_changes_and_defaults_only_fill_the_controls)
+{
+	ShellModel model;
+	UserOptions options;
+	options.musicVolume = 20;
+	OptionsViewModel menu(model, options, OptionDefaults{});
+	model.optionsOpen.Set(true);
+	menu.musicVolume.Set(90);
+	menu.back.Execute();
+	BOOST_TEST(options.musicVolume == 20);
+	BOOST_TEST(model.optionsSaved.Get() == 0u);
+	model.optionsOpen.Set(true);
+	BOOST_TEST(menu.musicVolume.Get() == 20); // opening again shows the saved options
+	menu.defaultsCommand.Execute();
+	BOOST_TEST(menu.musicVolume.Get() == 55);
+	BOOST_TEST(options.musicVolume == 20); // not saved until accepted
+	// The advanced panel keeps its checks on its accept, restores them on its back.
+	menu.CustomDetail();
+	BOOST_TEST(menu.advancedOpen.Get());
+	menu.heatEffects.Set(false);
+	menu.advancedBack.Execute();
+	BOOST_TEST(menu.heatEffects.Get());
+	BOOST_TEST(!menu.advancedOpen.Get());
+}
+
+// Legacy parity (OptionPreferences getStaticGameDetail / getResolution, OptionsMenu
+// GCM_SELECTED on the detail box, cancelAdvancedOptions).
+BOOST_AUTO_TEST_CASE(legacy_parity_detail_and_resolution_boxes)
+{
+	UserOptions options = ReadUserOptions(Preferences::Parse("StaticGameLOD = veryhigh\nResolution = 1024 768\n"), OptionDefaults{});
+	BOOST_TEST(options.staticLod == 3); // case blind
+	BOOST_TEST(options.resolutionWidth == 1024);
+	ShellModel model;
+	OptionsViewModel menu(model, options, OptionDefaults{}, {u"Low", u"Medium", u"High", u"Very High", u"Custom"}, {{800, 600}, {1024, 768}, {1920, 1080}});
+	model.optionsOpen.Set(true);
+	BOOST_TEST(menu.detail.Get() == 3);
+	BOOST_TEST(menu.resolution.Get() == 1);
+	BOOST_TEST((menu.resolutionItems.Get().at(2) == u"1920 x 1080"));
+	BOOST_TEST(!menu.advancedOpen.Get()); // showing a saved level opens nothing
+	menu.detail.Set(CustomLod);           // the player picks Custom
+	BOOST_TEST(menu.advancedOpen.Get());
+	menu.advancedBack.Execute();          // back: the detail as saved
+	BOOST_TEST(menu.detail.Get() == 3);
+	menu.detail.Set(0);
+	menu.resolution.Set(2);
+	menu.accept.Execute();
+	Preferences file;
+	WriteUserOptions(file, options);
+	BOOST_TEST(file.Find("StaticGameLOD").value_or("") == "Low");
+	BOOST_TEST(file.Find("Resolution").value_or("") == "1920 1080");
+}
+
+// Legacy parity (OptionsMenuInit): the resolution box shows the resolution the game runs at,
+// added after the listed modes when it is not one, whatever Options.ini names.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_resolution_box_shows_the_running_resolution)
+{
+	UserOptions options = ReadUserOptions(Preferences::Parse("Resolution = 2194 1338\n"),OptionDefaults{});
+	ShellModel model;
+	OptionsViewModel menu(model, options, OptionDefaults{}, {}, {{800, 600}, {1024, 768}}, std::pair{1024, 768});
+	model.optionsOpen.Set(true);
+	BOOST_TEST(menu.resolution.Get() == 1);
+	BOOST_TEST(menu.resolutionItems.Get().size() == 2u);
+	ShellModel windowed;
+	OptionsViewModel custom(windowed, options, OptionDefaults{}, {}, {{800, 600}, {1024, 768}}, std::pair{1366, 700});
+	windowed.optionsOpen.Set(true);
+	BOOST_TEST(custom.resolution.Get() == 2);
+	BOOST_TEST((custom.resolutionItems.Get().at(2) == u"1366 x 700"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

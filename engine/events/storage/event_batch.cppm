@@ -1,14 +1,5 @@
-module;
-#include <algorithm>
-#include <cstddef>
-#include <memory>
-#include <memory_resource>
-#include <span>
-#include <stdexcept>
-#include <type_traits>
-#include <utility>
-#include <vector>
 export module engine.events.storage.event_batch;
+import std;
 export import engine.events.ordering.batch_order;
 
 export namespace engine::events

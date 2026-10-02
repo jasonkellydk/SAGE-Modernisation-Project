@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <span>
-#include <type_traits>
-
 export module Graphics.RHI.Tests;
+import std;
 
 import Graphics.RHI;
 

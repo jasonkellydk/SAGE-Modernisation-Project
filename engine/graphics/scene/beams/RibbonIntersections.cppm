@@ -1,10 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Beams.RibbonIntersections;
+import std;
 import Graphics.Scene.Beams.RibbonEdges;
 import Graphics.Scene.Beams.RibbonSubdivision;
 import Graphics.Scene.Beams.RibbonMath;

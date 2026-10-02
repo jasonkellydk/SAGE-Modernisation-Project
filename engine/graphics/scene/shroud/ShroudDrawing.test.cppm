@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ShroudDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Shroud.Drawing.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Shroud.Image;

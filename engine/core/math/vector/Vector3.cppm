@@ -1,11 +1,6 @@
-module;
-
-#include <cmath>
-#include <algorithm>
-#include <cassert>
-#include <cstddef>
-
 export module Engine.Core.Math.Vector3;
+import std;
+import engine.core.contracts;
 
 export namespace Engine::Math
 {
@@ -17,12 +12,12 @@ struct Vector3 final
 
 	constexpr float &operator[](std::size_t index) noexcept
 	{
-		assert(index < 3);
+		engine::core::Assert(index < 3);
 		return index == 0 ? x : index == 1 ? y : z;
 	}
 	constexpr const float &operator[](std::size_t index) const noexcept
 	{
-		assert(index < 3);
+		engine::core::Assert(index < 3);
 		return index == 0 ? x : index == 1 ? y : z;
 	}
 

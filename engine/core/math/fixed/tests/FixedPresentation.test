@@ -1,0 +1,23 @@
+#include <boost/test/unit_test.hpp>
+
+import Engine.Core.Math.Fixed;
+import Engine.Core.Math.FixedAngle;
+import Engine.Core.Math.FixedVector;
+import Engine.Core.Math.FixedPresentation;
+
+using namespace Engine::Math;
+using namespace Engine::Math::Literals;
+
+BOOST_AUTO_TEST_SUITE(presentation_conversion)
+
+BOOST_AUTO_TEST_CASE(converts_simulation_values_for_rendering)
+{
+	BOOST_TEST(ToFloat(1.5_fx) == 1.5f);
+	BOOST_TEST(ToFloat(-0.25_fx) == -0.25f);
+	const auto position = ToFloat(FixedVector3{1_fx, 2_fx, 3.5_fx});
+	BOOST_TEST(position.z == 3.5f);
+	BOOST_TEST(ToRadiansFloat(TurnFromDegrees(180)) == 3.14159f, boost::test_tools::tolerance(1e-4f));
+	BOOST_TEST(Interpolate(10_fx, 20_fx, 0.5f) == 15.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

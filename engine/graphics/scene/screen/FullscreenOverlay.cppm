@@ -1,14 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <span>
-
 export module Graphics.Scene.Screen.FullscreenOverlay;
+import std;
 
 export import Graphics.Resources.Bindless.BindlessResourceTable;
 export import Graphics.Resources.Materials.Material;

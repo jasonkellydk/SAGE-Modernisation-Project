@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Graphics.Resources.Bindless.BindlessResourceTable.Tests;
+import std;
 
 import Graphics.Resources.Bindless.BindlessResourceTable;
 

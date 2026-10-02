@@ -1,7 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <span>
 export module engine.platform.adapters.sdl3.process.interface;
+import std;
 import engine.platform.process.interface;
 export namespace engine::platform::sdl3
 {

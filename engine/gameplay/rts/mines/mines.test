@@ -1,0 +1,332 @@
+#define BOOST_TEST_MODULE EngineGameplayMines
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.rts.mines.systems.minefield_system;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.common.weapons.resources.weapon_catalog;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.common.health.systems.health_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Unresistable = 5, Weapon = 7;
+
+// A field of the original's ChinaStandardMine (MinefieldBehavior: NumVirtualMines 8, RepeatDetonateMoveThresh 5,
+// Regenerates, DetonatedBy ENEMIES NEUTRAL, DegenPercentPerSecondAfterCreatorDies 3.33%; MaxHealth 100; a 30-radius
+// cylinder) of player 0, allied with player 1, enemy of player 2.
+struct Field
+{
+	explicit Field(std::size_t workers, bool build = true)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<ObjectShroud>();
+		world.RegisterComponent<OffMap>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<HealthFloor>();
+		world.RegisterComponent<Subdual>();
+		world.RegisterComponent<Minefield>();
+		world.RegisterComponent<Armament>();
+		world.RegisterComponent<AttackTarget>();
+		world.RegisterComponent<MineSafe>();
+		world.RegisterComponent<Dying>();
+		world.RegisterComponent<SelfHealing>();
+		world.RegisterComponent<Lifetime>();
+		world.RegisterComponent<DefinitionRef>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<SpatialIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(100));
+		world.EmplaceResource<SpatialGather>();
+		Relationships &relationships = world.EmplaceResource<Relationships>(3u);
+		relationships.Set(0, 1, Relationship::Allies);
+		relationships.Set(1, 0, Relationship::Allies);
+		relationships.Set(0, 2, Relationship::Enemies);
+		relationships.Set(2, 0, Relationship::Enemies);
+		world.EmplaceResource<ShotQueue>();
+		world.EmplaceResource<MineShots>();
+		world.EmplaceResource<IncomingDamage>();
+		world.EmplaceResource<ArmorCatalog>();
+		world.EmplaceResource<Deaths>();
+		world.EmplaceResource<Hits>();
+		world.EmplaceResource<SecondLives>();
+		world.EmplaceResource<MineSettings>(MineSettings{Unresistable, 0, 30});
+		{
+			WeaponCatalog &weapons = world.EmplaceResource<WeaponCatalog>();
+			WeaponDefinition clearing;
+			clearing.anti = weapon_anti::Mine | weapon_anti::Ground;
+			clearingWeapon = weapons.Add(clearing);
+		}
+		if (build)
+			mine = Mine(500, true);
+		registry.Register(index);
+		registry.Register(drain);
+		registry.Register(health);
+		registry.Register(field);
+		registry.OrderBefore<MineDrainSystem, HealthSystem>();
+		registry.OrderBefore<HealthSystem, MinefieldSystem>();
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Body(std::uint32_t player, int x, int radius)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Health>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(500), {}};
+		*world.Get<Targetable>(entity) = {Fixed::FromInt(radius), target_class::Vehicle};
+		world.Get<Owner>(entity)->player = player;
+		*world.Get<Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100), 0};
+		return entity;
+	}
+
+	ecs::Entity Mine(int x, bool regenerates)
+	{
+		const ecs::Entity entity = Body(0, x, 30);
+		world.Get<Targetable>(entity)->classes = target_class::Mine;
+		world.Add<Minefield>(entity);
+		Minefield &data = *world.Get<Minefield>(entity);
+		data.weapon = Weapon;
+		data.total = data.remaining = 8;
+		data.regenerates = regenerates ? 1 : 0;
+		data.repeatThreshold = Fixed::FromInt(5);
+		data.drain = Fixed::FromRatio(333, 100);
+		data.radius = Fixed::FromInt(30);
+		data.lastHealth = Fixed::FromInt(100);
+		if (regenerates)
+		{
+			world.Add<HealthFloor>(entity);
+			*world.Get<HealthFloor>(entity) = HealthFloor{HealthFloor::NoExemptType, 0, MinefieldSystem::Least()};
+		}
+		return entity;
+	}
+
+	// One tick; the detonations it set off (their points).
+	std::vector<Engine::Math::FixedVector3> Step()
+	{
+		world.Resource<IncomingDamage>().Clear();
+		for (const auto &[target, amount] : pending)
+			world.Resource<IncomingDamage>().Add({target, {}, amount, 0, 0});
+		pending.clear();
+		world.Resource<IncomingDamage>().Seal();
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<Engine::Math::FixedVector3> out;
+		for (const Shot &shot : world.Resource<ShotQueue>().TakeDue(tick))
+			out.push_back(shot.aim);
+		return out;
+	}
+
+	const Minefield &Data(ecs::Entity entity) { return *world.Get<Minefield>(entity); }
+	double HealthOf(ecs::Entity entity) { return static_cast<double>(world.Get<Health>(entity)->current.Raw()) / 65536.0; }
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::Entity mine;
+	std::vector<std::pair<ecs::Entity, Fixed>> pending;
+	SpatialIndexSystem index;
+	MineDrainSystem drain;
+	HealthSystem health;
+	MinefieldSystem field;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+	std::uint32_t clearingWeapon{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(mines)
+
+// MinefieldBehavior::onCollide and detonateOnce: an enemy tank (radius 10) standing 35 from the mine's centre sets it
+// off once where it touches the mine (clipped to its 30 radius: 530), spending a virtual mine (health to 7/8: 87.5);
+// standing still it does not again (RepeatDetonateMoveThresh 5), moved 6 it does. An ally, and an enemy worker
+// (WorkersDetonate No), do not.
+BOOST_AUTO_TEST_CASE(legacy_parity_what_stands_in_a_mine_sets_it_off_once_per_move)
+{
+	Field field(2);
+	const ecs::Entity tank = field.Body(2, 535, 10);
+	const auto first = field.Step();
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((first[0].x == Fixed::FromInt(530)));
+	BOOST_TEST(field.Data(field.mine).remaining == 7u);
+	BOOST_TEST(field.HealthOf(field.mine) == 87.5);
+	BOOST_TEST(field.Step().empty());
+	field.world.Get<Transform>(tank)->position.x = Fixed::FromInt(529);
+	BOOST_TEST(field.Step().size() == 1u);
+	BOOST_TEST(field.Data(field.mine).remaining == 6u);
+	field.world.Destroy(tank);
+	const ecs::Entity ally = field.Body(1, 520, 10);
+	BOOST_TEST(field.Step().empty());
+	field.world.Destroy(ally);
+	const ecs::Entity worker = field.Body(2, 520, 5);
+	field.world.Add<MineSafe>(worker);
+	BOOST_TEST(field.Step().empty());
+	BOOST_TEST(field.Data(field.mine).remaining == 6u);
+}
+
+// onDamage / onHealing: 30 damage leaves 70 of 100, 5.6 mines' worth: rounded up, 6 live, so two go off where the mine
+// is; healed back to 90 (7.2, rounded down) one lives again. A regenerating mine hit for all it has keeps MIN_HEALTH
+// 0.1 (its HealthFloor), all its mines spent: rubble, not attackable, still there.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mines_health_holds_its_virtual_mines)
+{
+	Field field(1);
+	field.pending.emplace_back(field.mine, Fixed::FromInt(30));
+	const auto hit = field.Step();
+	BOOST_TEST(hit.size() == 2u);
+	for (const auto &at : hit)
+		BOOST_TEST((at.x == Fixed::FromInt(500)));
+	BOOST_TEST(field.Data(field.mine).remaining == 6u);
+	BOOST_TEST(field.HealthOf(field.mine) == 70.0);
+	field.world.Get<Health>(field.mine)->current = Fixed::FromInt(90);
+	BOOST_TEST(field.Step().empty());
+	BOOST_TEST(field.Data(field.mine).remaining == 7u);
+	field.pending.emplace_back(field.mine, Fixed::FromInt(1000));
+	BOOST_TEST(field.Step().size() == 7u);
+	BOOST_TEST(field.world.IsAlive(field.mine));
+	BOOST_TEST(field.world.Get<Dying>(field.mine) == nullptr);
+	BOOST_TEST(field.Data(field.mine).remaining == 0u);
+	BOOST_TEST(std::abs(field.HealthOf(field.mine) - 0.1) < 0.0001);
+	field.Step();
+	BOOST_TEST((field.world.Get<Targetable>(field.mine)->classes & target_class::Unattackable) != 0u);
+}
+
+// A mine that does not regenerate (the ChinaClusterMine) is removed once its eighth mine goes off (destroyObject); a
+// regenerating one whose producer is gone stops regenerating and drains 3.33% of its most a second (its drained mines
+// spent quietly), found at its next producer check (a second at most) and dead about 30 seconds after.
+BOOST_AUTO_TEST_CASE(legacy_parity_spent_and_orphaned_mines_go)
+{
+	Field field(2, false);
+	const ecs::Entity cluster = field.Mine(300, false);
+	std::size_t blasts = 0;
+	for (int step = 0; step < 8; ++step)
+	{
+		const ecs::Entity tank = field.Body(2, 320, 10);
+		blasts += field.Step().size();
+		field.world.Destroy(tank);
+	}
+	BOOST_TEST(blasts == 8u);
+	BOOST_TEST_REQUIRE(field.world.Get<Lifetime>(cluster) != nullptr);
+	BOOST_TEST(field.world.Get<Lifetime>(cluster)->deletes == 1u);
+
+	const ecs::Entity producer = field.Body(0, 800, 10);
+	const ecs::Entity mine = field.Mine(600, true);
+	field.world.Get<Minefield>(mine)->producer = producer;
+	field.Step();
+	field.world.Destroy(producer);
+	// Found gone at its next check (CreatorDeathCheckRate: a second).
+	int waited = 0;
+	while (field.Data(mine).draining == 0 && waited < 40)
+	{
+		field.Step();
+		++waited;
+	}
+	BOOST_TEST(waited <= 30);
+	BOOST_TEST(field.Data(mine).draining == 1u);
+	field.Step();
+	BOOST_TEST(field.world.Get<HealthFloor>(mine) == nullptr);
+	std::size_t quiet = 0;
+	int ticks = 0;
+	while (field.world.Get<Dying>(mine) == nullptr && IsDead(*field.world.Get<Health>(mine)) == false && ticks < 2000)
+	{
+		quiet += field.Step().size();
+		++ticks;
+	}
+	BOOST_TEST(quiet == 0u); // spent quietly, not set off
+	// 100 at 100 * 3.33% / 30 = 0.111 a tick: about 901 ticks (3.33 in 16-bit fixed point: within a tick or two).
+	BOOST_TEST(ticks >= 897);
+	BOOST_TEST(ticks <= 903);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(mines_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Field field(workers, false);
+		std::vector<ecs::Entity> tanks;
+		for (int index = 0; index < 12; ++index)
+			field.Mine(100 + index * 60, index % 2 == 0);
+		for (int index = 0; index < 20; ++index)
+			tanks.push_back(field.Body(static_cast<std::uint32_t>(index % 3), 90 + index * 37, 8));
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 40; ++step)
+		{
+			for (const ecs::Entity tank : tanks)
+				field.world.Get<Transform>(tank)->position.x += Fixed::FromInt(4);
+			field.Step();
+			hashes.push_back(field.world.StateHash());
+		}
+		return hashes;
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Field saved(2);
+	const ecs::Entity tank = saved.Body(2, 535, 10);
+	saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Field loaded(3, false);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	for (int step = 0; step < 10; ++step)
+	{
+		saved.world.Get<Transform>(tank)->position.x -= Fixed::FromInt(3);
+		loaded.world.Get<Transform>(tank)->position.x -= Fixed::FromInt(3);
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+// MinefieldBehavior::onCollide / update with MAX_IMMUNITY: an enemy clearing mines (attacking something with a
+// WEAPON_ANTI_MINE weapon in hand: isClearingMines, with a goal object) that stands in a mine is made immune to it
+// instead of setting it off, and stays immune while it keeps touching it, even once it stops clearing. Clear of the mine
+// for more than 2 frames, its immunity lapses, and touching the mine again (not clearing) sets it off.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mine_clearer_is_immune_while_it_touches_the_mine)
+{
+	Field field(2);
+	const ecs::Entity other = field.Body(2, 900, 5);
+	const ecs::Entity clearer = field.Body(2, 535, 10);
+	field.world.Add<Armament>(clearer);
+	field.world.Get<Armament>(clearer)->weapon = field.clearingWeapon;
+	field.world.Add<AttackTarget>(clearer);
+	field.world.Get<AttackTarget>(clearer)->target = other;
+	BOOST_TEST(field.Step().empty());
+	BOOST_TEST((field.Data(field.mine).immunes[0].who == clearer));
+	*field.world.Get<AttackTarget>(clearer) = AttackTarget{};
+	for (int tick = 0; tick < 5; ++tick)
+		BOOST_TEST(field.Step().empty());
+	BOOST_TEST(field.Data(field.mine).remaining == 8u);
+	field.world.Get<Transform>(clearer)->position.x = Fixed::FromInt(700);
+	for (int tick = 0; tick < 3; ++tick)
+		field.Step();
+	BOOST_TEST((field.Data(field.mine).immunes[0].who == ecs::Entity{}));
+	field.world.Get<Transform>(clearer)->position.x = Fixed::FromInt(535);
+	BOOST_TEST(field.Step().size() == 1u);
+	BOOST_TEST(field.Data(field.mine).remaining == 7u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -2,16 +2,8 @@ module;
 // MSVC needs Tracy's static helpers when instantiating instrumented module templates.
 #define BOOST_TEST_MODULE DazzleDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Dazzles.Drawing.Tests;
+import std;
 import Assets.Dazzles;
 import Graphics.RHI;
 import Graphics.Tests.Device;

@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <numbers>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Water.Waves;
+import std;
 export import Graphics.Scene.Water.Displacement;
 
 namespace Graphics

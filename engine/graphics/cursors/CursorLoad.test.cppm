@@ -2,13 +2,8 @@ module;
 #define BOOST_TEST_MODULE CursorLoadTests
 #include <boost/test/included/unit_test.hpp>
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <cstddef>
-#include <limits>
-#include <string>
-#include <string_view>
-#include <vector>
 export module Graphics.Cursors.Load.Tests;
+import std;
 import Graphics.Cursors.Load;
 
 namespace

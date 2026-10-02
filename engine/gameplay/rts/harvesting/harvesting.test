@@ -1,0 +1,400 @@
+#define BOOST_TEST_MODULE EngineGameplayHarvesting
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.containment.components.cargo_size;
+import engine.gameplay.rts.harvesting.systems.harvest_roster_system;
+import engine.gameplay.rts.harvesting.systems.harvest_system;
+import engine.gameplay.rts.docking.systems.dock_system;
+import engine.gameplay.rts.movement.systems.movement_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+using Engine::Math::FixedVector3;
+
+namespace
+{
+LocomotorDefinition Truck()
+{
+	LocomotorDefinition truck;
+	truck.maxSpeed = Fixed::FromInt(2);
+	truck.acceleration = Fixed::FromRatio(1, 2);
+	truck.braking = Fixed::FromRatio(1, 2);
+	truck.turnRate = Engine::Math::TurnFromDegrees(15);
+	truck.appearance = LocomotorAppearance::FourWheels;
+	return truck;
+}
+
+struct Base
+{
+	explicit Base(std::size_t workers = 1)
+	{
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<Transport>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Targetable>();
+		world.RegisterComponent<DefinitionRef>();
+		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<PathCompleted>();
+		world.RegisterComponent<MoveEnded>();
+		world.RegisterComponent<Harvester>();
+		world.RegisterComponent<Docking>();
+		world.RegisterComponent<Dock>();
+		world.RegisterComponent<DockLook>();
+		world.RegisterComponent<CargoSize>();
+		world.RegisterComponent<ResourceStore>();
+		world.RegisterComponent<ResourceDepot>();
+		world.RegisterComponent<Lifetime>();
+		world.FinalizeComponents();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(4000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<WaypointGraph>();
+		world.EmplaceResource<RandomSeed>();
+		world.EmplaceResource<NavigationGrid>();
+		world.EmplaceResource<Relationships>(3u);
+		world.EmplaceResource<PlayerMoney>().Resize(3);
+		world.EmplaceResource<PlayerUpgrades>().Resize(3);
+		world.EmplaceResource<HarvestRoster>();
+		world.EmplaceResource<HarvestEvents>();
+		HarvestCatalog &catalog = world.EmplaceResource<HarvestCatalog>();
+		catalog.valuePerBox = 75;
+		catalog.homeRank = {HarvestCatalog::NoHome, 0, 1}; // definition 1: a cash generator; 2: a command centre
+		registry.Register(roster);
+		registry.Register(harvest);
+		registry.Register(docks);
+		registry.Register(movement);
+		registry.OrderBefore<HarvestRosterSystem, HarvestSystem>();
+		registry.OrderBefore<HarvestSystem, DockSystem>();
+		registry.OrderBefore<DockSystem, MovementSystem>();
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Thing(FixedVector2 at, std::uint32_t player, Fixed radius, std::uint32_t definition = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Targetable>(entity);
+		world.Add<DefinitionRef>(entity);
+		world.Get<Transform>(entity)->position = {at.x, at.y, {}};
+		world.Get<Owner>(entity)->player = player;
+		world.Get<Targetable>(entity)->radius = radius;
+		world.Get<DefinitionRef>(entity)->index = definition;
+		return entity;
+	}
+
+	// A boneless dock that takes any number of movers and none through it (a supply dock, a supply centre).
+	ecs::Entity Boneless(FixedVector2 at, std::uint32_t player)
+	{
+		const ecs::Entity entity = Thing(at, player, Fixed::FromInt(20), 1);
+		world.Add<Dock>(entity);
+		Dock &dock = *world.Get<Dock>(entity);
+		dock.dynamic = true;
+		dock.passthrough = false;
+		dock.majorRadius = Fixed::FromInt(20);
+		return entity;
+	}
+
+	ecs::Entity Store(FixedVector2 at, std::uint32_t boxes, bool deleteWhenEmpty = false, std::uint32_t player = 2)
+	{
+		const ecs::Entity entity = Boneless(at, player);
+		world.Get<Dock>(entity)->drawsIn = true;
+		world.Add<ResourceStore>(entity);
+		*world.Get<ResourceStore>(entity) = {boxes, boxes, deleteWhenEmpty, true};
+		return entity;
+	}
+
+	ecs::Entity Depot(FixedVector2 at, std::uint32_t player = 0)
+	{
+		const ecs::Entity entity = Boneless(at, player);
+		world.Add<ResourceDepot>(entity);
+		return entity;
+	}
+
+	// A China supply truck: 4 boxes, 1000 ms a box at a store, 400 ms at a depot (ceil to ticks: 30, 12), 700 scan.
+	ecs::Entity Harvesting(FixedVector2 at, std::uint32_t player = 0, bool wanting = true)
+	{
+		const ecs::Entity entity = Thing(at, player, Fixed::FromInt(10));
+		world.Add<Locomotion>(entity);
+		world.Add<MoveOrder>(entity);
+		world.Add<Harvester>(entity);
+		world.Add<Docking>(entity);
+		*world.Get<Locomotion>(entity) = MakeLocomotion(Truck());
+		Harvester &harvester = *world.Get<Harvester>(entity);
+		harvester.maxBoxes = 4;
+		harvester.storeDelay = 30;
+		harvester.depotDelay = 12;
+		harvester.scanDistance = Fixed::FromInt(700);
+		harvester.forceWanting = wanting;
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	// Steps until `done` holds (or gives up); the tick it first held.
+	template<typename Done>
+	std::uint64_t Until(Done &&done, int most = 3000)
+	{
+		for (int step = 0; step < most; ++step)
+		{
+			Step();
+			if (done())
+				return tick;
+		}
+		return 0;
+	}
+
+	std::uint64_t UntilPhase(ecs::Entity truck, DockPhase phase)
+	{
+		return Until([&] { return world.Get<Docking>(truck)->phase == phase; });
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	HarvestRosterSystem roster;
+	HarvestSystem harvest;
+	DockSystem docks;
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(harvesting)
+
+// SupplyTruckStateMachine: a new truck starts Busy and, idle, goes Idle at once; told to go harvesting
+// (setForceWantingState, e.g. SupplyCenterProductionExitUpdate) it is Wanting that tick and docks with the store
+// the next (SupplyTruckWantsToPickUpOrDeliverBoxesState::update -> aiDock; success -> Busy -> ownerDocking ->
+// Docking in the same frame; AIDockApproachState::onEnter reserves the approach point and sets off).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_truck_told_to_harvest_docks_with_the_nearest_store)
+{
+	Base base;
+	const ecs::Entity nearest = base.Store({Fixed::FromInt(260), Fixed::FromInt(100)}, 400);
+	base.Store({Fixed::FromInt(400), Fixed::FromInt(100)}, 400);
+	const ecs::Entity idle = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(300)}, 0, false);
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	base.Step();
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Wanting));
+	BOOST_TEST((base.world.Get<Harvester>(idle)->state == HarvesterState::Idle));
+	BOOST_TEST(!IsDocking(*base.world.Get<Docking>(truck)));
+	base.Step();
+	const Harvester &harvester = *base.world.Get<Harvester>(truck);
+	const Docking &docking = *base.world.Get<Docking>(truck);
+	BOOST_TEST((harvester.state == HarvesterState::Docking));
+	BOOST_TEST((docking.dock == nearest));
+	BOOST_TEST((docking.phase == DockPhase::Approach));
+	BOOST_TEST(docking.slot == 0);
+	// A boneless dock's approach point: half its major radius out from its centre toward the truck.
+	const MoveOrder &order = *base.world.Get<MoveOrder>(truck);
+	BOOST_TEST((order.mode == MoveMode::Point));
+	BOOST_TEST(order.destination.x.Raw() == Fixed::FromInt(250).Raw());
+	BOOST_TEST(order.destination.y.Raw() == Fixed::FromInt(100).Raw());
+	// The one never told stays idle where it is.
+	for (int step = 0; step < 60; ++step)
+		base.Step();
+	BOOST_TEST((base.world.Get<Harvester>(idle)->state == HarvesterState::Idle));
+	BOOST_TEST(!IsDocking(*base.world.Get<Docking>(idle)));
+}
+
+// DockUpdate::update gives the turn the frame after the truck reached its point (the dock updates before its
+// docker); AIDockWaitForClearanceState then succeeds that frame. A boneless dock's entry, action and exit points
+// are where the truck stands (one frame each to "arrive"). AIDockProcessDockState: the first action
+// SupplyWarehouseActionDelay after it began, then one box every delay while the truck has room; the action that
+// finds it full ends the business (SupplyTruckAIUpdate::gainOneBox), and the truck leaves. Out, the docking is over
+// and the next frame the truck (Docking, idle: ownerAvailableForSupplying) wants again; the frame after that it
+// docks with its depot, where SupplyCenterDockUpdate::action pays every box at ValuePerSupplyBox one
+// SupplyCenterActionDelay after it began.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_truck_fills_up_one_box_a_delay_and_delivers_them_all_at_once)
+{
+	Base base;
+	const ecs::Entity store = base.Store({Fixed::FromInt(260), Fixed::FromInt(100)}, 400);
+	const ecs::Entity depot = base.Depot({Fixed::FromInt(-60), Fixed::FromInt(100)});
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	const std::uint64_t waiting = base.UntilPhase(truck, DockPhase::WaitForClearance);
+	BOOST_TEST_REQUIRE(waiting != 0);
+	BOOST_TEST(base.world.Get<Docking>(truck)->queued == waiting + 1);
+	base.Step();
+	BOOST_TEST((base.world.Get<Docking>(truck)->phase == DockPhase::MoveToEntry));
+	BOOST_TEST(base.world.Get<Docking>(truck)->granted);
+	base.Step();
+	BOOST_TEST((base.world.Get<Docking>(truck)->phase == DockPhase::MoveToDock));
+	BOOST_TEST(base.world.Get<Docking>(truck)->slot == -1);
+	base.Step();
+	BOOST_TEST((base.world.Get<Docking>(truck)->phase == DockPhase::Process));
+	const std::uint64_t process = base.tick;
+	BOOST_TEST(process == waiting + 3);
+	std::vector<std::uint64_t> boxes;
+	std::uint32_t carried = 0;
+	const std::uint64_t leaving = base.Until([&] {
+		if (base.world.Get<Harvester>(truck)->boxes != carried)
+		{
+			carried = base.world.Get<Harvester>(truck)->boxes;
+			boxes.push_back(base.tick);
+		}
+		return base.world.Get<Docking>(truck)->phase == DockPhase::MoveToExit;
+	});
+	BOOST_TEST(boxes == (std::vector<std::uint64_t>{process + 30, process + 60, process + 90, process + 120}), boost::test_tools::per_element());
+	BOOST_TEST(leaving == process + 150);
+	BOOST_TEST(base.world.Get<ResourceStore>(store)->boxes == 396u);
+	base.Step();
+	BOOST_TEST(!IsDocking(*base.world.Get<Docking>(truck)));
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Docking));
+	base.Step();
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Wanting));
+	base.Step();
+	BOOST_TEST((base.world.Get<Docking>(truck)->dock == depot));
+	const std::int64_t before = base.world.Resource<PlayerMoney>().Balance(0);
+	BOOST_TEST_REQUIRE(base.UntilPhase(truck, DockPhase::Process) != 0);
+	const std::uint64_t delivering = base.tick;
+	const std::uint64_t paid = base.Until([&] { return base.world.Resource<PlayerMoney>().Balance(0) != before; });
+	BOOST_TEST(paid == delivering + 12);
+	BOOST_TEST(base.world.Resource<PlayerMoney>().Balance(0) - before == 4 * 75);
+	BOOST_TEST(base.world.Get<Harvester>(truck)->boxes == 0u);
+	BOOST_TEST((base.world.Get<Docking>(truck)->phase == DockPhase::MoveToExit));
+	std::size_t delivered = 0;
+	base.world.Resource<HarvestEvents>().ForEach([&](const HarvestEvent &event) {
+		delivered += event.kind == HarvestEvent::Kind::Delivered && event.amount == 300 && event.harvester == truck ? 1 : 0;
+	});
+	BOOST_TEST(delivered == 1u);
+	// And round again: back to the store.
+	BOOST_TEST(base.Until([&] { return base.world.Get<Docking>(truck)->dock == store; }) != 0);
+}
+
+// DockUpdate: one active docker at a time; the rest wait at their approach points in the ready queue (first to
+// arrive, first served), each taking the dock's turn the frame after the one before it has left.
+BOOST_AUTO_TEST_CASE(legacy_parity_trucks_queue_at_a_store_and_take_turns)
+{
+	Base base;
+	const ecs::Entity store = base.Store({Fixed::FromInt(260), Fixed::FromInt(100)}, 400);
+	const ecs::Entity first = base.Harvesting({Fixed::FromInt(150), Fixed::FromInt(100)});
+	const ecs::Entity second = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(140)});
+	base.Step();
+	base.Step();
+	BOOST_TEST((base.world.Get<Docking>(first)->dock == store));
+	BOOST_TEST((base.world.Get<Docking>(second)->dock == store));
+	BOOST_TEST(base.world.Get<Docking>(first)->slot != base.world.Get<Docking>(second)->slot);
+	BOOST_TEST_REQUIRE(base.UntilPhase(first, DockPhase::Process) != 0);
+	// The second waits its turn while the first fills up.
+	BOOST_TEST_REQUIRE(base.Until([&] { return base.world.Get<Docking>(second)->phase == DockPhase::WaitForClearance; }, 200) != 0);
+	BOOST_TEST(!base.world.Get<Docking>(second)->granted);
+	const std::uint64_t left = base.Until([&] { return !IsDocking(*base.world.Get<Docking>(first)); });
+	BOOST_TEST_REQUIRE(left != 0);
+	BOOST_TEST(!base.world.Get<Docking>(second)->granted);
+	base.Step();
+	BOOST_TEST(base.world.Get<Docking>(second)->granted);
+	BOOST_TEST((base.world.Get<Docking>(second)->phase == DockPhase::MoveToEntry));
+}
+
+// SupplyWarehouseDockUpdate::action with DeleteWhenEmpty: the last box taken, the store is destroyed and the truck
+// leaves with what it has; SupplyTruckAIUpdate::gainOneBox speaks (supplies depleted) with no other store near by.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_emptied_pile_is_destroyed)
+{
+	Base base;
+	const ecs::Entity pile = base.Store({Fixed::FromInt(260), Fixed::FromInt(100)}, 2, true);
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	BOOST_TEST_REQUIRE(base.UntilPhase(truck, DockPhase::Process) != 0);
+	bool depleted = false;
+	const std::uint64_t leaving = base.Until([&] {
+		base.world.Resource<HarvestEvents>().ForEach([&](const HarvestEvent &event) { depleted = depleted || event.kind == HarvestEvent::Kind::Depleted; });
+		return base.world.Get<Docking>(truck)->phase == DockPhase::MoveToExit;
+	});
+	BOOST_TEST(leaving != 0);
+	BOOST_TEST(depleted);
+	BOOST_TEST(base.world.Get<Harvester>(truck)->boxes == 2u);
+	BOOST_TEST(base.world.Get<ResourceStore>(pile)->boxes == 0u);
+	const Lifetime *gone = base.world.Get<Lifetime>(pile);
+	BOOST_TEST_REQUIRE(gone != nullptr);
+	BOOST_TEST(gone->deletes == 1u);
+}
+
+// canTransferSuppliesAt: never an enemy's store; findBestSupplyWarehouse: only within SupplyWarehouseScanDistance
+// (twice that for a computer player). With nothing to be had the truck regroups (RegroupingState): to the nearest of
+// its cash generators, else command centres; once there it looks again.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_truck_skips_enemy_and_far_stores_and_regroups_at_home)
+{
+	Base base;
+	base.world.Resource<Relationships>().Set(1, 0, Relationship::Enemies);
+	base.Store({Fixed::FromInt(200), Fixed::FromInt(100)}, 400, false, 1); // an enemy's
+	const ecs::Entity distant = base.Store({Fixed::FromInt(1000), Fixed::FromInt(100)}, 400); // 900 away
+	const ecs::Entity centre = base.Thing({Fixed::FromInt(-300), Fixed::FromInt(100)}, 0, Fixed::FromInt(30), 2);
+	const ecs::Entity cash = base.Thing({Fixed::FromInt(100), Fixed::FromInt(400)}, 0, Fixed::FromInt(20), 1);
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	base.Step();
+	base.Step();
+	BOOST_TEST(!IsDocking(*base.world.Get<Docking>(truck)));
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Regrouping));
+	// To the cash generator (preferred over the nearer command centre), somewhere within 100 of it.
+	const MoveOrder &order = *base.world.Get<MoveOrder>(truck);
+	BOOST_TEST((order.mode == MoveMode::Point));
+	BOOST_TEST((Engine::Math::Distance(order.destination, base.world.Get<Transform>(cash)->position.XY()) <= Fixed::FromInt(100)));
+	(void)centre;
+	// A computer player looks twice as distant: it takes the distant store.
+	base.world.Resource<HarvestCatalog>().computer = {1};
+	BOOST_TEST(base.Until([&] { return base.world.Get<Docking>(truck)->dock == distant; }, 600) != 0);
+}
+
+// ResourceGatheringManager::findBestSupplyWarehouse walks only the warehouses SupplyWarehouseCreate listed: a truck
+// looking for supplies passes over a nearer store that no such module listed, and takes the listed one further off.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_truck_finds_only_listed_stores)
+{
+	Base base;
+	const ecs::Entity unlisted = base.Store({Fixed::FromInt(150), Fixed::FromInt(100)}, 400);
+	base.world.Get<ResourceStore>(unlisted)->listed = false;
+	const ecs::Entity listed = base.Store({Fixed::FromInt(180), Fixed::FromInt(100)}, 400);
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	BOOST_TEST(base.Until([&] { return base.world.Get<Docking>(truck)->dock == listed; }, 60) != 0);
+	BOOST_TEST((base.world.Get<Docking>(truck)->dock != unlisted));
+}
+
+// SupplyTruckAIUpdate::privateIdle from the player (a stop) forces Busy; Busy and idle, it is Idle, and stays so:
+// a truck its player stopped does not go back to harvesting on its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stopped_truck_stays_idle)
+{
+	Base base;
+	base.Store({Fixed::FromInt(260), Fixed::FromInt(100)}, 400);
+	const ecs::Entity truck = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)});
+	base.Step();
+	base.Step();
+	BOOST_TEST(IsDocking(*base.world.Get<Docking>(truck)));
+	*base.world.Get<Docking>(truck) = {};
+	base.world.Get<MoveOrder>(truck)->mode = MoveMode::Idle;
+	base.world.Get<Harvester>(truck)->forceBusy = true;
+	base.world.Get<Harvester>(truck)->directed = true;
+	base.Step();
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Idle));
+	for (int step = 0; step < 90; ++step)
+		base.Step();
+	BOOST_TEST((base.world.Get<Harvester>(truck)->state == HarvesterState::Idle));
+	BOOST_TEST(!IsDocking(*base.world.Get<Docking>(truck)));
+}
+
+// ChinookTakeoffOrLandingState::onEnter (landing): a supply carrier that lands on transport duty loses its boxes.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_carrier_landing_on_transport_duty_loses_its_supplies)
+{
+	Base base;
+	const ecs::Entity chinook = base.Harvesting({Fixed::FromInt(100), Fixed::FromInt(100)}, 0, false);
+	base.world.Get<Harvester>(chinook)->boxes = 3;
+	base.world.Add<Transport>(chinook);
+	base.Step();
+	BOOST_TEST(base.world.Get<Harvester>(chinook)->boxes == 3u);
+	base.world.Get<Transport>(chinook)->landing = true;
+	base.Step();
+	BOOST_TEST(base.world.Get<Harvester>(chinook)->boxes == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

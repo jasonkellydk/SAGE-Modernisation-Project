@@ -1,0 +1,1792 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationInteraction
+#include <boost/test/included/unit_test.hpp>
+
+#include <cmath>
+#include <variant>
+#include <vector>
+
+import games.generalszh.gameplay.containment.components.railed_transport;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.content.objects.object_status;
+import engine.gameplay.rts.vision.resources.shroud_map;
+import games.generalszh.gameplay.powers.components.spectre_gunship;
+import games.generalszh.gameplay.powers.components.particle_cannon;
+import games.generalszh.presentation.interaction.algorithms.selection_rules;
+import games.generalszh.presentation.interaction.systems.interaction_systems;
+import games.generalszh.presentation.interaction.systems.build_placement_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.FixedPresentation;
+import games.generalszh.gameplay.world.resources.deselections;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.rts.loadout.components.loadout;
+import games.generalszh.content.combat.loadout_content;
+import games.generalszh.content.objects.kind_of;
+import games.generalszh.content.control_bar.command_catalog;
+import games.generalszh.gameplay.powers.algorithms.power_targeting;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.common.health.components.inactive_body;
+import engine.gameplay.rts.construction.components.sale;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.rts.stealth.components.stealth;
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.containment.components.mount;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import games.generalszh.gameplay.containment.components.rider_change;
+import engine.gameplay.rts.harvesting.components.harvester;
+import engine.gameplay.rts.harvesting.components.resource_store;
+import engine.gameplay.rts.docking.components.dock;
+import engine.gameplay.common.healing.components.healing;
+import engine.gameplay.rts.powers.components.special_power_timers;
+import engine.gameplay.rts.powers.definitions.special_power_rules;
+import engine.gameplay.rts.powers.resources.shared_power_timers;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.common.physics.resources.physics_settings;
+import games.generalszh.gameplay.crates.components.pilot_seeker;
+import games.generalszh.gameplay.upgrades.components.command_set_override;
+
+using namespace generalszh::presentation;
+
+namespace
+{
+PickedObject Unit(std::uint32_t index, PickSide side = PickSide::Mine)
+{
+	PickedObject object;
+	object.entity = ecs::Entity{index, 1};
+	object.side = side;
+	return object;
+}
+
+PickedObject Building(std::uint32_t index, PickSide side = PickSide::Mine)
+{
+	PickedObject object = Unit(index, side);
+	object.structure = true;
+	return object;
+}
+
+const auto noCommand = [](std::size_t) { return false; };
+const auto anyCommand = [](std::size_t) { return true; };
+
+std::vector<std::uint32_t> Indices(const ClickSelection &selection)
+{
+	std::vector<std::uint32_t> out;
+	for (const ecs::Entity entity : selection.entities)
+		out.push_back(entity.index);
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(selection_rules)
+
+// SelectionTranslator::onMouseLeftClick: with nothing selected a click on one of mine selects it; with mine
+// selected, a click on another of mine without a context command for it (contextCommandForNewSelection:
+// newCountMine == 1, point, not prefer-selection -> evaluateContextCommand) replaces the selection.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_one_of_mine_selects_it)
+{
+	const std::vector<PickedObject> none;
+	const std::vector<PickedObject> tank{Unit(1)};
+	ClickSelection selection = LeftClickSelection(none, tank, true, false, false, false, false, noCommand);
+	BOOST_TEST((selection.outcome == ClickOutcome::Replace));
+	BOOST_TEST(Indices(selection) == std::vector<std::uint32_t>{1});
+	const std::vector<PickedObject> current{Unit(2), Unit(3)};
+	selection = LeftClickSelection(current, tank, true, false, false, false, false, noCommand);
+	BOOST_TEST((selection.outcome == ClickOutcome::Replace));
+	// One of mine that takes a command (a transport to enter): the click is the command's.
+	selection = LeftClickSelection(current, tank, true, false, false, false, false, anyCommand);
+	BOOST_TEST((selection.outcome == ClickOutcome::Pass));
+}
+
+// contextCommandForNewSelection: mine selected, a click on one enemy is its context command (attack) when there
+// is one; without one the enemy is selected alone. A drag over enemies is never theirs to select in numbers.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_an_enemy_attacks_or_selects_it)
+{
+	const std::vector<PickedObject> current{Unit(2)};
+	const std::vector<PickedObject> enemy{Unit(9, PickSide::Enemy)};
+	BOOST_TEST((LeftClickSelection(current, enemy, true, false, false, false, false, anyCommand).outcome == ClickOutcome::Pass));
+	const ClickSelection selected = LeftClickSelection(current, enemy, true, false, false, false, false, noCommand);
+	BOOST_TEST((selected.outcome == ClickOutcome::Replace));
+	BOOST_TEST(Indices(selected) == std::vector<std::uint32_t>{9});
+	const std::vector<PickedObject> enemies{Unit(8, PickSide::Enemy), Unit(9, PickSide::Enemy)};
+	BOOST_TEST((LeftClickSelection(current, enemies, false, false, false, false, false, noCommand).outcome == ClickOutcome::Pass));
+	// Force attack: never a command for new selection; one enemy is selected.
+	BOOST_TEST((LeftClickSelection(current, enemy, true, false, true, false, false, anyCommand).outcome == ClickOutcome::Replace));
+}
+
+// A drag selects my units, not my buildings, unless one building is the only selectable thing picked.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_drag_takes_units_before_buildings)
+{
+	const std::vector<PickedObject> none;
+	const std::vector<PickedObject> mixed{Unit(1), Building(2), Unit(3), Unit(4, PickSide::Enemy)};
+	ClickSelection selection = LeftClickSelection(none, mixed, false, false, false, false, false, noCommand);
+	BOOST_TEST((selection.outcome == ClickOutcome::Replace));
+	BOOST_TEST(Indices(selection) == (std::vector<std::uint32_t>{1, 3}));
+	// A building listed twice (its garrison passes selection to it: addDrawableToList) is still the one building.
+	const std::vector<PickedObject> building{Building(2), Building(2)};
+	selection = LeftClickSelection(none, building, false, false, false, false, false, noCommand);
+	BOOST_TEST(Indices(selection) == std::vector<std::uint32_t>{2});
+	const std::vector<PickedObject> twoBuildings{Building(2), Building(6)};
+	selection = LeftClickSelection(none, twoBuildings, false, false, false, false, false, noCommand);
+	BOOST_TEST(selection.entities.empty());
+	// Passengers are never selected themselves.
+	PickedObject passenger = Unit(7);
+	passenger.contained = true;
+	const std::vector<PickedObject> aboard{passenger, Unit(1)};
+	selection = LeftClickSelection(none, aboard, false, false, false, false, false, noCommand);
+	BOOST_TEST(Indices(selection) == std::vector<std::uint32_t>{1});
+}
+
+// Prefer-selection mode (shift): adds to a selection of mine, and a point on what is all selected deselects it;
+// a building of mine alone, or a selection holding others' objects, replaces instead.
+BOOST_AUTO_TEST_CASE(legacy_parity_prefer_selection_adds_and_toggles)
+{
+	const std::vector<PickedObject> current{Unit(2), Unit(3)};
+	const std::vector<PickedObject> another{Unit(4)};
+	BOOST_TEST((LeftClickSelection(current, another, true, true, false, false, false, anyCommand).outcome == ClickOutcome::Add));
+	const std::vector<PickedObject> again{Unit(3)};
+	const ClickSelection off = LeftClickSelection(current, again, true, true, false, false, true, noCommand);
+	BOOST_TEST((off.outcome == ClickOutcome::Deselect));
+	BOOST_TEST(Indices(off) == std::vector<std::uint32_t>{3});
+	const std::vector<PickedObject> barracks{Building(5)};
+	BOOST_TEST((LeftClickSelection(current, barracks, true, true, false, false, false, noCommand).outcome == ClickOutcome::Replace));
+	const std::vector<PickedObject> enemySelected{Unit(9, PickSide::Enemy)};
+	BOOST_TEST((LeftClickSelection(enemySelected, another, true, true, false, false, false, noCommand).outcome == ClickOutcome::Replace));
+}
+
+// MetaEventTranslator::onMouseEvent: a release under DragTolerance (25) on both axes is a point.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_is_a_point_under_the_drag_tolerance)
+{
+	BOOST_TEST(IsPointClick(100, 100, 124, 76, 25));
+	BOOST_TEST(!IsPointClick(100, 100, 125, 100, 25));
+	BOOST_TEST(!IsPointClick(100, 100, 100, 75, 25));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace
+{
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+// A kinds mask of these names.
+generalszh::content::KindOfMask Kinds(std::initializer_list<std::string_view> names)
+{
+	generalszh::content::KindOfMask mask{};
+	for (const std::string_view name : names)
+	{
+		const std::size_t bit = generalszh::content::KindOfBit(name);
+		mask[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	}
+	return mask;
+}
+
+// A flat field seen straight down from 300 above (100, 100): 800 x 600 pixels, 60 degrees across.
+struct Field
+{
+	engine::level::Heightfield heights;
+	ecs::World world{ecs::WorldConfig{4}};
+	std::uint64_t frame{0};
+	std::uint32_t gun{0};
+
+	Field()
+	{
+		heights.width = 2;
+		heights.height = 2;
+		heights.cellSize = Fixed::FromInt(1000);
+		heights.heights.assign(4, Fixed{});
+		world.RegisterComponent<gp::Owner>();
+		world.RegisterComponent<gp::Targetable>();
+		world.RegisterComponent<gp::OffMap>();
+		world.RegisterComponent<gp::Health>();
+		world.RegisterComponent<gp::Armament>();
+		world.RegisterComponent<gp::WeaponSlots>();
+		world.RegisterComponent<gp::Slaved>();
+		world.RegisterComponent<gp::ScriptStatus>();
+		world.RegisterComponent<gp::DefinitionRef>();
+		world.RegisterComponent<gp::StatusFlags>();
+		world.RegisterComponent<gp::Loadout>();
+		world.RegisterComponent<gp::Transport>();
+		world.RegisterComponent<gp::BodyExtent>();
+		world.RegisterComponent<gp::Subdual>();
+		world.RegisterComponent<gp::UnderConstruction>();
+		world.RegisterComponent<generalszh::gameplay::ParticleCannon>();
+		world.RegisterComponent<generalszh::gameplay::SpectreGunship>();
+		world.RegisterComponent<gp::Transform>();
+		world.RegisterComponent<gp::WeaponBonusConditions>();
+		world.RegisterComponent<gp::Dying>();
+		world.RegisterComponent<gp::InactiveBody>();
+		world.RegisterComponent<gp::Sale>();
+		world.RegisterComponent<gp::Builder>();
+		world.RegisterComponent<gp::TeamMember>();
+		world.RegisterComponent<gp::Disabled>();
+		world.RegisterComponent<gp::Stealth>();
+		world.RegisterComponent<gp::Garrison>();
+		world.RegisterComponent<gp::Mount>();
+		world.RegisterComponent<generalszh::gameplay::RiderChange>();
+		world.RegisterComponent<gp::Passenger>();
+		world.RegisterComponent<gp::Harvester>();
+		world.RegisterComponent<gp::ResourceStore>();
+		world.RegisterComponent<gp::ResourceDepot>();
+		world.RegisterComponent<gp::Dock>();
+		world.RegisterComponent<generalszh::gameplay::RailedTransport>();
+		world.RegisterComponent<gp::HealLock>();
+		world.RegisterComponent<gp::SpecialPowerTimers>();
+		world.RegisterComponent<gp::Jet>();
+		world.RegisterComponent<gp::Airfield>();
+		world.RegisterComponent<gp::Experience>();
+		world.RegisterComponent<gp::Locomotion>();
+		world.RegisterComponent<generalszh::gameplay::PilotSeeker>();
+		world.RegisterComponent<generalszh::gameplay::CommandSetOverride>();
+		world.RegisterComponent<Selected>();
+		world.FinalizeComponents();
+		world.EmplaceResource<gp::CargoManifest>();
+		world.EmplaceResource<gp::SpecialPowerRules>();
+		world.EmplaceResource<gp::SharedPowerTimers>();
+		world.EmplaceResource<gp::PhysicsSettings>();
+		world.EmplaceResource<gp::GroundHeight>(heights);
+		world.EmplaceResource<generalszh::gameplay::Deselections>();
+		world.EmplaceResource<gp::ShroudMap>().Init(Fixed::FromInt(2000), Fixed::FromInt(2000), Fixed::FromInt(10), 2, 0);
+		gp::Relationships &relationships = world.EmplaceResource<gp::Relationships>(2u);
+		relationships.Set(0, 1, gp::Relationship::Enemies);
+		relationships.Set(1, 0, gp::Relationship::Enemies);
+		gp::WeaponDefinition rifle;
+		rifle.attackRange = Fixed::FromInt(100);
+		gun = world.EmplaceResource<gp::WeaponCatalog>().Add(rifle);
+		world.EmplaceResource<gp::VisibleObjects>().Reset(1);
+		world.EmplaceResource<PointerInput>();
+		world.EmplaceResource<PointerHits>();
+		InteractionView &view = world.EmplaceResource<InteractionView>();
+		view = {{100, 100, 300}, {1, 0, 0}, {0, 1, 0}, {0, 0, -1}, std::tan(0.5236f), std::tan(0.5236f) * 0.75f, 800, 600, true};
+		world.EmplaceResource<InteractionState>();
+		world.EmplaceResource<MouseSettings>();
+		world.EmplaceResource<SelectionBox>();
+		world.EmplaceResource<CursorState>();
+		world.EmplaceResource<GuiTargeting>();
+		world.Resource<MouseSettings>().cursorDirections[static_cast<std::size_t>(generalszh::content::MouseCursorKind::Scroll)] = 8;
+		SelectionCatalog &catalog = world.EmplaceResource<SelectionCatalog>();
+		catalog.byDefinition = {SelectionLook{select_kind::Selectable, 8.0f, 4.0f}};
+		world.EmplaceResource<LocalPlayer>(LocalPlayer{0, true});
+		world.EmplaceResource<PlayerOrders>();
+		world.EmplaceResource<UnitVoiceCues>();
+		world.EmplaceResource<BuildPlacement>();
+	}
+
+	ecs::Entity Tank(int x, int y, std::uint32_t player)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Owner>(entity);
+		world.Add<gp::Targetable>(entity);
+		world.Add<gp::Health>(entity);
+		world.Add<gp::Armament>(entity);
+		world.Add<gp::Transform>(entity);
+		world.Get<gp::Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<gp::Owner>(entity) = {player};
+		*world.Get<gp::Targetable>(entity) = {Fixed::FromInt(5), gp::target_class::Ground};
+		*world.Get<gp::Health>(entity) = {Fixed::FromInt(100), Fixed::FromInt(100)};
+		world.Get<gp::Armament>(entity)->weapon = gun;
+		world.Add<gp::DefinitionRef>(entity); // every object is of a definition (the catalog's first here)
+		gp::VisibleObject seen;
+		seen.entity = entity;
+		seen.player = player;
+		seen.transform.position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		world.Resource<gp::VisibleObjects>().SlotAt(0).push_back(seen);
+		return entity;
+	}
+
+	// The models' pick at (x, y), stood in for (these objects have no models): each object whose catalog sphere
+	// (its centre and radius, projected) covers the pixel, nearest the eye first. What a hit leads to is under test
+	// here; the pick itself is the models' (generalszh_presentation_models_tests).
+	void CastPointer(float x, float y)
+	{
+		PointerHits &hits = world.Resource<PointerHits>();
+		hits.x = x;
+		hits.y = y;
+		hits.hits.clear();
+		const InteractionView &view = world.Resource<InteractionView>();
+		const SelectionCatalog &catalog = world.Resource<SelectionCatalog>();
+		world.Resource<gp::VisibleObjects>().ForEach([&](const gp::VisibleObject &object) {
+			const SelectionLook *look = catalog.Of(object.definition);
+			if (look == nullptr)
+				return;
+			const float px = Engine::Math::ToFloat(object.transform.position.x), py = Engine::Math::ToFloat(object.transform.position.y),
+						pz = Engine::Math::ToFloat(object.transform.position.z) + look->center;
+			float sx = 0, sy = 0, ex = 0, ey = 0;
+			if (!view.Project(px, py, pz, sx, sy) ||
+				!view.Project(px + view.right[0] * look->radius, py + view.right[1] * look->radius, pz + view.right[2] * look->radius, ex, ey))
+				return;
+			if (std::hypot(x - sx, y - sy) > std::hypot(ex - sx, ey - sy))
+				return;
+			const float depth = (px - view.eye[0]) * view.forward[0] + (py - view.eye[1]) * view.forward[1] + (pz - view.eye[2]) * view.forward[2];
+			hits.hits.push_back({(static_cast<std::uint64_t>(object.entity.index) << 32) | object.entity.generation, depth / 10000.0f});
+		});
+		std::ranges::stable_sort(hits.hits, {}, &PointerHit::fraction);
+	}
+
+	// One frame with the pointer at (x, y), these buttons going down and coming up.
+	void Frame(float x, float y, std::uint8_t pressed = 0, std::uint8_t released = 0, bool shift = false)
+	{
+		CastPointer(x, y);
+		PointerInput &pointer = world.Resource<PointerInput>();
+		pointer.x = x;
+		pointer.y = y;
+		pointer.pressed = pressed;
+		pointer.released = released;
+		pointer.shift = shift;
+		pointer.timeMs = static_cast<std::uint32_t>(frame * 33);
+		BuildPlacementSystem placement;
+		PointerInteractionSystem interaction;
+		ecs::SystemRegistry registry;
+		registry.Register(placement);
+		registry.Register(interaction);
+		registry.Finalize(world.Components());
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+		scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	}
+
+	void Click(float x, float y, std::uint8_t button = pointer_button::Left) { Frame(x, y, button, button); }
+	// An object of definition `definition` (its SelectionLook and kinds in the catalog) at (x, y) of `player`'s.
+	ecs::Entity Object(int x, int y, std::uint32_t player, std::uint32_t definition)
+	{
+		const ecs::Entity entity = Tank(x, y, player);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		world.Resource<gp::VisibleObjects>().SlotAt(0).back().definition = definition;
+		return entity;
+	}
+	// Selects `entity` by clicking it (nothing else selected).
+	void Select(ecs::Entity entity)
+	{
+		Click(10, 10, pointer_button::Right);
+		const auto at = world.Get<gp::Transform>(entity)->position;
+		const auto pixel = Pixel(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y));
+		Click(pixel[0], pixel[1]);
+	}
+	// The pointer resting over (or clicking) an object.
+	generalszh::content::MouseCursorKind HoverOver(ecs::Entity entity)
+	{
+		const auto at = world.Get<gp::Transform>(entity)->position;
+		const auto pixel = Pixel(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y));
+		return Hover(pixel[0], pixel[1]);
+	}
+	void ClickOn(ecs::Entity entity)
+	{
+		const auto at = world.Get<gp::Transform>(entity)->position;
+		const auto pixel = Pixel(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y));
+		Click(pixel[0], pixel[1]);
+	}
+	bool IsSelected(ecs::Entity entity) { return world.Side<Selected>().Get(entity) != nullptr; }
+	// The pointer resting at (x, y) for a frame: the cursor it gets.
+	generalszh::content::MouseCursorKind Hover(float x, float y)
+	{
+		Frame(x, y);
+		return world.Resource<CursorState>().cursor;
+	}
+	std::array<float, 2> Pixel(float x, float y)
+	{
+		std::array<float, 2> at{};
+		world.Resource<InteractionView>().Project(x, y, 4, at[0], at[1]);
+		return at;
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(pointer_interaction)
+
+// SelectionTranslator / CommandTranslator (default mouse setup): a click on a tank of mine selects it; a click on
+// the ground moves it there (the point under the pointer on the terrain); a click on an enemy it can shoot orders
+// the attack; a right click deselects; a drag selects mine within the box, not the enemy.
+BOOST_AUTO_TEST_CASE(clicks_select_move_and_attack_and_a_drag_box_selects)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity second = field.Tank(130, 100, 0);
+	const ecs::Entity enemy = field.Tank(150, 100, 1);
+	field.Click(400, 300);
+	BOOST_TEST(field.IsSelected(tank));
+	BOOST_TEST(!field.IsSelected(second));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *move = std::get_if<generalszh::commands::MoveTo>(&orders[0]);
+	BOOST_TEST_REQUIRE(move != nullptr);
+	BOOST_TEST((move->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(move->destination.x) - 100.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(move->destination.y) - 186.6f) < 0.5f); // 2/3 of the half view up at 300 deep
+	orders.clear();
+	float ex = 0, ey = 0;
+	field.world.Resource<InteractionView>().Project(150, 100, 4, ex, ey);
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *attack = std::get_if<generalszh::commands::Attack>(&orders[0]);
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	BOOST_TEST((attack->target == enemy));
+	BOOST_TEST(field.IsSelected(tank)); // attacking is not selecting
+	orders.clear();
+	field.Click(10, 10, pointer_button::Right);
+	BOOST_TEST(!field.IsSelected(tank));
+	// A drag across all three: my two tanks.
+	field.Frame(300, 200, pointer_button::Left);
+	field.Frame(560, 400);
+	BOOST_TEST(field.world.Resource<SelectionBox>().active);
+	field.Frame(560, 400, 0, pointer_button::Left);
+	BOOST_TEST(field.IsSelected(tank));
+	BOOST_TEST(field.IsSelected(second));
+	BOOST_TEST(!field.IsSelected(enemy));
+	BOOST_TEST(orders.empty());
+}
+
+// WeaponSet::getAbleToAttackSpecificObject (CMD_FROM_PLAYER): a click on a neutral object orders no attack, unless a
+// script or the map made it player-targetable (OBJECT_STATUS_SCRIPT_TARGETABLE); an ally's never.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_player_targetable_object_can_be_attacked_when_not_an_enemys)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity other = field.Tank(150, 100, 1);
+	auto &relationships = field.world.Resource<gp::Relationships>();
+	relationships.Set(0, 1, gp::Relationship::Neutral);
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	float ex = 0, ey = 0;
+	field.world.Resource<InteractionView>().Project(150, 100, 4, ex, ey);
+	field.Click(ex, ey);
+	BOOST_TEST(orders.empty());
+	field.world.Add<gp::ScriptStatus>(other);
+	field.world.Get<gp::ScriptStatus>(other)->Set(gp::script_status::Targetable, true);
+	field.Click(400, 300); // the neutral one was selected instead
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *attack = std::get_if<generalszh::commands::Attack>(&orders[0]);
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	BOOST_TEST((attack->target == other));
+	orders.clear();
+	relationships.Set(0, 1, gp::Relationship::Allies);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.Click(ex, ey);
+	BOOST_TEST(orders.empty());
+}
+
+// InGameUI's MOUSEMODE_BUILD_PLACE (handleBuildPlacements / getPlacementPoints): the ghost follows the ground under
+// the pointer; the left button anchors it, a drag turns it to face along the drag, and the release orders the build
+// at the anchor (DozerAIUpdate::construct through the command bus); the clicks neither select nor move. An illegal
+// place only drops the anchor; a right click gives placing up without ordering or deselecting.
+BOOST_AUTO_TEST_CASE(placing_a_structure_anchors_turns_and_orders_the_build)
+{
+	Field field;
+	const ecs::Entity worker = field.Tank(100, 100, 0);
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(worker));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BuildPlacement &placement = field.world.Resource<BuildPlacement>();
+	placement.active = true;
+	placement.structure = "GLABarracks";
+	placement.builder = worker;
+	placement.legal = true;
+	float ax = 0, ay = 0, bx = 0, by = 0;
+	InteractionView &view = field.world.Resource<InteractionView>();
+	view.Project(80, 120, 0, ax, ay);
+	view.Project(80, 160, 0, bx, by);
+	field.Frame(ax, ay);
+	BOOST_TEST(placement.onGround);
+	BOOST_TEST(std::abs(placement.at[0] - 80.0f) < 0.5f);
+	BOOST_TEST(std::abs(placement.at[1] - 120.0f) < 0.5f);
+	field.Frame(ax, ay, pointer_button::Left);
+	BOOST_TEST(placement.anchored);
+	field.Frame(bx, by); // dragged north: faces +y
+	BOOST_TEST(std::abs(placement.at[1] - 120.0f) < 0.5f);
+	BOOST_TEST(std::abs(placement.facing - 1.5708f) < 0.01f);
+	BOOST_TEST(!field.world.Resource<SelectionBox>().active);
+	field.Frame(bx, by, 0, pointer_button::Left);
+	BOOST_TEST(!placement.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *build = std::get_if<generalszh::commands::BuildStructure>(&orders[0]);
+	BOOST_TEST_REQUIRE(build != nullptr);
+	BOOST_TEST((build->builder == worker));
+	BOOST_TEST(build->structure == "GLABarracks");
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(build->position.x) - 80.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(build->position.y) - 120.0f) < 0.5f);
+	BOOST_TEST(build->facing == 0x40000000u); // a quarter turn
+	BOOST_TEST(field.IsSelected(worker));
+	orders.clear();
+
+	// Illegal: the release only lets go of the anchor; placing goes on.
+	placement.active = true;
+	placement.builder = worker;
+	placement.legal = false;
+	field.Click(ax, ay);
+	BOOST_TEST(placement.active);
+	BOOST_TEST(!placement.anchored);
+	BOOST_TEST(orders.empty());
+	// The right button gives up: no move, still selected.
+	field.Click(ax, ay, pointer_button::Right);
+	BOOST_TEST(!placement.active);
+	BOOST_TEST(orders.empty());
+	BOOST_TEST(field.IsSelected(worker));
+}
+
+// PlaceEventTranslator with a SPECIAL_POWER_CONSTRUCT button noted by the builder (the sneak attack): placed where it is
+// legal, MSG_DO_SPECIAL_POWER_AT_LOCATION goes instead of a build: the power at the spot, the placement's angle, the
+// button's options, the builder as its source.
+BOOST_AUTO_TEST_CASE(legacy_parity_placing_a_sneak_attack_fires_its_power_at_the_angle)
+{
+	Field field;
+	const ecs::Entity centre = field.Tank(100, 100, 0);
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BuildPlacement &placement = field.world.Resource<BuildPlacement>();
+	placement.active = true;
+	placement.structure = "GLASneakAttackTunnelNetwork";
+	placement.builder = centre;
+	placement.specialPower = "SuperweaponSneakAttack";
+	placement.options = 1u << 3;
+	placement.legal = true;
+	float ax = 0, ay = 0, bx = 0, by = 0;
+	InteractionView &view = field.world.Resource<InteractionView>();
+	view.Project(80, 120, 0, ax, ay);
+	view.Project(80, 160, 0, bx, by);
+	field.Frame(ax, ay, pointer_button::Left);
+	field.Frame(bx, by);
+	field.Frame(bx, by, 0, pointer_button::Left);
+	BOOST_TEST(!placement.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *power = std::get_if<generalszh::commands::UseSpecialPower>(&orders[0]);
+	BOOST_TEST_REQUIRE(power != nullptr);
+	BOOST_TEST((power->source == centre));
+	BOOST_TEST(power->power == "SuperweaponSneakAttack");
+	BOOST_TEST(power->atLocation);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(power->target.x) - 80.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(power->target.y) - 120.0f) < 0.5f);
+	BOOST_TEST(power->options == (1u << 3));
+	BOOST_TEST(power->angle == 0x40000000u); // a quarter turn
+}
+
+// CommandTranslator::evaluateContextCommand (ACTIONTYPE_GET_REPAIRED_AT, SELECTION_ANY): with a damaged tank selected,
+// a click on the player's repair pad orders it repaired there (MSG_GET_REPAIRED) instead of selecting the pad; whole,
+// the click selects the pad.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_a_repair_pad_sends_a_damaged_vehicle_to_it)
+{
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition = {SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f},
+		SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure | select_kind::RepairPad), 8.0f, 4.0f}};
+	catalog.kinds = {Kinds({"VEHICLE"}), Kinds({"STRUCTURE", "REPAIR_PAD"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity pad = field.Tank(150, 100, 0);
+	field.world.Add<gp::DefinitionRef>(tank);
+	field.world.Add<gp::DefinitionRef>(pad);
+	field.world.Get<gp::DefinitionRef>(pad)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[1].definition = 1;
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.world.Get<gp::Health>(tank)->current = Fixed::FromInt(40);
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	float ex = 0, ey = 0;
+	field.world.Resource<InteractionView>().Project(150, 100, 4, ex, ey);
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *repair = std::get_if<generalszh::commands::GetRepaired>(&orders[0]);
+	BOOST_TEST_REQUIRE(repair != nullptr);
+	BOOST_TEST((repair->depot == pad));
+	BOOST_TEST((repair->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(!field.IsSelected(pad));
+	orders.clear();
+	field.world.Get<gp::Health>(tank)->current = Fixed::FromInt(100);
+	field.Click(ex, ey);
+	BOOST_TEST(orders.empty());
+	BOOST_TEST(field.IsSelected(pad));
+}
+
+// CommandTranslator::evaluateContextCommand (ACTIONTYPE_CONVERT_OBJECT_TO_CARBOMB before ACTIONTYPE_ATTACK_OBJECT):
+// with a terrorist selected, a click on an enemy car it may make a car bomb (VEHICLE, as its collide requires) sends it
+// in (MSG_ENTER) rather than attacking; a car already on its CARBOMB set is attacked.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_a_car_sends_a_terrorist_to_make_it_a_car_bomb)
+{
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook terrorist{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	terrorist.carBomber = 0;
+	SelectionLook car{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f};
+	car.carBombable = true;
+	catalog.byDefinition = {terrorist, car};
+	generalszh::content::KindOfMask vehicle{};
+	vehicle[generalszh::content::KindOfBit("VEHICLE") / 64] |= std::uint64_t{1} << (generalszh::content::KindOfBit("VEHICLE") % 64);
+	catalog.kinds = {generalszh::content::KindOfMask{}, vehicle};
+	catalog.carBombers = {CarBomberKinds{vehicle, {}}};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0); // canConvertObjectToCarBomb: not fogged
+	const ecs::Entity bomber = field.Tank(100, 100, 0);
+	const ecs::Entity target = field.Tank(150, 100, 1);
+	field.world.Add<gp::DefinitionRef>(bomber);
+	field.world.Add<gp::DefinitionRef>(target);
+	field.world.Get<gp::DefinitionRef>(target)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[1].definition = 1;
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(bomber));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	float ex = 0, ey = 0;
+	field.world.Resource<InteractionView>().Project(150, 100, 4, ex, ey);
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->target == target));
+	BOOST_TEST((enter->units == std::vector<ecs::Entity>{bomber}));
+	orders.clear();
+	field.world.Add<gp::Loadout>(target);
+	field.world.Get<gp::Loadout>(target)->weaponFlags = generalszh::content::SetFlag(generalszh::content::WeaponSetFlagNames, "CARBOMB");
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::holds_alternative<generalszh::commands::Attack>(orders[0]));
+}
+
+// CommandTranslator::evaluateContextCommand (ACTIONTYPE_HIJACK_VEHICLE before ACTIONTYPE_ATTACK_OBJECT) and
+// handleHijackVehicleCommand (createEnterMessage): with a hijacker selected, a click on an enemy vehicle its collide
+// takes sends it in (MSG_ENTER) rather than attacking; a vehicle already HIJACKED is attacked.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_an_enemy_vehicle_sends_a_hijacker_in)
+{
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook jacker{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	jacker.hijacker = 0;
+	SelectionLook tank{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f};
+	catalog.byDefinition = {jacker, tank};
+	generalszh::content::KindOfMask vehicle{};
+	vehicle[generalszh::content::KindOfBit("VEHICLE") / 64] |= std::uint64_t{1} << (generalszh::content::KindOfBit("VEHICLE") % 64);
+	catalog.kinds = {generalszh::content::KindOfMask{}, vehicle};
+	catalog.hijackers = {CarBomberKinds{vehicle, {}}};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0); // canHijackVehicle: not fogged
+	const ecs::Entity hijacker = field.Tank(100, 100, 0);
+	const ecs::Entity target = field.Tank(150, 100, 1);
+	field.world.Add<gp::DefinitionRef>(hijacker);
+	field.world.Add<gp::DefinitionRef>(target);
+	field.world.Get<gp::DefinitionRef>(target)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[1].definition = 1;
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(hijacker));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	float ex = 0, ey = 0;
+	field.world.Resource<InteractionView>().Project(150, 100, 4, ex, ey);
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->target == target));
+	orders.clear();
+	field.world.Add<gp::StatusFlags>(target);
+	field.world.Get<gp::StatusFlags>(target)->bits = std::uint64_t{1} << generalszh::content::ObjectStatusBit("HIJACKED");
+	field.Click(ex, ey);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::holds_alternative<generalszh::commands::Attack>(orders[0]));
+}
+
+// CommandTranslator::evaluateContextCommand (canSelectedObjectsOverrideSpecialPowerDestination before every other context
+// command) and handleSpecialPowerOverrideDestinationCommand: with a Particle Cannon of mine selected while its beam is
+// firing, a click on the ground drives the beam there (MSG_DO_SPECIAL_POWER_OVERRIDE_DESTINATION for the selection),
+// even over an enemy; not where the ground is black to its player (canOverrideSpecialPowerDestination: the enemy is
+// attacked instead), nor while it is only charging (a plain move).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_firing_particle_cannon_is_driven_by_clicks)
+{
+	Field field;
+	const ecs::Entity uplink = field.Tank(100, 100, 0);
+	field.Tank(100, 186, 1); // an enemy under the second click
+	field.world.Add<generalszh::gameplay::ParticleCannon>(uplink);
+	auto &cannon = *field.world.Get<generalszh::gameplay::ParticleCannon>(uplink);
+	cannon.status = generalszh::gameplay::CannonStatus::Firing;
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(uplink));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	auto &shroud = field.world.Resource<gp::ShroudMap>();
+	field.Click(400, 100); // still black to its player: the enemy there is attacked as usual
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::Attack>(&orders[0]) != nullptr);
+	orders.clear();
+	shroud.RevealAllPermanently(0);
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *drive = std::get_if<generalszh::commands::SpecialPowerDestination>(&orders[0]);
+	BOOST_TEST_REQUIRE(drive != nullptr);
+	BOOST_TEST((drive->units == std::vector<ecs::Entity>{uplink}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(drive->position.y) - 186.6f) < 0.5f);
+	BOOST_TEST(field.IsSelected(uplink));
+	orders.clear();
+	cannon.status = generalszh::gameplay::CannonStatus::Charging;
+	field.Click(400, 50);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::SpecialPowerDestination>(&orders[0]) == nullptr);
+}
+
+// CommandTranslator's hints (MSG_MOUSEOVER_DRAWABLE_HINT / MSG_MOUSEOVER_LOCATION_HINT: evaluateContextCommand, or
+// evaluateForceAttack, with DO_HINT) as InGameUI::createMouseoverHint and createCommandHint turn them into the cursor,
+// with ActionManager::getCanAttackObject's results (WeaponSet::getAbleToAttackSpecificObject: POSSIBLE within the
+// current weapon's range between the bounding circles, POSSIBLE_AFTER_MOVING beyond it, INVALID_SHOT with no weapon for
+// the target's kind): nothing selected, one of mine may be selected (SELECTING), anything else is the arrow; with a
+// tank of mine selected the ground is a move (MOVETO), an enemy in range an attack (ATTACK_OBJECT), one out of range
+// OUTRANGE, one black to the player a move, an aircraft its rifle cannot hit GENERIC_INVALID; force-attacking, the
+// ground and objects are FORCE_ATTACK_GROUND / FORCE_ATTACK_OBJECT; a window under the pointer is the arrow; scrolling
+// (InGameUI::setScrolling) is SCROLL, turned by W3DMouse::setCursorDirection (frame 0 right, clockwise: up is 6 of 8).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_cursor_shows_what_a_click_would_do)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Tank(150, 100, 1);             // 50 apart: within 100 + 5 + 5
+	field.Tank(100, 220, 1);             // 120 apart: beyond it
+	const ecs::Entity jet = field.Tank(40, 100, 1);
+	field.world.Get<gp::Targetable>(jet)->classes = gp::target_class::AirborneVehicle;
+	const auto mineAt = field.Pixel(100, 100), nearAt = field.Pixel(150, 100), farAt = field.Pixel(100, 220), jetAt = field.Pixel(40, 100);
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+	BOOST_TEST((field.Hover(nearAt[0], nearAt[1]) == Cursor::Arrow));
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));
+	field.Click(mineAt[0], mineAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	BOOST_TEST((field.Hover(nearAt[0], nearAt[1]) == Cursor::Move)); // still black to the player
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	BOOST_TEST((field.Hover(nearAt[0], nearAt[1]) == Cursor::AttackObj));
+	BOOST_TEST((field.Hover(farAt[0], farAt[1]) == Cursor::OutRange));
+	BOOST_TEST((field.Hover(jetAt[0], jetAt[1]) == Cursor::GenericInvalid));
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.ctrl = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::ForceAttackGround));
+	BOOST_TEST((field.Hover(nearAt[0], nearAt[1]) == Cursor::ForceAttackObj));
+	pointer.ctrl = false;
+	pointer.overInterface = true;
+	BOOST_TEST((field.Hover(nearAt[0], nearAt[1]) == Cursor::Arrow));
+	pointer.overInterface = false;
+	pointer.scrolling = true;
+	pointer.scrollX = 0;
+	pointer.scrollY = -10; // up the screen
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Scroll));
+	BOOST_TEST(field.world.Resource<CursorState>().direction == 6);
+	pointer.scrollX = 10;
+	pointer.scrollY = 10; // down and right: 45 degrees clockwise from right
+	field.Hover(400, 60);
+	BOOST_TEST(field.world.Resource<CursorState>().direction == 1);
+	pointer.scrolling = false;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	BOOST_TEST(field.world.Resource<CursorState>().direction == 0);
+}
+
+// CommandTranslator::handleDefaultMoveCommand (DO_HINT) and InGameUI::createCommandHint: a move hint asks whether a selected
+// unit could path to the point (the host answers: rule_queries QueryQuickPath); where none could, MSG_DO_INVALID_HINT
+// shows GENERIC_INVALID in place of MOVETO. An answer for another point does not count; no hint (scrolling) asks nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_move_where_no_path_goes_shows_the_invalid_cursor)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	CursorState &cursor = field.world.Resource<CursorState>();
+	BOOST_TEST(cursor.quickPathAsked);
+	const std::array<float, 2> asked = cursor.quickPathAt;
+	cursor.quickPathAnsweredAt = asked;
+	cursor.quickPathBlocked = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::GenericInvalid));
+	BOOST_TEST((field.Hover(420, 60) == Cursor::Move)); // answered for another point
+	cursor.quickPathAnsweredAt = cursor.quickPathAt;
+	BOOST_TEST((field.Hover(420, 60) == Cursor::GenericInvalid));
+	cursor.quickPathBlocked = false;
+	BOOST_TEST((field.Hover(420, 60) == Cursor::Move));
+	// Scrolling (no hints): nothing asked.
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.scrolling = true;
+	field.Hover(420, 60);
+	BOOST_TEST(!cursor.quickPathAsked);
+	pointer.scrolling = false;
+}
+
+// InGameUI::createCommandHint's underWindow loop and its MSG_DO_MOVETO_HINT case: over the radar (a LeftHUDInput window)
+// the hints go on as if no window were there, with nothing picked (W3DView::pickDrawable: not see-through) at the ground
+// behind it; a move hint there shows MOVETO, the arrow when the player has no radar; over any other window the arrow.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_radar_lets_the_move_cursor_through)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.overInterface = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow)); // the bar elsewhere
+	pointer.overRadar = true;
+	pointer.hasRadar = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	const auto mineAt = field.Pixel(100, 100);
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Move)); // nothing picked behind the radar
+	pointer.hasRadar = false;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));
+	pointer.overRadar = false;
+	pointer.overInterface = false;
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+}
+
+// InGameUI::createCommandHint returns at once in a replay (RECORDERMODETYPE_PLAYBACK): with a selection the cursor keeps
+// what it was; createMouseoverHint's cursor with nothing selected comes only while the mouse moved within the last
+// second (LookAtTranslator::hasMouseMovedRecently).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_replay_gives_no_command_hints)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	const auto mineAt = field.Pixel(100, 100);
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.playback = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Select)); // no move hint: kept
+	field.Click(10, 10, pointer_button::Right);            // nothing selected now
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));   // just moved: the mouse-over cursor
+	for (int frame = 0; frame < 40; ++frame) // over a second without moving (33 ms a frame)
+		field.Hover(400, 60);
+	field.world.Resource<CursorState>().cursor = Cursor::Move;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move)); // not moved lately: kept
+	pointer.playback = false;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));
+}
+
+// SelectionTranslator / evaluateContextCommand: a click on something the selection could shoot at but has no weapon
+// for (INVALID_SHOT: handleInvalidShotCommand, a command all the same) neither selects it nor orders anything.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_what_the_selection_cannot_hit_does_nothing)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity jet = field.Tank(150, 100, 1);
+	field.world.Get<gp::Targetable>(jet)->classes = gp::target_class::AirborneVehicle;
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const auto mineAt = field.Pixel(100, 100), jetAt = field.Pixel(150, 100);
+	field.Click(mineAt[0], mineAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.Click(jetAt[0], jetAt[1]);
+	BOOST_TEST(field.IsSelected(tank));
+	BOOST_TEST(!field.IsSelected(jet));
+	BOOST_TEST(field.world.Resource<PlayerOrders>().pending.empty());
+}
+
+// InGameUI::setGUICommand / CommandTranslator::handleGuiCommand (GUI_COMMAND_SPECIAL_POWER, NEED_TARGET_POS) with
+// ActionManager::canDoSpecialPowerAtLocation (SPECIAL_PARTICLE_UPLINK_CANNON: not where the ground is black to its
+// player) and SelectionTranslator: waiting for its target, the uplink shows the button's invalid cursor over black
+// ground and its cursor over seen ground; a click on black ground does nothing, a click on seen ground fires the power
+// there (MSG_DO_SPECIAL_POWER_AT_LOCATION) and ends the wait; clicks select nothing meanwhile; a right click gives a
+// waiting command up without deselecting.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_special_power_waits_for_a_spot_its_player_can_see)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity uplink = field.Tank(100, 100, 0);
+	const ecs::Entity other = field.Tank(130, 100, 0);
+	const auto uplinkAt = field.Pixel(100, 100), otherAt = field.Pixel(130, 100);
+	field.Click(uplinkAt[0], uplinkAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(uplink));
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	const auto wait = [&] {
+		targeting = GuiTargeting{true, uplink, "SuperweaponParticleUplinkCannon", "SPECIAL_PARTICLE_UPLINK_CANNON",
+			generalszh::content::button_option::NeedTargetPos, Cursor::ParticleUplinkCannon, Cursor::GenericInvalid};
+	};
+	wait();
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::GenericInvalid)); // black to its player
+	field.Click(400, 60);
+	BOOST_TEST(orders.empty());
+	BOOST_TEST(targeting.active);
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	BOOST_TEST((field.Hover(400, 60) == Cursor::ParticleUplinkCannon));
+	field.Click(otherAt[0], otherAt[1]); // over one of mine: not selected, the power goes where the pointer meets the ground
+	BOOST_TEST(!field.IsSelected(other));
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *fire = std::get_if<generalszh::commands::UseSpecialPower>(&orders[0]);
+	BOOST_TEST_REQUIRE(fire != nullptr);
+	BOOST_TEST((fire->source == uplink));
+	BOOST_TEST(fire->power == "SuperweaponParticleUplinkCannon");
+	BOOST_TEST(fire->atLocation);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(fire->target.x) - 130.0f) < 1.0f);
+	BOOST_TEST(!targeting.active);
+	orders.clear();
+	wait();
+	field.Click(10, 10, pointer_button::Right);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST(field.IsSelected(uplink));
+	BOOST_TEST(orders.empty());
+}
+
+// ActionManager::canDoSpecialPowerAtLocation (GeneralsMD/Code/GameEngine/Source/Common/RTS/ActionManager.cpp): a
+// paradrop not onto water (isUnderwater), whatever the shroud allows; a spy satellite anywhere inside the map's extent,
+// its edge excluded (isPointOnMap), shroud or not; a power needing an object (a cash hack) never at a spot; one not
+// listed (a plain OCL power name) never either.
+BOOST_AUTO_TEST_CASE(legacy_parity_special_powers_go_only_where_the_original_lets_them)
+{
+	Field field;
+	auto &ground = field.world.Resource<gp::GroundHeight>();
+	ground.AddWater({{Fixed::FromInt(0), Fixed::FromInt(0)}, {Fixed::FromInt(100), Fixed::FromInt(0)}, {Fixed::FromInt(100), Fixed::FromInt(100)},
+		{Fixed::FromInt(0), Fixed::FromInt(100)}}, Fixed::FromInt(5));
+	auto &shroud = field.world.Resource<gp::ShroudMap>();
+	shroud.RevealAllPermanently(0);
+	using generalszh::gameplay::CanDoSpecialPowerAtLocation;
+	const Engine::Math::FixedVector2 wet{Fixed::FromInt(50), Fixed::FromInt(50)}, dry{Fixed::FromInt(500), Fixed::FromInt(500)};
+	BOOST_TEST(!CanDoSpecialPowerAtLocation("SPECIAL_PARADROP_AMERICA", 0, wet, ground, shroud));
+	BOOST_TEST(CanDoSpecialPowerAtLocation("SPECIAL_PARADROP_AMERICA", 0, dry, ground, shroud));
+	BOOST_TEST(CanDoSpecialPowerAtLocation("SPECIAL_DAISY_CUTTER", 0, wet, ground, shroud)); // bombs may fall on water
+	const auto [low, high] = ground.Extent();
+	BOOST_TEST(CanDoSpecialPowerAtLocation("SPECIAL_SPY_SATELLITE", 1, dry, ground, shroud)); // player 1 sees nothing
+	BOOST_TEST(!CanDoSpecialPowerAtLocation("SPECIAL_SPY_SATELLITE", 1, low, ground, shroud));
+	BOOST_TEST(!CanDoSpecialPowerAtLocation("SPECIAL_CASH_HACK", 0, dry, ground, shroud));
+	BOOST_TEST(!CanDoSpecialPowerAtLocation("SPECIAL_INVALID", 0, dry, ground, shroud));
+	BOOST_TEST(CanDoSpecialPowerAtLocation("SPECIAL_LAUNCH_BAIKONUR_ROCKET", 1, low, ground, shroud));
+}
+
+// CommandTranslator::handleGuiCommand with COMMAND_OPTION_NEED_OBJECT_TARGET (resolveGuiCommandTarget, then
+// canSelectedObjectsDoSpecialPower -> canDoSpecialPowerAtObject, asked of the session by the host): the object under
+// the pointer is the candidate; until it is found fit the invalid cursor shows and a click does nothing; once fit, the
+// valid cursor, and a click fires the power at it (MSG_DO_SPECIAL_POWER_AT_OBJECT) and ends the wait.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_special_power_waits_for_an_object_it_may_be_fired_at)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity hacker = field.Tank(100, 100, 0);
+	const ecs::Entity centre = field.Tank(150, 100, 1);
+	const auto hackerAt = field.Pixel(100, 100), centreAt = field.Pixel(150, 100);
+	field.Click(hackerAt[0], hackerAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(hacker));
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	targeting = GuiTargeting{true, hacker, "SuperweaponCashHack", "SPECIAL_CASH_HACK", generalszh::content::button_option::NeedTargetEnemy,
+		Cursor::Hack, Cursor::GenericInvalid};
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BOOST_TEST((field.Hover(centreAt[0], centreAt[1]) == Cursor::GenericInvalid));
+	BOOST_TEST((targeting.hovered == centre));
+	field.Click(centreAt[0], centreAt[1]);
+	BOOST_TEST(orders.empty());
+	targeting.validFor = centre; // the host: canDoSpecialPowerAtObject holds
+	BOOST_TEST((field.Hover(centreAt[0], centreAt[1]) == Cursor::Hack));
+	BOOST_TEST((field.Hover(400, 60) == Cursor::GenericInvalid)); // nothing there
+	targeting.validFor = centre;
+	field.Click(centreAt[0], centreAt[1]);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *fire = std::get_if<generalszh::commands::UseSpecialPowerAtObject>(&orders[0]);
+	BOOST_TEST_REQUIRE(fire != nullptr);
+	BOOST_TEST((fire->source == hacker));
+	BOOST_TEST((fire->target == centre));
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST(!field.IsSelected(centre));
+}
+
+// GUICommandTranslator (Core/GameEngine/Source/GameClient/MessageStream/GUICommandTranslator.cpp, doGuardCommand) and
+// InGameUI::createCommandHint (MOUSEMODE_GUI_COMMAND, not a context command: its CursorName, CROSS without one): the
+// shipped Command_Guard (NEED_TARGET_POS) guards the ground clicked with the player's selection (MSG_DO_GUARD_POSITION,
+// GUARDMODE_NORMAL) and the wait ends; a guard taking objects (NEED_TARGET_ALLY_OBJECT) guards one of the player's own
+// clicked (MSG_DO_GUARD_OBJECT); an enemy clicked is no ally, so without NEED_TARGET_POS it guards where the first
+// selected stands.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_guard_button_guards_the_spot_or_object_clicked)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	namespace bo = generalszh::content::button_option;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity friendTank = field.Tank(130, 100, 0);
+	field.Tank(160, 100, 1);
+	const auto tankAt = field.Pixel(100, 100), friendAt = field.Pixel(130, 100), enemyAt = field.Pixel(160, 100);
+	field.Click(tankAt[0], tankAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	const auto guard = [&](std::uint32_t options, std::uint8_t mode) {
+		targeting = GuiTargeting{};
+		targeting.active = true;
+		targeting.source = tank;
+		targeting.options = options;
+		targeting.kind = GuiCommandKind::Guard;
+		targeting.guardMode = mode;
+		targeting.invalidCursor = Cursor::GenericInvalid;
+	};
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	guard(bo::OkForMultiSelect | bo::NeedTargetPos, 0);
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Target));
+	field.Click(400, 100);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *spot = std::get_if<generalszh::commands::GuardPosition>(&orders[0]);
+	BOOST_TEST_REQUIRE(spot != nullptr);
+	BOOST_TEST((spot->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(spot->position.y) - 186.6f) < 0.5f);
+	BOOST_TEST(spot->mode == 0u);
+	orders.clear();
+	guard(bo::NeedTargetAlly, 1);
+	field.Click(friendAt[0], friendAt[1]);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *object = std::get_if<generalszh::commands::GuardObject>(&orders[0]);
+	BOOST_TEST_REQUIRE(object != nullptr);
+	BOOST_TEST((object->target == friendTank));
+	BOOST_TEST(object->mode == 1u);
+	BOOST_TEST(field.IsSelected(tank));
+	BOOST_TEST(!field.IsSelected(friendTank));
+	orders.clear();
+	guard(bo::NeedTargetAlly, 2);
+	field.Click(enemyAt[0], enemyAt[1]);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *stand = std::get_if<generalszh::commands::GuardPosition>(&orders[0]);
+	BOOST_TEST_REQUIRE(stand != nullptr);
+	BOOST_TEST((stand->position == Engine::Math::FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
+	BOOST_TEST(stand->mode == 2u);
+}
+
+// BuildAssistant::sellObject: a structure being sold leaves every selection (GameLogic::deselectObject) and is
+// OBJECT_STATUS_UNSELECTABLE from then on (Object::isSelectable): a click on it selects nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_sold_is_deselected_and_unselectable)
+{
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	catalog.kinds = {generalszh::content::KindOfMask{}, generalszh::content::KindOfMask{}};
+	const ecs::Entity barracks = field.Tank(100, 100, 0);
+	field.world.Add<gp::DefinitionRef>(barracks);
+	field.world.Get<gp::DefinitionRef>(barracks)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[0].definition = 1;
+	const auto at = field.Pixel(100, 100);
+	field.Click(at[0], at[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(barracks));
+	// Sold: the logic deselects it.
+	field.world.Add<gp::Sale>(barracks);
+	field.world.Resource<generalszh::gameplay::Deselections>().list.push_back(barracks);
+	field.Frame(500, 500);
+	field.world.Resource<generalszh::gameplay::Deselections>().list.clear();
+	BOOST_TEST(!field.IsSelected(barracks));
+	field.Click(at[0], at[1]);
+	BOOST_TEST(!field.IsSelected(barracks));
+	// Not sold, the same click selects it.
+	field.world.Remove<gp::Sale>(barracks);
+	field.Click(at[0], at[1]);
+	BOOST_TEST(field.IsSelected(barracks));
+}
+
+// CommandTranslator::evaluateContextCommand (ACTIONTYPE_SET_RALLY_POINT, SELECTION_ALL: every selected one AUTO_RALLYPOINT
+// and the player's, nothing under the pointer) / handleSetRallyPointCommand, InGameUI::createCommandHint
+// (MSG_SET_RALLY_POINT_HINT: SET_RALLY_POINT) and GUICommandTranslator::doSetRallyPointCommand: with a factory of the
+// player's selected, the ground shows the rally cursor and a click sets its rally point there (MSG_SET_RALLY_POINT);
+// with a tank also selected it is a move again; the Command_SetRallyPoint button sets it the same way and ends its wait.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_factory_selected_sets_its_rally_point_where_the_ground_is_clicked)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	generalszh::content::KindOfMask rally{};
+	rally[generalszh::content::KindOfBit("AUTO_RALLYPOINT") / 64] |= std::uint64_t{1} << (generalszh::content::KindOfBit("AUTO_RALLYPOINT") % 64);
+	catalog.kinds = {generalszh::content::KindOfMask{}, rally};
+	const ecs::Entity barracks = field.Tank(100, 100, 0);
+	field.world.Add<gp::DefinitionRef>(barracks);
+	field.world.Get<gp::DefinitionRef>(barracks)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[0].definition = 1;
+	const ecs::Entity tank = field.Tank(130, 100, 0);
+	const auto barracksAt = field.Pixel(100, 100), tankAt = field.Pixel(130, 100);
+	field.Click(barracksAt[0], barracksAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(barracks));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::SetRallyPoint));
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *rallyOrder = std::get_if<generalszh::commands::SetRallyPoint>(&orders[0]);
+	BOOST_TEST_REQUIRE(rallyOrder != nullptr);
+	BOOST_TEST((rallyOrder->factory == barracks));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(rallyOrder->position.y) - 186.6f) < 0.5f);
+	orders.clear();
+	field.Frame(tankAt[0], tankAt[1], pointer_button::Left, pointer_button::Left, true); // prefer-selection adds the tank
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	field.Click(10, 10, pointer_button::Right);
+	field.Click(barracksAt[0], barracksAt[1]);
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	targeting = GuiTargeting{};
+	targeting.active = true;
+	targeting.source = barracks;
+	targeting.options = generalszh::content::button_option::NeedTargetPos;
+	targeting.kind = GuiCommandKind::RallyPoint;
+	targeting.cursor = Cursor::SetRallyPoint;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::SetRallyPoint));
+	field.Click(400, 100);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST((std::get_if<generalszh::commands::SetRallyPoint>(&orders[0]) != nullptr));
+}
+
+// GUICommandTranslator::doAttackMoveCommand and InGameUI::createCommandHint (MOUSEMODE_GUI_COMMAND: Command_AttackMove's
+// CursorName AttackMove): waiting, the pointer shows AttackMove; a click on the ground sends the player's selection
+// attack-moving there (MSG_DO_ATTACKMOVETO) and ends the wait.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_attack_move_button_sends_the_selection_attack_moving)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const auto tankAt = field.Pixel(100, 100);
+	field.Click(tankAt[0], tankAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	targeting = GuiTargeting{};
+	targeting.active = true;
+	targeting.source = tank;
+	targeting.options = generalszh::content::button_option::NeedTargetPos;
+	targeting.kind = GuiCommandKind::AttackMove;
+	targeting.cursor = Cursor::AttackMove;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::AttackMove));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.Click(400, 100);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *move = std::get_if<generalszh::commands::AttackMoveTo>(&orders[0]);
+	BOOST_TEST_REQUIRE(move != nullptr);
+	BOOST_TEST((move->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(move->position.y) - 186.6f) < 0.5f);
+}
+
+// FIRE_WEAPON waiting for its target. GUICommandTranslator::doFireWeaponCommand (Command_ChinaDragonTankFireWall:
+// NEED_TARGET_POS): a click on the ground fires the button's slot there (MSG_DO_WEAPON_AT_LOCATION) and ends the wait.
+// A context command (CONTEXTMODE_COMMAND, Command_ColonelBurtonKnifeAttack: an enemy's or a neutral's object) goes
+// through handleGuiCommand: InGameUI::canSelectedObjectsEffectivelyUseWeapon (ActionManager::canFireWeaponAtObject)
+// shows its cursor over an enemy its slot's weapon can attack, the invalid one elsewhere (the ground, its own, a slot
+// with no weapon); only a click on a valid target fires (MSG_DO_WEAPON_AT_OBJECT), with its MaxShotsToFire.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_weapon_button_fires_at_what_it_is_aimed_at)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	namespace bo = generalszh::content::button_option;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity enemy = field.Tank(150, 100, 1);
+	const auto tankAt = field.Pixel(100, 100);
+	field.Click(tankAt[0], tankAt[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	GuiTargeting &targeting = field.world.Resource<GuiTargeting>();
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	const auto wait = [&](std::uint32_t options, std::uint8_t slot, std::uint32_t shots) {
+		targeting = GuiTargeting{};
+		targeting.active = true;
+		targeting.source = tank;
+		targeting.options = options;
+		targeting.kind = GuiCommandKind::FireWeapon;
+		targeting.cursor = Cursor::StabAttack;
+		targeting.invalidCursor = Cursor::StabAttackInvalid;
+		targeting.weaponSlot = slot;
+		targeting.maxShots = shots;
+	};
+	wait(bo::NeedTargetPos | bo::OkForMultiSelect, 1, 0);
+	BOOST_TEST((field.Hover(400, 60) == Cursor::StabAttack));
+	field.Click(400, 100);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *fire = std::get_if<generalszh::commands::FireWeapon>(&orders[0]);
+	BOOST_TEST_REQUIRE(fire != nullptr);
+	BOOST_TEST((fire->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(fire->slot == 1);
+	BOOST_TEST(fire->at == 1);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(fire->position.y) - 186.6f) < 0.5f);
+	orders.clear();
+	wait(bo::NeedTargetEnemy | bo::NeedTargetNeutral | bo::ContextModeCommand, 0, 1);
+	const auto enemyAt = field.Pixel(150, 100);
+	BOOST_TEST((field.Hover(enemyAt[0], enemyAt[1]) == Cursor::StabAttack));
+	BOOST_TEST((field.Hover(400, 60) == Cursor::StabAttackInvalid));
+	BOOST_TEST((field.Hover(tankAt[0], tankAt[1]) == Cursor::StabAttackInvalid));
+	field.Click(400, 100);
+	BOOST_TEST(targeting.active);
+	BOOST_TEST(orders.empty());
+	targeting.weaponSlot = 1;
+	BOOST_TEST((field.Hover(enemyAt[0], enemyAt[1]) == Cursor::StabAttackInvalid));
+	targeting.weaponSlot = 0;
+	field.Click(enemyAt[0], enemyAt[1]);
+	BOOST_TEST(!targeting.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	fire = std::get_if<generalszh::commands::FireWeapon>(&orders[0]);
+	BOOST_TEST_REQUIRE(fire != nullptr);
+	BOOST_TEST(fire->at == 2);
+	BOOST_TEST((fire->target == enemy));
+	BOOST_TEST(fire->maxShots == 1u);
+}
+
+// CommandTranslator::evaluateContextCommand (Core/GameEngine/Source/GameClient/MessageStream/CommandXlat.cpp:
+// ACTIONTYPE_RESUME_CONSTRUCTION, then ACTIONTYPE_REPAIR_OBJECT) with ActionManager::canResumeConstructionOf and
+// canRepairObject (GeneralsMD/Code/GameEngine/Source/Common/RTS/ActionManager.cpp), handleResumeConstructionCommand and
+// handleRepairObjectCommand, and InGameUI::createCommandHint's RESUME_CONSTRUCTION / DO_REPAIR cursors: with a dozer
+// selected, the player's structure still under construction resumes it (MSG_RESUME_CONSTRUCTION), not while fogged, nor
+// while the builder set to it is alive and at work on it (a dead one no longer counts); once standing and hurt a click
+// repairs it (MSG_DO_REPAIR), unless another is its sole healer (its heal lock); whole, nothing (it is selected).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_resumes_construction_or_repairs_a_structure_it_clicks)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f});
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	catalog.kinds = {Kinds({}), Kinds({"VEHICLE", "DOZER"}), Kinds({"STRUCTURE"})};
+	const ecs::Entity dozer = field.Object(100, 100, 0, 1);
+	const ecs::Entity other = field.Object(40, 100, 0, 1);
+	const ecs::Entity plant = field.Object(150, 100, 0, 2);
+	field.world.Add<gp::UnderConstruction>(plant);
+	field.Select(dozer);
+	BOOST_TEST_REQUIRE(field.IsSelected(dozer));
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Select)); // fogged to the player: no command, one of mine to select
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::ResumeConstruction));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(plant);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *resume = std::get_if<generalszh::commands::ResumeConstruction>(&orders[0]);
+	BOOST_TEST_REQUIRE(resume != nullptr);
+	BOOST_TEST((resume->units == std::vector<ecs::Entity>{dozer}));
+	BOOST_TEST((resume->target == plant));
+	BOOST_TEST(!field.IsSelected(plant));
+	orders.clear();
+	// Its builder at work on it: nobody else may resume it.
+	field.world.Get<gp::UnderConstruction>(plant)->builder = other;
+	field.world.Add<gp::Builder>(other);
+	field.world.Get<gp::Builder>(other)->target = plant;
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Select));
+	field.world.Add<gp::Dying>(other);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::ResumeConstruction));
+	field.world.Remove<gp::Dying>(other);
+	// Standing: repaired when hurt.
+	field.world.Remove<gp::UnderConstruction>(plant);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Select)); // whole
+	field.world.Get<gp::Health>(plant)->current = Fixed::FromInt(50);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::DoRepair));
+	field.ClickOn(plant);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *repair = std::get_if<generalszh::commands::Repair>(&orders[0]);
+	BOOST_TEST_REQUIRE(repair != nullptr);
+	BOOST_TEST((repair->units == std::vector<ecs::Entity>{dozer}));
+	BOOST_TEST((repair->target == plant));
+	orders.clear();
+	// Another dozer its sole healer this frame (getSoleHealingBenefactor): no repair; its own heal lock is no bar.
+	field.world.Add<gp::HealLock>(plant);
+	*field.world.Get<gp::HealLock>(plant) = gp::HealLock{other, catalog.tick + 2};
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Select));
+	field.world.Get<gp::HealLock>(plant)->healer = dozer;
+	BOOST_TEST((field.HoverOver(plant) == Cursor::DoRepair));
+	field.world.Get<gp::HealLock>(plant)->healer = other;
+	catalog.tick = 3; // the lock ran out
+	BOOST_TEST((field.HoverOver(plant) == Cursor::DoRepair));
+}
+
+// evaluateContextCommand's ACTIONTYPE_DOCK_AT (SELECTION_ALL) with ActionManager::canDockAt / canTransferSuppliesAt,
+// handleDockAtCommand and the DOCK cursor: a supply truck docks (MSG_DOCK) at a warehouse with boxes left that is not an
+// enemy's, not while it is shrouded to the player; an empty warehouse is no dock; an enemy's is attacked; at its player's
+// supply centre only with boxes aboard; with something else selected that may not dock, nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_supply_truck_docks_where_it_may_take_or_bring_supplies)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f});
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	catalog.kinds = {Kinds({}), Kinds({"VEHICLE"}), Kinds({"STRUCTURE"})};
+	const ecs::Entity truck = field.Object(100, 100, 0, 1);
+	field.world.Add<gp::Harvester>(truck);
+	const ecs::Entity warehouse = field.Object(150, 100, 0, 2);
+	field.world.Add<gp::Dock>(warehouse);
+	field.world.Add<gp::ResourceStore>(warehouse);
+	field.world.Get<gp::ResourceStore>(warehouse)->boxes = 5;
+	const ecs::Entity theirs = field.Object(100, 160, 1, 2);
+	field.world.Add<gp::Dock>(theirs);
+	field.world.Add<gp::ResourceStore>(theirs);
+	field.world.Get<gp::ResourceStore>(theirs)->boxes = 5;
+	const ecs::Entity centre = field.Object(100, 40, 0, 2);
+	field.world.Add<gp::Dock>(centre);
+	field.world.Add<gp::ResourceDepot>(centre);
+	field.Select(truck);
+	BOOST_TEST_REQUIRE(field.IsSelected(truck));
+	BOOST_TEST((field.HoverOver(warehouse) == Cursor::Select)); // shrouded
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	BOOST_TEST((field.HoverOver(warehouse) == Cursor::Dock));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(warehouse);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *dock = std::get_if<generalszh::commands::Dock>(&orders[0]);
+	BOOST_TEST_REQUIRE(dock != nullptr);
+	BOOST_TEST((dock->units == std::vector<ecs::Entity>{truck}));
+	BOOST_TEST((dock->dock == warehouse));
+	orders.clear();
+	field.world.Get<gp::ResourceStore>(warehouse)->boxes = 0;
+	BOOST_TEST((field.HoverOver(warehouse) == Cursor::Select));
+	BOOST_TEST((field.HoverOver(theirs) == Cursor::AttackObj)); // an enemy's: its view of the truck is ENEMIES
+	BOOST_TEST((field.HoverOver(centre) == Cursor::Select));    // nothing aboard
+	field.world.Get<gp::Harvester>(truck)->boxes = 2;
+	BOOST_TEST((field.HoverOver(centre) == Cursor::Dock));
+	// SELECTION_ALL: a tank selected with it may not dock.
+	const auto tankAt = field.Pixel(40, 100);
+	field.Tank(40, 100, 0);
+	field.Frame(tankAt[0], tankAt[1], pointer_button::Left, pointer_button::Left, true);
+	BOOST_TEST((field.HoverOver(centre) == Cursor::Select));
+}
+
+// evaluateContextCommand's ACTIONTYPE_DOCK_AT with ActionManager::canDockAt's railed transport case: any VEHICLE (and
+// INFANTRY) selected docks (MSG_DOCK) with a ferry (a RailedTransportDockUpdate), its own or not, with the DOCK cursor;
+// a structure selected with it may not dock, so nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_vehicle_docks_with_a_ferry)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f});
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	catalog.kinds = {Kinds({}), Kinds({"VEHICLE"}), Kinds({"STRUCTURE"})};
+	const ecs::Entity tank = field.Object(100, 100, 0, 1);
+	const ecs::Entity ferry = field.Object(150, 100, 1, 1);
+	field.world.Add<gp::Dock>(ferry);
+	field.world.Add<generalszh::gameplay::RailedTransport>(ferry);
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	field.Select(tank);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	BOOST_TEST((field.HoverOver(ferry) == Cursor::Dock));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(ferry);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *dock = std::get_if<generalszh::commands::Dock>(&orders[0]);
+	BOOST_TEST_REQUIRE(dock != nullptr);
+	BOOST_TEST((dock->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST((dock->dock == ferry));
+}
+
+// evaluateContextCommand's ACTIONTYPE_ENTER_OBJECT (SELECTION_ANY, CHECK_CAPACITY) with ActionManager::canEnterObject
+// and TransportContain / GarrisonContain::isValidContainerFor, handleEnterObjectCommand (createEnterMessage: MSG_ENTER)
+// and the ENTER_FRIENDLY cursor: infantry boards its player's transport with room (TransportSlotCount 1 of 2 free), not a
+// full one (selecting it instead), nor an enemy's (only its own player's may ride: attacked instead); it garrisons an
+// empty building of any player's; one held by anyone not stealthy is not entered unless its own; an unmanned vehicle is
+// taken over.
+BOOST_AUTO_TEST_CASE(legacy_parity_infantry_enters_a_transport_or_building_with_room)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook infantry{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	infantry.transportSlots = 1;
+	SelectionLook humvee{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f};
+	humvee.contain = ContainKind::Transport;
+	SelectionLook building{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f};
+	building.contain = ContainKind::Garrison;
+	SelectionLook stealthy = infantry;
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {infantry, humvee, building, stealthy, SelectionLook{select_kind::Selectable, 8.0f, 4.0f}});
+	catalog.kinds = {Kinds({}), Kinds({"INFANTRY"}), Kinds({"VEHICLE", "TRANSPORT"}), Kinds({"STRUCTURE"}), Kinds({"INFANTRY", "STEALTH_GARRISON"}),
+		Kinds({"VEHICLE"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity rifleman = field.Object(100, 100, 0, 1);
+	const ecs::Entity transport = field.Object(150, 100, 0, 2);
+	field.world.Add<gp::Transport>(transport);
+	field.world.Get<gp::Transport>(transport)->definition.slots = 2;
+	field.world.Get<gp::Transport>(transport)->occupied = 1;
+	field.Select(rifleman);
+	BOOST_TEST_REQUIRE(field.IsSelected(rifleman));
+	BOOST_TEST((field.HoverOver(transport) == Cursor::EnterFriendly));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(transport);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->units == std::vector<ecs::Entity>{rifleman}));
+	BOOST_TEST((enter->target == transport));
+	orders.clear();
+	field.world.Get<gp::Transport>(transport)->occupied = 2;
+	BOOST_TEST((field.HoverOver(transport) == Cursor::Select));
+	const ecs::Entity enemyTransport = field.Object(150, 160, 1, 2);
+	field.world.Add<gp::Transport>(enemyTransport);
+	field.world.Get<gp::Transport>(enemyTransport)->definition.slots = 2;
+	BOOST_TEST((field.HoverOver(enemyTransport) == Cursor::AttackObj));
+	// A building: an enemy's empty one is garrisoned; held by one of theirs, attacked; held only by a stealthy garrisoner, entered.
+	const ecs::Entity house = field.Object(100, 40, 1, 3);
+	field.world.Add<gp::Transport>(house);
+	field.world.Get<gp::Transport>(house)->definition.slots = 5;
+	BOOST_TEST((field.HoverOver(house) == Cursor::EnterFriendly));
+	const ecs::Entity inside = field.world.Create();
+	field.world.Add<gp::DefinitionRef>(inside);
+	field.world.Get<gp::DefinitionRef>(inside)->index = 1;
+	field.world.Resource<gp::CargoManifest>().Board(house, inside);
+	BOOST_TEST((field.HoverOver(house) == Cursor::AttackObj));
+	field.world.Get<gp::DefinitionRef>(inside)->index = 4;
+	BOOST_TEST((field.HoverOver(house) == Cursor::EnterFriendly));
+	// An unmanned vehicle (DISABLED_UNMANNED), anyone's: any infantry takes it over.
+	const ecs::Entity empty = field.Object(40, 100, 1, 5);
+	field.world.Add<gp::Disabled>(empty);
+	field.world.Get<gp::Disabled>(empty)->mask = gp::disabled_type::Unmanned;
+	BOOST_TEST((field.HoverOver(empty) == Cursor::EnterFriendly));
+}
+
+// evaluateContextCommand's ACTIONTYPE_GET_HEALED_AT (before ENTER_OBJECT) with ActionManager::canGetHealedAt (a HEAL_PAD
+// of an ally's, a hurt INFANTRY) and InGameUI::canSelectedObjectsDoAction's isHealContain exception, handleGetHealedAtCommand
+// (MSG_GET_HEALED) and the GET_HEALED cursor: hurt infantry goes to a heal pad (one with no contain) to be healed; a pad
+// that heals only who is inside it (HealContain) is entered instead (canEnterObject: not whole); whole, neither.
+BOOST_AUTO_TEST_CASE(legacy_parity_hurt_infantry_is_healed_at_a_heal_pad)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook infantry{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	infantry.transportSlots = 1;
+	SelectionLook pad{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f};
+	SelectionLook barracks = pad;
+	barracks.contain = ContainKind::Heal;
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {infantry, pad, barracks});
+	catalog.kinds = {Kinds({}), Kinds({"INFANTRY"}), Kinds({"STRUCTURE", "HEAL_PAD"}), Kinds({"STRUCTURE", "HEAL_PAD"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity rifleman = field.Object(100, 100, 0, 1);
+	const ecs::Entity healer = field.Object(150, 100, 0, 2);
+	const ecs::Entity heals = field.Object(100, 160, 0, 3);
+	field.world.Add<gp::Transport>(heals);
+	field.world.Get<gp::Transport>(heals)->definition.slots = 5;
+	field.Select(rifleman);
+	BOOST_TEST_REQUIRE(field.IsSelected(rifleman));
+	BOOST_TEST((field.HoverOver(healer) == Cursor::Select)); // whole
+	BOOST_TEST((field.HoverOver(heals) == Cursor::Select));
+	field.world.Get<gp::Health>(rifleman)->current = Fixed::FromInt(40);
+	BOOST_TEST((field.HoverOver(healer) == Cursor::GetHealed));
+	BOOST_TEST((field.HoverOver(heals) == Cursor::EnterFriendly));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(healer);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *healed = std::get_if<generalszh::commands::GetHealed>(&orders[0]);
+	BOOST_TEST_REQUIRE(healed != nullptr);
+	BOOST_TEST((healed->units == std::vector<ecs::Entity>{rifleman}));
+	BOOST_TEST((healed->target == healer));
+	orders.clear();
+	field.ClickOn(heals);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST((std::get_if<generalszh::commands::Enter>(&orders[0]) != nullptr));
+}
+
+// evaluateContextCommand's ACTIONTYPE_SABOTAGE_BUILDING with ActionManager::canSabotageBuilding (an enemy's, alive, not
+// fogged; a SabotagePowerPlantCrateCollide with BuildingPickup that would like to collide: FS_POWER, not under
+// construction), handleSabotageBuildingCommand (MSG_ENTER) and the ENTER_AGGRESSIVELY cursor: an unarmed saboteur goes in
+// to sabotage an enemy power plant; a barracks is nothing to its collide (a plain move hint over it); nor a plant being
+// built.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_saboteur_enters_an_enemy_building_to_sabotage_it)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook saboteur{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	saboteur.saboteur = 0;
+	saboteur.saboteurCount = 1;
+	catalog.saboteurs = {SaboteurCollide{generalszh::content::SabotageKind::PowerPlant, {}, {}, true, false}};
+	SelectionLook building{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f};
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {saboteur, building, building});
+	catalog.kinds = {Kinds({}), Kinds({"INFANTRY"}), Kinds({"STRUCTURE", "FS_POWER"}), Kinds({"STRUCTURE", "FS_BARRACKS"})};
+	const ecs::Entity spy = field.Object(100, 100, 0, 1);
+	field.world.Remove<gp::Armament>(spy);
+	const ecs::Entity plant = field.Object(150, 100, 1, 2);
+	const ecs::Entity barracks = field.Object(100, 160, 1, 3);
+	field.Select(spy);
+	BOOST_TEST_REQUIRE(field.IsSelected(spy));
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Move)); // fogged
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::EnterAggressive));
+	BOOST_TEST((field.HoverOver(barracks) == Cursor::Move));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(plant);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->units == std::vector<ecs::Entity>{spy}));
+	BOOST_TEST((enter->target == plant));
+	field.world.Add<gp::UnderConstruction>(plant);
+	BOOST_TEST((field.HoverOver(plant) == Cursor::Move));
+}
+
+// evaluateContextCommand's canSelectionSalvage (a salvage crate, any SALVAGER selected) before the attack, and
+// handleSalvageCommand: MSG_DO_SALVAGE with the crate's position (GameLogic runs it as a move, onDoMoveto), its hint
+// MSG_DO_SALVAGE_HINT the MOVETO cursor; a selection with no salvager attacks the crate like anything else (after moving).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_salvager_moves_onto_a_salvage_crate)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook crate{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Crate), 8.0f, 4.0f};
+	crate.salvageCrate = true;
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f}, crate});
+	catalog.kinds = {Kinds({}), Kinds({"VEHICLE", "SALVAGER"}), Kinds({"CRATE"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity technical = field.Object(100, 100, 0, 1);
+	const ecs::Entity tank = field.Tank(40, 100, 0);
+	const ecs::Entity box = field.Object(150, 100, 1, 2);
+	field.Select(technical);
+	BOOST_TEST_REQUIRE(field.IsSelected(technical));
+	BOOST_TEST((field.HoverOver(box) == Cursor::Move));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(box);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *move = std::get_if<generalszh::commands::MoveTo>(&orders[0]);
+	BOOST_TEST_REQUIRE(move != nullptr);
+	BOOST_TEST((move->units == std::vector<ecs::Entity>{technical}));
+	BOOST_TEST((move->destination == Engine::Math::FixedVector2{Fixed::FromInt(150), Fixed::FromInt(100)}));
+	orders.clear();
+	field.Select(tank);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	BOOST_TEST((field.HoverOver(box) == Cursor::OutRange)); // 110 away: beyond its rifle's 100 + 5 + 5
+}
+
+// evaluateContextCommand's ACTIONTYPE_CAPTURE_BUILDING and the hacking actions (after the attack) with
+// ActionManager::canCaptureBuilding, canDisableVehicleViaHacking and canStealCashViaHacking, handleCaptureBuildingCommand
+// and handleHackCommand (the first selected's command set: its button's power fired at the object through
+// issueSpecialPowerCommand, MSG_DO_SPECIAL_POWER_AT_OBJECT, only at an object of a relationship the button takes), and the
+// CAPTUREBUILDING / HACK cursors: an unarmed ranger with its capture ready captures an enemy building, not with the power
+// paused (the upgrade not yet in), nor when armed and able to shoot it (the attack comes first); a Black Lotus hacks: a
+// building (its capture: the HACK hint), a vehicle (disable), a cash generator once its capture is not ready (steal cash);
+// a button that takes no enemy shows its hint but a click fires nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_capturer_captures_and_a_hacker_hacks_what_it_clicks)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	namespace bo = generalszh::content::button_option;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook ranger{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f};
+	ranger.commandSet = 0;
+	SelectionLook lotus = ranger;
+	lotus.commandSet = 1;
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {ranger, lotus,
+		SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f},
+		SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f}});
+	catalog.kinds = {Kinds({}), Kinds({"INFANTRY"}), Kinds({"INFANTRY"}), Kinds({"STRUCTURE", "CAPTURABLE", "CASH_GENERATOR"}), Kinds({"VEHICLE"})};
+	catalog.powers = {ContextPower::InfantryCapture, ContextPower::BlackLotusCapture, ContextPower::DisableVehicleHack, ContextPower::StealCashHack};
+	const std::uint32_t takes = bo::NeedTargetEnemy | bo::NeedTargetNeutral;
+	catalog.contextSets = {{ContextButton{ContextPower::InfantryCapture, "SpecialAbilityRangerCaptureBuilding", takes}},
+		{ContextButton{ContextPower::BlackLotusCapture, "SpecialAbilityBlackLotusCaptureBuilding", takes},
+			ContextButton{ContextPower::DisableVehicleHack, "SpecialAbilityBlackLotusDisableVehicleHack", takes},
+			ContextButton{ContextPower::StealCashHack, "SpecialAbilityBlackLotusStealCashHack", takes}}};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity capturer = field.Object(100, 100, 0, 1);
+	field.world.Remove<gp::Armament>(capturer);
+	field.world.Add<gp::SpecialPowerTimers>(capturer);
+	auto &capture = *field.world.Get<gp::SpecialPowerTimers>(capturer);
+	capture.count = 1;
+	capture.timers[0].power = 0;
+	const ecs::Entity bank = field.Object(150, 100, 1, 3);
+	const ecs::Entity car = field.Object(100, 160, 1, 4);
+	field.Select(capturer);
+	BOOST_TEST_REQUIRE(field.IsSelected(capturer));
+	BOOST_TEST((field.HoverOver(bank) == Cursor::CaptureBuilding));
+	BOOST_TEST((field.HoverOver(car) == Cursor::Move));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(bank);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *fire = std::get_if<generalszh::commands::UseSpecialPowerAtObject>(&orders[0]);
+	BOOST_TEST_REQUIRE(fire != nullptr);
+	BOOST_TEST((fire->source == capturer));
+	BOOST_TEST(fire->power == "SpecialAbilityRangerCaptureBuilding");
+	BOOST_TEST((fire->target == bank));
+	orders.clear();
+	capture.timers[0].pausedCount = 1; // StartsPaused until the capture upgrade: getPercentReady below 1
+	BOOST_TEST((field.HoverOver(bank) == Cursor::Move));
+	capture.timers[0].pausedCount = 0;
+	field.world.Add<gp::Armament>(capturer);
+	field.world.Get<gp::Armament>(capturer)->weapon = field.gun;
+	BOOST_TEST((field.HoverOver(bank) == Cursor::AttackObj));
+	// The Black Lotus.
+	const ecs::Entity hacker = field.Object(40, 100, 0, 2);
+	field.world.Remove<gp::Armament>(hacker);
+	field.world.Add<gp::SpecialPowerTimers>(hacker);
+	auto &hacks = *field.world.Get<gp::SpecialPowerTimers>(hacker);
+	hacks.count = 3;
+	hacks.timers[0].power = 1;
+	hacks.timers[1].power = 2;
+	hacks.timers[2].power = 3;
+	field.Select(hacker);
+	BOOST_TEST_REQUIRE(field.IsSelected(hacker));
+	BOOST_TEST((field.HoverOver(bank) == Cursor::Hack));
+	field.ClickOn(bank);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get<generalszh::commands::UseSpecialPowerAtObject>(orders[0]).power == "SpecialAbilityBlackLotusCaptureBuilding");
+	orders.clear();
+	BOOST_TEST((field.HoverOver(car) == Cursor::Hack));
+	field.ClickOn(car);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get<generalszh::commands::UseSpecialPowerAtObject>(orders[0]).power == "SpecialAbilityBlackLotusDisableVehicleHack");
+	BOOST_TEST((std::get<generalszh::commands::UseSpecialPowerAtObject>(orders[0]).target == car));
+	orders.clear();
+	hacks.timers[0].availableOn = 900; // the capture recharging
+	BOOST_TEST((field.HoverOver(bank) == Cursor::Hack));
+	field.ClickOn(bank);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get<generalszh::commands::UseSpecialPowerAtObject>(orders[0]).power == "SpecialAbilityBlackLotusStealCashHack");
+	orders.clear();
+	catalog.contextSets[1][2].options = bo::NeedTargetNeutral; // isValidObjectTarget: an enemy is not taken
+	BOOST_TEST((field.HoverOver(bank) == Cursor::Hack));
+	field.ClickOn(bank);
+	BOOST_TEST(orders.empty());
+}
+
+// evaluateContextCommand's ACTIONTYPE_ENTER_OBJECT for an aircraft (ActionManager::canEnterObject's aircraft case: above
+// the ground, at its own player's FS_AIRFIELD where it holds a space, or one is free: ParkingPlaceBehavior::
+// hasReservedSpace / shouldReserveDoorWhenQueued / hasAvailableSpaceFor) and createEnterMessage: an airborne jet is sent
+// to land at its player's airfield with a space free (MSG_ENTER), not one whose spaces other jets hold, but its own
+// airfield where it holds one; on the ground, never.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_lands_at_an_airfield_of_its_players_with_room)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle | select_kind::Aircraft), 8.0f, 4.0f},
+		SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f}});
+	catalog.kinds = {Kinds({}), Kinds({"VEHICLE", "AIRCRAFT"}), Kinds({"STRUCTURE", "FS_AIRFIELD"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity raptor = field.Object(100, 100, 0, 1);
+	field.world.Get<gp::Transform>(raptor)->position.z = Fixed::FromInt(60);
+	field.world.Add<gp::Jet>(raptor);
+	const ecs::Entity airfield = field.Object(150, 100, 0, 2);
+	field.world.Add<gp::Airfield>(airfield);
+	field.world.Get<gp::Airfield>(airfield)->spaceCount = 1;
+	field.Select(raptor);
+	BOOST_TEST_REQUIRE(field.IsSelected(raptor));
+	BOOST_TEST((field.HoverOver(airfield) == Cursor::EnterFriendly));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(airfield);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->target == airfield));
+	orders.clear();
+	const ecs::Entity parked = field.world.Create();
+	field.world.Add<gp::Jet>(parked);
+	field.world.Get<gp::Jet>(parked)->airfield = airfield;
+	BOOST_TEST((field.HoverOver(airfield) == Cursor::Select)); // its one space held
+	field.world.Get<gp::Jet>(parked)->airfield = ecs::Entity{};
+	field.world.Get<gp::Jet>(raptor)->airfield = airfield;
+	BOOST_TEST((field.HoverOver(airfield) == Cursor::EnterFriendly)); // its own space
+	field.world.Get<gp::Transform>(raptor)->position.z = Fixed{};
+	BOOST_TEST((field.HoverOver(airfield) == Cursor::Select));
+}
+
+// evaluateContextCommand's ACTIONTYPE_ENTER_OBJECT for a pilot (canEnterObject: its VeterancyCrateCollide would like to
+// collide with the vehicle: VeterancyCrateCollide::isValidToExecute, IsPilot: its own player's, with an AI, trainable, not
+// yet heroic, on the ground): it climbs into its player's vehicle (MSG_ENTER), not into a heroic one, nor into an
+// enemy's (attacked).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_enters_its_players_vehicle)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	SelectionLook vehicle{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Vehicle), 8.0f, 4.0f};
+	vehicle.hasAi = true;
+	catalog.byDefinition.insert(catalog.byDefinition.end(), {SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Infantry), 8.0f, 4.0f}, vehicle});
+	catalog.kinds = {Kinds({}), Kinds({"INFANTRY"}), Kinds({"VEHICLE"})};
+	field.world.Resource<gp::ShroudMap>().RevealAllPermanently(0);
+	const ecs::Entity pilot = field.Object(100, 100, 0, 1);
+	field.world.Add<generalszh::gameplay::PilotSeeker>(pilot);
+	auto &seeker = *field.world.Get<generalszh::gameplay::PilotSeeker>(pilot);
+	seeker.required = Kinds({"VEHICLE"});
+	seeker.isPilot = 1;
+	field.world.Add<gp::Experience>(pilot);
+	const ecs::Entity tank = field.Object(150, 100, 0, 2);
+	field.world.Add<gp::Experience>(tank);
+	field.world.Get<gp::Experience>(tank)->trainable = true;
+	const ecs::Entity enemy = field.Object(100, 160, 1, 2);
+	field.world.Add<gp::Experience>(enemy);
+	field.world.Get<gp::Experience>(enemy)->trainable = true;
+	field.Select(pilot);
+	BOOST_TEST_REQUIRE(field.IsSelected(pilot));
+	BOOST_TEST((field.HoverOver(tank) == Cursor::EnterFriendly));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	field.ClickOn(tank);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *enter = std::get_if<generalszh::commands::Enter>(&orders[0]);
+	BOOST_TEST_REQUIRE(enter != nullptr);
+	BOOST_TEST((enter->units == std::vector<ecs::Entity>{pilot}));
+	BOOST_TEST((enter->target == tank));
+	BOOST_TEST((field.HoverOver(enemy) == Cursor::AttackObj));
+	field.world.Get<gp::Experience>(tank)->level = 3; // heroic
+	BOOST_TEST((field.HoverOver(tank) == Cursor::Select));
+}
+
+// Legacy parity (W3DModelDraw, as its render object is made: Set_Collision_Type from KindOf in turn, each replacing the
+// one before; the non-bridge dead set to none): a selectable unit is picked as selectable; a selectable mine only as a
+// mine (MINE came later); a force-attackable civilian building only as force-attackable; CLICK_THROUGH never; a dead
+// unit never; a dead bridge still as selectable.
+BOOST_AUTO_TEST_CASE(legacy_parity_pick_types_follow_the_kinds_in_w3d_model_draws_order)
+{
+	using namespace generalszh::presentation;
+	BOOST_TEST(PickTypes(select_kind::Selectable, false) == pick_type::Selectable);
+	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::Mine, false) == pick_type::Mines);
+	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::ForceAttackable, false) == pick_type::ForceAttackable);
+	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::ClickThrough, false) == 0);
+	BOOST_TEST(PickTypes(select_kind::Selectable, true) == 0);
+	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::Bridge, true) == pick_type::Selectable);
+}
+
+// Object::onContainedBy: anything contained is OBJECT_STATUS_UNSELECTABLE, and MASKED only inside a container that
+// encloses it. A fire base's occupant is not hidden (OpenContain::addToContain leaves it in the world: OffMap Stationed),
+// so the pick ray meets it (W3DView::pickDrawable): a click on an enemy one orders the attack
+// (WeaponSet::getAbleToAttackSpecificObject refuses only an enclosed victim), a click on one of mine selects nothing.
+// An enclosed one's drawable is hidden: the click goes through to the ground (a move).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_bases_occupant_is_targeted_but_never_selected)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity stationed = field.Tank(150, 100, 1);
+	field.world.Add<gp::OffMap>(stationed);
+	*field.world.Get<gp::OffMap>(stationed) = gp::OffMap{gp::off_map_reason::Stationed, true, {}, {}};
+	field.Select(tank);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	orders.clear();
+	field.ClickOn(stationed);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *attack = std::get_if<generalszh::commands::Attack>(&orders[0]);
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	BOOST_TEST((attack->target == stationed));
+	BOOST_TEST(!field.IsSelected(stationed));
+	orders.clear();
+	*field.world.Get<gp::OffMap>(stationed) = gp::OffMap{gp::off_map_reason::Contained, true, {}, {}};
+	field.ClickOn(stationed);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::MoveTo>(&orders[0]) != nullptr);
+	// One of mine at its station: never selected by a click.
+	orders.clear();
+	field.Click(10, 10, pointer_button::Right);
+	const ecs::Entity mine = field.Tank(100, 150, 0);
+	field.world.Add<gp::OffMap>(mine);
+	*field.world.Get<gp::OffMap>(mine) = gp::OffMap{gp::off_map_reason::Stationed, true, {}, {}};
+	field.ClickOn(mine);
+	BOOST_TEST(!field.IsSelected(mine));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(waypoint_mode)
+
+// CommandTranslator in waypoint mode (MSG_META_BEGIN_WAYPOINTS / END_WAYPOINTS: Alt held, CommandMap.ini): the cursor
+// over the ground is WAYPOINT (MSG_ADD_WAYPOINT_HINT); a click there adds a waypoint (handleWaypointModeCommand ->
+// issueMoveToLocationCommand: MSG_ADD_WAYPOINT at the spot) for the selection, which answers as for a move in waypoint
+// mode (pickAndPlayUnitVoiceResponse MSG_DO_MOVETO); a click on another of mine is a waypoint too, not a selection
+// (contextCommandForNewSelection: the command is MSG_ADD_WAYPOINT, not invalid); Alt let go, a click moves again.
+BOOST_AUTO_TEST_CASE(legacy_parity_alt_clicks_add_waypoints)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity second = field.Tank(130, 100, 0);
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.world.Resource<PointerInput>().alt = true;
+	BOOST_TEST((field.Hover(400, 100) == generalszh::content::MouseCursorKind::Waypoint));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	auto &cues = field.world.Resource<UnitVoiceCues>().pending;
+	orders.clear();
+	cues.clear();
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *waypoint = std::get_if<generalszh::commands::AddWaypoint>(&orders[0]);
+	BOOST_TEST_REQUIRE(waypoint != nullptr);
+	BOOST_TEST((waypoint->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(waypoint->destination.x) - 100.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(waypoint->destination.y) - 186.6f) < 0.5f);
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].order == VoiceOrder::Move));
+	BOOST_TEST(cues[0].waypointMode);
+	orders.clear();
+	field.ClickOn(second);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::AddWaypoint>(&orders[0]) != nullptr);
+	BOOST_TEST(!field.IsSelected(second));
+	orders.clear();
+	field.world.Resource<PointerInput>().alt = false;
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::MoveTo>(&orders[0]) != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

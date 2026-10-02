@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <memory>
-
 export module Graphics.Scene.Models.MaterialSlots.Tests;
+import std;
 
 import Graphics.Scene.Models.MaterialSlots;
 

@@ -1,6 +1,5 @@
-module;
-#include <exception>
 export module engine.platform.adapters.sdl3.crash_reporting;
+import std;
 import engine.platform.crash_reporting;
 
 export namespace engine::platform::sdl3

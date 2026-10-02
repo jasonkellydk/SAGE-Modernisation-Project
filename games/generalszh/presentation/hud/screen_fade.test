@@ -1,0 +1,61 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+
+import games.generalszh.presentation.hud.algorithms.screen_fade_steps;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(screen_fade)
+
+// legacy_parity: ScriptEngine::newMap's fade in from black (FADE_MULTIPLY, 1 to 0, 33 falling frames) stepped by
+// updateFades from the map's first frame: frame 1 is 1/34 of the way back to 1, frame 33 is 33/34, and on frame 34 the
+// fade is over.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_map_fades_in_from_black_over_34_frames)
+{
+	ScreenFade fade = StartFade();
+	BOOST_TEST((fade.kind == FadeKind::Multiply));
+	BOOST_TEST(fade.value == 0.0f);
+	StepFadeOnTick(fade, 1);
+	BOOST_TEST(fade.value == 1.0f / 34.0f);
+	for (std::uint64_t tick = 2; tick <= 33; ++tick)
+		StepFadeOnTick(fade, tick);
+	BOOST_TEST(fade.value == 33.0f / 34.0f);
+	BOOST_TEST((fade.kind == FadeKind::Multiply));
+	StepFadeOnTick(fade, 34);
+	BOOST_TEST((fade.kind == FadeKind::None));
+}
+
+// legacy_parity: ScriptEngine::setFade and updateFades: CAMERA_FADE_ADD(0, 1, 4, 2, 3) from a script on tick 10 starts at
+// the minimum and is not stepped that tick; then rises a quarter a tick to 1 (tick 14), holds two ticks (15, 16), falls a
+// quarter (frames into it / 4) a tick (17..19) and is over on tick 20. With nothing rising it steps at once.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scripted_fade_rises_holds_and_falls)
+{
+	ScreenFade fade;
+	SetFade(fade, FadeKind::Add, 0.0f, 1.0f, 4, 2, 3, 10);
+	BOOST_TEST(fade.value == 0.0f);
+	StepFadeOnTick(fade, 10);
+	BOOST_TEST(fade.frame == 0);
+	StepFadeOnTick(fade, 11);
+	BOOST_TEST(fade.value == 0.25f);
+	for (std::uint64_t tick = 12; tick <= 14; ++tick)
+		StepFadeOnTick(fade, tick);
+	BOOST_TEST(fade.value == 1.0f);
+	StepFadeOnTick(fade, 15);
+	StepFadeOnTick(fade, 16);
+	BOOST_TEST(fade.value == 1.0f);
+	StepFadeOnTick(fade, 17);
+	BOOST_TEST(fade.value == 0.75f);
+	StepFadeOnTick(fade, 18);
+	StepFadeOnTick(fade, 19);
+	BOOST_TEST(fade.value == 0.25f);
+	BOOST_TEST((fade.kind == FadeKind::Add));
+	StepFadeOnTick(fade, 20);
+	BOOST_TEST((fade.kind == FadeKind::None));
+
+	SetFade(fade, FadeKind::Multiply, 1.0f, 0.0f, 0, 5, 5, 30);
+	BOOST_TEST(fade.frame == 1); // stepped at once: holding the maximum
+	BOOST_TEST(fade.value == 0.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

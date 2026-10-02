@@ -1,0 +1,133 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <variant>
+
+import games.generalszh.hud.control_bar_view_model;
+import games.generalszh.hud.control_bar_state;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.teams.resources.team_roster;
+
+// The control bar for several selected objects (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(control_bar_multi_select)
+
+// Legacy parity (ControlBarMultiSelect.cpp populateMultiSelect / addCommonCommands / updateContextMultiSelect,
+// ControlBar::processCommandUI): a ranger and a Humvee selected show the commands both have in the same slots and may
+// give together (OK_FOR_MULTI_SELECT): Attack Move (11), Guard (13) and Stop (14); the ranger's own (capture, weapons)
+// and the Humvee's drones and exits do not show; Stop goes to both. A ranger then a dozer: only Attack Move stays (an
+// ATTACK_MOVE keeps its slot whatever the others have there); Guard and Stop do not (the dozer has other buttons there).
+BOOST_AUTO_TEST_CASE(legacy_parity_several_selected_show_their_common_commands)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int america = -1;
+	for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+		if (shell.game.playerTemplates.templates[index].name == "FactionAmerica")
+			america = static_cast<int>(index);
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = america;
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = america;
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t player = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().DefaultTeam(player);
+	ecs::Entity dozer{};
+	for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+		if (const auto *ref = game.World().Get<gp::DefinitionRef>(member); ref != nullptr && game.DefinitionName(ref->index) == "AmericaVehicleDozer")
+			dozer = member;
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const auto at = game.World().Get<gp::Transform>(dozer)->position.XY();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at, {}, team);
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at, {}, team);
+	game.Tick();
+	const auto names = [](const hud::ControlBarState &state) {
+		std::vector<std::string> shown;
+		for (std::size_t slot = 0; slot < hud::CommandButtons; ++slot)
+			if (state.slots[slot].button != nullptr && state.slots[slot].state != gameplay::ButtonState::Hidden)
+				shown.push_back(std::to_string(slot + 1) + ":" + state.slots[slot].button->name);
+		return shown;
+	};
+	const auto both = hud::ReadControlBar(game, player, std::array{ranger, humvee});
+	BOOST_TEST(both.multiSelect);
+	BOOST_TEST((both.group == std::vector<ecs::Entity>{ranger, humvee}));
+	BOOST_TEST((names(both) == std::vector<std::string>{"11:Command_AttackMove", "13:Command_Guard", "14:Command_Stop"}));
+	BOOST_TEST(both.queue.empty());
+	std::vector<commands::GameCommand> sent;
+	hud::ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	bar.Apply(both);
+	BOOST_TEST(bar.commandEnabled[13].Get());
+	BOOST_TEST(bar.commandClicked[13].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST((std::get<commands::Stop>(sent[0]).units == std::vector<ecs::Entity>{ranger, humvee}));
+	const auto mixed = hud::ReadControlBar(game, player, std::array{ranger, dozer});
+	BOOST_TEST((names(mixed) == std::vector<std::string>{"11:Command_AttackMove"}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,11 +1,6 @@
-module;
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
 export module Graphics.Scene.Models.GeometryMath;
+import std;
+import engine.core.contracts;
 import Graphics.Scene.Models.Hierarchy;
 
 namespace Graphics {
@@ -26,10 +21,10 @@ export template<class Position, class Triangle, class Plane>
 void Compute_Model_Planes(std::span<const Position> positions, std::span<const Triangle> triangles,
     std::span<Plane> planes)
 {
-    assert(planes.size() == triangles.size());
+    engine::core::Assert(planes.size() == triangles.size());
     for (std::size_t polygon = 0; polygon < triangles.size(); ++polygon) {
         const auto& triangle = triangles[polygon];
-        assert(triangle[0] < positions.size() && triangle[1] < positions.size() && triangle[2] < positions.size());
+        engine::core::Assert(triangle[0] < positions.size() && triangle[1] < positions.size() && triangle[2] < positions.size());
         const auto& p0 = positions[triangle[0]];
         const auto& p1 = positions[triangle[1]];
         const auto& p2 = positions[triangle[2]];
@@ -47,16 +42,16 @@ export template<class Position, class Triangle, class Plane, class ShadeIndex>
 void Compute_Model_Normals(std::span<const Triangle> triangles, std::span<const Plane> planes,
     std::span<const ShadeIndex> shade_indices, std::span<Position> normals)
 {
-    assert(planes.size() == triangles.size());
-    assert(shade_indices.empty() || shade_indices.size() == normals.size());
+    engine::core::Assert(planes.size() == triangles.size());
+    engine::core::Assert(shade_indices.empty() || shade_indices.size() == normals.size());
     for (auto& normal : normals) normal[0] = normal[1] = normal[2] = 0;
     const auto accumulate = [&](const auto& target_index) {
         for (std::size_t polygon = 0; polygon < triangles.size(); ++polygon)
             for (unsigned corner = 0; corner < 3; ++corner) {
                 const auto source = triangles[polygon][corner];
-                assert(source < normals.size());
+                engine::core::Assert(source < normals.size());
                 const auto target = target_index(source);
-                assert(target < normals.size());
+                engine::core::Assert(target < normals.size());
                 for (unsigned axis = 0; axis < 3; ++axis) normals[target][axis] += planes[polygon][axis];
             }
     };
@@ -66,7 +61,7 @@ void Compute_Model_Normals(std::span<const Triangle> triangles, std::span<const 
         // The authored smoothing contract visits masters before aliases and
         // normalizes masters here, then normalizes every result once more.
         for (std::size_t vertex = 0; vertex < normals.size(); ++vertex) {
-            assert(shade_indices[vertex] < normals.size());
+            engine::core::Assert(shade_indices[vertex] < normals.size());
             if (shade_indices[vertex] == vertex) ModelGeometryMathDetail::Normalize(normals[vertex]);
             else normals[vertex] = normals[shade_indices[vertex]];
         }
@@ -116,11 +111,11 @@ void Deform_Model_Geometry(std::span<const Position> positions, std::span<const 
     std::span<const std::uint16_t> bones, const ModelHierarchy& hierarchy,
     std::span<Position> output_positions, std::span<Position> output_normals = {})
 {
-    assert(bones.size() == positions.size() && output_positions.size() == positions.size());
-    assert(output_normals.empty() || (normals.size() == positions.size() && output_normals.size() == positions.size()));
+    engine::core::Assert(bones.size() == positions.size() && output_positions.size() == positions.size());
+    engine::core::Assert(output_normals.empty() || (normals.size() == positions.size() && output_normals.size() == positions.size()));
     for (std::size_t first = 0; first < positions.size();) {
         const auto bone = bones[first];
-        assert(bone < hierarchy.Bone_Count());
+        engine::core::Assert(bone < hierarchy.Bone_Count());
         const auto& transform = hierarchy.World_Transform(bone).matrix;
         std::size_t end = first + 1;
         while (end < positions.size() && bones[end] == bone) ++end;

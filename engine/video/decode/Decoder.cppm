@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string_view>
-
 export module Video.Decoder;
+import std;
 
 export import Video.Frame;
 

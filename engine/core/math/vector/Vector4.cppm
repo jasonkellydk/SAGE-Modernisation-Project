@@ -1,11 +1,6 @@
-module;
-
-#include <cmath>
-#include <algorithm>
-#include <cassert>
-#include <cstddef>
-
 export module Engine.Core.Math.Vector4;
+import std;
+import engine.core.contracts;
 
 export namespace Engine::Math
 {
@@ -18,12 +13,12 @@ struct Vector4 final
 
 	constexpr float &operator[](std::size_t index) noexcept
 	{
-		assert(index < 4);
+		engine::core::Assert(index < 4);
 		return index == 0 ? x : index == 1 ? y : index == 2 ? z : w;
 	}
 	constexpr const float &operator[](std::size_t index) const noexcept
 	{
-		assert(index < 4);
+		engine::core::Assert(index < 4);
 		return index == 0 ? x : index == 1 ? y : index == 2 ? z : w;
 	}
 

@@ -1,0 +1,50 @@
+#include <boost/test/unit_test.hpp>
+
+#include <vector>
+
+import games.generalszh.presentation.hud.algorithms.experience_bar;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(experience_bar)
+
+// Legacy parity (W3DControlBar.cpp W3DCommandBarGenExpDraw): a 70-pixel window, caps 4 high, centre pieces 10 high.
+// No progress: nothing (not even the window's own look). 50%: range 35; the top cap's start 70 - 35 - 4 = 31, the
+// bottom cap's 66; 35 pixels of centre: three whole pieces (31, 41, 51) and the fourth clipped to 61..66 (half its
+// rows); the bottom cap at 66..70; the top cap upside down at 31..35. 120% draws as 100%. 3%: range 2, no room for a
+// centre (a bottom cap 8 high): the caps stacked at the bottom, the top one the right way up.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_experience_bar_rises_with_the_rank_progress)
+{
+	BOOST_TEST(LayOutExperienceBar(0, 70, 4, 10, 4).empty());
+	const auto half = LayOutExperienceBar(50, 70, 4, 10, 4);
+	BOOST_TEST_REQUIRE(half.size() == 6u);
+	for (int piece = 0; piece < 3; ++piece)
+	{
+		BOOST_TEST((half[piece].piece == ExperiencePiece::Centre));
+		BOOST_TEST(half[piece].top == 31 + 10 * piece);
+		BOOST_TEST(half[piece].bottom == 41 + 10 * piece);
+	}
+	BOOST_TEST((half[3].piece == ExperiencePiece::Centre));
+	BOOST_TEST(half[3].top == 61);
+	BOOST_TEST(half[3].bottom == 66);
+	BOOST_TEST(half[3].vBottom == 0.5f);
+	BOOST_TEST((half[4].piece == ExperiencePiece::Bottom));
+	BOOST_TEST(half[4].top == 66);
+	BOOST_TEST(half[4].bottom == 70);
+	BOOST_TEST((half[5].piece == ExperiencePiece::Top));
+	BOOST_TEST(half[5].top == 31);
+	BOOST_TEST(half[5].bottom == 35);
+	BOOST_TEST(half[5].vTop == 1.0f);
+	BOOST_TEST(half[5].vBottom == 0.0f);
+	const auto full = LayOutExperienceBar(120, 70, 4, 10, 4);
+	BOOST_TEST(full.back().top == -4);
+	const auto low = LayOutExperienceBar(3, 70, 8, 10, 4);
+	BOOST_TEST_REQUIRE(low.size() == 2u);
+	BOOST_TEST((low[0].piece == ExperiencePiece::Bottom));
+	BOOST_TEST(low[0].top == 62);
+	BOOST_TEST((low[1].piece == ExperiencePiece::Top));
+	BOOST_TEST(low[1].top == 58);
+	BOOST_TEST(low[1].vTop == 0.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,179 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.shell.score.academy_advice;
+import games.generalszh.shell.score.score_screen_view_model;
+
+using namespace generalszh::shell;
+
+namespace
+{
+// A scripted client random stream (randomValue(theGameClientSeed)): its draws in turn, counting them.
+struct Draws
+{
+	std::vector<std::uint32_t> values;
+	std::size_t taken{0};
+
+	std::function<std::uint32_t()> Stream()
+	{
+		return [this] { return taken < values.size() ? values[taken++] : (++taken, 0u); };
+	}
+};
+
+// A record that asks for nothing in tiers 1 and 2 (but 21: the guard, never recorded used) as of frame 2000.
+AcademyAdviceRecord Diligent()
+{
+	AcademyAdviceRecord record;
+	record.unknownSide = false;
+	record.supplyCentersBuilt = 2;
+	record.researchedRadar = true;
+	record.peonsBuilt = 2;
+	record.structuresCaptured = 1;
+	record.generalsPointsSpent = 1;
+	record.specialPowersUsed = 1;
+	record.structuresGarrisoned = 1;
+	record.lastUnitBuiltFrame = 1900;
+	record.idleBuildingUnitsMaxFrames = 600;
+	record.dragSelectUnits = 1;
+	record.upgradesPurchased = 1;
+	record.hadPowerLastCheck = true;
+	record.gatherersBuilt = 1;
+	record.heroesBuilt = 1;
+	record.controlGroupsUsed = 1;
+	record.secondaryIncomeUnitsBuilt = 1;
+	record.clearedGarrisonedBuildings = 1;
+	return record;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(academy_advice)
+
+// Legacy parity (AcademyStats.cpp evaluateTier1Advice, GetGameClientRandomValue in RandomValue.cpp): counting the tips
+// on offer draws nothing (GameClientRandomValue(0, -2): lo >= hi gives hi); choosing, each on offer draws
+// GameClientRandomValue(0, left - 1) (draw % left) and is taken when under the one tip wanted; the last on offer draws
+// nothing (0..0) and is always taken. With radar and a hero the two on offer: a first draw of 7 (7 % 2 = 1) passes the
+// radar by and gives the hero; a draw of 4 (4 % 2 = 0) gives the radar. One draw either way.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tier_chooses_among_its_tips_by_the_client_random_stream)
+{
+	AcademyAdviceRecord record = Diligent();
+	record.researchedRadar = false;
+	record.heroesBuilt = 0;
+	const AcademyAdviceContext context{2000, "USA", false, 0, 0};
+	Draws seven{{7}};
+	const std::vector<std::string> hero = CalculateAcademyAdvice(record, context, seven.Stream());
+	BOOST_TEST_REQUIRE(hero.size() == 1u);
+	BOOST_TEST(hero[0] == "ACADEMY:BuildAHero");
+	BOOST_TEST(seven.taken == 1u);
+	Draws four{{4}};
+	const std::vector<std::string> radar = CalculateAcademyAdvice(record, context, four.Stream());
+	BOOST_TEST_REQUIRE(radar.size() == 1u);
+	BOOST_TEST(radar[0] == "ACADEMY:TryBuildingRadar");
+	BOOST_TEST(four.taken == 1u);
+}
+
+// Legacy parity (AcademyStats.cpp calculateAcademyAdvice, evaluateTier2Advice; AIStates.cpp AIGuardState's
+// recordGuardAbilityUsed after its return, never reached): a player owing nothing in tier 1 is told of tier 2's guard
+// ability, the only tip there on offer, with no draw. An unknown side (AcademyStats::init: no USA, China or GLA base
+// side) gets no advice at all.
+BOOST_AUTO_TEST_CASE(legacy_parity_with_tier_one_done_the_guard_ability_is_advised)
+{
+	const AcademyAdviceContext context{2000, "USA", false, 0, 0};
+	Draws none;
+	const std::vector<std::string> advice = CalculateAcademyAdvice(Diligent(), context, none.Stream());
+	BOOST_TEST_REQUIRE(advice.size() == 1u);
+	BOOST_TEST(advice[0] == "ACADEMY:UseGuardAbility");
+	BOOST_TEST(none.taken == 0u);
+	AcademyAdviceRecord unknown = Diligent();
+	unknown.unknownSide = true;
+	BOOST_TEST(CalculateAcademyAdvice(unknown, context, none.Stream()).empty());
+}
+
+// Legacy parity (AcademyStats.cpp evaluateTier1Advice 9) and 12), evaluateTier3Advice 30)): as it looks, the advice
+// brings the longest wait between units and outage up to now: a last unit at frame 100 seen at frame 9101 waited 9001
+// frames, over 300 * 30: "ACADEMY:IdleBuildingUnits"; a player out of power since frame 100 at frame 18101 was out
+// 18001, over 600 * 30: "ACADEMY:RanOutOfPower". Tier 3's income gap is last - now, unsigned: an income at frame 100 seen
+// at frame 200 wraps to 4294967196, over 120 * 30: "ACADEMY:NoIncome" (as is never having had income: frame 0); an income
+// on the frame itself is no gap. Mines (31) count the local player's own, never any, and say "ACADEMY:NoIncome" too.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_advice_measures_idle_time_outages_and_income_gaps_to_now)
+{
+	Draws none;
+	AcademyAdviceRecord idle = Diligent();
+	idle.lastUnitBuiltFrame = 100;
+	idle.idleBuildingUnitsMaxFrames = 0;
+	BOOST_TEST(CalculateAcademyAdvice(idle, {9100, "USA", false, 0, 0}, none.Stream()).at(0) == "ACADEMY:UseGuardAbility");
+	BOOST_TEST(CalculateAcademyAdvice(idle, {9101, "USA", false, 0, 0}, none.Stream()).at(0) == "ACADEMY:IdleBuildingUnits");
+	AcademyAdviceRecord dark = Diligent();
+	dark.hadPowerLastCheck = false;
+	dark.oldestPowerOutFrame = 100;
+	dark.lastUnitBuiltFrame = 18000;
+	BOOST_TEST(CalculateAcademyAdvice(dark, {18100, "USA", false, 0, 0}, none.Stream()).at(0) == "ACADEMY:UseGuardAbility");
+	BOOST_TEST(CalculateAcademyAdvice(dark, {18101, "USA", false, 0, 0}, none.Stream()).at(0) == "ACADEMY:RanOutOfPower");
+	BOOST_TEST(none.taken == 0u);
+
+	// Tier 3 alone: tiers 1 and 2 owed nothing (the guard set used here only to reach it), the alternate mouse used, a
+	// double-click attack move given, the barracks, war factory and tech structure in time.
+	AcademyAdviceRecord earner = Diligent();
+	earner.guardAbilityUsedCount = 1;
+	earner.lastUnitBuiltFrame = 150;
+	earner.doubleClickAttackMoveOrdersGiven = 1;
+	earner.builtBarracksWithinFiveMinutes = earner.builtWarFactoryWithinTenMinutes = earner.builtTechStructureWithinFifteenMinutes = true;
+	earner.lastIncomeFrame = 100;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 0}, none.Stream()).at(0) == "ACADEMY:NoIncome");
+	earner.lastIncomeFrame = 200;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 0}, none.Stream()).empty());
+	earner.lastIncomeFrame = 0;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 0}, none.Stream()).at(0) == "ACADEMY:NoIncome");
+	earner.lastIncomeFrame = 200;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 3, 0}, none.Stream()).at(0) == "ACADEMY:NoIncome");
+	// 32) the neutral player's sniped vehicles (none ever recovered), 33) a disguiser never disguised, 35) China's firestorm.
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 1}, none.Stream()).at(0) == "ACADEMY:UnmannedVehicles");
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "china", true, 0, 0}, none.Stream()).at(0) == "ACADEMY:Firestorm");
+	earner.disguisableVehiclesBuilt = 1;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 0}, none.Stream()).at(0) == "ACADEMY:DisguisedUnits");
+	earner.vehiclesDisguised = 1;
+	BOOST_TEST(CalculateAcademyAdvice(earner, {200, "USA", true, 0, 0}, none.Stream()).empty());
+	// 20) salvage, for a GLA player only.
+	AcademyAdviceRecord gla = Diligent();
+	gla.guardAbilityUsedCount = 1;
+	BOOST_TEST(CalculateAcademyAdvice(gla, {2000, "GLA", true, 0, 0}, none.Stream()).at(0) == "ACADEMY:PickUpSalvage");
+	BOOST_TEST(none.taken == 0u);
+}
+
+// Legacy parity (ScoreScreen.cpp populatePlayerInfo, initSkirmish, initLANMultiPlayer, initReplayMultiPlayer,
+// finishSinglePlayerInit): a skirmish's score screen shows the war school (ListboxWarschoolAdvice, StaticTextWarSchool)
+// with the local player's advice, each "\n\n" and the label's text (GadgetListBoxAddEntryText); a LAN game or a replay
+// hides it, as does a mission's score screen; with no record (an observer: setObserverWindows) it shows, empty, as
+// ScoreScreen.wnd has it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmishs_score_screen_lists_the_war_school_advice)
+{
+	ScoreScreenViewModel screen([](std::string_view label) { return u"[" + std::u16string(label.begin(), label.end()) + u"]"; });
+	ScoreScreenSetup setup;
+	setup.kind = ScoreScreenKind::Skirmish;
+	Draws none;
+	setup.academy = ScoreAcademy{Diligent(), {2000, "USA", false, 0, 0}, none.Stream()};
+	screen.Show(setup);
+	BOOST_TEST(screen.warSchoolShown.Get());
+	BOOST_TEST_REQUIRE(screen.warSchoolAdvice.Get().size() == 1u);
+	BOOST_TEST((screen.warSchoolAdvice.Get()[0] == u"\n\n[ACADEMY:UseGuardAbility]"));
+	setup.warSchoolHidden = true;
+	screen.Show(setup);
+	BOOST_TEST(!screen.warSchoolShown.Get());
+	BOOST_TEST(screen.warSchoolAdvice.Get().empty());
+	setup.warSchoolHidden = false;
+	setup.academy.reset();
+	screen.Show(setup);
+	BOOST_TEST(screen.warSchoolShown.Get());
+	BOOST_TEST(screen.warSchoolAdvice.Get().empty());
+	setup.kind = ScoreScreenKind::SinglePlayer;
+	setup.academy = ScoreAcademy{Diligent(), {2000, "USA", false, 0, 0}, none.Stream()};
+	screen.Show(setup);
+	BOOST_TEST(!screen.warSchoolShown.Get());
+	BOOST_TEST(screen.warSchoolAdvice.Get().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

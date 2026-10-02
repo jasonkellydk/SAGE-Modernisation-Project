@@ -1,0 +1,162 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.superweapon_timers;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import engine.gameplay.rts.construction.components.under_construction;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.identity.components.definition_ref;
+import games.generalszh.gameplay.powers.algorithms.special_power_state;
+
+// The superweapon countdowns over a shipped skirmish (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(superweapon_timers)
+
+// SpecialPowerModule::onSpecialPowerCreation -> InGameUI::addSuperweapon and InGameUI::postDraw's countdowns: America's
+// particle cannon (PublicTimer, not shared) puts its countdown up as it is built, ReloadTime 240 s: "4:00" that tick,
+// "3:59" the next (whole seconds of 30 ticks, rounded down). China's nuke silo shows after it (player order); a second
+// cannon shows its own below the first (not shared: each module's). A cannon still being built takes no line; a script
+// hiding one (NAMED_HIDE_SPECIAL_POWER_DISPLAY) leaves it out until shown again.
+BOOST_AUTO_TEST_CASE(legacy_parity_built_superweapons_count_down_on_screen)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	const auto teamOf = [&](std::uint32_t player) {
+		for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+			if (game.Teams().TeamAt(team).owner == player && !game.Teams().TeamAt(team).members.empty())
+				return team;
+		return 0u;
+	};
+	const auto build = [&](std::string_view type, std::uint32_t player, int x) {
+		const ecs::Entity made = game.Place(std::string(type), {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(500)}, {}, teamOf(player));
+		generalszh::gameplay::OnBuildComplete(game.Game(), made);
+		return made;
+	};
+	BOOST_TEST(hud::ReadSuperweaponTimers(game, game.CurrentTick()).empty());
+	const ecs::Entity silo = build("ChinaNuclearMissileLauncher", china, 900);
+	const ecs::Entity cannon = build("AmericaParticleCannonUplink", america, 500);
+	BOOST_TEST_REQUIRE(world.IsAlive(cannon));
+	auto lines = hud::ReadSuperweaponTimers(game, game.CurrentTick());
+	BOOST_TEST_REQUIRE(lines.size() == 2u);
+	BOOST_TEST(lines[0].player == america);
+	BOOST_TEST(lines[0].power == "SuperweaponParticleUplinkCannon");
+	BOOST_TEST(lines[0].readySeconds == 240);
+	BOOST_TEST(!lines[0].ready);
+	BOOST_TEST(lines[1].player == china);
+	BOOST_TEST(lines[1].power == "SuperweaponNeutronMissile");
+	BOOST_TEST(lines[1].readySeconds == 360);
+	BOOST_TEST((hud::CountdownText(lines[0].readySeconds) == u"4:00"));
+	game.Tick();
+	lines = hud::ReadSuperweaponTimers(game, game.CurrentTick());
+	BOOST_TEST((hud::CountdownText(lines[0].readySeconds) == u"3:59"));
+	BOOST_TEST((hud::CountdownText(61) == u"1:01"));
+
+	const ecs::Entity second = build("AmericaParticleCannonUplink", america, 700);
+	lines = hud::ReadSuperweaponTimers(game, game.CurrentTick());
+	BOOST_TEST_REQUIRE(lines.size() == 3u);
+	BOOST_TEST(lines[0].readySeconds == 239);
+	BOOST_TEST(lines[1].readySeconds == 240); // the later one below
+	BOOST_TEST(lines[2].player == china);
+
+	world.Add<gp::UnderConstruction>(second);
+	lines = hud::ReadSuperweaponTimers(game, game.CurrentTick());
+	BOOST_TEST_REQUIRE(lines.size() == 3u);
+	BOOST_TEST(!lines[1].shown);
+	world.Remove<gp::UnderConstruction>(second);
+
+	gp::HidePublicTimers(*world.Get<gp::SpecialPowerTimers>(cannon), true);
+	lines = hud::ReadSuperweaponTimers(game, game.CurrentTick());
+	BOOST_TEST_REQUIRE(lines.size() == 2u);
+	BOOST_TEST(lines[0].readySeconds == 240);
+	gp::HidePublicTimers(*world.Get<gp::SpecialPowerTimers>(cannon), false);
+	BOOST_TEST(hud::ReadSuperweaponTimers(game, game.CurrentTick()).size() == 3u);
+	BOOST_TEST(hud::ReadSuperweaponTimers(game, 0).empty()); // nothing before the first frame
+}
+
+// InGameUI::postDraw: a ready countdown swaps between the flash colour and its player's every FlashDuration frames
+// (500 ms: 15), starting on the flash colour; no flash with a duration of 0.
+BOOST_AUTO_TEST_CASE(legacy_parity_ready_countdowns_flash)
+{
+	hud::SuperweaponFlash flash;
+	const auto fifteen = Engine::Math::Fixed::FromInt(15);
+	BOOST_TEST(flash.FlashColor(100, fifteen));
+	BOOST_TEST(flash.FlashColor(114, fifteen));
+	BOOST_TEST(!flash.FlashColor(115, fifteen));
+	BOOST_TEST(!flash.FlashColor(129, fifteen));
+	BOOST_TEST(flash.FlashColor(130, fifteen));
+	hud::SuperweaponFlash none;
+	BOOST_TEST(!none.FlashColor(100, Engine::Math::Fixed{}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

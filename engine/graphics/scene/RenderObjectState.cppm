@@ -1,10 +1,5 @@
-module;
-
-#include <array>
-#include <bit>
-#include <cstdint>
-
 export module Graphics.Scene.RenderObjectState;
+import std;
 
 export import Graphics.Scene.AffineTransform;
 

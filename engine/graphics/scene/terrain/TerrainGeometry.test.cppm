@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE TerrainGeometryTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <limits>
-#include <algorithm>
-#include <vector>
-#include <span>
 export module Graphics.Scene.Terrain.Geometry.Tests;
+import std;
 import Graphics.Scene.Terrain.Geometry;
 using namespace Graphics;
 

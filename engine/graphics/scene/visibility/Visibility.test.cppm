@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-
 export module Graphics.Scene.Visibility.Tests;
+import std;
 
 import Graphics.Scene.Visibility;
 

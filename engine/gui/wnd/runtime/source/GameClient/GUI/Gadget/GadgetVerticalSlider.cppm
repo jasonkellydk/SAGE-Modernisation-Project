@@ -54,6 +54,7 @@ module;
 #include "GameClient/GameWindow.h"
 
 export module Engine.UI.WND.Runtime.Gadget.VerticalSlider;
+import std;
 
 #include "GameClient/Gadget.h"
 

@@ -1,0 +1,308 @@
+#define BOOST_TEST_MODULE EngineGameplayTopple
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.containment.components.drop_homing;
+import engine.gameplay.rts.topple.systems.topple_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::uint32_t Toppled = 6;
+
+struct Grove
+{
+	explicit Grove(std::size_t workers)
+	{
+		Register(world);
+		world.EmplaceResource<ColliderIndex>(Engine::Math::FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+		world.EmplaceResource<ColliderGather>();
+		world.EmplaceResource<ContactOffers>();
+		world.EmplaceResource<Contacts>();
+		world.EmplaceResource<ToppleSettings>(ToppleSettings{Toppled});
+		world.EmplaceResource<ToppleEvents>();
+		world.EmplaceResource<BlastWaves>();
+		world.EmplaceResource<TopplePushes>();
+		world.EmplaceResource<WaypointGraph>();
+		terrain.width = terrain.height = 2;
+		terrain.cellSize = Fixed::FromInt(1000);
+		terrain.heights.assign(4, Fixed{});
+		world.EmplaceResource<GroundHeight>(terrain);
+		world.EmplaceResource<RandomSeed>();
+		registry.Register(index);
+		registry.Register(movement);
+		registry.Register(contacts);
+		registry.Register(topple);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<Attitude>();
+		target.RegisterComponent<Collider>();
+		target.RegisterComponent<Topple>();
+		target.RegisterComponent<Lifetime>();
+		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<MoveOrder>();
+		target.RegisterComponent<PathCompleted>();
+		target.RegisterComponent<MoveEnded>();
+		target.RegisterComponent<Descent>();
+		target.RegisterComponent<FloorLift>();
+		target.RegisterComponent<DropHoming>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<Dying>();
+		target.RegisterComponent<BoundingVolume>();
+		target.RegisterComponent<BodyExtent>();
+		target.FinalizeComponents();
+	}
+
+	ecs::Entity Tree(int x, int y)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Attitude>(entity);
+		world.Add<Collider>(entity);
+		world.Add<Topple>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Collider>(entity) = {Fixed::FromInt(3), 0, 255};
+		return entity;
+	}
+
+	// A tank rolling east at `speed` a tick (its locomotor has no order: it coasts at that speed).
+	ecs::Entity Tank(int x, int y, std::uint32_t crusher, int speed)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Collider>(entity);
+		world.Add<Locomotion>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(y), {}};
+		*world.Get<Collider>(entity) = {Fixed::FromInt(10), crusher, 255};
+		world.Get<Locomotion>(entity)->speed = Fixed::FromInt(speed);
+		return entity;
+	}
+
+	std::vector<ToppleEvent> Step()
+	{
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<ToppleEvent> out;
+		world.Resource<ToppleEvents>().ForEach([&](const ToppleEvent &event) { out.push_back(event); });
+		return out;
+	}
+
+	engine::level::Heightfield terrain;
+	ecs::World world{ecs::WorldConfig{4}};
+	ColliderIndexSystem index;
+	MovementSystem movement;
+	ContactSystem contacts;
+	ToppleSystem topple;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(topple)
+
+BOOST_AUTO_TEST_CASE(a_heavy_crusher_fells_a_tree_away_from_it_and_it_dies_toppled)
+{
+	Grove grove(2);
+	const ecs::Entity tree = grove.Tree(508, 500);
+	grove.Tank(500, 500, 2, 1);
+	const auto first = grove.Step();
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((first[0].kind == ToppleEvent::Kind::Started));
+	BOOST_TEST((grove.world.Get<Topple>(tree)->state == ToppleState::Falling));
+	std::size_t bounces = 0;
+	for (int step = 0; step < 300 && grove.world.Get<Topple>(tree)->state != ToppleState::Down; ++step)
+		for (const auto &event : grove.Step())
+			bounces += event.kind == ToppleEvent::Kind::Bounced ? 1u : 0u;
+	const Topple &down = *grove.world.Get<Topple>(tree);
+	BOOST_TEST((down.state == ToppleState::Down));
+	BOOST_TEST(bounces > 0u);
+	// Lying along the fall (east, away from the tank): facing east or west, pitched near flat.
+	const auto facing = grove.world.Get<Transform>(tree)->facing.units;
+	BOOST_TEST((facing < Engine::Math::TurnFromDegrees(2).units || facing > Engine::Math::TurnFromDegrees(358).units ||
+		(facing > Engine::Math::TurnFromDegrees(178).units && facing < Engine::Math::TurnFromDegrees(182).units)));
+	BOOST_TEST_REQUIRE(grove.world.Get<Lifetime>(tree) != nullptr);
+	BOOST_TEST(grove.world.Get<Lifetime>(tree)->deathType == Toppled);
+}
+
+// ToppleUpdate::applyTopplingForce with ScriptEngine::adjustToppleDirection: a tree a script told to fall north does,
+// though the tank pushes it east: it turns to lie north-south.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_script_chooses_which_way_a_tree_falls)
+{
+	Grove grove(2);
+	const ecs::Entity tree = grove.Tree(508, 500);
+	Topple &topple = *grove.world.Get<Topple>(tree);
+	topple.scriptedDirection = {Fixed{}, Fixed::One()};
+	topple.scripted = 1;
+	grove.Tank(500, 500, 2, 1);
+	for (int step = 0; step < 300 && grove.world.Get<Topple>(tree)->state != ToppleState::Down; ++step)
+		grove.Step();
+	BOOST_TEST((grove.world.Get<Topple>(tree)->state == ToppleState::Down));
+	const auto facing = grove.world.Get<Transform>(tree)->facing.units;
+	BOOST_TEST(((facing > Engine::Math::TurnFromDegrees(88).units && facing < Engine::Math::TurnFromDegrees(92).units) ||
+		(facing > Engine::Math::TurnFromDegrees(268).units && facing < Engine::Math::TurnFromDegrees(272).units)));
+}
+
+// NeutronMissileSlowDeathBehavior::doBlast pushes everything within its outer radius (centre to centre, flat) over:
+// other->topple(missile to it, ToppleSpeed, TOPPLE_OPTIONS_NO_BOUNCE | TOPPLE_OPTIONS_NO_FX), ToppleUpdate::
+// applyTopplingForce and update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/ToppleUpdate.cpp). A tree's
+// defaults (InitialVelocityPercent 20%, InitialAccelPercent 1%) at ToppleSpeed 0.5 fall at 0.1 radians a tick, 0.005
+// faster each: 0.1n + 0.0025n(n-1) reaches the limit (pi/2 - pi/64) on the 12th tick after the push, where it lies
+// still at once (no bounce, no bounce effects) and dies toppled. The tree out of reach and the dead one inside stand.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_blast_pushes_a_tree_over_without_bouncing)
+{
+	Grove grove(2);
+	const ecs::Entity reached = grove.Tree(560, 500);
+	const ecs::Entity beyond = grove.Tree(700, 500);
+	const ecs::Entity dead = grove.Tree(500, 560);
+	grove.world.Add<Dying>(dead);
+	grove.world.Resource<BlastWaves>().pushes.push_back({{Fixed::FromInt(500), Fixed::FromInt(500), {}}, Fixed::FromInt(90), Fixed::FromRatio(1, 2)});
+	const auto first = grove.Step();
+	grove.world.Resource<BlastWaves>().Clear();
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((first[0].entity == reached));
+	BOOST_TEST((first[0].kind == ToppleEvent::Kind::Started));
+	BOOST_TEST((grove.world.Get<Topple>(beyond)->state == ToppleState::Upright));
+	BOOST_TEST((grove.world.Get<Topple>(dead)->state == ToppleState::Upright));
+	std::size_t steps = 0, events = 0;
+	while (steps < 100 && grove.world.Get<Topple>(reached)->state != ToppleState::Down)
+	{
+		events += grove.Step().size();
+		++steps;
+	}
+	BOOST_TEST(steps == 12u);
+	BOOST_TEST(events == 0u);
+	BOOST_TEST((grove.world.Get<Topple>(reached)->angularVelocity == Fixed{}));
+	BOOST_TEST_REQUIRE(grove.world.Get<Lifetime>(reached) != nullptr);
+	BOOST_TEST(grove.world.Get<Lifetime>(reached)->deathType == Toppled);
+}
+
+// WaveGuideUpdate::doDamage (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/WaveGuideUpdate.cpp): a flood
+// wave's victim is toppled away from the sample point that reached it, obj->topple(&toppleVector, ToppleForce,
+// TOPPLE_OPTIONS_NO_BOUNCE | TOPPLE_OPTIONS_NO_FX), through ToppleUpdate::applyTopplingForce and update. At the shipped
+// ToppleForce 0.25 a tree's defaults (InitialVelocityPercent 20%, InitialAccelPercent 1%) fall at 0.05 radians a tick,
+// 0.0025 faster each: 0.05n + 0.00125n(n-1) reaches the limit (pi/2 - pi/64) on the 21st tick after the push (1.4745 on
+// the 20th; the fixed-point percentages are a hair under, far from either side), where it lies still at once (no bounce,
+// no bounce effects) and dies toppled. A tree the wave did not reach stands.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_flood_wave_pushes_its_victim_over)
+{
+	Grove grove(1);
+	const ecs::Entity victim = grove.Tree(560, 500);
+	const ecs::Entity spared = grove.Tree(600, 500);
+	grove.world.Resource<TopplePushes>().list.push_back(
+		{victim, {Fixed::FromInt(7), Fixed::FromInt(-7)}, Fixed::FromRatio(1, 4), topple_option::NoBounce | topple_option::NoFx});
+	const auto first = grove.Step();
+	grove.world.Resource<TopplePushes>().list.clear();
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((first[0].entity == victim));
+	BOOST_TEST((first[0].kind == ToppleEvent::Kind::Started));
+	BOOST_TEST((grove.world.Get<Topple>(spared)->state == ToppleState::Upright));
+	std::size_t steps = 0, events = 0;
+	while (steps < 100 && grove.world.Get<Topple>(victim)->state != ToppleState::Down)
+	{
+		events += grove.Step().size();
+		++steps;
+	}
+	BOOST_TEST(steps == 21u);
+	BOOST_TEST(events == 0u);
+	BOOST_TEST_REQUIRE(grove.world.Get<Lifetime>(victim) != nullptr);
+	BOOST_TEST(grove.world.Get<Lifetime>(victim)->deathType == Toppled);
+	BOOST_TEST((grove.world.Get<Topple>(spared)->state == ToppleState::Upright));
+}
+
+BOOST_AUTO_TEST_CASE(light_crushers_and_standing_tanks_leave_trees_alone)
+{
+	Grove grove(1);
+	const ecs::Entity pushed = grove.Tree(508, 500);
+	grove.Tank(500, 500, 1, 1); // a light vehicle
+	const ecs::Entity parked = grove.Tree(508, 800);
+	grove.Tank(500, 800, 2, 0); // a heavy one, standing
+	for (int step = 0; step < 5; ++step)
+		grove.Step();
+	BOOST_TEST((grove.world.Get<Topple>(pushed)->state == ToppleState::Upright));
+	BOOST_TEST((grove.world.Get<Topple>(parked)->state == ToppleState::Upright));
+}
+
+BOOST_AUTO_TEST_CASE(toppling_is_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto plant = [](Grove &grove) {
+		for (int index = 0; index < 100; ++index)
+		{
+			grove.Tree(10 + index * 9, 300 + (index % 4) * 3);
+			if (index % 5 == 0)
+				grove.Tank(4 + index * 9, 300, 2, 1 + index % 3);
+		}
+	};
+	Grove one(1), four(4);
+	plant(one);
+	plant(four);
+	for (int step = 0; step < 20; ++step)
+	{
+		one.Step();
+		four.Step();
+	}
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Grove loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 60; ++step)
+	{
+		one.Step();
+		loaded.Step();
+	}
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+// ToppleUpdate::update with ReorientToppledRubble (the statues and walls: KillWhenFinishedToppling with a separate
+// rubble state): down, it is killed and moved to where its top now lies (Transform_Point of (0, 0, its geometry's max
+// height above its position): 40 up, tilted pi/2 - pi/64 toward its fall) and stood upright; a tree without it stays as
+// it fell.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_statue_is_set_upright_where_its_top_fell)
+{
+	Grove grove(2);
+	const ecs::Entity statue = grove.Tree(508, 500);
+	const ecs::Entity tree = grove.Tree(508, 600);
+	for (const ecs::Entity felled : {statue, tree})
+	{
+		grove.world.Add<BodyExtent>(felled);
+		grove.world.Get<BodyExtent>(felled)->maxHeight = Fixed::FromInt(40);
+	}
+	grove.world.Get<Topple>(statue)->flags |= topple_flag::ReorientRubble;
+	grove.Tank(500, 500, 2, 1);
+	grove.Tank(500, 600, 2, 1);
+	for (int step = 0; step < 300 && (grove.world.Get<Topple>(statue)->state != ToppleState::Down || grove.world.Get<Topple>(tree)->state != ToppleState::Down); ++step)
+		grove.Step();
+	const Topple &down = *grove.world.Get<Topple>(statue);
+	BOOST_TEST_REQUIRE((down.state == ToppleState::Down));
+	const Transform &at = *grove.world.Get<Transform>(statue);
+	const Engine::Math::TurnAngle tilt = Engine::Math::TurnFromRadians(down.fallen);
+	const auto toward = Engine::Math::Direction(at.facing) * (Fixed::FromInt(down.fallSign) * Fixed::FromInt(40) * Engine::Math::Sin(tilt));
+	BOOST_TEST((at.position.XY() == Engine::Math::FixedVector2{Fixed::FromInt(508) + toward.x, Fixed::FromInt(500) + toward.y}));
+	BOOST_TEST((at.position.z == Fixed::FromInt(40) * Engine::Math::Cos(tilt)));
+	BOOST_TEST((at.position.x > Fixed::FromInt(508))); // the way it fell: east, away from the tank
+	BOOST_TEST(grove.world.Get<Attitude>(statue)->pitch.units == 0u);
+	BOOST_TEST(grove.world.Get<Attitude>(tree)->pitch.units != 0u);
+	BOOST_TEST((grove.world.Get<Transform>(tree)->position.XY() == Engine::Math::FixedVector2{Fixed::FromInt(508), Fixed::FromInt(600)}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,214 @@
+#define BOOST_TEST_MODULE EngineGameplayConstructionWork
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.construction.systems.construction_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Site
+{
+	explicit Site(std::uint32_t workers = 1)
+	{
+		world.RegisterComponent<Builder>();
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<MoveOrder>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<UnderConstruction>();
+		world.RegisterComponent<ConstructionProgress>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<SelfHealing>();
+		world.RegisterComponent<HealLock>();
+		world.FinalizeComponents();
+		world.EmplaceResource<PlayerEnergy>();
+		world.EmplaceResource<EnergySettings>();
+		world.EmplaceResource<ConstructionsDone>();
+		world.EmplaceResource<HealPulses>();
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// A structure of `buildTicks` (BuildTime * 30) just placed: 0%, one hit point of 900.
+	ecs::Entity Structure(std::uint64_t buildTicks, int x)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<UnderConstruction>(entity);
+		world.Get<UnderConstruction>(entity)->buildTicks = buildTicks;
+		world.Add<ConstructionProgress>(entity);
+		world.Get<ConstructionProgress>(entity)->percent = Fixed{};
+		world.Add<Health>(entity);
+		*world.Get<Health>(entity) = Health{Fixed::One(), Fixed::FromInt(900)};
+		world.Add<Owner>(entity);
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), {}, {}};
+		return entity;
+	}
+
+	// A dozer at its dock beside `structure`, stopped.
+	ecs::Entity Dozer(ecs::Entity structure, int x)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Builder>(entity);
+		*world.Get<Builder>(entity) = Builder{structure, {Fixed::FromInt(x), {}}, Fixed::FromInt(10)};
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), {}, {}};
+		world.Add<MoveOrder>(entity);
+		world.Add<Owner>(entity);
+		return entity;
+	}
+
+	void Run(std::uint64_t tick) { scheduler->Execute(engine::time::SimulationTime{tick, engine::time::FixedStep{30}}); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::SystemRegistry registry;
+	ConstructionSystem system;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(construction_work)
+
+// DozerActionDoActionState (DOZER_TASK_BUILD) with calcTimeToBuild: a 3 s structure (90 frames) at full power gains
+// 100/90 % and 900/90 = 10 health a frame from the frame its dozer is at work, standing on the 90th (the tolerance: fixed
+// point truncates each 100/90 step where the float rounds up), and its base regeneration no longer waits; short of power
+// (half supplied: speed 0.5) it takes 180.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_raises_a_structure_frame_by_frame)
+{
+	Site site;
+	site.world.Resource<PlayerEnergy>().Add(0, 10); // produces 10, uses none: ratio 10, full speed
+	const ecs::Entity structure = site.Structure(90, 0);
+	site.world.Add<SelfHealing>(structure); // its base regeneration waits until it stands
+	site.world.Get<SelfHealing>(structure)->Add({Fixed{}, 1, 0, 0, 0, 1});
+	site.world.Get<SelfHealing>(structure)->waiting = 1;
+	site.Dozer(structure, 20);
+	std::uint64_t standing = 0;
+	for (std::uint64_t tick = 1; tick <= 200 && standing == 0; ++tick)
+	{
+		site.Run(tick);
+		if (tick == 45)
+		{
+			BOOST_TEST(site.world.Get<Health>(structure)->current.Raw() == Fixed::FromInt(451).Raw());
+			BOOST_TEST(site.world.Get<UnderConstruction>(structure)->started == 1u);
+		}
+		if (!site.world.Resource<ConstructionsDone>().list.empty())
+			standing = tick;
+	}
+	BOOST_TEST(standing == 90u);
+	BOOST_TEST(!site.world.Has<UnderConstruction>(structure));
+	BOOST_TEST(site.world.Get<SelfHealing>(structure)->waiting == 0u);
+	BOOST_TEST(site.world.Get<ConstructionProgress>(structure)->percent.Raw() == Fixed::FromInt(100).Raw());
+
+	Site starved;
+	starved.world.Resource<PlayerEnergy>().Add(0, 5);
+	starved.world.Resource<PlayerEnergy>().Add(0, -10);
+	const ecs::Entity slow = starved.Structure(90, 0);
+	starved.Dozer(slow, 20);
+	std::uint64_t slowStanding = 0;
+	for (std::uint64_t tick = 1; tick <= 400 && slowStanding == 0; ++tick)
+	{
+		starved.Run(tick);
+		if (!starved.world.Resource<ConstructionsDone>().list.empty())
+			slowStanding = tick;
+	}
+	BOOST_TEST(slowStanding == 180u);
+}
+
+// A dozer still on its way (not stopped, or not yet at its dock) does not build; one whose structure is another
+// player's gives up (it changed sides mid-build: STATE_FAILURE).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_builds_only_at_its_dock_and_for_its_own_player)
+{
+	Site site;
+	site.world.Resource<PlayerEnergy>().Add(0, 10);
+	const ecs::Entity structure = site.Structure(90, 0);
+	const ecs::Entity dozer = site.Dozer(structure, 20);
+	site.world.Get<Transform>(dozer)->position = {Fixed::FromInt(80), {}, {}}; // 60 from its dock
+	site.Run(1);
+	BOOST_TEST(site.world.Get<ConstructionProgress>(structure)->percent.Raw() == 0);
+	BOOST_TEST(site.world.Get<UnderConstruction>(structure)->started == 0u);
+	site.world.Get<Transform>(dozer)->position = {Fixed::FromInt(22), {}, {}};
+	site.Run(2);
+	BOOST_TEST(site.world.Get<ConstructionProgress>(structure)->percent.Raw() > 0);
+	site.world.Get<Owner>(structure)->player = 1;
+	site.Run(3);
+	BOOST_TEST(!site.world.Has<Builder>(dozer));
+}
+
+// Many dozers raising many structures come out the same on any number of workers.
+BOOST_AUTO_TEST_CASE(construction_is_the_same_on_any_number_of_workers)
+{
+	const auto run = [](std::uint32_t workers) {
+		Site site(workers);
+		site.world.Resource<PlayerEnergy>().Add(0, 10);
+		std::vector<ecs::Entity> structures;
+		for (int index = 0; index < 150; ++index)
+		{
+			structures.push_back(site.Structure(30 + static_cast<std::uint64_t>(index % 50), index * 100));
+			site.Dozer(structures.back(), index * 100 + 20);
+			if (index % 3 == 0)
+				site.Dozer(structures.back(), index * 100 - 20); // two at once
+		}
+		std::vector<std::int64_t> trace;
+		for (std::uint64_t tick = 1; tick <= 120; ++tick)
+		{
+			site.Run(tick);
+			trace.push_back(static_cast<std::int64_t>(site.world.Resource<ConstructionsDone>().list.size()));
+		}
+		for (const ecs::Entity structure : structures)
+			trace.push_back(site.world.Get<Health>(structure)->current.Raw());
+		return trace;
+	};
+	BOOST_TEST(run(1) == run(4));
+}
+
+// DozerActionDoActionState, DOZER_TASK_REPAIR: a dozer at its dock offers its standing structure max health *
+// RepairHealthPercentPerSecond (2%) / 30 a frame, as its sole healer for this frame and the next (a heal pulse locking
+// 2 ticks: attemptHealingFromSoleBenefactor); one whose structure another healer holds gives up; once it is whole the
+// dozer is done.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dozer_repairs_a_structure_as_its_sole_healer)
+{
+	Site site;
+	const ecs::Entity structure = site.world.Create();
+	site.world.Add<Health>(structure);
+	*site.world.Get<Health>(structure) = Health{Fixed::FromInt(990), Fixed::FromInt(1000)};
+	site.world.Add<HealLock>(structure);
+	site.world.Add<Owner>(structure);
+	site.world.Add<Transform>(structure);
+	const Fixed share = Fixed::FromRatio(2, 100) / Fixed::FromInt(30);
+	const auto dozer = [&](int x) {
+		const ecs::Entity entity = site.Dozer(structure, x);
+		site.world.Get<Builder>(entity)->repair = 1;
+		site.world.Get<Builder>(entity)->repairShare = share;
+		return entity;
+	};
+	const ecs::Entity first = dozer(20);
+	site.Run(1);
+	const auto pulses = site.world.Resource<HealPulses>().For(structure);
+	BOOST_TEST_REQUIRE(pulses.size() == 1u);
+	BOOST_TEST((pulses[0].healer == first));
+	BOOST_TEST(pulses[0].amount.Raw() == (Fixed::FromInt(1000) * share).Raw());
+	BOOST_TEST(pulses[0].lockTicks == 2u);
+	// Another healer holds it (as the healing system leaves the lock): a second dozer gives up; the holder goes on.
+	*site.world.Get<HealLock>(structure) = HealLock{first, 3};
+	const ecs::Entity second = dozer(-20);
+	site.Run(2);
+	BOOST_TEST(!site.world.Has<Builder>(second));
+	BOOST_TEST(site.world.Has<Builder>(first));
+	// Whole: done.
+	site.world.Get<Health>(structure)->current = Fixed::FromInt(1000);
+	site.Run(3);
+	BOOST_TEST(!site.world.Has<Builder>(first));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

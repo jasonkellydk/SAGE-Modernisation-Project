@@ -1,14 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelChildrenTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.Children.Tests;
+import std;
 import Graphics.Scene.Models.Children;
 import Graphics.Scene.Models.DetailLevels;
 import Graphics.Scene.Props.Renderer;

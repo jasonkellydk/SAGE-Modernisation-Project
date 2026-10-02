@@ -1,0 +1,57 @@
+#define BOOST_TEST_MODULE GeneralsZhShroudPixels
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+
+import games.generalszh.presentation.rendering.shroud_pixels;
+
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(shroud_pixels)
+
+// W3DShroud.cpp (setShroudLevel / fillShroudData / fillBorderShroudData) and W3DDisplay::setShroudLevel with GameData's
+// ShroudColor R:255 G:255 B:255, ClearAlpha 255, FogAlpha 127, ShroudAlpha 0: a clear cell is fully lit (0xFFFF), a
+// fogged one 127 grey in R5G6B5 (blue and red 127 & 0xF8, green 127 & 0xFC: 0x7BEF), a shrouded one black; nothing
+// darker than ShroudAlpha; a tinted ShroudColor scales each channel by the level (truncated); the border shrouded, or
+// clear once the border shroud is disabled.
+BOOST_AUTO_TEST_CASE(legacy_parity_shroud_texels_are_the_originals)
+{
+	const ShroudLook look;
+	BOOST_TEST(ShroudPixel(255, look) == 0xFFFFu);
+	BOOST_TEST(ShroudPixel(127, look) == 0x7BEFu);
+	BOOST_TEST(ShroudPixel(0, look) == 0x0000u);
+	ShroudLook floor = look;
+	floor.shroudAlpha = 64;
+	BOOST_TEST(ShroudPixel(0, floor) == ShroudPixel(64, look));
+	ShroudLook tinted;
+	tinted.color = {255, 128, 0};
+	// red 200 (0xC8 & 0xF8 = 0xC8), green 200 * 128/255 = 100.39 -> 100 (& 0xFC = 100), blue 0.
+	BOOST_TEST(ShroudPixel(200, tinted) == static_cast<std::uint16_t>((0xC8u << 8) | (100u << 3)));
+	BOOST_TEST(ShroudPixel(255, tinted) == 0xFFFFu); // unshrouded pixels are fully lit whatever the colour
+
+	engine::gameplay::ShroudMap map;
+	map.Init(Fixed::FromInt(200), Fixed::FromInt(120), Fixed::FromInt(40), 2, 30);
+	map.RevealAll(1); // fogged everywhere for player 1
+	map.Reveal(1, 1, 0, std::uint64_t{1} << 1); // cell (1, 1) in sight
+	ShroudCells cells;
+	FillShroudCells(map, 1, look, false, cells);
+	BOOST_TEST(cells.width == 5u);
+	BOOST_TEST(cells.height == 3u);
+	BOOST_TEST(cells.cellSize == 40.0f);
+	BOOST_TEST(cells.border == 0x0000u);
+	BOOST_TEST(cells.pixels[1 * 5 + 1] == 0xFFFFu);
+	BOOST_TEST(cells.pixels[0] == 0x7BEFu);
+	FillShroudCells(map, 0, look, true, cells);
+	BOOST_TEST(cells.pixels[1 * 5 + 1] == 0x0000u); // player 0 never looked
+	BOOST_TEST(cells.border == 0xFFFFu);
+
+	// uv = world * P.xy + P.zw: the cell (0, 0) begins one texel in, the last cell ends one texel short.
+	const auto projection = ShroudProjection(40.0f, 7, 5);
+	BOOST_TEST(0.0f * projection[0] + projection[2] == 1.0f / 7.0f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(200.0f * projection[0] + projection[2] == 6.0f / 7.0f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(120.0f * projection[1] + projection[3] == 4.0f / 5.0f, boost::test_tools::tolerance(1e-6f));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

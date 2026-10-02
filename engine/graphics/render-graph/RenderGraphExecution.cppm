@@ -1,11 +1,5 @@
-module;
-
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <utility>
-
 export module Graphics.RenderGraph.Execution;
+import std;
 
 export import Graphics.RenderGraph;
 export import Graphics.RHI;

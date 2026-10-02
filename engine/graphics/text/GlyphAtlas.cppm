@@ -1,12 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <vector>
-#include <utility>
-
 export module Graphics.Text.GlyphAtlas;
+import std;
 
 namespace Graphics {
 export struct GlyphAtlasRegion final {

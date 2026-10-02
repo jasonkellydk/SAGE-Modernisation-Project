@@ -1,16 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <string_view>
-#include <utility>
-
 export module Video.Runtime;
+import std;
 
 export import Video.FFmpeg.Player;
 export import Video.Presentation;

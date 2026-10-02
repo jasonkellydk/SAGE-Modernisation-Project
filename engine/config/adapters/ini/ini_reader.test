@@ -1,0 +1,142 @@
+#define BOOST_TEST_MODULE EngineConfig
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+#include <string_view>
+
+import engine.config.adapters.ini.ini_reader;
+
+using namespace engine::config;
+
+namespace
+{
+ini::Grammar TestGrammar()
+{
+	ini::Grammar grammar;
+	grammar.topLevelBlocks = {"Object", "Weapon"};
+	grammar.nested["Object"] = {"Draw", "Behavior"};
+	grammar.nested["Draw"] = {"ConditionState"};
+	return grammar;
+}
+
+struct Parsed
+{
+	Document document;
+	Diagnostics diagnostics;
+};
+
+Parsed Parse(std::string text, const ini::Grammar &grammar = TestGrammar())
+{
+	Parsed parsed;
+	const auto source = parsed.document.AddSource("test.ini", std::move(text));
+	ini::Read(parsed.document, source, grammar, parsed.diagnostics);
+	return parsed;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(ini_reader)
+
+BOOST_AUTO_TEST_CASE(builds_nested_blocks_with_values_and_lines)
+{
+	const auto parsed = Parse(
+		"; header comment\n"
+		"Object AmericaTankCrusader\n"
+		"  DisplayName = OBJECT:Crusader\n"
+		"  Draw = W3DTankDraw ModuleTag_01\n"
+		"    ConditionState = NONE\n"
+		"      Model = AVCrusader\n"
+		"    End\n"
+		"  END\n"
+		"  Behavior = AIUpdateInterface ModuleTag_02\n"
+		"    Turret = Yes\n"
+		"  end\n"
+		"End\n");
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	const auto &roots = parsed.document.Roots();
+	BOOST_TEST_REQUIRE(roots.size() == 1u);
+	const Node &object = roots[0];
+	BOOST_TEST(object.key == "Object");
+	BOOST_TEST(object.Value() == "AmericaTankCrusader");
+	BOOST_TEST(object.location.line == 2u);
+	BOOST_TEST_REQUIRE(object.children.size() == 3u);
+	BOOST_TEST(object.children[0].key == "DisplayName");
+	BOOST_TEST(object.children[0].Value() == "OBJECT:Crusader");
+	const Node &draw = object.children[1];
+	BOOST_TEST(draw.block);
+	BOOST_TEST(draw.Value(0) == "W3DTankDraw");
+	BOOST_TEST(draw.Value(1) == "ModuleTag_01");
+	BOOST_TEST_REQUIRE(draw.children.size() == 1u);
+	const Node &state = draw.children[0];
+	BOOST_TEST(state.block);
+	BOOST_TEST(state.Find("Model")->Value() == "AVCrusader");
+	BOOST_TEST(state.Find("Model")->location.line == 6u);
+	BOOST_TEST(object.Find("Behavior")->Find("Turret")->Value() == "Yes");
+}
+
+BOOST_AUTO_TEST_CASE(comments_and_separators_follow_the_classic_rules)
+{
+	const auto parsed = Parse(
+		"Weapon Gun\n"
+		"  PrimaryDamage = 25.5 ; trailing comment\n"
+		"  TurnRate      = 60   // degrees per second\n"
+		"  Url = \"http://example.com;x\" tail\n"
+		"  Radius=12\n"
+		"  Offset = X:1.5 Y:-2 Z:3\n"
+		"  Tabbed\t=\t7\r\n"
+		"End");
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	const Node &weapon = parsed.document.Roots().at(0);
+	BOOST_TEST(weapon.Find("PrimaryDamage")->text == "25.5");
+	BOOST_TEST(weapon.Find("TurnRate")->values.size() == 1u);
+	BOOST_TEST(weapon.Find("Url")->text == "\"http://example.com;x\" tail");
+	BOOST_TEST(weapon.Find("Radius")->Value() == "12");
+	BOOST_TEST(weapon.Find("Offset")->text == "X:1.5 Y:-2 Z:3");
+	BOOST_TEST(weapon.Find("Tabbed")->Value() == "7");
+}
+
+BOOST_AUTO_TEST_CASE(keys_only_open_blocks_under_their_declared_parent)
+{
+	// "Draw" opens a block inside Object but is a plain field inside Weapon.
+	const auto parsed = Parse(
+		"Weapon Gun\n"
+		"  Draw = Yes\n"
+		"End\n");
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	BOOST_TEST(!parsed.document.Roots().at(0).Find("Draw")->block);
+}
+
+BOOST_AUTO_TEST_CASE(structural_errors_are_reported_with_locations)
+{
+	const auto unknown = Parse("Mystery Thing\nEnd\n");
+	BOOST_TEST(unknown.diagnostics.ErrorCount() == 1u);
+	BOOST_TEST(unknown.diagnostics.Format(unknown.document).find("test.ini:1: error: unknown block type 'Mystery'") != std::string::npos);
+
+	const auto extra = Parse("Weapon Gun\nEnd\nEnd\n");
+	BOOST_TEST(extra.diagnostics.ErrorCount() == 1u);
+	BOOST_TEST(extra.diagnostics.Entries()[0].location.line == 3u);
+
+	const auto missing = Parse("Object Tank\n  Draw = W3DModelDraw Tag\n  Model = X\nEnd\n");
+	BOOST_TEST(missing.diagnostics.ErrorCount() == 1u);
+	BOOST_TEST(missing.diagnostics.Entries()[0].message.find("'Object' is missing its End") != std::string::npos);
+	BOOST_TEST(missing.document.Roots().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(empty_grammar_accepts_any_top_level_block)
+{
+	const auto parsed = Parse("Anything Goes\n  Key = Value\nEnd\n", ini::Grammar{});
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	BOOST_TEST(parsed.document.Roots().at(0).key == "Anything");
+}
+
+BOOST_AUTO_TEST_CASE(single_line_top_level_entries_have_no_end)
+{
+	ini::Grammar grammar = TestGrammar();
+	grammar.topLevelSingleLine = {"ReallyLowMHz"};
+	const auto parsed = Parse("ReallyLowMHz = 400\nWeapon Gun\nEnd\n", grammar);
+	BOOST_TEST(!parsed.diagnostics.HasErrors());
+	BOOST_TEST_REQUIRE(parsed.document.Roots().size() == 2u);
+	BOOST_TEST(!parsed.document.Roots()[0].block);
+	BOOST_TEST(parsed.document.Roots()[0].Value() == "400");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

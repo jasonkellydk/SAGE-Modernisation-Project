@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.RHI;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 

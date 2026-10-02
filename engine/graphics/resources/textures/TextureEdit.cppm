@@ -1,13 +1,7 @@
 module;
 #define NOMINMAX
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <memory>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Resources.Textures.Edit;
+import std;
 export import Assets.Images.Buffer;
 export import Graphics.Resources.Textures.Resource;
 import Assets.Images.Preparation;

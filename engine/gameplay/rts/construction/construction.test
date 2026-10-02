@@ -1,0 +1,104 @@
+#define BOOST_TEST_MODULE EngineGameplayConstruction
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.construction.systems.sale_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Lot
+{
+	explicit Lot(std::uint32_t workers = 1)
+	{
+		world.RegisterComponent<Sale>();
+		world.RegisterComponent<ConstructionProgress>();
+		world.FinalizeComponents();
+		world.EmplaceResource<SaleSettings>();
+		world.EmplaceResource<SalesDone>();
+		registry.Register(sale);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// Sold on `tick` (BuildAssistant::sellObject: its construction set just under 100%).
+	ecs::Entity Sold(std::uint64_t tick)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<Sale>(entity);
+		world.Get<Sale>(entity)->since = tick;
+		world.Add<ConstructionProgress>(entity);
+		world.Get<ConstructionProgress>(entity)->percent = Fixed::FromRatio(999, 10);
+		return entity;
+	}
+
+	void Run(std::uint64_t tick) { scheduler->Execute(engine::time::SimulationTime{tick, engine::time::FixedStep{30}}); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	ecs::SystemRegistry registry;
+	SaleSystem sale;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(construction)
+
+// BuildAssistant::sellObject / update: sold on frame S at 99.9%, the scaffold stands until S + 45 (FRAMES_TO_ALLOW_SCAFFOLD,
+// 1.5 s), then 100/90 % goes a frame (TOTAL_FRAMES_TO_SELL_OBJECT, 3 s): it crosses 0 (SOLD) on its 90th step, S + 134,
+// and reaches -50% on its 135th, S + 179, when it is refunded and removed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sold_structure_sinks_and_goes_on_the_original_frames)
+{
+	Lot lot;
+	const std::uint64_t sold = 10;
+	const ecs::Entity building = lot.Sold(sold);
+	std::uint64_t sunk = 0, done = 0;
+	for (std::uint64_t tick = sold; tick < sold + 300 && done == 0; ++tick)
+	{
+		lot.Run(tick);
+		if (tick == sold + 44)
+			BOOST_TEST(lot.world.Get<ConstructionProgress>(building)->percent.Raw() == Fixed::FromRatio(999, 10).Raw()); // scaffold still up
+		if (sunk == 0 && lot.world.Get<Sale>(building)->sunk != 0)
+			sunk = tick;
+		const auto &finished = lot.world.Resource<SalesDone>().entities;
+		if (!finished.empty())
+		{
+			BOOST_TEST((finished.front() == building));
+			done = tick;
+		}
+	}
+	BOOST_TEST(sunk == sold + 134);
+	BOOST_TEST(done == sold + 179);
+}
+
+// Many structures sold on different ticks come down the same on any number of workers.
+BOOST_AUTO_TEST_CASE(sales_are_the_same_on_any_number_of_workers)
+{
+	const auto run = [](std::uint32_t workers) {
+		Lot lot(workers);
+		std::vector<ecs::Entity> buildings;
+		for (std::uint64_t index = 0; index < 200; ++index)
+			buildings.push_back(lot.Sold(index % 37));
+		std::vector<std::int64_t> trace;
+		for (std::uint64_t tick = 0; tick < 240; ++tick)
+		{
+			lot.Run(tick);
+			trace.push_back(static_cast<std::int64_t>(lot.world.Resource<SalesDone>().entities.size()));
+		}
+		for (const ecs::Entity building : buildings)
+			trace.push_back(lot.world.Get<ConstructionProgress>(building)->percent.Raw());
+		return trace;
+	};
+	BOOST_TEST(run(1) == run(4));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

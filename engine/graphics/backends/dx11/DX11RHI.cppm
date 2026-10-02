@@ -2,30 +2,16 @@ module;
 
 #define NOMINMAX
 
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
 #include <d3d11.h>
 #include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <dxgi.h>
-#include <fstream>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <span>
-#include <string>
-#include <type_traits>
-#include <utility>
-#include <vector>
 #include <windows.h>
 #include "DX11GPUProfiling.h"
 #include "DX11DeviceHealth.h"
 
 export module Graphics.Backends.DX11;
+import std;
 
 import engine.profiling;
 export import Graphics.RHI;
@@ -743,10 +729,10 @@ static bool Texture_Transfer_Layout(const RHITexture& description, std::uint32_t
     const std::uint64_t row_bytes = compressed
         ? static_cast<std::uint64_t>((width + 3u) / 4u) * (description.format == RHITextureFormat::BC1_UNorm ? 8u : 16u)
         : static_cast<std::uint64_t>(width) * To_DX11_Bytes_Per_Pixel(description.format);
-    if (row_bytes == 0 || row_bytes > UINT32_MAX) return false;
+    if (row_bytes == 0 || row_bytes > std::numeric_limits<std::uint32_t>::max()) return false;
     if (row_pitch == 0) row_pitch = static_cast<std::uint32_t>(row_bytes);
     const std::uint64_t minimum_slice = static_cast<std::uint64_t>(row_pitch) * rows;
-    if (row_pitch < row_bytes || minimum_slice > UINT32_MAX) return false;
+    if (row_pitch < row_bytes || minimum_slice > std::numeric_limits<std::uint32_t>::max()) return false;
     if (slice_pitch == 0) slice_pitch = static_cast<std::uint32_t>(minimum_slice);
     const auto required = static_cast<std::uint64_t>(slice_pitch) * (depth - 1u)
         + static_cast<std::uint64_t>(row_pitch) * (rows - 1u) + row_bytes;
@@ -1893,7 +1879,7 @@ bool DX11Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip, std::u
     TextureTransferLayout layout{};
     if (resource == nullptr || resource->Resource() == nullptr
         || (!read_only && Has_Texture_Usage(resource->description, RHITextureUsage::DepthStencil))
-        || !Texture_Transfer_Layout(resource->description, mip, layer, 0, 0, SIZE_MAX, layout)) return false;
+        || !Texture_Transfer_Layout(resource->description, mip, layer, 0, 0, std::numeric_limits<std::size_t>::max(), layout)) return false;
     for (const auto& mapping : resource->mappings)
         if (mapping->subresource == layout.subresource) return false;
     DX11NativeObject<ID3D11Resource> staging;
@@ -2045,7 +2031,7 @@ bool DX11Device::Retain_Texture(RHITextureHandle texture) noexcept
 {
     if (!Is_Valid()) return false;
     auto* resource = m_state->textures.Resolve(texture);
-    if (resource == nullptr || resource->references == UINT32_MAX) return false;
+    if (resource == nullptr || resource->references == std::numeric_limits<std::uint32_t>::max()) return false;
     ++resource->references;
     return true;
 }

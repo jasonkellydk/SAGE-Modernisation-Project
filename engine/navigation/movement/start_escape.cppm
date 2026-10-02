@@ -1,11 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <vector>
-
 export module engine.navigation.movement.start_escape;
+import std;
 import engine.navigation.movement.goal_projection;
 
 export namespace navigation {

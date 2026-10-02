@@ -1,7 +1,5 @@
-module;
-#include <array>
-#include <cmath>
 export module Graphics.Materials.TextureProjection;
+import std;
 import Graphics.Materials.TextureCoordinates;
 
 namespace Graphics {

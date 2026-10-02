@@ -1,13 +1,7 @@
 module;
 #define NOMINMAX
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
 export module Graphics.Resources.Textures.Resource;
+import std;
 export import Graphics.RHI;
 export import Graphics.Resources.Textures.Storage;
 

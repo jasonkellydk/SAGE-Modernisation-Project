@@ -1,11 +1,5 @@
-module;
-#include <algorithm>
-#include <map>
-#include <limits>
-#include <stdexcept>
-#include <utility>
-
 export module engine.navigation.topology.footprint_reachability;
+import std;
 export import engine.navigation.topology.reachability_cache;
 
 export namespace navigation {

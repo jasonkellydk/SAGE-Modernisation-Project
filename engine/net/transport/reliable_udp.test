@@ -1,0 +1,141 @@
+#include <boost/test/unit_test.hpp>
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <span>
+#include <vector>
+
+import engine.net.transport.reliable_udp;
+
+using namespace engine::net;
+
+namespace
+{
+// Datagrams between addresses in memory: each one lost with `lossPercent`, the rest delivered in a shuffled order.
+struct LossyNetwork
+{
+	std::map<std::uint32_t, std::deque<Datagram>> queues;
+	std::mt19937 random{12345};
+	int lossPercent{0};
+	bool reorder{false};
+
+	DatagramLink LinkFor(std::uint32_t self)
+	{
+		return {[this, self](Endpoint to, std::span<const std::byte> bytes) {
+					if (static_cast<int>(random() % 100) < lossPercent)
+						return;
+					auto &queue = queues[to.address];
+					Datagram datagram{{self, 1}, std::vector<std::byte>(bytes.begin(), bytes.end())};
+					if (reorder && !queue.empty() && random() % 3 == 0)
+						queue.insert(queue.begin() + static_cast<std::ptrdiff_t>(random() % queue.size()), std::move(datagram));
+					else
+						queue.push_back(std::move(datagram));
+				},
+			[this, self]() -> std::optional<Datagram> {
+				auto &queue = queues[self];
+				if (queue.empty())
+					return std::nullopt;
+				Datagram datagram = std::move(queue.front());
+				queue.pop_front();
+				return datagram;
+			}};
+	}
+};
+
+std::vector<std::byte> MessageOf(std::size_t index)
+{
+	std::vector<std::byte> message(1 + (index * 7919) % 5000);
+	for (std::size_t at = 0; at < message.size(); ++at)
+		message[at] = static_cast<std::byte>((index + at) & 0xFF);
+	return message;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(reliable_udp)
+
+// A client says hello until the listening host welcomes it; both ways, messages of up to 5000 bytes (cut into 1024-byte
+// segments) arrive whole, in order and once each, through a link that loses a fifth of its datagrams and reorders the
+// rest; a close reaches the other side; a peer never heard from again times out.
+BOOST_AUTO_TEST_CASE(messages_arrive_whole_in_order_over_a_lossy_link)
+{
+	LossyNetwork network;
+	network.lossPercent = 20;
+	network.reorder = true;
+	ReliableUdpHost server(network.LinkFor(1));
+	ReliableUdpHost client(network.LinkFor(2));
+	server.Listen(true);
+	auto toServer = client.Connect({1, 1});
+	std::unique_ptr<ReliableUdpConnection> toClient;
+	auto now = std::chrono::steady_clock::now();
+	const auto step = [&] {
+		now += std::chrono::milliseconds(20);
+		client.Poll(now);
+		server.Poll(now);
+		for (auto &accepted : server.Accept())
+			toClient = std::move(accepted);
+	};
+	constexpr std::size_t Count = 200;
+	for (std::size_t index = 0; index < Count; ++index)
+	{
+		toServer->Send(MessageOf(index));
+		if (index % 2 == 0)
+			step();
+	}
+	std::vector<std::vector<std::byte>> received;
+	for (int round = 0; round < 3000 && received.size() < Count; ++round)
+	{
+		step();
+		if (toClient)
+			while (auto message = toClient->Receive())
+				received.push_back(std::move(*message));
+	}
+	BOOST_TEST_REQUIRE(toClient != nullptr);
+	BOOST_TEST(toServer->Connected());
+	BOOST_TEST_REQUIRE(received.size() == Count);
+	for (std::size_t index = 0; index < Count; ++index)
+		BOOST_TEST((received[index] == MessageOf(index)));
+	// And back.
+	toClient->Send(MessageOf(7));
+	std::optional<std::vector<std::byte>> back;
+	for (int round = 0; round < 500 && !back; ++round)
+	{
+		step();
+		back = toServer->Receive();
+	}
+	BOOST_TEST_REQUIRE(back.has_value());
+	BOOST_TEST((*back == MessageOf(7)));
+	// A close reaches the other side (sent thrice over the lossy link).
+	network.lossPercent = 0;
+	toServer->Close();
+	for (int round = 0; round < 10; ++round)
+		step();
+	BOOST_TEST(!toClient->Open());
+}
+
+BOOST_AUTO_TEST_CASE(a_silent_peer_times_out_and_a_host_not_listening_takes_no_one)
+{
+	LossyNetwork network;
+	ReliableUdpHost server(network.LinkFor(1));
+	ReliableUdpHost client(network.LinkFor(2));
+	auto toServer = client.Connect({1, 1});
+	auto now = std::chrono::steady_clock::now();
+	for (int round = 0; round < 20; ++round)
+	{
+		now += std::chrono::milliseconds(50);
+		client.Poll(now);
+		server.Poll(now);
+	}
+	BOOST_TEST(server.Accept().empty()); // not listening
+	BOOST_TEST(!toServer->Connected());
+	now += std::chrono::seconds(11);
+	client.Poll(now);
+	BOOST_TEST(!toServer->Open());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

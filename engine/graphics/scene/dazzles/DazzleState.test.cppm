@@ -1,8 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DazzleStateTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
 export module Graphics.Scene.Dazzles.State.Tests;
+import std;
 import Assets.Dazzles;
 import Graphics.Scene.Dazzles.State;
 using namespace Graphics;

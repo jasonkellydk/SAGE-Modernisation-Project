@@ -1,0 +1,160 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+import games.generalszh.session.session;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import Engine.Core.Math.FixedPresentation;
+
+// ScriptActions::doNamedUseCommandButtonAbilityUsingWaypointPath -> Object::doCommandButtonUsingWaypoints ->
+// SpecialPowerModule::doSpecialPowerUsingWaypoints -> ParticleUplinkCannonUpdate::initiateIntentToDoSpecialPower (its
+// waypoint branch) on the shipped MD_GLA03, whose closing cinematic fires a particle cannon down the path
+// CINE_ENDTarget.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(waypoint_powers)
+
+// Legacy parity (ParticleUplinkCannonUpdate::initiateIntentToDoSpecialPower, `way` branch, and update's
+// m_scriptedWaypointMode driving): fired along the path from its waypoint closest to the cannon, the cannon is ready to
+// fire at once, its attack starting that frame (startAttackFrame = now) with the beam's first target the waypoint and
+// its destination one of the waypoint's links; its beam is born BeamTravelTime (2500 ms = 75 frames) later at the
+// waypoint and then driven at the fast speed (ManualFastDrivingSpeed 40 a second: 4/3 a frame, scripted always fast)
+// toward the link from its birth frame on. The power is triggered (markSpecialPowerTriggered). One and four workers agree; a checkpoint taken
+// mid-attack plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_script_fires_a_particle_cannon_down_a_waypoint_path)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/MD_GLA03/MD_GLA03.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	std::vector<std::string> seats;
+	for (const auto &side : read->level.scenario.participants)
+		if (side.properties.Get<bool>("playerIsHuman").value_or(false))
+		{
+			seats.push_back(side.properties.Get<std::string>("playerName").value_or(""));
+			break;
+		}
+	const auto play = [&](std::size_t workers) {
+		session::SessionOptions options{7, workers, {}, seats};
+		options.singlePlayer = true;
+		return std::make_unique<session::Session>(read->level, shell.game, options);
+	};
+	auto game = play(1);
+	auto other = play(4);
+	const auto &graph = game->Game().waypoints;
+	const std::uint32_t first = graph.ClosestOnPath(FixedVector2{Fixed::FromInt(3000), Fixed::FromInt(300)}, "CINE_ENDTarget");
+	BOOST_TEST_REQUIRE(first != gp::WaypointGraph::None);
+	const auto target = graph.Position(first);
+	const auto links = graph.Links(first);
+	BOOST_TEST_REQUIRE(!links.empty());
+	struct Fired
+	{
+		ecs::Entity uplink;
+		std::uint64_t start;
+	};
+	const auto fire = [&](session::Session &session) {
+		session.Tick();
+		const auto team = *session.Teams().FindTeam("team" + seats.front());
+		session.Place("AmericaPowerPlant", FixedVector2{Fixed::FromInt(2900), Fixed::FromInt(450)}, {}, team);
+		session.Place("AmericaPowerPlant", FixedVector2{Fixed::FromInt(3000), Fixed::FromInt(450)}, {}, team);
+		const ecs::Entity uplink = session.Place("AmericaParticleCannonUplink", FixedVector2{Fixed::FromInt(3000), Fixed::FromInt(300)}, {}, team);
+		session.Tick();
+		const std::uint64_t start = session.Game().tick;
+		gameplay::FireSpecialPowerUsingWaypoints(session.Game(), uplink, "SuperweaponParticleUplinkCannon", first);
+		return Fired{uplink, start};
+	};
+	const Fired fired = fire(*game);
+	const Fired mirrored = fire(*other);
+	auto &world = game->World();
+	const auto cannon = [&] { return *world.Get<gameplay::ParticleCannon>(fired.uplink); };
+	BOOST_TEST_REQUIRE(world.Has<gameplay::ParticleCannon>(fired.uplink));
+	BOOST_TEST((cannon().status == gameplay::CannonStatus::ReadyToFire));
+	BOOST_TEST(cannon().scripted == 1);
+	BOOST_TEST(cannon().manual == 0);
+	BOOST_TEST(cannon().startAttackTick == fired.start);
+	BOOST_TEST((cannon().initialTarget == target));
+	BOOST_TEST((std::ranges::find(links, cannon().nextWaypoint) != links.end()));
+	BOOST_TEST((cannon().destination == graph.Position(cannon().nextWaypoint)));
+	std::unique_ptr<session::Session> restored;
+	std::uint64_t born = 0;
+	while (born == 0 && game->CurrentTick() < fired.start + 200)
+	{
+		game->Tick();
+		other->Tick();
+		if (restored)
+			restored->Tick();
+		if (game->CurrentTick() == fired.start + 30)
+			restored = session::Session::Restore(read->level, shell.game, [&] {
+				session::SessionOptions options{7, 1, {}, seats};
+				options.singlePlayer = true;
+				return options;
+			}(), game->Checkpoint());
+		if (cannon().beam == gameplay::BeamStatus::Born)
+			born = game->Game().tick;
+	}
+	BOOST_TEST(born == fired.start + 75);
+	// Driven from its birth frame on (isFiring from orbitalBirthFrame): one 4/3 step already taken from the waypoint.
+	BOOST_TEST((Engine::Math::Abs(Engine::Math::Distance(cannon().currentTarget.XY(), target.XY()) - Fixed::FromRatio(4, 3)) <= Fixed::FromRatio(1, 100)));
+	// Fifteen frames on, 20 nearer its link (or there).
+	const FixedVector2 destination = cannon().destination.XY();
+	const Fixed before = Engine::Math::Distance(cannon().currentTarget.XY(), destination);
+	for (int tick = 0; tick < 15; ++tick)
+	{
+		game->Tick();
+		other->Tick();
+		restored->Tick();
+	}
+	const Fixed after = Engine::Math::Distance(cannon().currentTarget.XY(), destination);
+	if (before > Fixed::FromInt(21))
+		BOOST_TEST((Engine::Math::Abs(before - after - Fixed::FromInt(20)) <= Fixed::FromRatio(1, 100)), "moved " << (before - after).Raw());
+	BOOST_TEST((mirrored.uplink == fired.uplink));
+	BOOST_TEST((other->StateHash() == game->StateHash()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game->StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

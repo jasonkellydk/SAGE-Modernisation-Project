@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <limits>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
 export module Graphics.Cursors.Load;
+import std;
 export import Graphics.Cursors.Cursor;
 import Assets.Adapters.DDS;
 import Assets.Adapters.TGA.Image;

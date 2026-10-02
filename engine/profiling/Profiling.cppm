@@ -1,8 +1,5 @@
-module;
-#include <cstdint>
-#include <string_view>
-
 export module engine.profiling;
+import std;
 
 export namespace engine::profiling
 {

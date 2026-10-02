@@ -5,6 +5,7 @@ module;
 #include <boost/test/included/unit_test.hpp>
 
 export module Graphics.Resources.Pools.ResourcePool.Tests;
+import std;
 
 import Graphics.Resources.Handles.ResourceHandle;
 import Graphics.Resources.Pools.ResourcePool;

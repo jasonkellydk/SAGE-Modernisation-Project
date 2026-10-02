@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.GPUScene;
+import std;
 
 import engine.profiling;
 export import Graphics.Resources.Materials.Material;

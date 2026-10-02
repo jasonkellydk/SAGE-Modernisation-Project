@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-
 export module Graphics.Scene.Shadows.Tests;
+import std;
 
 import Graphics.Scene.Shadows;
 

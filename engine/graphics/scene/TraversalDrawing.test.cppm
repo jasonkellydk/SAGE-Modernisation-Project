@@ -2,13 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE SceneTraversalDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
 
 export module Graphics.Scene.TraversalDrawing.Tests;
+import std;
 
 import Graphics.Scene.RenderObjectDrawing;
 import Graphics.Scene.Traversal;

@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Particles.SpriteGeometry;
+import std;
 import Assets.Math;
 export import Graphics.Scene.Props.Geometry;
 

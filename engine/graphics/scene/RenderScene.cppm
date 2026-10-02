@@ -1,15 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.RenderScene;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Resources.Meshes.Mesh;

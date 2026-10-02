@@ -1,13 +1,9 @@
 module;
 #define BOOST_TEST_MODULE MuzzleFlashTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 
 export module Graphics.Scene.MuzzleFlash.Tests;
+import std;
 import Graphics.Tests.Device;
 import Graphics.RHI;
 import Graphics.Scene.MuzzleFlash;

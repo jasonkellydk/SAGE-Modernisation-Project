@@ -1,0 +1,97 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+
+import games.generalszh.presentation.objects.systems.rally_point_marker_system;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(rally_point_marker)
+
+// ControlBar::evaluateContextUI / populateCommand -> showRallyPoint (ControlBar.cpp): one thing selected, the viewed
+// player's, with a rally point set: the RallyPointMarker flag stands on the ground there, turned to DownwindAngle,
+// in the player's colour, its loop running on from when it went up (moved to another factory's point it keeps its
+// clock); nothing selected, two selected, another player's building or one without a rally point: no flag, and the
+// next one starts its animation afresh.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_rally_flag_stands_for_the_one_selected_factory)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::RallyPoint>();
+	world.RegisterComponent<Selected>();
+	world.FinalizeComponents();
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	frame.viewer = 1;
+	frame.clock = 10.0;
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	DefinitionLooks flag;
+	flag.stateLooks = {7};
+	flag.scale = 1.0f;
+	catalog.byDefinition = {DefinitionLooks{}, flag};
+	catalog.known = {1, 1};
+	catalog.playerColors = {{1, 0, 0, 1}, {0, 0, 1, 1}};
+	world.EmplaceResource<TerrainHeightHandle>().at = [](float, float) { return 12.0f; };
+	RallyPointMarkers &markers = world.EmplaceResource<RallyPointMarkers>();
+	markers.definition = 1;
+	markers.downwindAngle = -0.785f;
+	const auto factory = [&](std::uint32_t player, bool rally, std::int64_t x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Owner>(entity);
+		world.Get<gp::Owner>(entity)->player = player;
+		if (rally)
+		{
+			world.Add<gp::RallyPoint>(entity);
+			world.Get<gp::RallyPoint>(entity)->at = {Fixed::FromInt(x), Fixed::FromInt(40)};
+		}
+		return entity;
+	};
+	const ecs::Entity barracks = factory(1, true, 100), warFactory = factory(1, true, 300), plain = factory(1, false, 0), theirs = factory(0, true, 500);
+	RallyPointMarkerSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto select = [&](std::initializer_list<ecs::Entity> chosen) {
+		world.Side<Selected>().Clear();
+		for (const ecs::Entity entity : chosen)
+			world.Side<Selected>().Emplace(entity);
+		scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}});
+		return markers.instances;
+	};
+	BOOST_TEST(select({}).empty());
+	const auto shown = select({barracks});
+	BOOST_TEST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown[0].look == 7u);
+	BOOST_TEST(shown[0].world[3] == 100.0f);
+	BOOST_TEST(shown[0].world[7] == 40.0f);
+	BOOST_TEST(shown[0].world[11] == 12.0f);
+	BOOST_TEST(shown[0].world[0] == std::cos(-0.785f));
+	BOOST_TEST(shown[0].world[4] == std::sin(-0.785f));
+	BOOST_TEST((shown[0].teamColor == std::array<float, 4>{0, 0, 1, 1}));
+	BOOST_TEST(shown[0].animationSeconds == 0.0f);
+	frame.clock = 12.5;
+	const auto moved = select({warFactory});
+	BOOST_TEST_REQUIRE(moved.size() == 1u);
+	BOOST_TEST(moved[0].world[3] == 300.0f);
+	BOOST_TEST(moved[0].animationSeconds == 2.5f);
+	BOOST_TEST(select({barracks, warFactory}).empty());
+	BOOST_TEST(select({plain}).empty());
+	BOOST_TEST(select({theirs}).empty());
+	frame.clock = 20.0;
+	const auto again = select({barracks});
+	BOOST_TEST_REQUIRE(again.size() == 1u);
+	BOOST_TEST(again[0].animationSeconds == 0.0f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

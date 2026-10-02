@@ -1,0 +1,344 @@
+#define BOOST_TEST_MODULE EngineGameplayProduction
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.rts.production.systems.production_system;
+import engine.gameplay.rts.economy.systems.energy_system;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+
+namespace
+{
+struct Plant
+{
+	explicit Plant(std::size_t workers)
+	{
+		world.RegisterComponent<ProductionQueue>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Health>();
+		world.RegisterComponent<EnergySource>();
+		world.RegisterComponent<ProductionDoors>();
+		world.RegisterComponent<Disabled>();
+		world.FinalizeComponents();
+		world.EmplaceResource<ProductionDone>();
+		world.EmplaceResource<PlayerEnergy>();
+		world.EmplaceResource<EnergySettings>();
+		world.EmplaceResource<EnergyShares>();
+		registry.Register(energy);
+		registry.Register(production);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	ecs::Entity Factory()
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<ProductionQueue>(entity);
+		return entity;
+	}
+
+	// A factory of `player`, whose other buildings produce and consume power.
+	ecs::Entity PoweredFactory(std::uint32_t player, std::int32_t produced, std::int32_t consumed)
+	{
+		const ecs::Entity factory = Factory();
+		world.Add<Owner>(factory);
+		*world.Get<Owner>(factory) = {player};
+		for (const std::int32_t amount : {produced, -consumed})
+			if (amount != 0)
+			{
+				const ecs::Entity building = world.Create();
+				world.Add<Owner>(building);
+				world.Add<EnergySource>(building);
+				*world.Get<Owner>(building) = {player};
+				*world.Get<EnergySource>(building) = {amount, 0};
+			}
+		return factory;
+	}
+
+	std::vector<Produced> Step()
+	{
+		scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<Produced> out;
+		world.Resource<ProductionDone>().ForEach([&](const Produced &produced) { out.push_back(produced); });
+		return out;
+	}
+
+	ecs::World world{ecs::WorldConfig{4}};
+	EnergySystem energy;
+	ProductionSystem production;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(production)
+
+BOOST_AUTO_TEST_CASE(a_factory_builds_its_queue_in_order_each_for_its_build_time)
+{
+	Plant plant(2);
+	const ecs::Entity airfield = plant.Factory();
+	ProductionQueue &queue = *plant.world.Get<ProductionQueue>(airfield);
+	BOOST_TEST(queue.Push({7, 3, 1, 0, {}, 300}));
+	BOOST_TEST(queue.Push({8, 3, 2, 0, {}, 30}));
+	std::vector<std::pair<std::uint64_t, Produced>> done;
+	for (int step = 0; step < 400; ++step)
+		for (const Produced &produced : plant.Step())
+			done.push_back({plant.tick, produced});
+	BOOST_TEST_REQUIRE(done.size() == 2u);
+	BOOST_TEST(done[0].first == 300u);
+	BOOST_TEST(done[0].second.definition == 7u);
+	BOOST_TEST(done[0].second.team == 3u);
+	BOOST_TEST((done[0].second.factory == airfield));
+	BOOST_TEST(done[1].first == 330u); // the next starts when the first is done
+	BOOST_TEST(done[1].second.quantity == 2u);
+	BOOST_TEST(plant.world.Get<ProductionQueue>(airfield)->count == 0u);
+}
+
+// GameLogic's disabled gate on ProductionUpdate (getDisabledTypesToProcess: DisabledTypesToProcess, default
+// DISABLED_HELD): a factory disabled otherwise (EMPed) builds nothing while it lasts; its 30-tick unit is done 20 ticks
+// late for 20 ticks disabled. A China nuclear silo's (DISABLED_HELD DISABLED_UNDERPOWERED) keeps building underpowered.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_disabled_factory_builds_nothing_unless_it_processes_that_disable)
+{
+	Plant plant(2);
+	const ecs::Entity factory = plant.Factory();
+	BOOST_TEST(plant.world.Get<ProductionQueue>(factory)->Push({7, 3, 1, 0, {}, 30}));
+	plant.world.Add<Disabled>(factory);
+	plant.world.Get<Disabled>(factory)->mask = disabled_type::Emp;
+	std::uint64_t done = 0;
+	for (int step = 0; step < 100 && done == 0; ++step)
+	{
+		if (plant.tick == 20)
+			plant.world.Get<Disabled>(factory)->mask = 0;
+		if (!plant.Step().empty())
+			done = plant.tick;
+	}
+	BOOST_TEST(done == 50u);
+	const ecs::Entity silo = plant.Factory();
+	plant.world.Get<ProductionQueue>(silo)->runsWhileDisabled = disabled_type::Held | disabled_type::Underpowered;
+	BOOST_TEST(plant.world.Get<ProductionQueue>(silo)->Push({8, 3, 1, 0, {}, 30}));
+	plant.world.Add<Disabled>(silo);
+	plant.world.Get<Disabled>(silo)->mask = disabled_type::Underpowered;
+	const std::uint64_t start = plant.tick;
+	std::uint64_t built = 0;
+	for (int step = 0; step < 100 && built == 0; ++step)
+		if (!plant.Step().empty())
+			built = plant.tick;
+	BOOST_TEST(built == start + 30);
+}
+
+BOOST_AUTO_TEST_CASE(a_queue_holds_as_many_as_it_may)
+{
+	ProductionQueue queue;
+	queue.capacity = 2;
+	BOOST_TEST(queue.Push({1}));
+	BOOST_TEST(queue.Push({2}));
+	BOOST_TEST(!queue.Push({3}));
+	queue.PopFront();
+	BOOST_TEST(queue.entries[0].definition == 2u);
+	BOOST_TEST(queue.Push({3}));
+}
+
+BOOST_AUTO_TEST_CASE(money_is_withdrawn_only_when_there_is_enough_and_checkpoints)
+{
+	PlayerMoney money;
+	money.Resize(2);
+	money.Deposit(1, 10000);
+	BOOST_TEST(money.Withdraw(1, 1200));
+	BOOST_TEST(!money.Withdraw(0, 1));
+	BOOST_TEST(!money.Withdraw(1, 9000));
+	BOOST_TEST(money.Balance(1) == 8800);
+	engine::core::serialization::ByteWriter writer;
+	money.Save(writer);
+	const auto bytes = writer.Take();
+	PlayerMoney loaded;
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.Load(reader));
+	BOOST_TEST(loaded.Balance(1) == 8800);
+}
+
+BOOST_AUTO_TEST_CASE(factories_build_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto build = [](Plant &plant) {
+		for (std::uint32_t index = 0; index < 300; ++index)
+		{
+			const ecs::Entity factory = plant.Factory();
+			for (std::uint32_t entry = 0; entry < 1 + index % 5; ++entry)
+				plant.world.Get<ProductionQueue>(factory)->Push({index, entry, 1, 0, {}, 10 + (index * 7 + entry) % 40});
+		}
+	};
+	Plant one(1), four(4);
+	build(one);
+	build(four);
+	std::size_t oneDone = 0, fourDone = 0;
+	for (int step = 0; step < 60; ++step)
+	{
+		oneDone += one.Step().size();
+		fourDone += four.Step().size();
+	}
+	BOOST_TEST(oneDone == fourDone);
+	BOOST_TEST(one.world.StateHash() == four.world.StateHash());
+	engine::core::serialization::ByteWriter writer;
+	one.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Plant loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = one.tick;
+	for (int step = 0; step < 100; ++step)
+		BOOST_TEST((loaded.Step().size() == one.Step().size()));
+	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+BOOST_AUTO_TEST_CASE(short_power_slows_production_as_the_original)
+{
+	Plant plant(2);
+	// Full power; half (50%: at the least speed); 90% (at most 80%); no power at all (a ratio of 0: the least).
+	const ecs::Entity full = plant.PoweredFactory(0, 10, 10);
+	const ecs::Entity half = plant.PoweredFactory(1, 5, 10);
+	const ecs::Entity most = plant.PoweredFactory(2, 9, 10);
+	const ecs::Entity none = plant.PoweredFactory(3, 0, 0);
+	for (const ecs::Entity factory : {full, half, most, none})
+		plant.world.Get<ProductionQueue>(factory)->Push({1, 0, 1, 0, {}, 30});
+	std::map<std::uint32_t, std::uint64_t> doneAt;
+	for (int step = 0; step < 100; ++step)
+		for (const Produced &produced : plant.Step())
+			doneAt[produced.factory.index] = plant.tick;
+	BOOST_TEST(doneAt[full.index] == 30u);
+	BOOST_TEST(doneAt[half.index] == 60u);
+	BOOST_TEST(doneAt[most.index] == 37u); // calcTimeToBuild: Int 30 / 0.8, truncated (37.5 -> 37)
+	BOOST_TEST(doneAt[none.index] == 60u);
+	// A dead power plant produces nothing.
+	const PlayerEnergy &energy = plant.world.Resource<PlayerEnergy>();
+	BOOST_TEST(energy.Production(1) == 5);
+	BOOST_TEST(energy.Consumption(1) == 10);
+	BOOST_TEST(!energy.Sufficient(1));
+}
+
+// ProductionUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/ProductionUpdate.cpp) with
+// ThingTemplate::calcTimeToBuild: each update counts m_framesUnderConstruction and the unit is done once that count is
+// at least its build time as the player's power stands at that update. A 30-frame unit at half power (60 frames) whose
+// player gets its power back after 40 updates is done on the 41st (41 >= 30), not 10 updates later; one at full power
+// whose player loses half its power after 20 updates waits for its 60th.
+BOOST_AUTO_TEST_CASE(legacy_parity_power_coming_back_finishes_a_slowed_unit_at_once)
+{
+	Plant plant(2);
+	const ecs::Entity slowed = plant.PoweredFactory(0, 5, 10);
+	const ecs::Entity full = plant.PoweredFactory(1, 10, 10);
+	for (const ecs::Entity factory : {slowed, full})
+		plant.world.Get<ProductionQueue>(factory)->Push({1, 0, 1, 0, {}, 30});
+	const auto source = [&](std::uint32_t player, std::int32_t amount) {
+		const ecs::Entity building = plant.world.Create();
+		plant.world.Add<Owner>(building);
+		plant.world.Add<EnergySource>(building);
+		*plant.world.Get<Owner>(building) = {player};
+		*plant.world.Get<EnergySource>(building) = {amount, 0};
+	};
+	std::map<std::uint32_t, std::uint64_t> doneAt;
+	for (int step = 0; step < 100; ++step)
+	{
+		if (plant.tick == 20)
+			source(1, -10); // player 1 now 10 of 20: half power
+		if (plant.tick == 40)
+			source(0, 5); // player 0 now 10 of 10: full power
+		for (const Produced &produced : plant.Step())
+			doneAt[produced.factory.index] = plant.tick;
+		if (plant.tick == 30)
+		{
+			// Its percent as its last update had it: 30 of 60 frames.
+			const ProductionEntry &front = plant.world.Get<ProductionQueue>(slowed)->entries[0];
+			BOOST_TEST(front.frames == 30u);
+			BOOST_TEST(front.ticksNow == 60u);
+		}
+	}
+	BOOST_TEST(doneAt[slowed.index] == 41u);
+	BOOST_TEST(doneAt[full.index] == 60u);
+}
+
+// ProductionUpdate with a PRODUCTION_UPGRADE entry: UpgradeTemplate::calcTimeToBuild is BuildTime seconds of
+// frames whatever the power, and research comes out of no door; a unit behind it then builds as usual.
+// Cancelling an entry (ProductionUpdate::cancelUpgrade) takes it out and moves the rest up.
+BOOST_AUTO_TEST_CASE(legacy_parity_research_ignores_power_and_doors)
+{
+	Plant plant(2);
+	const ecs::Entity starved = plant.PoweredFactory(1, 5, 10); // half power: units at half speed
+	plant.world.Add<ProductionDoors>(starved);
+	ProductionDoors doors;
+	doors.count = 1;
+	doors.openTicks = 10;
+	*plant.world.Get<ProductionDoors>(starved) = doors;
+	ProductionEntry research{42, 0, 1, 0, {}, 30};
+	research.kind = ProductionKind::Upgrade;
+	ProductionQueue &queue = *plant.world.Get<ProductionQueue>(starved);
+	BOOST_TEST(queue.Push(research));
+	BOOST_TEST(queue.Push({7, 0, 1, 0, {}, 5}));
+	std::vector<std::pair<std::uint64_t, Produced>> done;
+	for (int step = 0; step < 60; ++step)
+		for (const Produced &produced : plant.Step())
+			done.emplace_back(plant.tick, produced);
+	BOOST_TEST_REQUIRE(done.size() == 2u);
+	BOOST_TEST(done[0].first == 30u);
+	BOOST_TEST((done[0].second.kind == ProductionKind::Upgrade));
+	BOOST_TEST(done[0].second.definition == 42u);
+	BOOST_TEST((done[1].second.kind == ProductionKind::Unit));
+	BOOST_TEST(done[1].first == 51u); // 10 ticks at half power, then the door's 10
+
+	ProductionQueue cancel;
+	cancel.Push({1});
+	cancel.Push({2});
+	cancel.Push({3});
+	cancel.RemoveAt(1);
+	BOOST_TEST(cancel.count == 2u);
+	BOOST_TEST(cancel.entries[1].definition == 3u);
+	BOOST_TEST(cancel.entries[2].definition == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(units_come_out_only_through_an_open_door_which_then_waits_and_closes)
+{
+	Plant plant(2);
+	const ecs::Entity factory = plant.Factory();
+	plant.world.Add<ProductionDoors>(factory);
+	ProductionDoors doors;
+	doors.count = 1;
+	doors.openTicks = 10;
+	doors.waitTicks = 20;
+	doors.closeTicks = 10;
+	doors.completeTicks = 15;
+	*plant.world.Get<ProductionDoors>(factory) = doors;
+	plant.world.Get<ProductionQueue>(factory)->Push({1, 0, 1, 0, {}, 5});
+	plant.world.Get<ProductionQueue>(factory)->Push({2, 0, 1, 0, {}, 5});
+	std::vector<std::uint64_t> outAt;
+	std::vector<std::uint64_t> closingSeen;
+	for (int step = 0; step < 70; ++step)
+	{
+		for (const Produced &produced : plant.Step())
+			outAt.push_back(plant.tick);
+		const ProductionDoor &door = plant.world.Get<ProductionDoors>(factory)->doors[0];
+		if (door.closing == plant.tick)
+			closingSeen.push_back(plant.tick);
+	}
+	// Built by 5, out once the door has opened (10 ticks later); the next straight through the open door.
+	BOOST_TEST_REQUIRE(outAt.size() == 2u);
+	BOOST_TEST(outAt[0] == 16u);
+	BOOST_TEST(outAt[1] == 21u);
+	// Open 20 ticks after the last one went through, then closing, then shut.
+	BOOST_TEST_REQUIRE(closingSeen.size() == 1u);
+	BOOST_TEST(closingSeen[0] == 42u);
+	const ProductionDoor &door = plant.world.Get<ProductionDoors>(factory)->doors[0];
+	BOOST_TEST((door.opening == 0u && door.open == 0u && door.closing == 0u));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

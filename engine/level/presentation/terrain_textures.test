@@ -1,0 +1,417 @@
+#define BOOST_TEST_MODULE EngineLevelPresentation
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+import engine.level.presentation.terrain_textures;
+import engine.level.adapters.generals_map.map_reader;
+import engine.filesystem.adapters.big.big_archive_source;
+
+using namespace engine::level;
+using namespace engine::level::presentation;
+namespace math = Engine::Math;
+
+namespace
+{
+using Rgba = std::array<std::uint8_t, 4>;
+
+MaterialImage Solid(std::uint32_t width, std::uint32_t height, Rgba colour)
+{
+	MaterialImage image{width, height, {}};
+	image.pixels.reserve(static_cast<std::size_t>(width) * height * 4);
+	for (std::size_t index = 0; index < static_cast<std::size_t>(width) * height; ++index)
+		image.pixels.insert(image.pixels.end(), colour.begin(), colour.end());
+	return image;
+}
+
+void Set(MaterialImage &image, std::uint32_t x, std::uint32_t y, Rgba colour)
+{
+	const std::size_t offset = (static_cast<std::size_t>(y) * image.width + x) * 4;
+	for (int channel = 0; channel < 4; ++channel)
+		image.pixels[offset + channel] = colour[channel];
+}
+
+constexpr Rgba Red{255, 0, 0, 255};
+constexpr Rgba Green{0, 255, 0, 255};
+constexpr Rgba Blue{0, 0, 255, 255};
+constexpr Rgba White{255, 255, 255, 255};
+constexpr Rgba Black{0, 0, 0, 255};
+constexpr Rgba Clear{0, 0, 0, 0};
+constexpr Rgba Olive{90, 80, 70, 255};
+constexpr Rgba Teal{10, 20, 30, 255};
+
+// Heightfield + surface with every sample on tile index 0.
+struct Fixture
+{
+	Heightfield terrain;
+	TerrainSurface surface;
+	MaterialImages images;
+
+	Fixture(std::uint32_t width, std::uint32_t height)
+	{
+		terrain.width = width;
+		terrain.height = height;
+		terrain.cellSize = math::Fixed::FromInt(10);
+		terrain.heights.assign(static_cast<std::size_t>(width) * height, math::Fixed{});
+		const std::size_t samples = terrain.heights.size();
+		surface.tiles.assign(samples, 0);
+		surface.blends.assign(samples, 0);
+		surface.extraBlends.assign(samples, 0);
+		surface.cliffs.assign(samples, 0);
+		surface.cliffFlagBytesPerRow = (width + 7) / 8;
+		surface.cliffFlags.assign(static_cast<std::size_t>(surface.cliffFlagBytesPerRow) * height, 0);
+		// A: 1x1 at tile 0, B: 2x2 at tiles 1-4, C: 1x1 at 5, D: half tile at 6, E: 1x1 at 7 without an image.
+		surface.materials = {{"A", 0, 1, 1}, {"B", 1, 4, 2}, {"C", 5, 1, 1}, {"D", 6, 1, 1}, {"E", 7, 1, 1}};
+		surface.tileCount = 8;
+		surface.blendTable.resize(1);
+		surface.cliffTable.resize(1);
+
+		images.materials["A"] = Solid(256, 256, Olive);
+		MaterialImage quadrants = Solid(512, 512, Red); // top-left red
+		for (std::uint32_t y = 0; y < 512; ++y)
+			for (std::uint32_t x = 0; x < 512; ++x)
+				if (y < 256 && x >= 256)
+					Set(quadrants, x, y, Green);
+				else if (y >= 256 && x < 256)
+					Set(quadrants, x, y, Blue);
+				else if (y >= 256)
+					Set(quadrants, x, y, White);
+		images.materials["B"] = quadrants;
+		MaterialImage stripes = Solid(512, 512, Black); // 2x down-sampled by the box filter
+		for (std::uint32_t y = 0; y < 512; ++y)
+			for (std::uint32_t x = 1; x < 512; x += 2)
+				Set(stripes, x, y, Red);
+		images.materials["C"] = stripes;
+		images.materials["D"] = Solid(128, 128, Teal);
+	}
+
+	std::uint16_t AddBlend(TerrainBlend blend)
+	{
+		surface.blendTable.push_back(blend);
+		return static_cast<std::uint16_t>(surface.blendTable.size() - 1);
+	}
+
+	void SetRawHeight(std::uint32_t x, std::uint32_t y, std::int64_t raw)
+	{
+		terrain.heights[static_cast<std::size_t>(y) * terrain.width + x] = math::Fixed::FromRatio(raw * 5, 8);
+	}
+
+	TerrainSurfaceTextures Build(TerrainTexturingOptions options = {}) const { return BuildTerrainSurfaceTextures(terrain, surface, images, options); }
+};
+
+Rgba Pixel(const AtlasImage &image, std::uint32_t x, std::uint32_t y) { return image.At(x, y); }
+
+TextureCoordinate Uv(float x, float y, float height) { return {x / 8192.0f, y / height}; }
+
+CornerCoordinates Quad(float minX, float minY, float maxX, float maxY, float height)
+{
+	// Corners 0..3 = (x,y) (x+1,y) (x+1,y+1) (x,y+1): v runs downwards in the atlas.
+	return {Uv(minX, maxY, height), Uv(maxX, maxY, height), Uv(maxX, minY, height), Uv(minX, minY, height)};
+}
+
+void CheckQuad(const CornerCoordinates &actual, const CornerCoordinates &expected)
+{
+	for (int corner = 0; corner < 4; ++corner)
+	{
+		BOOST_TEST(actual[corner].u == expected[corner].u);
+		BOOST_TEST(actual[corner].v == expected[corner].v);
+	}
+}
+
+using Alpha = std::array<std::uint8_t, 4>;
+}
+
+BOOST_AUTO_TEST_CASE(materials_pack_widest_first_into_a_power_of_two_atlas)
+{
+	const Fixture fixture(3, 3);
+	const auto textures = fixture.Build();
+	BOOST_TEST(textures.atlas.width == 8192u);
+	// B (2 tiles) reaches 16 + 512 + 16 = 544 pixels -> 1024.
+	BOOST_TEST(textures.atlas.height == 1024u);
+	BOOST_TEST(textures.atlas.pixels.size() == 8192u * 1024u * 4u);
+	const auto &placed = textures.materials;
+	BOOST_REQUIRE(placed.size() == 5u);
+	BOOST_TEST((placed[1].placed && placed[1].x == 16 && placed[1].y == 16));
+	// Width-1 materials follow in declaration order, one slot (288 px) apart.
+	BOOST_TEST((placed[0].x == 592 && placed[0].y == 16));
+	BOOST_TEST((placed[2].x == 880 && placed[2].y == 16));
+	BOOST_TEST((placed[3].x == 1168 && placed[3].y == 16));
+	// Placement does not depend on the image being present.
+	BOOST_TEST((placed[4].placed && placed[4].x == 1456));
+}
+
+BOOST_AUTO_TEST_CASE(tile_pixels_keep_the_image_upright_with_periodic_borders)
+{
+	const Fixture fixture(3, 3);
+	const auto textures = fixture.Build();
+	const auto &atlas = textures.atlas;
+	BOOST_TEST((Pixel(atlas, 16, 16) == Red));
+	BOOST_TEST((Pixel(atlas, 272 + 10, 16 + 10) == Green));
+	BOOST_TEST((Pixel(atlas, 16 + 10, 272 + 10) == Blue));
+	BOOST_TEST((Pixel(atlas, 16 + 511, 16 + 511) == White));
+	BOOST_TEST((Pixel(atlas, 600, 20) == Olive));
+	// Background is opaque black.
+	BOOST_TEST((Pixel(atlas, 4000, 900) == Black));
+	// 16-pixel gutter repeats the opposite edge of the material.
+	BOOST_TEST((Pixel(atlas, 0, 20) == Green));
+	BOOST_TEST((Pixel(atlas, 16 + 512 + 5, 20) == Red));
+	BOOST_TEST((Pixel(atlas, 20, 5) == Blue));
+	BOOST_TEST((Pixel(atlas, 20, 16 + 512 + 3) == Red));
+	BOOST_TEST((Pixel(atlas, 0, 5) == White)); // corner from the diagonal opposite
+	// Box filter: 512 -> 256 averages 2x2 blocks with rounding.
+	BOOST_TEST((Pixel(atlas, 880 + 7, 16 + 9) == Rgba{128, 0, 0, 255}));
+	// A 128x128 image fills the lower-left quarter of its tile only.
+	BOOST_TEST((Pixel(atlas, 1168 + 10, 16 + 200) == Teal));
+	BOOST_TEST((Pixel(atlas, 1168 + 10, 16 + 10) == Clear));
+	BOOST_TEST((Pixel(atlas, 1168 + 200, 16 + 200) == Clear));
+	// A material without an image leaves the background.
+	BOOST_TEST((Pixel(atlas, 1456 + 100, 100) == Black));
+}
+
+BOOST_AUTO_TEST_CASE(base_uvs_select_a_quarter_of_a_tile)
+{
+	Fixture fixture(4, 3);
+	fixture.surface.tiles[0] = (1 << 2) | 0;  // B's lower-left tile, lower-left quarter
+	fixture.surface.tiles[1] = (0 << 2) | 3;  // A, upper-right quarter
+	fixture.surface.tiles[2] = (7 << 2) | 0;  // E has no image
+	fixture.surface.tiles[4] = (4 << 2) | 1;  // B's upper-right tile, lower-right quarter
+	const auto textures = fixture.Build();
+	BOOST_TEST(textures.cellsWide == 3u);
+	BOOST_TEST(textures.cellsHigh == 2u);
+	BOOST_REQUIRE(textures.cells.size() == 6u);
+	CheckQuad(textures.Cell(0, 0).base, Quad(16, 400, 144, 528, 1024));
+	CheckQuad(textures.Cell(1, 0).base, Quad(720, 16, 848, 144, 1024));
+	CheckQuad(textures.Cell(2, 0).base, CornerCoordinates{});
+	CheckQuad(textures.Cell(0, 1).base, Quad(400, 144, 528, 272, 1024));
+	// Without a blend, the blend layer repeats the base tile with zero alpha.
+	CheckQuad(textures.Cell(0, 0).blend.uv, textures.Cell(0, 0).base);
+	BOOST_TEST((textures.Cell(0, 0).blend.alpha == Alpha{0, 0, 0, 0}));
+	BOOST_TEST(!textures.Cell(0, 0).blend.alternateDiagonal);
+	BOOST_TEST(!textures.Cell(0, 0).hasExtraBlend);
+}
+
+BOOST_AUTO_TEST_CASE(blend_alpha_patterns_and_diagonal_flips)
+{
+	Fixture fixture(10, 3);
+	TerrainBlend blend;
+	blend.tile = (1 << 2) | 0;
+	const auto add = [&](auto configure) {
+		TerrainBlend entry = blend;
+		configure(entry);
+		return fixture.AddBlend(entry);
+	};
+	fixture.surface.blends[0] = add([](TerrainBlend &b) { b.horizontal = true; });
+	fixture.surface.blends[1] = add([](TerrainBlend &b) { b.horizontal = true; b.inverted = 3; });
+	fixture.surface.blends[2] = add([](TerrainBlend &b) { b.rightDiagonal = true; });
+	fixture.surface.blends[3] = add([](TerrainBlend &b) { b.rightDiagonal = true; b.longDiagonal = true; });
+	fixture.surface.blends[4] = add([](TerrainBlend &b) { b.leftDiagonal = true; b.inverted = 1; });
+	fixture.surface.blends[5] = add([](TerrainBlend &b) { b.leftDiagonal = true; b.inverted = 1; b.longDiagonal = true; });
+	fixture.surface.blends[6] = add([](TerrainBlend &b) { b.leftDiagonal = true; });
+	fixture.surface.blends[7] = add([](TerrainBlend &b) { b.vertical = true; b.inverted = 1; });
+	fixture.surface.blends[8] = add([](TerrainBlend &b) { b.horizontal = true; b.edgeMaterial = 0; });
+	fixture.surface.blends[10] = add([](TerrainBlend &b) { b.rightDiagonal = true; b.inverted = 1; });
+	fixture.surface.extraBlends[0] = fixture.surface.blends[7];
+	const auto textures = fixture.Build();
+	const auto check = [&](std::uint32_t x, std::uint32_t y, Alpha alpha, bool flip) {
+		BOOST_TEST_CONTEXT("cell " << x << "," << y)
+		{
+			BOOST_TEST((textures.Cell(x, y).blend.alpha == alpha));
+			BOOST_TEST(textures.Cell(x, y).blend.alternateDiagonal == flip);
+		}
+	};
+	check(0, 0, {0, 255, 255, 0}, false);
+	check(1, 0, {255, 0, 0, 255}, true); // forced by the 3-way flipped bit
+	check(2, 0, {0, 0, 255, 0}, true);   // uninverted right diagonal
+	check(3, 0, {0, 255, 255, 255}, true);
+	check(4, 0, {255, 0, 0, 0}, true); // inverted left diagonal
+	check(5, 0, {255, 255, 0, 255}, true);
+	check(6, 0, {0, 0, 0, 255}, false);
+	check(7, 0, {255, 255, 0, 0}, false);
+	check(8, 0, {0, 0, 0, 0}, false); // custom edge: drawn by the edge pass
+	check(0, 1, {0, 255, 0, 0}, false);
+	BOOST_TEST(textures.Cell(8, 0).blend.edgeMaterial == 0);
+	BOOST_TEST(textures.Cell(0, 0).blend.edgeMaterial == -1);
+	CheckQuad(textures.Cell(0, 0).blend.uv, Quad(16, 400, 144, 528, 1024));
+	CheckQuad(textures.Cell(0, 0).base, Quad(592, 144, 720, 272, 1024));
+
+	// Extra (3-way) layer.
+	BOOST_TEST(textures.Cell(0, 0).hasExtraBlend);
+	BOOST_TEST((textures.Cell(0, 0).extraBlend.alpha == Alpha{255, 255, 0, 0}));
+	BOOST_TEST(!textures.Cell(0, 0).extraBlend.alternateDiagonal);
+	CheckQuad(textures.Cell(0, 0).extraBlend.uv, Quad(16, 400, 144, 528, 1024));
+	BOOST_TEST(!textures.Cell(1, 0).hasExtraBlend);
+
+	// Without 3-way blends the flipped bit and the extra layer are ignored.
+	const auto plain = fixture.Build({.adjustCliffTextures = false, .use3WayBlends = false});
+	BOOST_TEST(!plain.Cell(1, 0).blend.alternateDiagonal);
+	BOOST_TEST((plain.Cell(1, 0).blend.alpha == Alpha{255, 0, 0, 255}));
+	BOOST_TEST(!plain.Cell(0, 0).hasExtraBlend);
+}
+
+BOOST_AUTO_TEST_CASE(explicit_cliff_uvs_apply_only_when_enabled)
+{
+	Fixture fixture(3, 3);
+	CliffMapping cliff;
+	cliff.tile = (2 << 2); // another tile of B
+	cliff.uv = {math::Fixed::FromRatio(1, 4), math::Fixed::FromRatio(-1, 128), math::Fixed::FromRatio(1, 2), math::Fixed{},
+		math::Fixed::FromRatio(1, 2), math::Fixed::FromRatio(-1, 64), math::Fixed::FromRatio(1, 4), math::Fixed::FromRatio(-1, 32)};
+	cliff.flip = true;
+	fixture.surface.cliffTable.push_back(cliff);
+	fixture.surface.tiles[0] = (1 << 2);
+	fixture.surface.cliffs[0] = 1;
+	fixture.surface.cliffFlags[0] = 0x1;
+
+	const auto off = fixture.Build();
+	CheckQuad(off.Cell(0, 0).base, Quad(16, 400, 144, 528, 1024));
+	BOOST_TEST(off.Cell(0, 0).cliffMapped);
+	BOOST_TEST(off.Cell(0, 0).cliff);
+	BOOST_TEST(!off.Cell(1, 0).cliff);
+	BOOST_TEST(!off.Cell(0, 0).blend.cliffAdjusted);
+
+	const auto on = fixture.Build({.adjustCliffTextures = true});
+	// U = u + 16/8192, V = v * (8192 / 1024) + (16 + 512) / 1024.
+	const CornerCoordinates expected{TextureCoordinate{0.25f + 16.0f / 8192, -8.0f / 128 + 528.0f / 1024},
+		TextureCoordinate{0.5f + 16.0f / 8192, 528.0f / 1024}, TextureCoordinate{0.5f + 16.0f / 8192, -8.0f / 64 + 528.0f / 1024},
+		TextureCoordinate{0.25f + 16.0f / 8192, -8.0f / 32 + 528.0f / 1024}};
+	CheckQuad(on.Cell(0, 0).base, expected);
+	BOOST_TEST(on.Cell(0, 0).blend.cliffAdjusted);
+	// Flat cell: the height rule replaces the cliff flip.
+	BOOST_TEST(!on.Cell(0, 0).blend.alternateDiagonal);
+}
+
+BOOST_AUTO_TEST_CASE(steep_cells_restretch_their_tile_when_enabled)
+{
+	Fixture fixture(2, 2);
+	fixture.SetRawHeight(1, 0, 100);
+	fixture.SetRawHeight(1, 1, 100);
+	fixture.SetRawHeight(0, 1, 100);
+	const auto off = fixture.Build();
+	CheckQuad(off.Cell(0, 0).base, Quad(592, 144, 720, 272, 1024));
+	BOOST_TEST(!off.Cell(0, 0).blend.alternateDiagonal);
+
+	const auto on = fixture.Build({.adjustCliffTextures = true});
+	// One low corner: V0 = nV + 256/1024, then shifted back inside A's block.
+	const CornerCoordinates expected{Uv(592, 272, 1024), Uv(720, 144, 1024), Uv(720, 16, 1024), Uv(592, 16, 1024)};
+	CheckQuad(on.Cell(0, 0).base, expected);
+	BOOST_TEST(on.Cell(0, 0).blend.cliffAdjusted);
+	// |h0 - h2| = 100 > |h1 - h3| = 0.
+	BOOST_TEST(on.Cell(0, 0).blend.alternateDiagonal);
+}
+
+BOOST_AUTO_TEST_CASE(edge_atlas_rebuilds_alpha_from_colour)
+{
+	Fixture fixture(3, 3);
+	fixture.surface.edgeMaterials = {{"Edge", 0, 1, 1}};
+	fixture.surface.edgeTileCount = 1;
+	MaterialImage edge = Solid(256, 256, Black);
+	for (std::uint32_t y = 128; y < 256; ++y)
+		for (std::uint32_t x = 0; x < 256; ++x)
+			Set(edge, x, y, x < 128 ? White : Rgba{100, 50, 25, 255});
+	fixture.images.edgeMaterials["Edge"] = edge;
+	const auto textures = fixture.Build();
+	const auto &atlas = textures.edgeAtlas;
+	BOOST_TEST(atlas.width == 8192u);
+	BOOST_TEST(atlas.height == 512u);
+	BOOST_TEST((Pixel(atlas, 16 + 5, 16 + 5) == Rgba{0, 0, 0, 128}));
+	BOOST_TEST((Pixel(atlas, 16 + 5, 16 + 200) == Rgba{255, 255, 255, 0}));
+	BOOST_TEST((Pixel(atlas, 16 + 200, 16 + 200) == Rgba{100, 50, 25, 255}));
+	// Gradient background: red 255 - y/2, blue x/2 (8 bit), alpha 128.
+	BOOST_TEST((Pixel(atlas, 5000, 300) == Rgba{105, 0, 196, 128}));
+	const auto range = textures.EdgeMaterialRange(0);
+	BOOST_TEST(range[0].u == 16.0f / 8192);
+	BOOST_TEST(range[0].v == 16.0f / 512);
+	BOOST_TEST(range[1].u == 272.0f / 8192);
+	BOOST_TEST(range[1].v == 272.0f / 512);
+}
+
+BOOST_AUTO_TEST_CASE(shell_map_cells_sample_their_own_material)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || *install == '\0')
+	{
+		BOOST_TEST_MESSAGE("GENERALSZH_INSTALL_DIR not set; skipping real-data test");
+		return;
+	}
+	auto archive = engine::filesystem::BigArchiveSource::Open(std::filesystem::path(install) / "MapsZH.big");
+	BOOST_REQUIRE_MESSAGE(archive.has_value(), "cannot open MapsZH.big");
+	const auto bytes = (*archive)->Read("maps/shellmapmd/shellmapmd.map");
+	BOOST_REQUIRE(bytes.has_value());
+	const auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_REQUIRE_MESSAGE(read.has_value(), "map decode failed");
+	const Level &level = read->level;
+	const TerrainSurface &surface = level.surface;
+	BOOST_REQUIRE(!surface.materials.empty());
+
+	MaterialImages images;
+	std::vector<Rgba> colours;
+	for (std::size_t index = 0; index < surface.materials.size(); ++index)
+	{
+		const std::uint32_t extent = std::max<std::uint32_t>(surface.materials[index].widthInTiles, 1) * 256;
+		const Rgba colour{static_cast<std::uint8_t>(40 + index * 7), static_cast<std::uint8_t>(200 - index * 5), static_cast<std::uint8_t>(index * 11), 255};
+		colours.push_back(colour);
+		images.materials[surface.materials[index].name] = Solid(extent, extent, colour);
+	}
+	for (const TerrainMaterial &edge : surface.edgeMaterials)
+	{
+		const std::uint32_t extent = std::max<std::uint32_t>(edge.widthInTiles, 1) * 256;
+		images.edgeMaterials[edge.name] = Solid(extent, extent, Rgba{128, 128, 128, 255});
+	}
+	const auto textures = BuildTerrainSurfaceTextures(level.terrain, surface, images);
+	BOOST_TEST(textures.cells.size() == static_cast<std::size_t>(level.terrain.width - 1) * (level.terrain.height - 1));
+	BOOST_TEST(textures.atlas.width == 8192u);
+	BOOST_TEST(textures.atlas.height > 0u);
+	BOOST_TEST((textures.atlas.height & (textures.atlas.height - 1)) == 0u);
+	for (const MaterialPlacement &placement : textures.materials)
+		BOOST_TEST(placement.placed);
+
+	std::size_t invalid = 0, wrongColour = 0, blended = 0, extra = 0;
+	const auto inside = [](const CornerCoordinates &uv) {
+		for (const TextureCoordinate &corner : uv)
+			if (!(corner.u > 0.0f && corner.u < 1.0f && corner.v > 0.0f && corner.v < 1.0f))
+				return false;
+		return true;
+	};
+	const auto materialOf = [&](std::uint32_t tileIndex) -> int {
+		const std::uint32_t tile = tileIndex >> 2;
+		for (std::size_t index = 0; index < surface.materials.size(); ++index)
+			if (tile >= surface.materials[index].firstTile && tile < surface.materials[index].firstTile + surface.materials[index].tileCount)
+				return static_cast<int>(index);
+		return -1;
+	};
+	const auto sampleColour = [&](const CornerCoordinates &uv) {
+		float u = 0, v = 0;
+		for (const TextureCoordinate &corner : uv)
+		{
+			u += corner.u / 4;
+			v += corner.v / 4;
+		}
+		return textures.atlas.At(static_cast<std::uint32_t>(u * textures.atlas.width), static_cast<std::uint32_t>(v * textures.atlas.height));
+	};
+	for (std::uint32_t y = 0; y < textures.cellsHigh; ++y)
+		for (std::uint32_t x = 0; x < textures.cellsWide; ++x)
+		{
+			const CellTexturing &cell = textures.Cell(x, y);
+			const std::size_t sample = static_cast<std::size_t>(y) * level.terrain.width + x;
+			if (!inside(cell.base) || !inside(cell.blend.uv) || (cell.hasExtraBlend && !inside(cell.extraBlend.uv)))
+				++invalid;
+			const int material = materialOf(surface.tiles[sample]);
+			if (material >= 0 && sampleColour(cell.base) != colours[static_cast<std::size_t>(material)])
+				++wrongColour;
+			if (cell.blend.alpha != Alpha{0, 0, 0, 0})
+				++blended;
+			if (cell.hasExtraBlend)
+				++extra;
+		}
+	BOOST_TEST(invalid == 0u);
+	BOOST_TEST(wrongColour == 0u);
+	BOOST_TEST(blended > 0u);
+	BOOST_TEST_MESSAGE("shell map: " << textures.cells.size() << " cells, " << blended << " blended, " << extra << " 3-way, atlas 8192x"
+									 << textures.atlas.height << ", " << surface.materials.size() << " materials");
+}

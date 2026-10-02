@@ -1,9 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <cstdint>
-#include <limits>
 export module engine.platform.adapters.sdl3.threading.condition;
+import std;
 import engine.platform.threading.condition;
 import engine.platform.adapters.sdl3.threading.mutex;
 export namespace engine::platform::sdl3
@@ -18,7 +16,7 @@ public:
 		auto* native = dynamic_cast<SDL3Mutex*>(&mutex); if (!native) return false;
 		auto* native_mutex = static_cast<SDL_Mutex*>(native->native_handle());
 		if (ms == std::numeric_limits<std::uint32_t>::max()) { SDL_WaitCondition(m_condition, native_mutex); return true; }
-		return SDL_WaitConditionTimeout(m_condition, native_mutex, static_cast<Sint32>(std::min(ms, static_cast<std::uint32_t>(INT32_MAX))));
+		return SDL_WaitConditionTimeout(m_condition, native_mutex, static_cast<Sint32>(std::min(ms, static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()))));
 	}
 	void notify_one() noexcept override { SDL_SignalCondition(m_condition); }
 	void notify_all() noexcept override { SDL_BroadcastCondition(m_condition); }

@@ -1,0 +1,93 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.stealth.stealth_content;
+import games.generalszh.content.install.install_mount;
+import engine.gameplay.common.spatial.components.targetable;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(stealth_content)
+
+BOOST_AUTO_TEST_CASE(shipped_detectors_and_the_gps_scrambler_bind)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+	namespace target = engine::gameplay::target_class;
+	namespace flag = engine::gameplay::stealth_detector_flag;
+
+	// The sentry drone scans every 900 ms out to its own detection range.
+	const auto drone = ReadObjectStealthDetector(*objects.Find("AmericaVehicleSentryDrone"), step);
+	BOOST_TEST_REQUIRE(drone.has_value());
+	BOOST_TEST(drone->rate == 27u);
+	BOOST_TEST(drone->range.Floor() == 225);
+	BOOST_TEST(drone->requiredClasses == 0u);
+	BOOST_TEST(drone->Has(flag::Enabled));
+	BOOST_TEST(!drone->Has(flag::WhileContained));
+
+	// The Air Force dozer finds only mines, as far as it sees.
+	const ObjectDefinition &dozer = *objects.Find("AirF_AmericaVehicleDozer");
+	const auto mines = ReadObjectStealthDetector(dozer, step);
+	BOOST_TEST_REQUIRE(mines.has_value());
+	BOOST_TEST(mines->rate == 15u);
+	BOOST_TEST((mines->range == dozer.visionRange));
+	BOOST_TEST(mines->requiredClasses == target::Mine);
+
+	// The GPS scrambler grows from 20 to 100, 10 a frame, over vehicles and infantry.
+	const auto scrambler = ReadObjectGrantStealth(*objects.Find("GPSScrambler_InvisibleMarker"), step);
+	BOOST_TEST_REQUIRE(scrambler.has_value());
+	BOOST_TEST(scrambler->radius.Floor() == 20);
+	BOOST_TEST(scrambler->growRate.Floor() == 10);
+	BOOST_TEST(scrambler->finalRadius.Floor() == 100);
+	BOOST_TEST(scrambler->classes == (target::Vehicle | target::Infantry));
+
+	// The troop crawler pings as it scans, louder when it finds something.
+	const auto look = ReadDetectorLook(*objects.Find("ChinaVehicleTroopCrawler"));
+	BOOST_TEST_REQUIRE(look.has_value());
+	BOOST_TEST(look->pingSound == "IRPing");
+	BOOST_TEST(look->loudPingSound == "IRPingLoud");
+
+	// Things without the modules have neither.
+	BOOST_TEST(!ReadObjectGrantStealth(dozer, step).has_value());
+	BOOST_TEST(!ReadObjectStealthDetector(*objects.Find("GPSScrambler_InvisibleMarker"), step).has_value());
+	// Colonel Burton firing flashes for his player (HintDetectableConditions = IS_FIRING_WEAPON).
+	const auto burton = ReadObjectStealth(*objects.Find("AmericaInfantryColonelBurton"), step);
+	BOOST_TEST_REQUIRE(burton.has_value());
+	BOOST_TEST(burton->stealth.hint == engine::gameplay::stealth_hint::FiringWeapon);
+
+	// StealthUpdateModuleData GrantedBySpecialPower (Default/Object.ini's OverrideableByLikeKind StealthUpdate: Yes, its
+	// StealthForbiddenConditions FIRING_PRIMARY FIRING_SECONDARY FIRING_TERTIARY RIDERS_ATTACKING): a Crusader, with no
+	// StealthUpdate of its own, takes the default one, asleep till a power grants it (the StealthUpdate constructor's
+	// UPDATE_SLEEP_FOREVER); the Rebel's own stealth is not granted and runs from the start.
+	namespace sf = engine::gameplay::stealth_forbidden;
+	const auto crusader = ReadObjectStealth(*objects.Find("AmericaTankCrusader"), step);
+	BOOST_TEST_REQUIRE(crusader.has_value());
+	BOOST_TEST(crusader->stealth.Option(engine::gameplay::stealth_option::GrantedBySpecialPower));
+	BOOST_TEST(crusader->stealth.Has(engine::gameplay::stealth_flag::Asleep));
+	BOOST_TEST(!crusader->stealth.Has(engine::gameplay::stealth_flag::CanStealth));
+	BOOST_TEST(crusader->stealth.forbidden == (sf::FiringPrimary | sf::FiringSecondary | sf::FiringTertiary | sf::RidersAttacking));
+	const auto rebel = ReadObjectStealth(*objects.Find("GLAInfantryRebel"), step);
+	BOOST_TEST_REQUIRE(rebel.has_value());
+	BOOST_TEST(!rebel->stealth.Option(engine::gameplay::stealth_option::GrantedBySpecialPower));
+	BOOST_TEST(!rebel->stealth.Has(engine::gameplay::stealth_flag::Asleep));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

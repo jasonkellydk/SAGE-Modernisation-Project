@@ -1,12 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ScorchDrawingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <span>
 export module Graphics.Scene.Scorches.Drawing.Tests;
+import std;
 import Graphics.Scene.Scorches.Geometry;
 import Graphics.Scene.Surfaces.Renderer;
 import Graphics.Tests.Device;
@@ -66,4 +62,37 @@ BOOST_AUTO_TEST_CASE(decal_blends_over_ground_preserving_destination_alpha)
     renderer.Destroy_Mesh(mesh);
     renderer.Shutdown();
     for (auto handle : {texture,target,depth}) device.Destroy_Texture(handle);
+}
+BOOST_AUTO_TEST_CASE(a_whole_texture_decal_spans_its_square)
+{
+    ScorchGeometry geometry;
+    const ScorchGrid grid{3,3,1,10,0};
+    ScorchDescription decal{{0,0},10,0};
+    decal.whole_texture = true;
+    BOOST_REQUIRE(geometry.Append(decal, grid, {1,0,0,0.5f}, [](int,int) { return 0.0f; }, [](int,int) { return false; }));
+    BOOST_REQUIRE_EQUAL(geometry.vertices.size(), 9);
+    BOOST_CHECK_EQUAL(geometry.vertices[0].uv[0], 0.0f);
+    BOOST_CHECK_EQUAL(geometry.vertices[0].uv[1], 0.0f);
+    BOOST_CHECK_EQUAL(geometry.vertices[4].uv[0], 0.5f);
+    BOOST_CHECK_EQUAL(geometry.vertices[8].uv[1], 1.0f);
+    BOOST_CHECK_EQUAL(geometry.vertices[4].color[3], 0.5f);
+}
+
+// Its triangles face up counter-clockwise seen from above (as the tracks' strips): a pass culling back faces must take
+// counter-clockwise faces as front (SurfaceStyle::front_counter_clockwise), or every scorch and radius decal is culled.
+BOOST_AUTO_TEST_CASE(scorch_triangles_wind_counter_clockwise_seen_from_above)
+{
+    ScorchGeometry geometry;
+    const ScorchGrid grid{5,5,1,10,0};
+    ScorchDescription decal{{20,20},15,0};
+    decal.whole_texture = true;
+    BOOST_REQUIRE(geometry.Append(decal, grid, {1,1,1,1}, [](int,int) { return 0.0f; }, [](int x,int y) { return (x+y)%2==0; }));
+    BOOST_REQUIRE(!geometry.indices.empty());
+    for (std::size_t i = 0; i + 2 < geometry.indices.size(); i += 3)
+    {
+        const auto &a = geometry.vertices[geometry.indices[i]].position, &b = geometry.vertices[geometry.indices[i+1]].position,
+            &c = geometry.vertices[geometry.indices[i+2]].position;
+        const float z = (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+        BOOST_CHECK_GT(z, 0.0f);
+    }
 }

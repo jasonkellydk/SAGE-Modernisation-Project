@@ -4,15 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <string>
-#include <string_view>
-#include <vector>
-
 export module Assets.Tests.W3DMaterialParser;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Materials;

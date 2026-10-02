@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <utility>
-
 export module Assets.Tests.ModelAsset;
+import std;
 
 import Assets.Identity;
 import Assets.Models;

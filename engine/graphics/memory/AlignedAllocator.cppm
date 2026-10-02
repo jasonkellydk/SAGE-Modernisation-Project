@@ -1,13 +1,5 @@
-module;
-
-#include <cstddef>
-#include <limits>
-#include <memory>
-#include <new>
-#include <type_traits>
-#include <vector>
-
 export module Graphics.Memory.AlignedAllocator;
+import std;
 
 namespace Graphics
 {

@@ -1,18 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <string>
-#include <utility>
-
 export module Graphics.Scene.Ring;
+import std;
 
 import Assets.Math;
 import Assets.Rings;

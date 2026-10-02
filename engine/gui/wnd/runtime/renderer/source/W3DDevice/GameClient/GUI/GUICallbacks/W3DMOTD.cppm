@@ -46,7 +46,6 @@
 module;
 
 #include "Precompiled/PreRTS.h"
-#include <stdlib.h>
 #include "Common/NameKeyGenerator.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
@@ -54,6 +53,7 @@ module;
 #include "GameClient/GadgetSlider.h"
 
 export module Engine.UI.WND.Runtime.Renderer.W3DMOTD;
+import std;
 
 ///////////////////////////////////////////////////////////////////////////////
 // DEFINES ////////////////////////////////////////////////////////////////////

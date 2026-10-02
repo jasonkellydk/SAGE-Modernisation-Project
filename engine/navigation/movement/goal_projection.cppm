@@ -1,10 +1,5 @@
-module;
-#include <cstdint>
-#include <algorithm>
-#include <limits>
-#include <optional>
-
 export module engine.navigation.movement.goal_projection;
+import std;
 
 export namespace navigation {
 struct DestinationCell {

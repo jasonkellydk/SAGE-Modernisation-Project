@@ -1,13 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Water.OceanPatches;
+import std;
+import engine.core.contracts;
 
 namespace Graphics {
 export struct OceanPatchGrid final {
@@ -24,16 +17,16 @@ export class OceanPatches final {
 public:
     bool Prepare(const OceanPatchGrid& grid) {
         const float spacing = grid.width * grid.scale;
-        assert(std::isfinite(spacing) && spacing > 0);
-        assert(std::isfinite(grid.position[0]) && std::isfinite(grid.position[1]) && std::isfinite(grid.position[2]));
+        engine::core::Assert(std::isfinite(spacing) && spacing > 0);
+        engine::core::Assert(std::isfinite(grid.position[0]) && std::isfinite(grid.position[1]) && std::isfinite(grid.position[2]));
         Key key;
         key.position = grid.position; key.width = grid.width; key.scale = grid.scale;
         for (unsigned axis=0; axis<2; ++axis) {
             const double first = std::floor((grid.minimum[axis]-grid.position[axis]) / spacing);
             const double end = std::ceil((grid.maximum[axis]-grid.position[axis]) / spacing);
             constexpr auto limit = (std::numeric_limits<std::int32_t>::max)() - 1;
-            assert(std::isfinite(first) && std::isfinite(end));
-            assert(first >= -limit && first <= limit && end >= -limit && end <= limit);
+            engine::core::Assert(std::isfinite(first) && std::isfinite(end));
+            engine::core::Assert(first >= -limit && first <= limit && end >= -limit && end <= limit);
             key.first[axis] = static_cast<std::int32_t>(first);
             key.end[axis] = static_cast<std::int32_t>(end);
 
@@ -57,7 +50,7 @@ public:
                     0,0,grid.scale,world_y,0,1,0,grid.position[2],0,0,0,1};
             }
         }
-        assert(index == m_worlds.size());
+        engine::core::Assert(index == m_worlds.size());
         m_key = key; m_valid = true; ++m_revision;
         return true;
     }

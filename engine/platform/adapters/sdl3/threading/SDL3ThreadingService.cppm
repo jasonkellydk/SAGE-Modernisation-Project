@@ -1,12 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <thread>
-#include <utility>
 export module engine.platform.adapters.sdl3.threading;
+import std;
 import engine.platform.threading;
 import engine.platform.adapters.sdl3.threading.mutex;
 import engine.platform.adapters.sdl3.threading.semaphore;

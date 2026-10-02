@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <type_traits>
-
 export module Assets.Tests.AssetHandle;
+import std;
 
 import Assets.Handles;
 

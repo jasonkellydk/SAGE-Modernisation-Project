@@ -1,9 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-
 export module Graphics.Scene.RenderObjectBounds;
+import std;
 
 export import Graphics.Scene.RenderScene;
 

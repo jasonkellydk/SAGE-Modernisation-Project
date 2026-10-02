@@ -1,0 +1,234 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.shell.save_load.save_load_view_model;
+import games.generalszh.shell.save_load.save_game_file;
+
+using namespace generalszh::shell;
+
+namespace
+{
+struct Save
+{
+	SaveFileType type{SaveFileType::Normal};
+	SaveDate date;
+	std::u16string description;
+	std::string mapLabel;
+};
+
+// A save file as the original writes it (GameState::xfer inside its Xfer block, after another block).
+std::vector<std::byte> Write(const Save &save)
+{
+	std::vector<std::byte> bytes;
+	const auto u8 = [&](std::uint32_t value) { bytes.push_back(static_cast<std::byte>(value & 0xFF)); };
+	const auto u16 = [&](std::uint32_t value) { u8(value), u8(value >> 8); };
+	const auto u32 = [&](std::uint32_t value) { u16(value), u16(value >> 16); };
+	const auto ascii = [&](const std::string &text) {
+		u8(static_cast<std::uint32_t>(text.size()));
+		for (const char c : text)
+			u8(static_cast<unsigned char>(c));
+	};
+	ascii("CHUNK_Campaign"); // a block before it is skipped by its size
+	u32(3), u8(1), u8(2), u8(3);
+	ascii("CHUNK_GameState");
+	u32(0); // the block's size (not needed to read it)
+	u8(2);  // version
+	u32(static_cast<std::uint32_t>(save.type));
+	ascii("Maps\\GC_AirGeneral\\GC_AirGeneral.map");
+	for (const std::uint16_t field : {save.date.year, save.date.month, save.date.day, save.date.dayOfWeek, save.date.hour, save.date.minute,
+			 save.date.second, save.date.milliseconds})
+		u16(field);
+	u8(static_cast<std::uint32_t>(save.description.size()));
+	for (const char16_t c : save.description)
+		u16(c);
+	ascii(save.mapLabel);
+	ascii("SG_EOF");
+	return bytes;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(save_load_view_model)
+
+// Legacy parity (GameState::getSaveGameInfoFromFile, GameState::xfer version 2): the header of
+// a real save (00000003.sav: "Mission Start - Superweapon General Challenge 2", 2024/03/23 14:03).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_save_file_reads_as_the_original_writes_it)
+{
+	const auto bytes = Write({SaveFileType::Mission, {2024, 3, 23, 6, 14, 3, 18, 943}, u"Mission Start - Superweapon General Challenge 2", "gc_tankgeneral.map"});
+	const auto info = ReadSaveGameInfo(bytes);
+	BOOST_TEST_REQUIRE(info.has_value());
+	BOOST_TEST((info->type == SaveFileType::Mission));
+	BOOST_TEST(info->missionMap == "Maps\\GC_AirGeneral\\GC_AirGeneral.map");
+	BOOST_TEST(info->date.year == 2024);
+	BOOST_TEST(info->date.day == 23);
+	BOOST_TEST(info->date.hour == 14);
+	BOOST_TEST(info->date.minute == 3);
+	BOOST_TEST((info->description == u"Mission Start - Superweapon General Challenge 2"));
+	BOOST_TEST(info->mapLabel == "gc_tankgeneral.map");
+	std::vector<std::byte> cut(bytes.begin(), bytes.begin() + 40);
+	BOOST_TEST(!ReadSaveGameInfo(cut).has_value()); // the info block cut short
+}
+
+// Legacy parity (populateSaveGameListbox SLLT_LOAD_ONLY, addGameToAvailableList, updateMenuActions,
+// SaveLoadMenuSystem's delete confirm and Escape).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_load_screen_lists_newest_first_and_confirms_deletes)
+{
+	std::map<std::string, std::vector<std::byte>> folder{
+		{"00000000.sav", Write({SaveFileType::Normal, {2024, 3, 23, 6, 9, 5, 0, 0}, u"", "MAP:Old"})},
+		{"00000001.sav", Write({SaveFileType::Normal, {2025, 1, 2, 4, 20, 45, 0, 0}, u"My base", "MAP:Any"})},
+		{"00000002.sav", Write({SaveFileType::Mission, {2024, 12, 31, 2, 23, 59, 0, 0}, u"", "unknown.map"})},
+		{"notes.txt", {}},
+		{"broken.sav", {std::byte{3}}}};
+	SaveFiles files;
+	files.list = [&] {
+		std::vector<std::string> names;
+		for (const auto &[name, bytes] : folder)
+			names.push_back(name);
+		return names;
+	};
+	files.read = [&](const std::string &name) { return std::optional(folder.at(name)); };
+	files.remove = [&](const std::string &name) { return folder.erase(name) == 1; };
+	files.mapName = [](const std::string &label) { return label == "MAP:Old" ? std::u16string(u"Old Town") : std::u16string{}; };
+	ShellModel model;
+	model.Push(Screen::LoadGame);
+	MessageBoxViewModel messages;
+	SaveLoadViewModel menu(model, messages, files);
+	menu.Populate();
+	const auto &rows = menu.items.Get();
+	BOOST_TEST_REQUIRE(rows.size() == 3u); // the unreadable save and the other file left out
+	BOOST_TEST((rows[0] == u"My base\t20:45\t2025/01/02"));       // newest first; its description
+	BOOST_TEST((rows[1] == u"unknown.map\t23:59\t2024/12/31"));   // no description, no map text: the label
+	BOOST_TEST((rows[2] == u"Old Town\t09:05\t2024/03/23"));      // no description: the map's text
+	const auto &colors = menu.rowColors.Get();
+	BOOST_TEST(colors[0] == EvenSaveColor);
+	BOOST_TEST(colors[1] == MissionSaveColor);
+	BOOST_TEST(colors[2] == EvenSaveColor); // the count runs on over mission saves
+	BOOST_TEST(menu.selected.Get() == 0);
+	BOOST_TEST(menu.canLoad.Get());
+	BOOST_TEST(!menu.canSave.Get());
+	menu.selected.Set(-1);
+	BOOST_TEST(!menu.canLoad.Get());
+
+	// Delete asks in the confirm panel, the menu off meanwhile; Cancel keeps it, Confirm deletes.
+	menu.selected.Set(2);
+	menu.deleteGame.Execute();
+	BOOST_TEST(menu.deleteConfirmOpen.Get());
+	BOOST_TEST(!menu.menuEnabled.Get());
+	menu.deleteCancel.Execute();
+	BOOST_TEST(menu.menuEnabled.Get());
+	BOOST_TEST(folder.contains("00000000.sav"));
+	menu.deleteGame.Execute();
+	menu.deleteConfirm.Execute();
+	BOOST_TEST(!folder.contains("00000000.sav"));
+	BOOST_TEST(menu.items.Get().size() == 2u);
+	BOOST_TEST(!menu.deleteConfirmOpen.Get());
+
+	// Load cannot run yet: it says so. Escape drops a confirm panel and backs out.
+	menu.load.Execute();
+	BOOST_TEST(messages.open.Get());
+	messages.ok.Execute();
+	menu.deleteGame.Execute();
+	menu.escape.Execute();
+	BOOST_TEST(!menu.deleteConfirmOpen.Get());
+	BOOST_TEST((model.requestedScreen.Get() == Screen::MainMenu));
+}
+
+// A save this game writes has the original's info block first (GameState::getSaveGameInfoFromFile reads it: type,
+// mission map, date, description, label) and its game in its own block; the original's own saves hold none of ours.
+BOOST_AUTO_TEST_CASE(a_written_save_reads_back)
+{
+	using namespace generalszh::shell;
+	SaveGameInfo info;
+	info.type = SaveFileType::Mission;
+	info.missionMap = "Maps\\MD_USA01\\MD_USA01.map";
+	info.date = {2026, 9, 28, 1, 13, 45, 7, 250};
+	info.description = u"Before the bridge";
+	info.mapLabel = "MAP:MD_USA01";
+	const std::vector<std::byte> game{std::byte{1}, std::byte{2}, std::byte{0}, std::byte{255}};
+	const std::vector<std::byte> file = WriteSaveGame(info, game);
+	const auto read = ReadSaveGameInfo(file);
+	BOOST_TEST_REQUIRE(read.has_value());
+	BOOST_TEST((read->type == SaveFileType::Mission));
+	BOOST_TEST(read->missionMap == info.missionMap);
+	BOOST_TEST(read->date.minute == 45);
+	BOOST_TEST(read->date.milliseconds == 250);
+	BOOST_TEST((read->description == info.description));
+	BOOST_TEST(read->mapLabel == info.mapLabel);
+	const auto body = ReadSaveGame(file);
+	BOOST_TEST_REQUIRE(body.has_value());
+	BOOST_TEST((*body == game));
+	std::vector<std::byte> original = WriteSaveGame(info, game);
+	original[original.size() - 7 - game.size() - 4 - 1] = std::byte{'X'}; // not our block's token any more
+	BOOST_TEST(!ReadSaveGame(original).has_value());
+}
+
+// Legacy parity (populateSaveGameListbox SLLT_SAVE_AND_LOAD, SaveLoadMenuSystem's Save / Load in a game): the new
+// save comes first (GUI:NewSaveGame, 200/200/255); Save on it asks for a description (setEditDescription's) and saves a
+// new file; Save on a save asks to overwrite and keeps its description; Load asks first; every panel turns the menu off
+// and each confirm closes the popup.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_game_save_menu_saves_overwrites_and_asks_before_loading)
+{
+	std::map<std::string, std::vector<std::byte>> folder{{"00000004.sav", Write({SaveFileType::Normal, {2025, 1, 2, 4, 20, 45, 0, 0}, u"My base", "MAP:Any"})}};
+	std::vector<std::string> log;
+	SaveFiles files;
+	files.list = [&] {
+		std::vector<std::string> names;
+		for (const auto &[name, bytes] : folder)
+			names.push_back(name);
+		return names;
+	};
+	files.read = [&](const std::string &name) { return std::optional(folder.at(name)); };
+	files.save = [&](const std::optional<std::string> &file, const std::u16string &text) {
+		log.push_back("save " + file.value_or("new") + " " + std::string(text.begin(), text.end()));
+	};
+	files.load = [&](const std::string &file) { log.push_back("load " + file); };
+	files.close = [&] { log.push_back("close"); };
+	files.defaultDescription = [] { return std::u16string(u"USA 3"); };
+	ShellModel model;
+	MessageBoxViewModel messages;
+	SaveLoadTexts texts;
+	texts.newSave = u"New Save";
+	SaveLoadViewModel menu(model, messages, files, texts, SaveLoadMode::SaveAndLoad);
+	menu.Populate();
+	BOOST_TEST_REQUIRE(menu.items.Get().size() == 2u);
+	BOOST_TEST((menu.items.Get()[0] == u"New Save"));
+	BOOST_TEST(menu.rowColors.Get()[0] == NewSaveColor);
+	BOOST_TEST(menu.canSave.Get());
+	BOOST_TEST(!menu.canLoad.Get()); // the new save has no game to load
+	menu.save.Execute();
+	BOOST_TEST(menu.saveDescOpen.Get());
+	BOOST_TEST(!menu.menuEnabled.Get());
+	BOOST_TEST((menu.description.Get() == u"USA 3"));
+	menu.description.Set(u"Before the bridge");
+	menu.saveDescConfirm.Execute();
+	BOOST_TEST(menu.menuEnabled.Get());
+	menu.selected.Set(1);
+	BOOST_TEST(menu.canLoad.Get());
+	menu.save.Execute();
+	BOOST_TEST(menu.overwriteConfirmOpen.Get());
+	menu.overwriteConfirm.Execute();
+	menu.load.Execute();
+	BOOST_TEST(menu.loadConfirmOpen.Get());
+	menu.loadCancel.Execute();
+	BOOST_TEST(!menu.loadConfirmOpen.Get());
+	menu.load.Execute();
+	menu.loadConfirm.Execute();
+	BOOST_TEST((log == std::vector<std::string>{"close", "save new Before the bridge", "close", "save 00000004.sav My base", "close", "load 00000004.sav"}));
+}
+
+// GameState::missionSave: "GUI:MissionSave" formatted with the campaign's name (its first %s or %ls) and the mission's
+// number (its first %d); a format without them stays as it is.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mission_save_is_described_by_campaign_and_mission)
+{
+	using namespace generalszh::shell;
+	BOOST_TEST((MissionSaveDescription(u"%s - Mission %d", u"USA", 3) == u"USA - Mission 3"));
+	BOOST_TEST((MissionSaveDescription(u"%ls, %d", u"China", 12) == u"China, 12"));
+	BOOST_TEST((MissionSaveDescription(u"Mission save", u"GLA", 1) == u"Mission save"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,778 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.session.session;
+import engine.gameplay.rts.lifecycle.resources.kill_requests;
+import games.generalszh.gameplay.powers.algorithms.special_power_launch;
+import games.generalszh.content.powers.special_powers;
+import games.generalszh.gameplay.sciences.algorithms.general_ranks;
+import games.generalszh.gameplay.scripts.resources.script_records;
+import games.generalszh.gameplay.ai.resources.ai_players;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.rts.powers.algorithms.special_power_timing;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.common.weapons.components.armament;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.construction.components.sale;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.resources.relationships;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+
+// Teams' own scripts on the live shell map, apart from session.test (one module set per translation unit keeps within
+// the compiler's source-location limit).
+using namespace generalszh;
+namespace level = engine::level;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(shell_map_team_states)
+
+level::ScriptCall Call(std::string name, std::vector<std::string> texts = {}, std::int64_t integer = 0)
+{
+	level::ScriptCall call;
+	call.name = std::move(name);
+	for (std::string &text : texts)
+	{
+		level::ScriptParameter parameter;
+		parameter.text = std::move(text);
+		call.parameters.push_back(std::move(parameter));
+	}
+	if (!call.parameters.empty())
+		call.parameters.front().integer = integer;
+	return call;
+}
+
+// INCREMENT_COUNTER(amount, name).
+level::ScriptCall Increment(std::string counter)
+{
+	level::ScriptParameter amount;
+	amount.integer = 1;
+	level::ScriptParameter name;
+	name.text = std::move(counter);
+	level::ScriptCall call;
+	call.name = "INCREMENT_COUNTER";
+	call.parameters = {amount, name};
+	return call;
+}
+
+level::Script Subroutine(std::string name, std::vector<level::ScriptCall> actions, bool oneShot = false)
+{
+	level::Script script;
+	script.name = std::move(name);
+	script.subroutine = true;
+	script.oneShot = oneShot;
+	script.conditions = {{Call("CONDITION_TRUE")}};
+	script.actions = std::move(actions);
+	return script;
+}
+
+// Team::updateState / Team::updateGenericScripts (GeneralsMD Common/RTS/Team.cpp), with doCreateReinforcements
+// (ScriptActions.cpp: a new instance, setActive once its units are out) and ScriptEngine::update's order (the side
+// scripts, then ThePlayerList->updateTeamStates, then the objects, then Player::update's generic scripts). A script on
+// tick 1 brings in four Humvees of a civilian team at a waypoint:
+// - on-create runs on tick 1, in the same tick's team update, once;
+// - on-idle needs two idle looks in a row (the team's update sees the members as the last tick's systems left them),
+//   then runs every tick;
+// - a one-shot generic script runs once (tick 1), a repeating one every tick from tick 1;
+// - on-destroyed at DestroyedThreshold 0.5 of four: at two left (4 - 4 * 0.5), once. The kills are requested before a
+//   tick and land in its systems, after that tick's team update: the team sees them on the next tick.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_teams_own_scripts_run_on_create_idle_generic_and_destroyed)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	std::string waypoint;
+	for (const auto &marker : level.markers)
+		if (!marker.name.empty())
+		{
+			waypoint = marker.name;
+			break;
+		}
+	BOOST_TEST_REQUIRE(!waypoint.empty());
+	engine::level::Properties team;
+	team.Set("teamName", std::string("TestHumvees"));
+	team.Set("teamOwner", std::string("PlyrCivilian"));
+	team.Set("teamIsSingleton", false);
+	team.Set("teamUnitType1", std::string("AmericaVehicleHumvee"));
+	team.Set("teamUnitMaxCount1", std::int64_t{4});
+	team.Set("teamOnCreateScript", std::string("tsCreate"));
+	team.Set("teamOnIdleScript", std::string("tsIdle"));
+	team.Set("teamOnDestroyedScript", std::string("tsDestroyed"));
+	team.Set("teamDestroyedThreshold", Engine::Math::Fixed::FromRatio(1, 2));
+	team.Set("teamGenericScriptHook0", std::string("tsGenericOnce"));
+	team.Set("teamGenericScriptHook1", std::string("tsGenericEvery"));
+	level.scenario.groups.push_back(team);
+	auto &scripts = level.scenario.participants.front().scripts.scripts;
+	level::Script spawn;
+	spawn.name = "tsSpawn";
+	spawn.oneShot = true;
+	spawn.conditions = {{Call("CONDITION_TRUE")}};
+	spawn.actions = {Call("CREATE_REINFORCEMENT_TEAM", {"TestHumvees", waypoint})};
+	scripts.push_back(spawn);
+	scripts.push_back(Subroutine("tsCreate", {Increment("created")}));
+	scripts.push_back(Subroutine("tsIdle", {Increment("idle")}));
+	scripts.push_back(Subroutine("tsDestroyed", {Increment("destroyed")}));
+	scripts.push_back(Subroutine("tsGenericOnce", {Increment("genericOnce")}, true));
+	scripts.push_back(Subroutine("tsGenericEvery", {Increment("genericEvery")}));
+
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam("TestHumvees");
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	game.Tick();
+	const auto instances = game.Teams().Instances(*prototype);
+	BOOST_TEST_REQUIRE(instances.size() == 1u);
+	const std::uint32_t instance = instances.front();
+	BOOST_TEST(instance != *prototype);
+	BOOST_TEST(game.Teams().TeamAt(instance).members.size() == 4u);
+	BOOST_TEST(game.ScriptCounter("created") == 1);
+	BOOST_TEST(game.ScriptCounter("idle") == 0);
+	BOOST_TEST(game.ScriptCounter("genericOnce") == 1);
+	BOOST_TEST(game.ScriptCounter("genericEvery") == 1);
+	// Whether every member is idle once a tick's systems have run (what the next tick's team update sees).
+	const auto allIdle = [&] {
+		for (const auto member : game.Teams().TeamAt(instance).members)
+		{
+			const auto *order = game.World().Get<engine::gameplay::MoveOrder>(member);
+			const auto *attack = game.World().Get<engine::gameplay::AttackTarget>(member);
+			if ((order != nullptr && order->mode != engine::gameplay::MoveMode::Idle) || (attack != nullptr && attack->target != ecs::Entity{}) ||
+				game.World().Get<engine::gameplay::Builder>(member) != nullptr)
+				return false;
+		}
+		return true;
+	};
+	std::vector<bool> idleAfter{false, allIdle()}; // [tick]
+	std::vector<std::int64_t> idleCount{0, game.ScriptCounter("idle")};
+	for (int tick = 2; tick <= 120; ++tick)
+	{
+		game.Tick();
+		idleAfter.push_back(allIdle());
+		idleCount.push_back(game.ScriptCounter("idle"));
+	}
+	// Made at the waypoint with no reinforcement origin, they are not sent anywhere (needToMoveToDestination is decided
+	// before the units are made): idle as tick 1's team update sees them (made by its scripts just before), and after,
+	// so on-idle runs from the second idle look (tick 2) on, every tick.
+	BOOST_TEST(idleAfter[1]);
+	int first = 0;
+	for (int tick = 2; tick <= 120 && first == 0; ++tick)
+		if (idleCount[tick] > idleCount[tick - 1])
+			first = tick;
+	BOOST_TEST_REQUIRE(first == 2);
+	BOOST_TEST(idleCount[120] == 120 - first + 1);
+	BOOST_TEST(game.ScriptCounter("created") == 1);
+	BOOST_TEST(game.ScriptCounter("genericOnce") == 1);
+	BOOST_TEST(game.ScriptCounter("genericEvery") == 120);
+
+	const auto members = game.Teams().TeamAt(instance).members;
+	auto &kills = game.World().Resource<engine::gameplay::KillRequests>();
+	kills.entities.push_back(members[0]);
+	for (int tick = 121; tick <= 130; ++tick)
+		game.Tick();
+	BOOST_TEST(game.ScriptCounter("destroyed") == 0); // three left
+	kills.entities.push_back(members[1]);
+	game.Tick(); // tick 131: the kill lands after the team update
+	BOOST_TEST(game.ScriptCounter("destroyed") == 0);
+	game.Tick(); // tick 132: two left
+	BOOST_TEST(game.ScriptCounter("destroyed") == 1);
+	kills.entities.push_back(members[2]);
+	for (int tick = 133; tick <= 140; ++tick)
+		game.Tick();
+	BOOST_TEST(game.ScriptCounter("destroyed") == 1); // once only
+}
+
+// SpecialPowerStore::canUseSpecialPower, Object::doSpecialPowerAtLocation, Player::addScience (special powers woken),
+// SpecialPowerModule::onSpecialPowerCreation / triggerSpecialPower with SharedSyncedTimer: the shell map's paradrop
+// command centre may not paradrop on its player's order without SCIENCE_Paradrop1 (a script may); learning it makes
+// the power ready at once; fired at tick t, the player's shared timer is next ready at t + 7200 (240 s).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_generals_power_waits_for_its_science_and_shares_its_timer)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	namespace gp = engine::gameplay;
+	auto &world = game.World();
+	const auto &roster = game.Teams();
+	const auto paradrops = roster.FindTeam("teamParadrops");
+	BOOST_TEST_REQUIRE(paradrops.has_value());
+	const ecs::Entity center = roster.TeamAt(*paradrops).members.front();
+	const std::uint32_t player = roster.TeamAt(*paradrops).owner;
+	const auto power = shell.game.powers.Template("SuperweaponParadropAmerica");
+	const auto science = shell.game.Science("SCIENCE_Paradrop1");
+	BOOST_TEST_REQUIRE((power.has_value() && science.has_value()));
+	const auto *timers = world.Get<gp::SpecialPowerTimers>(center);
+	BOOST_TEST_REQUIRE(timers != nullptr);
+	BOOST_TEST_REQUIRE(timers->Find(*power) != nullptr);
+	game.Tick();
+	const auto planes = [&] { return game.PlayerObjectCount("Paradrops", "AmericaJetCargoPlane"); };
+	const std::int64_t before = planes();
+	const Engine::Math::FixedVector2 target{Engine::Math::Fixed::FromInt(1000), Engine::Math::Fixed::FromInt(1000)};
+	const bool known = world.Resource<gp::PlayerSciences>().Has(player, *science);
+	BOOST_TEST_MESSAGE("the paradrop player knows SCIENCE_Paradrop1 from the start: " << known);
+	if (!known)
+	{
+		generalszh::gameplay::FireSpecialPower(game.Game(), center, "SuperweaponParadropAmerica", target, false);
+		BOOST_TEST(planes() == before); // a player's order needs the science
+		BOOST_TEST(generalszh::gameplay::GrantScience(game.Game(), player, *science));
+	}
+	auto &shared = world.Resource<gp::SharedPowerTimers>();
+	const gp::PowerClock now{world.Resource<gp::SpecialPowerRules>(), shared, player, game.CurrentTick()};
+	BOOST_TEST(gp::IsReady(*timers->Find(*power), now));
+	generalszh::gameplay::FireSpecialPower(game.Game(), center, "SuperweaponParadropAmerica", target, false);
+	BOOST_TEST(planes() > before);
+	const std::uint64_t fired = game.CurrentTick();
+	// SpecialPowerModule::aboutToDoSpecialPower: the scripts hear it (from this command centre), once.
+	auto &records = world.Resource<generalszh::gameplay::ScriptRecords>();
+	BOOST_TEST(records.TakeTriggeredPower(player, "SuperweaponParadropAmerica", center));
+	BOOST_TEST(!records.TakeTriggeredPower(player, "SuperweaponParadropAmerica"));
+	BOOST_TEST(!gp::IsReady(*timers->Find(*power), {world.Resource<gp::SpecialPowerRules>(), shared, player, fired + 7199}));
+	BOOST_TEST(gp::IsReady(*timers->Find(*power), {world.Resource<gp::SpecialPowerRules>(), shared, player, fired + 7200}));
+}
+
+// ObjectCreationList DeliverPayloadNugget -> SpecialPowerCompletionDie::setCreator / notifyScriptEngine: a carpet bomb
+// run from the shell map's Chinese command centre (fired as a script) marks its first bomb as the command centre's;
+// when the bombs are gone, its player's scripts hear the power completed from that command centre.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_delivered_bomb_tells_the_scripts_its_power_completed)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	auto &world = game.World();
+	const auto &roster = game.Teams();
+	const auto china = roster.FindTeam("teamPlyrChina");
+	BOOST_TEST_REQUIRE(china.has_value());
+	ecs::Entity center;
+	for (const auto member : roster.TeamAt(*china).members)
+		if (game.DefinitionName(world.Get<engine::gameplay::DefinitionRef>(member)->index) == "ChinaCommandCenter")
+			center = member;
+	BOOST_TEST_REQUIRE(world.IsAlive(center));
+	const std::uint32_t player = roster.TeamAt(*china).owner;
+	// The command centre's power whose delivery drops something with a SpecialPowerCompletionDie (its carpet bombs).
+	std::string power;
+	const auto *definition = shell.game.objects.Find("ChinaCommandCenter");
+	for (const auto &module : generalszh::content::PowerModulesOf(*definition))
+		if (const auto ocl = generalszh::content::FindOclPower(*definition, module.power))
+			if (const auto runs = shell.game.powers.deliveries.find(ocl->creationList); runs != shell.game.powers.deliveries.end())
+				for (const auto &run : runs->second)
+					for (const auto &item : run.payload)
+						if (const auto *payload = shell.game.objects.Find(item.object))
+							for (const auto &part : payload->modules)
+								if (part.type == "SpecialPowerCompletionDie" && power.empty())
+									power = module.power;
+	BOOST_TEST_REQUIRE(!power.empty());
+	BOOST_TEST_MESSAGE("carpet bomb power: " << power);
+	game.Tick();
+	const Engine::Math::FixedVector2 target = game.TransformOf(center)->position.XY() + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(600), Engine::Math::Fixed::FromInt(0)};
+	generalszh::gameplay::FireSpecialPower(game.Game(), center, power, target, true);
+	auto &records = world.Resource<generalszh::gameplay::ScriptRecords>();
+	bool completed = false;
+	for (int tick = 0; tick < 30 * 90 && !completed; ++tick)
+	{
+		game.Tick();
+		completed = records.TakeCompletedPower(player, "SuperweaponChinaCarpetBomb", center);
+	}
+	BOOST_TEST(completed);
+}
+
+// AIPlayer::newMap / doBaseBuilding / processBaseBuilding (a map's own computer player): a planned power plant the plan
+// marks initially built stands from the start (buildStructureNow); destroyed at tick 60, it is noted lost on the next
+// look (its timestamp), left alone for RebuildDelayTimeSeconds (30 s) and then put up again by its dozer.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_maps_computer_player_rebuilds_what_it_lost)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	engine::level::Participant *america = nullptr;
+	for (auto &participant : level.scenario.participants)
+		if (participant.properties.Get<std::string>("playerName") == "PlyrAmerica")
+			america = &participant;
+	BOOST_TEST_REQUIRE(america != nullptr);
+	// Beside America's command centre.
+	Engine::Math::FixedVector3 where;
+	for (const auto &placement : level.placements)
+		if (placement.type == "AmericaCommandCenter" && placement.properties.Get<std::string>("originalOwner").value_or("").find("America") != std::string::npos)
+			where = placement.position;
+	where.x = where.x + Engine::Math::Fixed::FromInt(160);
+	engine::level::PlannedPlacement planned;
+	planned.type = "AmericaPowerPlant";
+	planned.position = where;
+	planned.initiallyPlaced = true;
+	planned.rebuilds = 1;
+	america->plan.push_back(planned);
+	// A dozer of its own to build with (it has no factory to make one).
+	engine::level::Placement dozer;
+	dozer.type = "AmericaVehicleDozer";
+	dozer.position = where;
+	dozer.position.y = dozer.position.y + Engine::Math::Fixed::FromInt(120);
+	dozer.properties.Set("originalOwner", std::string("teamPlyrAmerica"));
+	level.placements.push_back(dozer);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const std::uint32_t player = *game.Teams().FindPlayer("PlyrAmerica");
+	auto &ais = game.World().Resource<generalszh::gameplay::AiPlayers>();
+	auto *ai = ais.Of(player);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	BOOST_TEST(!ai->skirmish);
+	const auto &slot = ai->buildList.back();
+	BOOST_TEST(slot.structure == "AmericaPowerPlant");
+	BOOST_TEST_REQUIRE(game.World().IsAlive(slot.built));
+	for (int tick = 0; tick < 60; ++tick)
+		game.Tick();
+	game.World().Resource<engine::gameplay::KillRequests>().entities.push_back(slot.built);
+	game.Tick(); // tick 61: it dies
+	std::uint64_t noted = 0, rebuilt = 0;
+	for (int tick = 0; tick < 30 * 60 && rebuilt == 0; ++tick)
+	{
+		game.Tick();
+		if (noted == 0 && slot.built == ecs::Entity{} && slot.builtTick > 0)
+			noted = slot.builtTick;
+		if (slot.built != ecs::Entity{} && game.World().IsAlive(slot.built))
+			rebuilt = game.CurrentTick();
+	}
+	BOOST_TEST_MESSAGE("noted lost at " << noted << ", rebuilt at " << rebuilt);
+	BOOST_TEST_REQUIRE(noted > 0u);
+	BOOST_TEST(rebuilt >= noted + 900u);
+	BOOST_TEST(rebuilt <= noted + 900u + 60u); // at the first 2 s look once the delay is out
+	BOOST_TEST_REQUIRE(rebuilt > 0u);
+	BOOST_TEST(game.DefinitionName(game.World().Get<engine::gameplay::DefinitionRef>(slot.built)->index) == "AmericaPowerPlant");
+	BOOST_TEST(slot.rebuilds == 0);
+}
+
+// Player::setPlayerType (ForceSkirmishAI; shipped No): with it a map's own computer player gets the skirmish AI
+// (AISkirmishPlayer::newMap: its side's skirmish build list from AIData, laid out about its command centre); without it
+// the map's AI (AIPlayer::newMap: the map's plan). The shell map's PlyrAmerica both ways.
+BOOST_AUTO_TEST_CASE(legacy_parity_force_skirmish_ai_gives_a_maps_computer_player_the_skirmish_ai)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	BOOST_TEST(!shell.game.aiData.forceSkirmishAi);
+	content::GameContent forced = shell.game;
+	forced.aiData.forceSkirmishAi = true;
+	const content::AiBuildList *plan = forced.aiData.BuildList("America");
+	BOOST_TEST_REQUIRE(plan != nullptr);
+	for (const bool force : {false, true})
+	{
+		session::Session game(shell.map->level, force ? forced : shell.game, {42, 0, {}});
+		const std::uint32_t player = *game.Teams().FindPlayer("PlyrAmerica");
+		const auto *ai = game.World().Resource<generalszh::gameplay::AiPlayers>().Of(player);
+		BOOST_TEST_REQUIRE(ai != nullptr);
+		BOOST_TEST(ai->skirmish == force);
+		if (force)
+		{
+			BOOST_TEST(ai->side == "America");
+			BOOST_TEST_REQUIRE(ai->buildList.size() == plan->structures.size());
+			for (std::size_t index = 0; index < plan->structures.size(); ++index)
+				BOOST_TEST(ai->buildList[index].structure == plan->structures[index].structure);
+		}
+	}
+}
+
+// legacy_parity: Object::setTeam / setOrRestoreTeam / onCapture (EA's CnC_Generals_Zero_Hour Object.cpp, which wins over the
+// fork's ally exception and dozer cancelAllTasks) on the shell map (PlyrAmerica and PlyrChina, enemies). Taken over by another
+// player, a dozer on its way stops (aiIdle(CMD_FROM_AI)), its task kept; moved to another team of its own player it keeps
+// going (oldOwner == newOwner: no idle). Given to a dead player's team, it goes
+// to the neutral player's default team instead (isPlayerActive). A skirmish computer player that takes a faction
+// structure sells it (isSkirmishAIPlayer && isFactionStructure: sellObject).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_captured_unit_changes_hands_as_set_team_does)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t america = *game.Teams().FindPlayer("PlyrAmerica");
+	const std::uint32_t china = *game.Teams().FindPlayer("PlyrChina");
+	const std::uint32_t americaTeam = *game.Teams().DefaultTeam(america);
+	const std::uint32_t chinaTeam = *game.Teams().DefaultTeam(china);
+	BOOST_TEST_REQUIRE((world.Resource<gp::Relationships>().Between(gp::Relationships::NoTeam, america, chinaTeam, china) != gp::Relationship::Allies));
+	Engine::Math::FixedVector2 at;
+	for (const auto &placement : shell.map->level.placements)
+		if (placement.type == "AmericaCommandCenter")
+			at = placement.position.XY();
+	const Engine::Math::FixedVector2 aside{Engine::Math::Fixed::FromInt(200), Engine::Math::Fixed{}};
+	// An enemy's capture.
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", at + aside, {}, americaTeam);
+	BOOST_TEST_REQUIRE(world.IsAlive(dozer));
+	*world.Get<gp::MoveOrder>(dozer) = gp::MoveToPoint(at + aside + aside);
+	if (!world.Has<gp::Builder>(dozer))
+		world.Add<gp::Builder>(dozer);
+	gameplay::ChangeTeam(game.Game(), dozer, chinaTeam);
+	BOOST_TEST(world.Get<gp::Owner>(dozer)->player == china);
+	BOOST_TEST((world.Get<gp::MoveOrder>(dozer)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(world.Has<gp::Builder>(dozer)); // EA's onCapture cancels no dozer task
+	// Another team of its own player.
+	std::optional<std::uint32_t> otherAmerican;
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (team != americaTeam && game.Teams().TeamAt(team).owner == america)
+			otherAmerican = team;
+	if (otherAmerican)
+	{
+		const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at + aside, {}, americaTeam);
+		*world.Get<gp::MoveOrder>(humvee) = gp::MoveToPoint(at + aside + aside);
+		gameplay::ChangeTeam(game.Game(), humvee, *otherAmerican);
+		BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::Point));
+	}
+	// A dead player's team: the neutral player's instead.
+	game.Game().roster.PlayerAt(china).dead = true;
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at + aside, {}, americaTeam);
+	gameplay::ChangeTeam(game.Game(), ranger, chinaTeam);
+	BOOST_TEST(game.Teams().PlayerAt(world.Get<gp::Owner>(ranger)->player).name.empty());
+	game.Game().roster.PlayerAt(china).dead = false;
+	// A skirmish computer player's capture of a faction structure: sold.
+	auto *ai = world.Resource<gameplay::AiPlayers>().Of(china);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	ai->skirmish = true;
+	const ecs::Entity barracks = game.Place("AmericaBarracks", at - aside - aside, {}, americaTeam);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	gameplay::ChangeTeam(game.Game(), barracks, chinaTeam);
+	BOOST_TEST(world.Has<gp::Sale>(barracks));
+}
+
+// Legacy parity (ScriptEngine::isSpeechComplete / isAudioComplete): the first time a speech is asked about it is done
+// its length in ticks later (45 here: from tick 10, done on tick 55, not 54); once done it is taken off, so asking again
+// starts it afresh; speech and sounds are kept apart; a checkpoint keeps what is waiting.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_speech_is_done_its_length_after_first_asked)
+{
+	using generalszh::gameplay::ScriptRecords;
+	ScriptRecords records;
+	int lengths = 0;
+	const auto length = [&lengths]() -> std::uint64_t {
+		++lengths;
+		return 45;
+	};
+	BOOST_TEST(!ScriptRecords::SoundComplete(records.testingSpeech, "Line1", 10, length));
+	BOOST_TEST(!ScriptRecords::SoundComplete(records.testingSpeech, "Line1", 54, length));
+	BOOST_TEST(lengths == 1); // measured once
+	BOOST_TEST(!ScriptRecords::SoundComplete(records.testingAudio, "Line1", 54, length)); // a sound of that name: its own
+	engine::core::serialization::ByteWriter writer;
+	records.Save(writer);
+	ScriptRecords loaded;
+	engine::core::serialization::ByteReader reader(writer.Bytes());
+	BOOST_TEST_REQUIRE(loaded.Load(reader));
+	BOOST_TEST_REQUIRE(loaded.testingSpeech.size() == 1u);
+	BOOST_TEST(loaded.testingSpeech.front().second == 55u);
+	BOOST_TEST(ScriptRecords::SoundComplete(loaded.testingSpeech, "Line1", 55, length));
+	BOOST_TEST(loaded.testingSpeech.empty());
+	BOOST_TEST(!ScriptRecords::SoundComplete(loaded.testingSpeech, "Line1", 56, length)); // afresh: 101
+	BOOST_TEST(loaded.testingSpeech.front().second == 101u);
+	// No length (an unknown sound): done at once.
+	BOOST_TEST(ScriptRecords::SoundComplete(loaded.testingSpeech, "Nothing", 60, {}));
+}
+
+// Legacy parity (ScriptActions::doRemoveCommandBarButton / doAddCommandBarButton, GameLogic::setControlBarOverride,
+// CommandSet::getCommandButton): the dozer's set loses its power plant where it shows it (slot 0); adding the barracks
+// at slot 1 (the first) puts it there; a button that does not exist, a slot past 18 or an unknown object type change
+// nothing; what the sets read now is kept in a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_scripts_add_and_remove_command_bar_buttons)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	auto &scripts = level.scenario.participants.front().scripts.scripts;
+	level::Script edit;
+	edit.name = "edit";
+	edit.oneShot = true;
+	edit.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall add = Call("COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT", {"Command_ConstructAmericaBarracks", "AmericaVehicleDozer"});
+	level::ScriptParameter slot;
+	slot.integer = 1;
+	add.parameters.push_back(slot);
+	level::ScriptCall badButton = Call("COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT", {"Command_NoSuchButton", "AmericaVehicleDozer"});
+	badButton.parameters.push_back(slot);
+	level::ScriptCall badSlot = Call("COMMANDBAR_ADD_BUTTON_OBJECTTYPE_SLOT", {"Command_ConstructAmericaBarracks", "AmericaVehicleDozer"});
+	level::ScriptParameter far;
+	far.integer = 19;
+	badSlot.parameters.push_back(far);
+	edit.actions = {Call("COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE", {"Command_ConstructAmericaPowerPlant", "AmericaVehicleDozer"}), add, badButton, badSlot,
+		Call("COMMANDBAR_REMOVE_BUTTON_OBJECTTYPE", {"Command_ConstructAmericaPowerPlant", "NoSuchObject"})};
+	scripts.push_back(edit);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto &catalog = shell.game.commands;
+	const auto *original = catalog.Set("AmericaDozerCommandSet");
+	BOOST_TEST_REQUIRE(original != nullptr);
+	BOOST_TEST(original->buttons[0] == "Command_ConstructAmericaPowerPlant");
+	game.Tick();
+	auto &overrides = game.World().Resource<generalszh::gameplay::CommandBarOverrides>();
+	BOOST_TEST(overrides.slots.size() == 1u); // removing then adding at the same slot: one override
+	const auto now = generalszh::gameplay::EffectiveCommandSet(catalog, &overrides, "AmericaDozerCommandSet");
+	BOOST_TEST_REQUIRE(now.has_value());
+	BOOST_TEST(now->buttons[0] == "Command_ConstructAmericaBarracks");
+	BOOST_TEST(now->buttons[1] == original->buttons[1]);
+	const auto saved = game.Checkpoint();
+	auto restored = session::Session::Restore(level, shell.game, {42, 0, {}}, saved);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	const auto &kept = restored->World().Resource<generalszh::gameplay::CommandBarOverrides>();
+	BOOST_TEST((kept.slots == overrides.slots));
+}
+
+// Legacy parity (ScriptEngine::doFreezeTime / doUnfreezeTime, GameLogic::update: frozen, a frame ends with its scripts
+// and its number stays): a script freezes time on tick 1 and starts a 5-tick timer; the scripts go on running (a counter
+// every call) and the timer runs down, but the tick stays; when it runs out, on the sixth call, time goes on from tick 1.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_script_freezes_time_while_the_scripts_run_on)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	auto &scripts = level.scenario.participants.front().scripts.scripts;
+	level::Script freeze;
+	freeze.name = "freeze";
+	freeze.oneShot = true;
+	freeze.conditions = {{Call("CONDITION_TRUE")}};
+	level::ScriptCall timer = Call("SET_TIMER", {"t"});
+	level::ScriptParameter ticks;
+	ticks.integer = 5;
+	timer.parameters.push_back(ticks);
+	freeze.actions = {Call("FREEZE_TIME"), timer};
+	scripts.push_back(freeze);
+	level::Script every;
+	every.name = "every";
+	every.conditions = {{Call("CONDITION_TRUE")}};
+	every.actions = {Increment("runs")};
+	scripts.push_back(every);
+	level::Script thaw;
+	thaw.name = "thaw";
+	thaw.oneShot = true;
+	thaw.conditions = {{Call("TIMER_EXPIRED", {"t"})}};
+	thaw.actions = {Call("UNFREEZE_TIME")};
+	scripts.push_back(thaw);
+	session::Session game(level, shell.game, {42, 0, {}});
+	std::vector<std::uint64_t> seen;
+	for (int call = 1; call <= 7; ++call)
+	{
+		game.Tick();
+		seen.push_back(game.CurrentTick());
+	}
+	BOOST_TEST((seen == std::vector<std::uint64_t>{0, 0, 0, 0, 0, 1, 2}));
+	BOOST_TEST(game.ScriptCounter("runs") == 7);
+	BOOST_TEST(!game.TimeFrozen());
+}
+
+// ScriptActions::doSetMoney / doGiveMoney (EA ScriptActions.cpp; Money::withdraw / deposit, each heard by its player
+// through Money::triggerAudioEvent unless it moves nothing): PLAYER_SET_MONEY 5000 withdraws all there is (heard when there
+// was any) and deposits 5000 (heard: EA's deposit(money); the fork's FALSE is not followed); PLAYER_GIVE_MONEY -300
+// withdraws 300 (heard), +200 deposits 200 (heard): 4900 at the end of the tick, the sounds in that order.
+BOOST_AUTO_TEST_CASE(legacy_parity_script_money_is_set_given_and_heard)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	std::size_t seat = 0;
+	for (; seat < level.scenario.participants.size(); ++seat)
+		if (!level.scenario.participants[seat].properties.Get<std::string>("playerName").value_or("").empty())
+			break;
+	BOOST_TEST_REQUIRE(seat < level.scenario.participants.size());
+	const std::string name = *level.scenario.participants[seat].properties.Get<std::string>("playerName");
+	const auto amount = [](level::ScriptCall call, std::int64_t value) {
+		level::ScriptParameter money;
+		money.integer = value;
+		money.number = Engine::Math::Fixed::FromInt(value);
+		call.parameters.push_back(money);
+		return call;
+	};
+	level::Script cash;
+	cash.name = "cash";
+	cash.oneShot = true;
+	cash.conditions = {{Call("CONDITION_TRUE")}};
+	cash.actions = {amount(Call("PLAYER_SET_MONEY", {"<This Player>"}), 5000), amount(Call("PLAYER_GIVE_MONEY", {"<This Player>"}), -300),
+		amount(Call("PLAYER_GIVE_MONEY", {"<This Player>"}), 200)};
+	level.scenario.participants[seat].scripts.scripts.push_back(cash);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto player = game.Teams().FindPlayer(name);
+	BOOST_TEST_REQUIRE(player.has_value());
+	const std::int64_t before = game.World().Resource<engine::gameplay::PlayerMoney>().Balance(*player);
+	game.Tick();
+	const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+	BOOST_TEST(money.Balance(*player) == 4900);
+	using Kind = engine::gameplay::MoneyTransaction::Kind;
+	std::vector<Kind> heard;
+	for (const auto &transaction : money.Transactions())
+		if (transaction.player == *player)
+			heard.push_back(transaction.kind);
+	std::vector<Kind> expected;
+	if (before > 0)
+		expected.push_back(Kind::Withdraw);
+	expected.insert(expected.end(), {Kind::Deposit, Kind::Withdraw, Kind::Deposit});
+	BOOST_TEST((heard == expected));
+}
+
+// ScriptActions::doBuildTeam -> Player::buildSpecificTeam -> AIPlayer::buildSpecificAITeam(priorityBuild true) (EA
+// AIPlayer.cpp): the shell map's own BUILD_TEAM team, built by script on tick 1 for its computer player, goes to the front
+// of its build queue flagged priorityBuild, as a new inactive instance, with work orders prepended slot by slot (the slots
+// with a type and a MaxUnits): first each slot's optional count (MaxUnits - MinUnits, when above none), then each slot's
+// required count (MinUnits) in front of them: the required ones in reverse slot order, then the optional ones.
+BOOST_AUTO_TEST_CASE(legacy_parity_build_team_queues_its_work_orders_first)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	// The team the shell map's scripts build.
+	std::string teamName;
+	std::size_t seat = 0;
+	for (std::size_t participant = 0; participant < level.scenario.participants.size() && teamName.empty(); ++participant)
+		for (const auto &script : level.scenario.participants[participant].scripts.scripts)
+		{
+			for (const auto &call : script.actions)
+				if (call.name == "BUILD_TEAM" && !call.parameters.empty())
+				{
+					teamName = call.parameters.front().text;
+					seat = participant;
+					break;
+				}
+			if (!teamName.empty())
+				break;
+		}
+	BOOST_TEST_REQUIRE(!teamName.empty());
+	level::Script build;
+	build.name = "buildNow";
+	build.oneShot = true;
+	build.conditions = {{Call("CONDITION_TRUE")}};
+	build.actions = {Call("BUILD_TEAM", {teamName})};
+	auto &own = level.scenario.participants[seat].scripts.scripts;
+	own.insert(own.begin(), build);
+	const engine::level::Properties *info = nullptr;
+	for (const auto &group : level.scenario.groups)
+		if (group.Get<std::string>("teamName").value_or("") == teamName)
+			info = &group;
+	BOOST_TEST_REQUIRE(info != nullptr);
+	struct Wanted
+	{
+		std::string type;
+		std::int64_t count;
+		bool mandatory;
+	};
+	std::vector<Wanted> expected;
+	const auto slots = [&](auto &&each) {
+		for (int slot = 1; slot <= 7; ++slot)
+		{
+			const std::string type = info->Get<std::string>("teamUnitType" + std::to_string(slot)).value_or("");
+			const std::int64_t most = info->Get<std::int64_t>("teamUnitMaxCount" + std::to_string(slot)).value_or(0);
+			const std::int64_t least = info->Get<std::int64_t>("teamUnitMinCount" + std::to_string(slot)).value_or(0);
+			if (type.empty() || most <= 0 || shell.game.objects.Find(type) == nullptr)
+				continue;
+			each(type, least, most);
+		}
+	};
+	slots([&](const std::string &type, std::int64_t least, std::int64_t most) {
+		if (most - least > 0)
+			expected.insert(expected.begin(), Wanted{type, most - least, false});
+	});
+	slots([&](const std::string &type, std::int64_t least, std::int64_t) { expected.insert(expected.begin(), Wanted{type, least, true}); });
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam(teamName);
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	const std::uint32_t player = game.Teams().TeamAt(*prototype).owner;
+	game.Tick();
+	const auto *ai = game.World().Resource<generalszh::gameplay::AiPlayers>().Of(player);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	BOOST_TEST_REQUIRE(!ai->buildQueue.empty());
+	const auto &entry = ai->buildQueue.front();
+	BOOST_TEST(entry.priorityBuild);
+	BOOST_TEST(entry.team != *prototype); // a new instance
+	BOOST_TEST(game.Teams().PrototypeOf(entry.team) == *prototype);
+	BOOST_TEST_REQUIRE(entry.orders.size() == expected.size());
+	for (std::size_t index = 0; index < expected.size(); ++index)
+	{
+		BOOST_TEST(game.Game().templates.DefinitionAt(entry.orders[index].definition).name == expected[index].type);
+		BOOST_TEST(entry.orders[index].required == expected[index].count);
+		BOOST_TEST(entry.orders[index].mandatory == expected[index].mandatory);
+	}
+}
+
+// Player::killPlayer (EA Player.cpp, ScriptActions::doKillPlayer): after its teams are evacuated and killed the player is
+// dead (m_isPlayerDead) and its money is withdrawn to nothing (Money::withdraw: heard); in a single-player game a
+// computer player is left alive (m_isPlayerDead FALSE again) with its money, to be used later in the mission.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_killed_player_is_dead_and_penniless_unless_a_solo_computer)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](bool solo) {
+		engine::level::Level level = shell.map->level;
+		std::size_t seat = 0;
+		for (; seat < level.scenario.participants.size(); ++seat)
+			if (!level.scenario.participants[seat].properties.Get<std::string>("playerName").value_or("").empty())
+				break;
+		BOOST_TEST_REQUIRE(seat < level.scenario.participants.size());
+		const std::string name = *level.scenario.participants[seat].properties.Get<std::string>("playerName");
+		level::ScriptCall give = Call("PLAYER_SET_MONEY", {"<This Player>"});
+		level::ScriptParameter amount;
+		amount.integer = 1000;
+		amount.number = Engine::Math::Fixed::FromInt(1000);
+		give.parameters.push_back(amount);
+		level::Script kill;
+		kill.name = "kill";
+		kill.oneShot = true;
+		kill.conditions = {{Call("CONDITION_TRUE")}};
+		kill.actions = {give, Call("PLAYER_KILL", {"<This Player>"})};
+		auto &own = level.scenario.participants[seat].scripts.scripts;
+		own.insert(own.begin(), kill);
+		session::SessionOptions options{42, 0, {}};
+		options.singlePlayer = solo;
+		session::Session game(level, shell.game, options);
+		const auto player = game.Teams().FindPlayer(name);
+		BOOST_TEST_REQUIRE(player.has_value());
+		BOOST_TEST_REQUIRE(!game.Teams().PlayerAt(*player).human);
+		game.Tick();
+		const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+		return std::pair{game.Teams().PlayerAt(*player).dead, money.Balance(*player)};
+	};
+	const auto [dead, left] = run(false);
+	BOOST_TEST(dead);
+	BOOST_TEST(left == 0);
+	const auto [soloDead, soloLeft] = run(true);
+	BOOST_TEST(!soloDead);
+	BOOST_TEST(soloLeft == 1000);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

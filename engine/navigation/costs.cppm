@@ -17,6 +17,7 @@
 */
 
 export module engine.navigation.costs;
+import std;
 
 export namespace navigation {
 inline int estimateGoalCost(int dx, int dy)

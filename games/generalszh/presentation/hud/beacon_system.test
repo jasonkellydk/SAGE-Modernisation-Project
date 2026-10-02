@@ -1,0 +1,311 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.hud.systems.beacon_system;
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.eva.eva_content;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.match.resources.match_outcome;
+import engine.ecs.query.query;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+
+// Multiplayer beacons over a shipped skirmish (real data), as America watches: GameLogic::onPlaceBeacon /
+// onRemoveBeacon / onSetBeaconText (GameLogicDispatch.cpp) and BeaconClientUpdate::clientUpdate / hideBeacon
+// (BeaconClientUpdate.cpp).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{5, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		options.presentationComponents = [](ecs::World &world) {
+			world.RegisterComponent<presentation::BeaconLook>();
+			world.RegisterComponent<presentation::BeaconCaption>();
+			world.RegisterComponent<presentation::ShroudSight>(); // BeaconSystem's smoke under the shroud
+		};
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!map)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*map);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 5;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	return match;
+}
+
+engine::net::CommandEnvelope From(std::uint32_t seat, const commands::GameCommand &command)
+{
+	auto envelope = commands::Encode(command);
+	envelope.player = seat;
+	return envelope;
+}
+
+std::vector<ecs::Entity> BeaconsOf(session::Session &game, std::uint32_t player)
+{
+	std::vector<ecs::Entity> out;
+	ecs::Query<ecs::Read<gp::DefinitionRef>, ecs::Read<gp::Owner>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto definitions = chunk.template Get<gp::DefinitionRef>();
+		const auto owners = chunk.template Get<gp::Owner>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < definitions.size(); ++row)
+			if (game.DefinitionName(definitions[row].index) == "MultiplayerBeacon" && owners[row].player == player)
+				out.push_back(entities[row]);
+	});
+	return out;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(beacons)
+
+// Legacy parity (GameLogicDispatch.cpp: GameLogic::onPlaceBeacon, onRemoveBeacon, onSetBeaconText; MultiplayerSettings
+// MaxBeaconsPerPlayer 3; PlayerTemplate BeaconName MultiplayerBeacon): a beacon goes up the tick its message is
+// applied, where it was placed on the ground, the player's own on its default team; a fourth while three are up is
+// refused (GUI:TooManyBeacons, to the player who tried); off the map it lands on the nearest point of the map's edge;
+// a defeated player's is refused; a player's own beacon told to go is gone the same tick (destroyObject), another's
+// only hidden from the one who asked; a caption is set on what the player has selected.
+BOOST_AUTO_TEST_CASE(legacy_parity_beacons_placed_capped_and_removed)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	std::unique_ptr<session::Session> restored;
+	const auto step = [&](std::vector<engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		four.Tick(orders);
+		if (restored)
+			restored->Tick(orders);
+	};
+	const auto &cues = world.Resource<gameplay::BeaconCues>().list;
+	step();
+	const Engine::Math::FixedVector2 spot{Fixed::FromInt(700), Fixed::FromInt(600)};
+	step({From(0, commands::PlaceBeacon{spot})});
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::Placed));
+	BOOST_TEST(cues[0].player == america);
+	const auto first = BeaconsOf(game, america);
+	BOOST_TEST_REQUIRE(first.size() == 1u);
+	BOOST_TEST((cues[0].beacon == first[0]));
+	const auto &at = world.Get<gp::Transform>(first[0])->position;
+	BOOST_TEST((at.x == spot.x));
+	BOOST_TEST((at.y == spot.y));
+	BOOST_TEST((at.z == game.Game().ground.At(spot)));
+	BOOST_TEST((world.Get<gp::TeamMember>(first[0])->team == game.Teams().DefaultTeam(america)));
+
+	// Two more make three; the fourth is refused and nothing is made.
+	step({From(0, commands::PlaceBeacon{{spot.x + Fixed::FromInt(50), spot.y}})});
+	step({From(0, commands::PlaceBeacon{{spot.x + Fixed::FromInt(100), spot.y}})});
+	BOOST_TEST(BeaconsOf(game, america).size() == 3u);
+	step({From(0, commands::PlaceBeacon{{spot.x + Fixed::FromInt(150), spot.y}})});
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::TooMany));
+	BOOST_TEST(cues[0].player == america);
+	BOOST_TEST(BeaconsOf(game, america).size() == 3u);
+
+	// Off the map: at the nearest point of its edge.
+	const Engine::Math::FixedVector2 off{Fixed::FromInt(-200), Fixed::FromInt(400)};
+	step({From(1, commands::PlaceBeacon{off})});
+	const auto theirs = BeaconsOf(game, gla);
+	BOOST_TEST_REQUIRE(theirs.size() == 1u);
+	const auto edge = game.Game().ground.ClosestEdgePoint(off);
+	BOOST_TEST((world.Get<gp::Transform>(theirs[0])->position == edge));
+
+	// GLA told America's beacon to go: only hidden from GLA; America's own told to go: gone this tick.
+	step({From(1, commands::RemoveBeacon{{first[0]}})});
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::Hidden));
+	BOOST_TEST(cues[0].player == gla);
+	BOOST_TEST(world.IsAlive(first[0]));
+	step({From(0, commands::RemoveBeacon{{first[0], theirs[0]}})});
+	BOOST_TEST(!world.IsAlive(first[0]));
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::Hidden));
+	BOOST_TEST(cues[0].player == america);
+	BOOST_TEST(world.IsAlive(theirs[0]));
+	BOOST_TEST(BeaconsOf(game, america).size() == 2u);
+	// Room again for one.
+	step({From(0, commands::PlaceBeacon{spot})});
+	BOOST_TEST(BeaconsOf(game, america).size() == 3u);
+
+	step({From(0, commands::SetBeaconText{{theirs[0]}, "Rally here"})});
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::Text));
+	BOOST_TEST(cues[0].text == "Rally here");
+	BOOST_TEST((cues[0].beacon == theirs[0]));
+
+	restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	// A defeated player's is refused (hasSinglePlayerBeenDefeated).
+	for (auto *session : {&game, &four, restored.get()})
+		for (auto &standing : session->World().Resource<gp::MatchOutcome>().players)
+			if (standing.player == gla)
+				standing.defeated = true;
+	step({From(1, commands::PlaceBeacon{spot})});
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == gameplay::BeaconCue::Kind::Failed));
+	BOOST_TEST(BeaconsOf(game, gla).size() == 1u);
+	step();
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (GameLogic::onPlaceBeacon's client side; BeaconClientUpdate.cpp: clientUpdate, hideBeacon; the
+// beacon's RadarPulseFrequency 1000 ms = 30 frames, RadarPulseDuration 500 ms = 15): America places one:
+// GUI:BeaconPlaced with its name, the BeaconPlaced sound where it stands, an information event on the radar and
+// EVA's BeaconDetected, the tick it goes up; then a beacon pulse on the radar the first tick more than 30 past the one
+// it went up (31 later), lasting 15 ticks, and every 31 after. GLA's is hidden from America: no pulses.
+BOOST_AUTO_TEST_CASE(legacy_parity_beacon_feedback_and_pulses)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	auto &catalog = world.EmplaceResource<presentation::LookCatalog>();
+	presentation::KnowLooks(catalog, game);
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
+	auto &messages = world.EmplaceResource<presentation::InGameMessages>();
+	messages.playerNames.resize(std::max(america, gla) + 1);
+	messages.playerNames[america] = u"Jason";
+	auto &sounds = world.EmplaceResource<presentation::SoundRequests>();
+	auto &radar = world.EmplaceResource<presentation::RadarEvents>();
+	auto &eva = world.EmplaceResource<presentation::EvaState>();
+	world.EmplaceResource<presentation::ParticleWorldHandle>();
+	presentation::BeaconSystem beacons;
+	ecs::SystemRegistry registry;
+	registry.Register(beacons);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const auto step = [&](std::vector<engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		// As the host does before its tick systems: the definitions the session took on.
+		presentation::KnowLooks(catalog, game);
+		sounds.pending.clear();
+		scheduler.Execute(engine::time::SimulationTime{game.CurrentTick(), engine::time::FixedStep{30}});
+	};
+	step();
+	const Engine::Math::FixedVector2 spot{Fixed::FromInt(700), Fixed::FromInt(600)};
+	step({From(0, commands::PlaceBeacon{spot}), From(1, commands::PlaceBeacon{{spot.x + Fixed::FromInt(80), spot.y}})});
+	const std::uint64_t placed = game.CurrentTick();
+	BOOST_TEST_REQUIRE(BeaconsOf(game, america).size() == 1u);
+	BOOST_TEST_REQUIRE(BeaconsOf(game, gla).size() == 1u);
+	const ecs::Entity own = BeaconsOf(game, america)[0];
+	const ecs::Entity enemy = BeaconsOf(game, gla)[0];
+	BOOST_TEST(std::ranges::any_of(messages.slots, [](const auto &slot) { return slot.shown && slot.text == u"Jason has placed a beacon."; }));
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "BeaconPlaced");
+	BOOST_TEST_REQUIRE(radar.last.has_value());
+	BOOST_TEST((radar.events[*radar.last].type == presentation::RadarEventType::Information));
+	BOOST_TEST(radar.events[*radar.last].createFrame == placed);
+	BOOST_TEST(eva.shouldPlay[*content::EvaMessageOf("BEACONDETECTED")]);
+	const auto *hidden = world.Side<presentation::BeaconLook>().Get(enemy);
+	BOOST_TEST_REQUIRE(hidden != nullptr);
+	BOOST_TEST(hidden->hidden == 1);
+	BOOST_TEST(world.Side<presentation::BeaconLook>().Get(own)->hidden == 0);
+
+	std::vector<std::uint64_t> seen;
+	for (int tick = 0; tick < 70; ++tick)
+	{
+		step();
+		for (const auto &event : radar.events)
+			if (event.active && event.type == presentation::RadarEventType::BeaconPulse && event.createFrame == game.CurrentTick())
+			{
+				seen.push_back(event.createFrame);
+				BOOST_TEST(event.dieFrame == event.createFrame + 15);
+			}
+	}
+	BOOST_TEST((seen == std::vector<std::uint64_t>{placed + 31, placed + 62}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

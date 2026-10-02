@@ -56,6 +56,7 @@ module;
 #include "GameClient/IMEManager.h"
 
 export module Engine.UI.WND.Runtime.Gadget.TextEntry;
+import std;
 
 #include "GameClient/Gadget.h"
 

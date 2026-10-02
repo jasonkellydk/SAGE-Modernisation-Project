@@ -1,7 +1,5 @@
-module;
-#include <memory>
-#include <string>
 export module engine.platform.libraries;
+import std;
 export import engine.platform.libraries.library;
 export namespace engine::platform
 {

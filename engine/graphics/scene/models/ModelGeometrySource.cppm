@@ -1,12 +1,6 @@
-module;
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <string>
-#include <utility>
-#include <vector>
 export module Graphics.Scene.Models.GeometrySource;
+import std;
+import engine.core.contracts;
 import Graphics.Scene.Models.SourceRevision;
 
 namespace Graphics {
@@ -18,7 +12,7 @@ export template<class Position, class Triangle, class Plane, class ShadeIndex = 
 class ModelGeometrySource final {
 public:
     void Reset(int polygons, int vertices) {
-        assert(polygons >= 0 && vertices >= 0);
+        engine::core::Assert(polygons >= 0 && vertices >= 0);
         if (polygons != 0 && vertices != 0) revision.Reset();
         else revision.Invalidate();
         name.reset();
@@ -43,7 +37,7 @@ public:
     }
 
     void Detach_Positions_And_Normals() {
-        assert(positions && normals);
+        engine::core::Assert(positions && normals);
         revision.Invalidate();
         positions = std::make_shared<std::vector<Position>>(*positions);
         normals = std::make_shared<std::vector<Position>>(*normals);

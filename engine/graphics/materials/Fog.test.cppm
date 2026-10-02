@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MaterialFogTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
 export module Graphics.Materials.Fog.Tests;
+import std;
 import Graphics.Materials.Fog;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Tests.Device;

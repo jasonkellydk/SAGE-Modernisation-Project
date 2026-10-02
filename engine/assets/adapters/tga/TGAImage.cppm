@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
 export module Assets.Adapters.TGA.Image;
+import std;
 export import Assets.Adapters.TGA.PixelEncoding;
 
 namespace Assets

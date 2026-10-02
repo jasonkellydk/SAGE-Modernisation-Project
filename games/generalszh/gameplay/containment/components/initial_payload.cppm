@@ -1,42 +1,29 @@
-module;
-#include <cstdint>
-#include <string_view>
 export module games.generalszh.gameplay.containment.components.initial_payload;
+import std;
+
 export import engine.ecs.core.component_registry;
 
-export namespace generalszh::containment
+// A TransportContain's InitialPayload not made yet (TransportContain::m_payloadCreated false): what (a definition index)
+// and how many; or an OverlordContain's PayloadTemplateName (`ownTeam`: made on the carrier's own team, as
+// OverlordContain::createPayload does, not its player's default team). Simulation state: checkpointed.
+export namespace generalszh::gameplay
 {
-inline constexpr std::string_view InitialPayloadStableKey =
-    "games.generalszh.containment.initial_payload";
-inline constexpr std::uint32_t InitialPayloadVersion = 1;
-
-enum class InitialPayloadPhase : std::uint8_t
+struct InitialPayload
 {
-    Pending,
-    Consumed,
-    Aborted
-};
-
-// The passengerDefinition is the stable BuildDefinition key, never a dense
-// catalog index. The immutable catalog supplies the spawn recipe at runtime.
-// Pending/Consumed/Aborted is authoritative state so zero-count and
-// death-before-action cases cannot repeat after a later tick or restore.
-struct InitialPayloadBinding
-{
-    std::uint32_t passengerDefinition{};
-    std::uint32_t count{};
-    InitialPayloadPhase phase{InitialPayloadPhase::Pending};
+	std::uint32_t definition{0};
+	std::uint32_t count{0};
+	std::uint32_t ownTeam{0};
+	std::uint32_t reserved{0};
 };
 }
 
 export namespace ecs
 {
-template<> struct ComponentTraits<generalszh::containment::InitialPayloadBinding>
+template<>
+struct ComponentTraits<generalszh::gameplay::InitialPayload>
 {
-    static constexpr std::string_view StableName =
-        generalszh::containment::InitialPayloadStableKey;
-    static constexpr std::uint32_t Version =
-        generalszh::containment::InitialPayloadVersion;
-    static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+	static constexpr std::string_view StableName = "generalszh.gameplay.initial_payload";
+	static constexpr std::uint32_t Version = 2;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }

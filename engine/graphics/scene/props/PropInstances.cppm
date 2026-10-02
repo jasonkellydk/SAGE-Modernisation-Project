@@ -1,15 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.Instances;
+import std;
+import engine.core.contracts;
 export import Graphics.Scene.Props.SkinPalettes;
 import Graphics.RHI;
 import Graphics.Resources.Handles.ResourceHandle;
@@ -93,7 +84,7 @@ public:
         PropInstanceData value;
         value.world = parameters.world;
         value.skin = m_palettes.Address(skin);
-        assert(!skin.Is_Valid() || value.skin[1] != 0);
+        engine::core::Assert(!skin.Is_Valid() || value.skin[1] != 0);
         std::memcpy(value.lighting.data(), &parameters.scene_ambient, value.lighting.size());
         auto* entry = m_entries.Resolve(handle);
         if (entry && entry->skin == skin && std::memcmp(&m_values[handle.Get_Index()], &value, sizeof(value)) == 0) return handle;
@@ -113,7 +104,7 @@ public:
     bool Retain(PropInstanceHandle handle) noexcept {
         auto* entry = m_entries.Resolve(handle);
         if (!entry) return false;
-        assert(entry->references != (std::numeric_limits<std::size_t>::max)());
+        engine::core::Assert(entry->references != (std::numeric_limits<std::size_t>::max)());
         ++entry->references;
         return true;
     }
@@ -129,7 +120,7 @@ public:
     }
     // Draw queues retain and validate generations before exposing GPU indices.
     const PropInstanceData& At_Index(std::uint32_t index) const noexcept {
-        assert(index<m_values.size());
+        engine::core::Assert(index<m_values.size());
         return m_values[index];
     }
     PropSkinPalettes& Palettes() noexcept { return m_palettes; }

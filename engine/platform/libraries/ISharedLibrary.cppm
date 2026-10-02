@@ -1,4 +1,5 @@
 export module engine.platform.libraries.library;
+import std;
 export namespace engine::platform
 {
 class ISharedLibrary

@@ -1,10 +1,5 @@
-module;
-#include <cmath>
-#include <span>
-#include <stdexcept>
-#include <vector>
-
 export module engine.navigation.movement.corridor.yield_paths;
+import std;
 
 export namespace navigation {
 struct YieldSegment { float x1,y1,x2,y2,width; };

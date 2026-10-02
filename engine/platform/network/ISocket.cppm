@@ -1,11 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <optional>
-#include <memory>
 export module engine.platform.network.socket;
+import std;
 export namespace engine::platform
 {
 struct NetworkEndpoint { std::string host; std::uint16_t port{}; };

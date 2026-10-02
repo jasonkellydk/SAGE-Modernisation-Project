@@ -1,12 +1,6 @@
-module;
-#include <array>
-#include <algorithm>
-#include <cassert>
-#include <vector>
-#include <cmath>
-#include <cstdint>
-#include <limits>
 export module Graphics.Scene.Models.ClipSampling;
+import std;
+import engine.core.contracts;
 export import Assets.Cache.Animations;
 import Graphics.Scene.Models.AnimationChannels;
 import Graphics.Scene.Models.AnimationRotation;
@@ -62,7 +56,7 @@ public:
         return true;
     }
     std::array<float,3> Translation(std::uint32_t index) const {
-        assert(index<m_bones.size());
+        engine::core::Assert(index<m_bones.size());
         const auto& bone=m_bones[index];
         if (m_fraction==0) return bone.first;
         std::array<float,3> result;
@@ -71,14 +65,14 @@ public:
         return result;
     }
     std::array<float,4> Rotation(std::uint32_t index) const {
-        assert(index<m_bones.size());
+        engine::core::Assert(index<m_bones.size());
         if (!m_bones[index].has_rotation) return {0,0,0,1};
         const auto& rotation=m_bones[index].rotation;
         if (m_fraction==0) return rotation.First();
         if (m_fraction==1) return rotation.Second();
         return rotation.Sample(m_fraction);
     }
-    bool Visible(std::uint32_t index) const { assert(index<m_bones.size());return m_bones[index].visible; }
+    bool Visible(std::uint32_t index) const { engine::core::Assert(index<m_bones.size());return m_bones[index].visible; }
 private:
     struct Bone {
         std::array<float,3> first{},second{};

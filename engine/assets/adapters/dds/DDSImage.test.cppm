@@ -1,15 +1,8 @@
 module;
 #define BOOST_TEST_MODULE DDSImageTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <vector>
 export module Assets.Adapters.DDS.Tests;
+import std;
 import Assets.Adapters.DDS;
 
 namespace

@@ -1,15 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <type_traits>
-#include <vector>
-
 export module Graphics.Scene.Models.Skinning;
+import std;
 
 export import Graphics.Resources.Handles.ResourceHandle;
 export import Graphics.Scene.RenderScene;

@@ -1,11 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Passes.Particles;
+import std;
 
 export import Graphics.RenderGraph.Execution;
 export import Graphics.Scene.ParticleDraw;

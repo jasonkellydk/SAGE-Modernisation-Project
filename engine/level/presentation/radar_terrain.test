@@ -1,0 +1,124 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+import engine.level.presentation.radar_terrain;
+
+using namespace engine::level;
+using namespace engine::level::presentation;
+
+BOOST_AUTO_TEST_SUITE(radar_terrain)
+
+// W3DRadar::buildTerrainTexture / interpolateColorForHeight / Radar::newMap on a flat 120 x 120 map: the playable area
+// is the extent (0.9375 a cell); flat ground keeps its tile's colour (the height range is widened by 0.1 each way, no
+// change at the middle; float truncation to bytes may lose one step); under 5 of water (x < 60) the radar water colour
+// is darkened fully (t = 1: 60% toward black, 140 -> 56, 255 -> 102); the average ground height is 0.
+BOOST_AUTO_TEST_CASE(legacy_parity_radar_terrain_shades_tiles_and_water)
+{
+	Heightfield field;
+	field.width = field.height = 13;
+	field.cellSize = Engine::Math::Fixed::FromInt(10);
+	field.heights.assign(13 * 13, Engine::Math::Fixed{});
+	field.playableExtents = {{12, 12}};
+	TerrainSurface surface;
+	surface.tiles.assign(13 * 13, 4); // tile 1, quarter 0
+	const std::vector<std::array<std::uint8_t, 3>> colors{{0, 0, 0}, {200, 100, 50}};
+	RadarTerrainSource source;
+	source.terrain = &field;
+	source.surface = &surface;
+	source.tileColors = &colors;
+	source.ground = [](float, float) { return 0.0f; };
+	source.water = [](float x, float) { return x < 60.0f ? std::optional<float>(5.0f) : std::nullopt; };
+	const RadarTerrain radar = BuildRadarTerrain(source);
+	BOOST_TEST(radar.extentWidth == 120.0f);
+	BOOST_TEST(radar.SampleX() == 0.9375f);
+	BOOST_TEST(radar.terrainAverageZ == 0.0f);
+	const auto pixel = [&](std::uint32_t x, std::uint32_t y) {
+		const std::size_t at = (static_cast<std::size_t>(y) * RadarCells + x) * 4;
+		return std::array<int, 3>{radar.pixels[at], radar.pixels[at + 1], radar.pixels[at + 2]};
+	};
+	const auto land = pixel(120, 64);
+	BOOST_TEST(std::abs(land[0] - 200) <= 1);
+	BOOST_TEST(std::abs(land[1] - 100) <= 1);
+	BOOST_TEST(std::abs(land[2] - 50) <= 1);
+	const auto water = pixel(10, 64);
+	BOOST_TEST(std::abs(water[0] - 56) <= 1);
+	BOOST_TEST(std::abs(water[2] - 102) <= 1);
+	const auto cell = WorldToRadar(radar, 60.0f, 500.0f);
+	BOOST_TEST(cell[0] == 64);
+	BOOST_TEST(cell[1] == 127); // kept on the radar
+}
+
+// legacy_parity: W3DRadar::refreshTerrain (REFRESH_RADAR: ScriptActions::doRadarRefresh) builds the terrain picture
+// again (buildTerrainTexture) from the ground and water as they are now: a cell that was dry land shows the darkened
+// radar water once the water over it has risen, and its land colour again once the water is gone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_refresh_draws_the_water_as_it_is_now)
+{
+	Heightfield field;
+	field.width = field.height = 13;
+	field.cellSize = Engine::Math::Fixed::FromInt(10);
+	field.heights.assign(13 * 13, Engine::Math::Fixed{});
+	field.playableExtents = {{12, 12}};
+	TerrainSurface surface;
+	surface.tiles.assign(13 * 13, 4);
+	const std::vector<std::array<std::uint8_t, 3>> colors{{0, 0, 0}, {200, 100, 50}};
+	std::optional<float> level;
+	RadarTerrainSource source;
+	source.terrain = &field;
+	source.surface = &surface;
+	source.tileColors = &colors;
+	source.ground = [](float, float) { return 0.0f; };
+	source.water = [&level](float x, float) { return x < 60.0f ? level : std::nullopt; };
+	const auto red = [](const RadarTerrain &radar) { return static_cast<int>(radar.pixels[(static_cast<std::size_t>(64) * RadarCells + 10) * 4]); };
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 200) <= 1);
+	level = 5.0f;
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 56) <= 1);
+	level.reset();
+	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 200) <= 1);
+}
+
+// legacy_parity: W3DRadar::buildTerrainTexture over a bridge (TerrainLogic::findBridgeAt at the cell's point, its object's
+// body not RUBBLE: workingBridge): the cell is not water even over water; every sample takes the bridge template's
+// RadarColor (Roads.ini R:192 G:192 B:192: 192 / 255) shaded for the bridge's height (the average of its corners' z,
+// here 0 on flat ground: unchanged; float truncation to bytes may lose one step). A cell whose own point is off the
+// bridge is drawn as before even with a neighbour on it (water: 140 -> 56). A broken bridge (rubble) is not drawn.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_standing_bridge_shows_its_radar_colour)
+{
+	Heightfield field;
+	field.width = field.height = 13;
+	field.cellSize = Engine::Math::Fixed::FromInt(10);
+	field.heights.assign(13 * 13, Engine::Math::Fixed{});
+	field.playableExtents = {{12, 12}};
+	TerrainSurface surface;
+	surface.tiles.assign(13 * 13, 4);
+	const std::vector<std::array<std::uint8_t, 3>> colors{{0, 0, 0}, {200, 100, 50}};
+	bool broken = false;
+	RadarTerrainSource source;
+	source.terrain = &field;
+	source.surface = &surface;
+	source.tileColors = &colors;
+	source.ground = [](float, float) { return 0.0f; };
+	source.water = [](float x, float) { return x < 60.0f ? std::optional<float>(5.0f) : std::nullopt; };
+	source.bridge = [&broken](float x, float) -> std::optional<RadarDeck> {
+		if (broken || x < 40.0f || x > 80.0f)
+			return std::nullopt;
+		return RadarDeck{{192.0f / 255.0f, 192.0f / 255.0f, 192.0f / 255.0f}, 0.0f};
+	};
+	const auto pixel = [](const RadarTerrain &radar, std::uint32_t x, std::uint32_t y) {
+		const std::size_t at = (static_cast<std::size_t>(y) * RadarCells + x) * 4;
+		return std::array<int, 3>{radar.pixels[at], radar.pixels[at + 1], radar.pixels[at + 2]};
+	};
+	const RadarTerrain radar = BuildRadarTerrain(source);
+	for (const int channel : pixel(radar, 50, 64)) // world x 46.875, over the water
+		BOOST_TEST(std::abs(channel - 192) <= 1);
+	for (const int channel : pixel(radar, 70, 64)) // world x 65.625, over land
+		BOOST_TEST(std::abs(channel - 192) <= 1);
+	BOOST_TEST(std::abs(pixel(radar, 42, 64)[0] - 56) <= 1); // world x 39.375: off it, its neighbour on it
+	broken = true;
+	BOOST_TEST(std::abs(pixel(BuildRadarTerrain(source), 50, 64)[0] - 56) <= 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

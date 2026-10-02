@@ -1,16 +1,8 @@
 module;
 #define BOOST_TEST_MODULE W3DAnimationChannelTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <bit>
-#include <cmath>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <limits>
-#include <string>
-#include <vector>
 export module Assets.Adapters.W3D.AnimationChannels.Tests;
+import std;
 import Assets.Adapters.W3D.AnimationChannels;
 import Assets.Adapters.W3D.Chunks;
 import Assets.ModelRig;

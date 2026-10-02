@@ -1,10 +1,8 @@
 module;
 #define BOOST_TEST_MODULE GeneralsPropSkinningTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <vector>
-#include <span>
 export module Graphics.Tests.PropSkinning;
+import std;
 import Graphics.Scene.Props.Skinning;
 import Graphics.Scene.RenderScene;
 

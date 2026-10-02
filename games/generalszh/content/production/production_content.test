@@ -1,0 +1,77 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.production.production_content;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.objects.model_draw;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(production_content)
+
+BOOST_AUTO_TEST_CASE(the_war_factory_opens_its_door_and_runs_on_power)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+
+	const ObjectDefinition &factory = *objects.Find("ChinaWarFactory");
+	const auto production = ReadObjectProduction(factory, step);
+	BOOST_TEST_REQUIRE(production.has_value());
+	BOOST_TEST(production->doors == 1u);
+	BOOST_TEST(production->doorOpenTicks == 120u); // 4 s
+	BOOST_TEST(production->doorWaitTicks == 60u);
+	BOOST_TEST(production->doorCloseTicks == 150u);
+	BOOST_TEST(production->completeTicks == 45u);
+	BOOST_TEST(factory.energyProduction == -1);
+	BOOST_TEST(objects.Find("ChinaPowerPlant")->energyProduction == 10);
+
+	// Tech: the Overlord needs a war factory and a propaganda center; the MiG an airfield.
+	const ObjectDefinition &overlord = *objects.Find("ChinaTankOverlord");
+	BOOST_TEST_REQUIRE(overlord.prerequisiteObjects.size() == 2u);
+	BOOST_TEST(overlord.prerequisiteObjects[0].front() == "ChinaWarFactory");
+	BOOST_TEST(overlord.prerequisiteObjects[1].front() == "ChinaPropagandaCenter");
+	BOOST_TEST_REQUIRE(objects.Find("ChinaJetMIG")->prerequisiteObjects.size() == 1u);
+	BOOST_TEST(objects.Find("ChinaJetMIG")->prerequisiteObjects[0].front() == "ChinaAirfield");
+
+	// The supply truck's six tires turn at 0.2; the Gattling tank's treads roll at 2 a second.
+	const auto tires = ReadTruckTires(*objects.Find("ChinaVehicleSupplyTruck"));
+	BOOST_TEST_REQUIRE(tires.has_value());
+	BOOST_TEST(tires->bones.size() == 6u);
+	BOOST_TEST(tires->bones.front() == "Tire01");
+	BOOST_TEST((tires->steered == std::vector<std::string>{"Tire01", "Tire02"})); // the front ones steer
+	BOOST_TEST((tires->rotationMultiplier == Engine::Math::Fixed::FromRatio(2, 10)));
+	const auto treads = ReadTankTreads(*objects.Find("ChinaTankGattling"));
+	BOOST_TEST_REQUIRE(treads.has_value());
+	BOOST_TEST(treads->rate.Floor() == 2);
+	// W3DPoliceCarDraw is a W3DTruckDraw: the police car's four tires turn at 0.2 too.
+	const auto police = ReadTruckTires(*objects.Find("CINE_PoliceCar"));
+	BOOST_TEST_REQUIRE(police.has_value());
+	BOOST_TEST(police->bones.size() == 4u);
+	BOOST_TEST((police->rotationMultiplier == Engine::Math::Fixed::FromRatio(2, 10)));
+	// Shadow (TheShadowNames bits): a tank's volume (2), a ranger's and a tree's decal (1).
+	BOOST_TEST(objects.Find("AmericaTankCrusader")->shadow == 2u);
+	BOOST_TEST(objects.Find("AmericaInfantryRanger")->shadow == 1u);
+	BOOST_TEST(objects.Find("GenericTree")->shadow == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

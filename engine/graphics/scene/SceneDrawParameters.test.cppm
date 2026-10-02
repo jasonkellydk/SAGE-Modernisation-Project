@@ -1,13 +1,8 @@
 module;
 #define BOOST_TEST_MODULE SceneDrawParametersTests
 #include <boost/test/included/unit_test.hpp>
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <vector>
 export module Graphics.Scene.DrawParameters.Tests;
+import std;
 import Graphics.Scene.DrawParameters;
 import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.MaterialPassQueue;

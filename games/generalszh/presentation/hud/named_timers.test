@@ -1,0 +1,52 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.hud.algorithms.named_timer_lines;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(named_timers)
+
+// legacy_parity: InGameUI::addNamedTimer / removeNamedTimer / showNamedTimerDisplay and postDraw's named timers: kept in
+// name order; a counter shows its value, a countdown its frames left as m:ss (m:0s under ten seconds, 29 frames still
+// 0:00); nothing on frame 0 or while hidden; a ready countdown flashes, flipping each flash duration (15 ticks) from the
+// first frame it is ready; adding one of the same name replaces it.
+BOOST_AUTO_TEST_CASE(legacy_parity_counters_and_countdowns_show_in_name_order_and_flash_when_ready)
+{
+	NamedTimers timers;
+	const std::function<std::int64_t(std::string_view)> counter = [](std::string_view name) -> std::int64_t {
+		return name == "b" ? 3725 : name == "a" ? 7 : name == "c" ? 29 : 0;
+	};
+	AddNamedTimer(timers, "b", u"Time:", true);
+	AddNamedTimer(timers, "a", u"Kills", false);
+	AddNamedTimer(timers, "c", u"Soon", true);
+	BOOST_TEST(NamedTimerLines(timers, counter, 0).empty());
+	auto lines = NamedTimerLines(timers, counter, 1);
+	BOOST_TEST_REQUIRE(lines.size() == 3u);
+	BOOST_TEST((lines[0].text == u"Kills 7"));
+	BOOST_TEST((lines[1].text == u"Time: 2:04")); // 3725 frames: 124 seconds
+	BOOST_TEST(!lines[1].ready);
+	BOOST_TEST((lines[2].text == u"Soon 0:00"));
+	BOOST_TEST(lines[2].ready);
+	BOOST_TEST(!lines[2].flashColor);
+	StepNamedTimerFlash(timers, counter, 15);
+	BOOST_TEST(NamedTimerLines(timers, counter, 15)[2].flashColor);
+	StepNamedTimerFlash(timers, counter, 20);
+	BOOST_TEST(NamedTimerLines(timers, counter, 20)[2].flashColor);
+	StepNamedTimerFlash(timers, counter, 30);
+	BOOST_TEST(!NamedTimerLines(timers, counter, 30)[2].flashColor);
+	AddNamedTimer(timers, "a", u"Score", false);
+	RemoveNamedTimer(timers, "b");
+	lines = NamedTimerLines(timers, counter, 31);
+	BOOST_TEST_REQUIRE(lines.size() == 2u);
+	BOOST_TEST((lines[0].text == u"Score 7"));
+	timers.shown = false;
+	BOOST_TEST(NamedTimerLines(timers, counter, 32).empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

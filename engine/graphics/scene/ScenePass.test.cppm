@@ -2,11 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE ScenePassTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
-#include <vector>
 
 export module Graphics.Scene.Pass.Tests;
+import std;
 
 import Graphics.Scene.Pass;
 

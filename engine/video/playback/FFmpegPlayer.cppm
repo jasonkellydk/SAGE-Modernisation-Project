@@ -1,9 +1,5 @@
-module;
-
-#include <cstddef>
-#include <string_view>
-
 export module Video.FFmpeg.Player;
+import std;
 
 export import Video.FFmpeg.Decoder;
 export import Video.Playback;

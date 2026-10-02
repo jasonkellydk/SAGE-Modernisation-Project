@@ -1,12 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Primitives.Geometry;
+import std;
 export import Graphics.Scene.Props.Geometry;
 
 namespace Graphics

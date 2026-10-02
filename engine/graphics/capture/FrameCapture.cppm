@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <vector>
 export module Graphics.Capture.FrameCapture;
+import std;
 export import Graphics.RHI;
 export import Video.Frame;
 namespace Graphics

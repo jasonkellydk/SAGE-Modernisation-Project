@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <cmath>
-#include <span>
-
 export module Graphics.Passes.PostProcess;
+import std;
 
 export import Graphics.RenderGraph.Execution;
 export import Graphics.RHI;

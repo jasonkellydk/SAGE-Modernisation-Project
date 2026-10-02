@@ -1,11 +1,5 @@
-module;
-#include <array>
-#include <cstdint>
-#include <limits>
-#include <string>
-#include <utility>
-#include <vector>
 export module Assets.Animations;
+import std;
 export import Assets.ModelRig;
 
 namespace Assets {

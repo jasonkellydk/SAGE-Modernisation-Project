@@ -1,13 +1,7 @@
 module;
 #include <SDL3/SDL.h>
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <span>
-#include <utility>
-#include <vector>
 export module Graphics.Cursors.Cursor;
+import std;
 export import Assets.Images.Preparation;
 
 namespace Graphics

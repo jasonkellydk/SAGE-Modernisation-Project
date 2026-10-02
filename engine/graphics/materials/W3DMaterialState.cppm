@@ -1,4 +1,5 @@
 export module Graphics.Materials.W3DState;
+import std;
 import Graphics.Materials.State;
 import Assets.Adapters.W3D.Materials;
 

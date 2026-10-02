@@ -1,17 +1,5 @@
-module;
-
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <string>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Sphere;
+import std;
 
 import Assets.Spheres;
 import Assets.Math;

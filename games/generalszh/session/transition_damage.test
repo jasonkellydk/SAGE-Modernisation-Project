@@ -1,0 +1,308 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.health.components.pending_damage;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.ecs.query.query;
+import Engine.Core.Math.FixedAngle;
+
+// TransitionDamageFX's object creation lists on real data (TransitionDamageFX.cpp onBodyDamageStateChange and
+// getLocalEffectPos; ActiveBody.cpp attemptDamage). No shipped object has a <State>OCL<n> slot, so the tests give a
+// shipped building some, as its INI would (ReadTransitionCreations reads them: transition_damage_content.test).
+using namespace generalszh;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+std::vector<ecs::Entity> Named(session::Session &game, std::string_view name)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<engine::gameplay::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.DefinitionName(refs[row].index) == name)
+				found.push_back(entities[row]);
+	});
+	return found;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(transition_damage)
+
+// Legacy parity (TransitionDamageFX::onBodyDamageStateChange, ActiveBody::attemptDamage): a Mogadishu tower (2000
+// health; UnitDamagedThreshold 0.7, UnitReallyDamagedThreshold 0.35) given creation lists for each worse state, hit by a
+// Ranger with UNRESISTABLE damage:
+// - 700 (2000 -> 1300, damaged): its Damaged list runs in the hit's own tick, at its place turned and moved with it; a
+//   second module taking every damage type but UNRESISTABLE (DamageOCLTypes) runs nothing;
+// - healed whole (better: nothing), then 700 again: it runs again;
+// - 700 more (really damaged) once the Ranger is gone (findObjectByID fails): nothing;
+// - healed whole, 1400 from another Ranger (2000 -> 600: straight to really damaged): only its ReallyDamaged list, at one
+//   of its random bone's three places, never the Damaged one;
+// - 5000 (rubble): only its Rubble list.
+// The same on 1 and 4 workers, and a checkpoint taken after the second hit carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_building_runs_its_transition_creation_lists_on_getting_worse)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace gp = engine::gameplay;
+	const std::uint32_t unresistable = *content::DamageTypeIndex("UNRESISTABLE");
+	const Engine::Math::FixedVector3 damagedAt{Fixed::FromInt(10), Fixed::FromInt(4), Fixed::FromInt(20)};
+	const std::vector<Engine::Math::FixedVector3> family{{Fixed::FromInt(-12), Fixed::FromInt(0), Fixed::FromInt(30)},
+		{Fixed::FromInt(0), Fixed::FromInt(12), Fixed::FromInt(30)}, {Fixed::FromInt(12), Fixed::FromInt(-6), Fixed::FromInt(30)}};
+	const Engine::Math::FixedVector3 rubbleAt{Fixed::FromInt(-5), Fixed::FromInt(-5), Fixed{}};
+	content::GameContent modded = shell.game;
+	{
+		content::TransitionCreations creations;
+		content::TransitionCreationModule &plays = creations.modules.emplace_back();
+		plays.slots[1][0] = {"SUPERWEAPON_RadarVanScan", {damagedAt}};
+		plays.slots[2][1] = {"SUPERWEAPON_RadarVanScan", family};
+		plays.slots[3][0] = {"SUPERWEAPON_RadarVanScan", {rubbleAt}};
+		content::TransitionCreationModule &filtered = creations.modules.emplace_back();
+		filtered.types = ~(std::uint64_t{1} << unresistable);
+		for (std::size_t state = 1; state < 4; ++state)
+			filtered.slots[state][0] = {"SUPERWEAPON_SpySatellite", {Engine::Math::FixedVector3{}}};
+		modded.transitionCreations["MogadishuTower04"] = std::move(creations);
+	}
+
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity tower, ranger, other;
+		std::vector<ecs::Entity> seen;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, modded, match->Options(workers));
+		made.game->Tick();
+		made.tower = made.game->Place("MogadishuTower04", match->At(300, 300), {}, 0);
+		made.ranger = made.game->Place("AmericaInfantryRanger", match->At(200, 250), {}, match->Team(*made.game, 0));
+		made.other = made.game->Place("AmericaInfantryRanger", match->At(200, 350), {}, match->Team(*made.game, 0));
+		made.game->Tick();
+		return made;
+	};
+	// The pings (and satellite pings) made since last asked.
+	const auto fresh = [&](Game &g, std::string_view name) {
+		std::vector<ecs::Entity> made;
+		for (const ecs::Entity entity : Named(*g.game, name))
+			if (std::ranges::find(g.seen, entity) == g.seen.end())
+			{
+				g.seen.push_back(entity);
+				made.push_back(entity);
+			}
+		return made;
+	};
+	const auto hit = [&](Game &g, ecs::Entity source, int amount) {
+		auto &w = g.game->World();
+		w.Add<gp::PendingDamage>(g.tower);
+		*w.Get<gp::PendingDamage>(g.tower) = gp::PendingDamage{source, Fixed::FromInt(amount), unresistable, 0};
+	};
+	const auto heal = [&](Game &g) {
+		gp::Health &health = *g.game->World().Get<gp::Health>(g.tower);
+		health.current = health.maximum;
+	};
+	// Where a place in the tower's frame is in the world (transformBoneToWorld).
+	const auto world = [&](Game &g, const Engine::Math::FixedVector3 &local) {
+		const auto &frame = *g.game->World().Get<gp::Transform>(g.tower);
+		const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+		return Engine::Math::FixedVector2{frame.position.x + local.x * c - local.y * s, frame.position.y + local.x * s + local.y * c};
+	};
+	const auto at = [&](Game &g, ecs::Entity entity) { return g.game->World().Get<gp::Transform>(entity)->position.XY(); };
+
+	Game one = stage(1), four = stage(4);
+	BOOST_TEST((one.game->World().Get<gp::Health>(one.tower)->maximum == Fixed::FromInt(2000)));
+	for (Game *g : {&one, &four})
+	{
+		fresh(*g, "RadarVanPing");
+		fresh(*g, "SpySatellitePing");
+	}
+	Game three; // restored from a checkpoint of `one` after the second hit
+	const auto tickBoth = [&] {
+		one.game->Tick();
+		four.game->Tick();
+		if (three.game)
+			three.game->Tick();
+	};
+	for (int n = 0; n < 30; ++n)
+		tickBoth();
+	for (Game *g : {&one, &four})
+		BOOST_TEST(fresh(*g, "RadarVanPing").empty());
+
+	// 700: damaged, in the hit's own tick.
+	for (Game *g : {&one, &four})
+		hit(*g, g->ranger, 700);
+	tickBoth();
+	BOOST_TEST((one.game->World().Get<gp::Health>(one.tower)->current == Fixed::FromInt(1300)));
+	for (Game *g : {&one, &four})
+	{
+		const auto pings = fresh(*g, "RadarVanPing");
+		BOOST_TEST_REQUIRE(pings.size() == 1u);
+		BOOST_TEST((at(*g, pings[0]) == world(*g, damagedAt)));
+		BOOST_TEST(fresh(*g, "SpySatellitePing").empty()); // DamageOCLTypes
+	}
+	tickBoth();
+	BOOST_TEST(fresh(one, "RadarVanPing").empty());
+
+	// Healed whole (getting better plays nothing), then 700 again.
+	for (Game *g : {&one, &four})
+		heal(*g);
+	tickBoth();
+	BOOST_TEST(fresh(one, "RadarVanPing").empty());
+	for (Game *g : {&one, &four})
+		hit(*g, g->ranger, 700);
+	tickBoth();
+	for (Game *g : {&one, &four})
+		BOOST_TEST(fresh(*g, "RadarVanPing").size() == 1u);
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+	three.game = session::Session::Restore(match->skirmish.level, modded, match->Options(1), one.game->Checkpoint());
+	BOOST_TEST_REQUIRE(three.game != nullptr);
+	BOOST_TEST((three.game->StateHash() == one.game->StateHash()));
+	three.tower = one.tower, three.ranger = one.ranger, three.other = one.other, three.seen = one.seen;
+
+	// The Ranger gone: 700 more (really damaged) runs nothing.
+	for (Game *g : {&one, &four, &three})
+	{
+		gameplay::RetireNow(g->game->Game(), {g->ranger});
+		hit(*g, g->ranger, 700);
+	}
+	tickBoth();
+	BOOST_TEST((one.game->World().Get<gp::Health>(one.tower)->current == Fixed::FromInt(600)));
+	for (Game *g : {&one, &four, &three})
+		BOOST_TEST(fresh(*g, "RadarVanPing").empty());
+
+	// Healed whole, then 1400 from the other Ranger: straight to really damaged.
+	for (Game *g : {&one, &four, &three})
+		heal(*g);
+	tickBoth();
+	for (Game *g : {&one, &four, &three})
+		hit(*g, g->other, 1400);
+	tickBoth();
+	std::optional<Engine::Math::FixedVector2> picked;
+	for (Game *g : {&one, &four, &three})
+	{
+		const auto pings = fresh(*g, "RadarVanPing");
+		BOOST_TEST_REQUIRE(pings.size() == 1u);
+		const auto where = at(*g, pings[0]);
+		BOOST_TEST(std::ranges::any_of(family, [&](const auto &place) { return where == world(*g, place); }));
+		if (picked)
+			BOOST_TEST((where == *picked)); // the same pick on 4 workers and after the checkpoint
+		picked = where;
+	}
+
+	// 5000: rubble, only its Rubble list.
+	for (Game *g : {&one, &four, &three})
+		hit(*g, g->other, 5000);
+	tickBoth();
+	for (Game *g : {&one, &four, &three})
+	{
+		const auto pings = fresh(*g, "RadarVanPing");
+		BOOST_TEST_REQUIRE(pings.size() == 1u);
+		BOOST_TEST((at(*g, pings[0]) == world(*g, rubbleAt)));
+		BOOST_TEST(fresh(*g, "SpySatellitePing").empty());
+	}
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+	BOOST_TEST((three.game->StateHash() == one.game->StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,194 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+import engine.gameplay.rts.economy.systems.auto_deposit_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// Players: 0 the neutral one (nameless), 1 and 2 playable. Upgrade 3: the boost's.
+struct Economy
+{
+	explicit Economy(std::size_t workers)
+	{
+		world.RegisterComponent<AutoDeposit>();
+		world.RegisterComponent<Owner>();
+		world.RegisterComponent<Transform>();
+		world.RegisterComponent<ConstructionProgress>();
+		world.FinalizeComponents();
+		TeamRoster &roster = world.EmplaceResource<TeamRoster>();
+		roster.AddPlayer({});
+		roster.AddPlayer({"Player_1"});
+		roster.AddPlayer({"Player_2"});
+		world.EmplaceResource<PlayerUpgrades>();
+		world.EmplaceResource<PlayerMoney>().Resize(3);
+		world.EmplaceResource<AutoDeposits>();
+		registry.Register(system);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	// The shipped TechOilDerrick: DepositTiming 12 s (360 ticks), DepositAmount 200, InitialCaptureBonus 1000,
+	// UpgradedBoost Upgrade_AmericaSupplyLines 20; made on tick 0 for `player`.
+	ecs::Entity Derrick(std::uint32_t player)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<AutoDeposit>(entity);
+		world.Add<Owner>(entity);
+		world.Add<Transform>(entity);
+		AutoDeposit &deposit = *world.Get<AutoDeposit>(entity);
+		deposit.period = 360;
+		deposit.nextTick = 360;
+		deposit.amount = 200;
+		deposit.captureBonus = 1000;
+		deposit.boostUpgrade = 3;
+		deposit.boost = 20;
+		deposit.player = player;
+		world.Get<Owner>(entity)->player = player;
+		return entity;
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+	void RunTo(std::uint64_t until)
+	{
+		while (tick < until)
+			Step();
+	}
+	std::int64_t Money(std::uint32_t player) { return world.Resource<PlayerMoney>().Balance(player); }
+
+	ecs::World world{ecs::WorldConfig{4}};
+	AutoDepositSystem system;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(auto_deposit)
+
+// AutoDepositUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AutoDepositUpdate.cpp): a
+// player's derrick pays 200 on tick 360 and every 360 after, not before; with Upgrade_AmericaSupplyLines, 220; unfinished
+// it pays nothing but keeps its rhythm; each payment is listed 10 above it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_derrick_pays_every_period)
+{
+	Economy economy(2);
+	const ecs::Entity derrick = economy.Derrick(1);
+	economy.world.Get<Transform>(derrick)->position = {Fixed::FromInt(50), Fixed::FromInt(60), Fixed::FromInt(5)};
+	economy.RunTo(359);
+	BOOST_TEST(economy.Money(1) == 0);
+	economy.Step(); // 360
+	BOOST_TEST(economy.Money(1) == 200);
+	const auto &paid = economy.world.Resource<AutoDeposits>().list;
+	BOOST_TEST_REQUIRE(paid.size() == 1u);
+	BOOST_TEST(paid[0].amount == 200);
+	BOOST_TEST((paid[0].position.z == Fixed::FromInt(15)));
+	economy.RunTo(719);
+	BOOST_TEST(economy.Money(1) == 200);
+	economy.world.Resource<PlayerUpgrades>().Grant(1, 3);
+	economy.Step(); // 720
+	BOOST_TEST(economy.Money(1) == 420);
+	economy.world.Add<ConstructionProgress>(derrick);
+	economy.world.Get<ConstructionProgress>(derrick)->percent = Fixed::FromInt(50);
+	economy.RunTo(1080);
+	BOOST_TEST(economy.Money(1) == 420);
+	economy.world.Get<ConstructionProgress>(derrick)->percent = Fixed::FromInt(100);
+	economy.RunTo(1440);
+	BOOST_TEST(economy.Money(1) == 640);
+}
+
+// A map's neutral derrick pays no one; its first payday (tick 360) arms the capture bonus. Captured on tick 500 by player
+// 1: 1000 at once and its next payday a period on (tick 860); captured back by player 2 on 900: no bonus again, and its
+// period restarts (1260). One captured before its first payday gets no bonus.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_captured_derrick_pays_its_bonus_once)
+{
+	Economy economy(1);
+	const ecs::Entity derrick = economy.Derrick(0);
+	const ecs::Entity early = economy.Derrick(0);
+	economy.RunTo(400);
+	BOOST_TEST(economy.Money(0) == 0);
+	economy.RunTo(499);
+	economy.world.Get<Owner>(derrick)->player = 1;
+	economy.Step(); // 500
+	BOOST_TEST(economy.Money(1) == 1000);
+	BOOST_TEST(economy.world.Resource<AutoDeposits>().list.at(0).capture == 1u);
+	economy.RunTo(859);
+	BOOST_TEST(economy.Money(1) == 1000);
+	economy.Step(); // 860
+	BOOST_TEST(economy.Money(1) == 1200);
+	economy.RunTo(899);
+	economy.world.Get<Owner>(derrick)->player = 2;
+	economy.Step(); // 900
+	BOOST_TEST(economy.Money(2) == 0);
+	economy.RunTo(1259);
+	BOOST_TEST(economy.Money(2) == 0);
+	economy.Step(); // 1260
+	BOOST_TEST(economy.Money(2) == 200);
+
+	Economy fresh(1);
+	const ecs::Entity quick = fresh.Derrick(0);
+	fresh.RunTo(99);
+	fresh.world.Get<Owner>(quick)->player = 1;
+	fresh.Step(); // 100: its first payday is now 460, no bonus armed yet
+	BOOST_TEST(fresh.Money(1) == 0);
+	fresh.RunTo(460);
+	BOOST_TEST(fresh.Money(1) == 200);
+	(void)early;
+}
+
+// A display-only deposit (ActualMoney No: a fake black market) lists its payment and pays nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fake_deposit_only_shows)
+{
+	Economy economy(1);
+	const ecs::Entity fake = economy.Derrick(1);
+	economy.world.Get<AutoDeposit>(fake)->actualMoney = 0;
+	economy.RunTo(360);
+	BOOST_TEST(economy.Money(1) == 0);
+	BOOST_TEST(economy.world.Resource<AutoDeposits>().list.size() == 1u);
+}
+
+// The same on one worker as on four, and after a checkpoint.
+BOOST_AUTO_TEST_CASE(auto_deposits_are_the_same_on_any_number_of_workers_and_after_a_checkpoint)
+{
+	const auto run = [](std::size_t workers) {
+		Economy economy(workers);
+		for (std::uint32_t index = 0; index < 40; ++index)
+			economy.Derrick(index % 3);
+		std::vector<ecs::StateHashValue> hashes;
+		for (int step = 0; step < 800; ++step)
+		{
+			economy.Step();
+			if (step % 50 == 0)
+				hashes.push_back(economy.world.StateHash());
+		}
+		return std::pair{hashes, economy.Money(1)};
+	};
+	BOOST_TEST((run(1) == run(4)));
+
+	Economy saved(2);
+	const ecs::Entity derrick = saved.Derrick(1);
+	saved.RunTo(100);
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Economy loaded(3);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	saved.RunTo(400);
+	loaded.RunTo(400);
+	BOOST_TEST(loaded.world.StateHash() == saved.world.StateHash());
+	BOOST_TEST(loaded.world.Get<AutoDeposit>(derrick)->nextTick == 720u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

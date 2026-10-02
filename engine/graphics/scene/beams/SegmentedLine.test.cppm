@@ -1,19 +1,11 @@
 module;
 
-
 #define BOOST_TEST_MODULE SegmentedLineTests
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Beams.SegmentedLine.Tests;
+import std;
 
 import Graphics.Scene.Beams.SegmentedLine;
 import Graphics.Scene.Beams.RibbonPipeline;

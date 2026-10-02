@@ -1,0 +1,42 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.shell.lan.lan_tooltips;
+
+using namespace generalszh::shell;
+
+BOOST_AUTO_TEST_SUITE(lan_tooltips)
+
+// GeneralsMD/Code/GameEngine/Source/GameClient/GUI/GUICallbacks/Menus/LanGameOptionsMenu.cpp setLANPlayerTooltip and the
+// two playerTooltip callbacks (LanLobbyMenu.cpp over the players' list, LanGameOptionsMenu.cpp over a slot's player box):
+// TOOLTIP:LANPlayer with the login and machine when either is known, else nothing set; off the list's rows nothing; a slot
+// without a human player an empty tooltip.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_lan_player_tooltip_names_its_login_and_machine)
+{
+	const auto known = LanPlayerTooltip("jason", "DESKTOP");
+	BOOST_TEST_REQUIRE(known.has_value());
+	BOOST_TEST(known->label == "TOOLTIP:LANPlayer");
+	BOOST_TEST((known->arguments == std::vector<std::u16string>{u"jason", u"DESKTOP"}));
+	BOOST_TEST(!LanPlayerTooltip("", "").has_value());
+	BOOST_TEST(LanPlayerTooltip("", "DESKTOP").has_value());
+	BOOST_TEST(!LanLobbyPlayerTooltip(-1, 0, std::pair<std::string, std::string>{"a", "b"}).has_value());
+	BOOST_TEST(!LanLobbyPlayerTooltip(0, -1, std::pair<std::string, std::string>{"a", "b"}).has_value());
+	BOOST_TEST(LanLobbyPlayerTooltip(0, 0, std::pair<std::string, std::string>{"a", "b"}).has_value());
+	const auto empty = LanSlotPlayerTooltip(std::nullopt);
+	BOOST_TEST_REQUIRE(empty.has_value());
+	BOOST_TEST(empty->label.empty());
+}
+
+// GeneralsMD/.../WOLGameSetupMenu.cpp gameAcceptTooltip: TOOLTIP:GameAcceptance strictly inside the accept mark's window
+// (a 20 x 10 window at (100, 50): 101..119 across, 51..59 down), nothing on its edges.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_accept_mark_tells_its_meaning_inside_its_edges)
+{
+	BOOST_TEST(GameAcceptTooltip(110, 55, 100, 50, 20, 10)->label == "TOOLTIP:GameAcceptance");
+	BOOST_TEST(GameAcceptTooltip(101, 51, 100, 50, 20, 10).has_value());
+	BOOST_TEST(!GameAcceptTooltip(100, 55, 100, 50, 20, 10).has_value());
+	BOOST_TEST(!GameAcceptTooltip(120, 55, 100, 50, 20, 10).has_value());
+	BOOST_TEST(!GameAcceptTooltip(110, 60, 100, 50, 20, 10).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,451 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <cmath>
+#include <optional>
+#include <array>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <algorithm>
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import games.generalszh.gameplay.combat_drop.components.combat_drop;
+import games.generalszh.gameplay.combat_drop.resources.deferred_orders;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.commands.game_commands;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.spatial.components.off_map;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.gameplay.common.spatial.algorithms.geometry_collision;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.containment.components.transport;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// ChinookAIUpdate's combat drop and AIRappelState (ChinookAIUpdate.cpp, AIStates.cpp) on the shipped Alpine Assault.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// Two human seats with nobody at them on Alpine Assault.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 2);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+}
+
+BOOST_AUTO_TEST_SUITE(combat_drop)
+
+namespace
+{
+// The frames a rope takes to be all the way out (ChinookCombatDropState::update: ropeSpeed += |g| each frame from 0,
+// ropeLen += ropeSpeed from 1): the first n with 1 + |g| n (n + 1) / 2 >= its full length, in the original's floats.
+int RopeFrames(float full)
+{
+	const float g = 64.0f / 900.0f;
+	float speed = 0.0f, length = 1.0f;
+	int frames = 0;
+	while (length < full)
+	{
+		speed += g;
+		length += speed;
+		++frames;
+	}
+	return frames;
+}
+
+// The physics steps a rappeller takes to come down to `to` (AIRappelState::update holds its fall to 1 a frame, then
+// PhysicsBehavior adds gravity and moves it), in the original's floats.
+int RappelSteps(float from, float to)
+{
+	const float g = -64.0f / 900.0f;
+	float z = from, vz = 0.0f;
+	int steps = 0;
+	while (z > to)
+	{
+		vz = std::max(vz, -1.0f);
+		vz += g;
+		z += vz;
+		++steps;
+	}
+	return steps;
+}
+}
+
+// Legacy parity (ChinookAIUpdate.cpp: privateCombatDrop, ChinookMoveToBldgState, ChinookCombatDropState::onEnter /
+// update / onExit; AIStates.cpp: AIRappelState; the shipped AmericaVehicleChinook: NumRopes 4, PerRopeDelayMin 900 ms =
+// 27 frames, Max 1500 ms = 45, RopeFinalHeight 10, RappelSpeed 30 = 1 a frame, WaitForRopesToDrop): a Chinook with five
+// Rangers aboard told to combat drop at a spot flies there at its own height (100: the spot is no building) and drops
+// on arriving there (within 3 of that height), the tick E its move is over:
+//   it is DISABLED_HELD and stops where it is; each of its 4 ropes (RopeStart01..04, RopeEnd01..04) reaches RopeFinalHeight
+//     over the ground below it; rope i's first Ranger goes out through its door and is put at the rope's end on tick
+//     E + n_i + max(1, r_i), n_i the frames the rope takes to be all the way out and r_i its first delay (0 to 18);
+//     the next down a rope waits 27 to 45 frames; the fifth Ranger goes down the first rope free again;
+//   a Ranger comes down at most 1 a frame before gravity (1.0711 a frame), landing K + 1 ticks after it went out, K the
+//     physics steps it takes to reach the ground;
+//   the drop is over the tick the last Ranger lands (no one on a rope, nobody aboard who can rappel): no longer held,
+//     its height back at 100; its ropes fall away for 150 ticks;
+//   a move ordered while it drops is kept (m_pendingCommand) and it sets off on it the tick after the drop is over.
+// A 4-worker run hashes the same, and a checkpoint taken as the drop starts plays on the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chinook_combat_drops_its_rangers_at_a_spot)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	BOOST_TEST_REQUIRE(shell.game.ropeBones.contains("AmericaVehicleChinook"));
+	BOOST_TEST(shell.game.ropeBones.at("AmericaVehicleChinook").starts.size() == 4u);
+	BOOST_TEST(shell.game.ropeBones.at("AmericaVehicleChinook").ends.size() == 4u);
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	std::unique_ptr<session::Session> restored;
+	auto &world = game.World();
+	const auto team = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 from = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(0)};
+	ecs::Entity chinook;
+	std::vector<ecs::Entity> rangers;
+	for (session::Session *session : {&game, &four})
+	{
+		const ecs::Entity made = session->Place("AmericaVehicleChinook", from, {}, team);
+		if (session == &game)
+			chinook = made;
+		for (int index = 0; index < 5; ++index)
+		{
+			const ecs::Entity ranger = session->Place("AmericaInfantryRanger", from, {}, team);
+			gameplay::PutInside(session->Game(), made, ranger);
+			if (session == &game)
+				rangers.push_back(ranger);
+		}
+	}
+	const auto step = [&](std::vector<engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		four.Tick(orders);
+		if (restored)
+			restored->Tick(orders);
+	};
+	for (int tick = 0; tick < 150; ++tick)
+		step();
+	const Fixed cruise = world.Get<gp::Locomotion>(chinook)->locomotor.preferredHeight;
+	BOOST_TEST((cruise == Fixed::FromInt(100)));
+	step({commands::Encode(commands::CombatDrop{{chinook}, {}, {from.x + Fixed::FromInt(200), from.y}})});
+	const auto *moving = world.Get<gameplay::CombatDrop>(chinook);
+	BOOST_TEST_REQUIRE(moving != nullptr);
+	BOOST_TEST((moving->stage == gameplay::CombatDropStage::Moving));
+	BOOST_TEST((moving->destZ == game.Game().ground.At(moving->goal) + cruise));
+
+	std::uint64_t dropStart = 0, dropEnd = 0;
+	std::array<std::uint64_t, 4> firstOut{};
+	std::array<int, 4> ropeFrames{}, firstDelay{};
+	std::vector<std::uint64_t> outAt(rangers.size(), 0), landedAt(rangers.size(), 0), rope(rangers.size(), 0);
+	std::vector<float> startZ(rangers.size(), 0.0f), groundZ(rangers.size(), 0.0f);
+	Engine::Math::FixedVector3 hanging;
+	const Engine::Math::FixedVector2 later{from.x - Fixed::FromInt(100), from.y + Fixed::FromInt(100)};
+	for (int tick = 0; tick < 1200 && dropEnd == 0; ++tick)
+	{
+		if (dropStart != 0 && game.CurrentTick() == dropStart + 5)
+		{
+			step({commands::Encode(commands::MoveTo{{chinook}, later})});
+			BOOST_TEST_REQUIRE(world.Resource<gameplay::DeferredOrders>().list.size() == 1u);
+			BOOST_TEST((world.Get<gp::MoveOrder>(chinook)->mode == gp::MoveMode::Idle));
+		}
+		else
+			step();
+		const std::uint64_t now = game.CurrentTick();
+		const auto *drop = world.Get<gameplay::CombatDrop>(chinook);
+		if (drop != nullptr && drop->stage == gameplay::CombatDropStage::Dropping && dropStart == 0)
+		{
+			dropStart = now;
+			hanging = world.Get<gp::Transform>(chinook)->position;
+			BOOST_TEST(std::abs(Engine::Math::ToFloat(hanging.z - drop->destZ)) <= 3.0f);
+			BOOST_TEST_REQUIRE(drop->ropeCount == 4);
+			for (int index = 0; index < 4; ++index)
+			{
+				const auto &line = drop->ropes[index];
+				const Fixed floor = game.Game().ground.At(line.top.XY());
+				BOOST_TEST((line.lengthMax == line.top.z - floor - Fixed::FromInt(10)));
+				ropeFrames[index] = RopeFrames(Engine::Math::ToFloat(line.lengthMax));
+				firstDelay[index] = static_cast<int>(line.nextDrop - now);
+				BOOST_TEST(firstDelay[index] >= 0);
+				BOOST_TEST(firstDelay[index] <= 18);
+			}
+			BOOST_TEST((world.Get<gp::Disabled>(chinook)->mask & gp::disabled_type::Held) != 0u);
+			restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+		}
+		if (dropStart != 0 && drop != nullptr)
+			BOOST_TEST((world.Get<gp::Transform>(chinook)->position == hanging), "tick " << now);
+		for (std::size_t index = 0; index < rangers.size(); ++index)
+		{
+			const ecs::Entity ranger = rangers[index];
+			if (outAt[index] == 0 && !world.Has<gp::OffMap>(ranger))
+			{
+				outAt[index] = now;
+				BOOST_TEST_REQUIRE(drop != nullptr);
+				BOOST_TEST_REQUIRE(world.Has<gameplay::OnRope>(ranger));
+				rope[index] = world.Get<gameplay::OnRope>(ranger)->rope;
+				const auto &at = world.Get<gp::Transform>(ranger)->position;
+				startZ[index] = Engine::Math::ToFloat(at.z);
+				groundZ[index] = Engine::Math::ToFloat(game.Game().ground.At(at.XY()));
+				BOOST_TEST((at == drop->ropes[rope[index]].dropAt));
+				if (firstOut[rope[index]] == 0)
+					firstOut[rope[index]] = now;
+				// The next down that rope: 27 to 45 frames on.
+				const std::uint64_t waits = drop->ropes[rope[index]].nextDrop - now;
+				BOOST_TEST(waits >= 27u);
+				BOOST_TEST(waits <= 45u);
+			}
+			if (outAt[index] != 0 && landedAt[index] == 0 && !world.Has<gameplay::Rappel>(ranger))
+				landedAt[index] = now;
+			// RAPPELLING while on its rope.
+			if (outAt[index] != 0 && now > outAt[index])
+				BOOST_TEST(world.Get<gp::Appearance>(ranger)->Test(content::model_condition::Rappelling) == world.Has<gameplay::Rappel>(ranger), "tick " << now);
+		}
+		if (dropStart != 0 && drop == nullptr)
+			dropEnd = now;
+	}
+	BOOST_TEST_REQUIRE(dropEnd != 0u);
+	for (int index = 0; index < 4; ++index)
+		BOOST_TEST(firstOut[index] == dropStart + ropeFrames[index] + std::max(1, firstDelay[index]), "rope " << index);
+	std::uint64_t lastLanding = 0;
+	for (std::size_t index = 0; index < rangers.size(); ++index)
+	{
+		BOOST_TEST_REQUIRE(outAt[index] != 0u);
+		BOOST_TEST_REQUIRE(landedAt[index] != 0u);
+		const int steps = RappelSteps(startZ[index], groundZ[index]);
+		BOOST_TEST(landedAt[index] == outAt[index] + steps + 1, "ranger " << index);
+		lastLanding = std::max(lastLanding, landedAt[index]);
+		const auto &at = world.Get<gp::Transform>(rangers[index])->position;
+		BOOST_TEST((at.z == game.Game().ground.At(at.XY())));
+	}
+	BOOST_TEST(dropEnd == lastLanding);
+	// The move kept: not yet on the tick the drop ends, taken the next.
+	BOOST_TEST((world.Get<gp::MoveOrder>(chinook)->mode == gp::MoveMode::Idle));
+	step();
+	BOOST_TEST(world.Resource<gameplay::DeferredOrders>().list.empty());
+	BOOST_TEST((world.Get<gp::MoveOrder>(chinook)->mode == gp::MoveMode::Point));
+	BOOST_TEST((world.Get<gp::MoveOrder>(chinook)->destination == later));
+	BOOST_TEST((world.Get<gp::Disabled>(chinook)->mask & gp::disabled_type::Held) == 0u);
+	BOOST_TEST((world.Get<gp::Locomotion>(chinook)->locomotor.preferredHeight == cruise));
+	const auto countFalling = [&] {
+		std::size_t count = 0;
+		ecs::Query<ecs::Read<gameplay::FallingRope>> ropes(world);
+		ropes.ForEachChunk([&](auto chunk) { count += chunk.Entities().size(); });
+		return count;
+	};
+	BOOST_TEST(countFalling() == 4u);
+	for (int tick = 0; tick < 150; ++tick)
+		step();
+	BOOST_TEST(countFalling() == 0u);
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ChinookAIUpdate.cpp: ChinookMoveToBldgState::onEnter; AIStates.cpp: AIRappelState::onEnter / update,
+// killEnemiesInContainer; GarrisonContain::isValidContainerFor; the Ranger's UnitSpecificFX CombatDropKillFX =
+// FX_RangerCombatDropKill): a Chinook with three Rangers told to combat drop into a Chalet (50 tall) two China Red Guards
+// hold hovers at 100 over the ground there (50 + MinDropHeight 40 is lower); each Ranger comes down onto the chalet's top
+// (the ground under it plus 50). The first to land takes the two Red Guards out and kills them as its kills (they die the
+// next tick), its kill FX plays on the chalet, and having killed two it dies too; the next ones go inside (the chalet
+// has room and anyone may garrison it) where it stands.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_chinook_combat_drops_into_an_enemy_garrison)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	session::Session four(match->skirmish.level, shell.game, match->Options(4));
+	std::unique_ptr<session::Session> restored;
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+	const auto neutral = *game.Teams().FindTeam("team");
+	const Engine::Math::FixedVector2 from = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(0)};
+	const Engine::Math::FixedVector2 site = from + Engine::Math::FixedVector2{Fixed::FromInt(250), Fixed::FromInt(-150)};
+	ecs::Entity chinook, chalet;
+	std::vector<ecs::Entity> rangers, guards;
+	for (session::Session *session : {&game, &four})
+	{
+		const ecs::Entity house = session->Place("Chalet", site, {}, neutral);
+		const ecs::Entity made = session->Place("AmericaVehicleChinook", from, {}, america);
+		for (int index = 0; index < 2; ++index)
+		{
+			const ecs::Entity guard = session->Place("ChinaInfantryRedguard", site, {}, china);
+			gameplay::PutInside(session->Game(), house, guard);
+			if (session == &game)
+				guards.push_back(guard);
+		}
+		for (int index = 0; index < 3; ++index)
+		{
+			const ecs::Entity ranger = session->Place("AmericaInfantryRanger", from, {}, america);
+			gameplay::PutInside(session->Game(), made, ranger);
+			if (session == &game)
+				rangers.push_back(ranger);
+		}
+		if (session == &game)
+			chinook = made, chalet = house;
+	}
+	const auto step = [&](std::vector<engine::net::CommandEnvelope> orders = {}) {
+		game.Tick(orders);
+		four.Tick(orders);
+		if (restored)
+			restored->Tick(orders);
+	};
+	for (int tick = 0; tick < 150; ++tick)
+		step();
+	step({commands::Encode(commands::CombatDrop{{chinook}, chalet, world.Get<gp::Transform>(chalet)->position.XY()})});
+	const auto *moving = world.Get<gameplay::CombatDrop>(chinook);
+	BOOST_TEST_REQUIRE(moving != nullptr);
+	BOOST_TEST((moving->target == chalet));
+	const Fixed floor = game.Game().ground.At(world.Get<gp::Transform>(chalet)->position.XY());
+	BOOST_TEST((moving->destZ == floor + Fixed::FromInt(100)));
+	restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+
+	std::vector<std::uint64_t> landedAt(rangers.size(), 0);
+	std::uint64_t guardsDied = 0, firstDied = 0, fxAt = 0;
+	ecs::Entity killer;
+	for (int tick = 0; tick < 1500 && world.Has<gameplay::CombatDrop>(chinook); ++tick)
+	{
+		step();
+		const std::uint64_t now = game.CurrentTick();
+		for (const auto &cue : world.Resource<gameplay::EffectCues>().list)
+			if (cue.effect == "FX_RangerCombatDropKill" && cue.on == chalet)
+				fxAt = now;
+		for (const auto &casualty : game.Game().casualties.list)
+		{
+			if (std::ranges::find(guards, casualty.entity) != guards.end())
+			{
+				guardsDied = now;
+				killer = casualty.killer;
+			}
+			if (casualty.entity == rangers[0])
+				firstDied = now;
+		}
+		for (std::size_t index = 0; index < rangers.size(); ++index)
+			if (landedAt[index] == 0 && world.IsAlive(rangers[index]) && !world.Has<gp::OffMap>(rangers[index]) && !world.Has<gameplay::Rappel>(rangers[index]))
+			{
+				landedAt[index] = now;
+				if (index == 0)
+				{
+					// On the chalet's top as it lands: the kills are made (no Red Guard is left inside; a Ranger landing on the
+					// same tick from another rope may already have gone in) and it goes after the step.
+					for (const ecs::Entity guard : guards)
+						BOOST_TEST((std::ranges::find(game.Game().manifest.Aboard(chalet), guard) == game.Game().manifest.Aboard(chalet).end()));
+				}
+			}
+			else if (landedAt[index] == 0 && world.Has<gameplay::Rappel>(rangers[index]))
+				BOOST_TEST((world.Get<gameplay::Rappel>(rangers[index])->destZ ==
+					game.Game().ground.At(world.Get<gp::Transform>(rangers[index])->position.XY()) + Fixed::FromInt(50)));
+	}
+	BOOST_TEST_REQUIRE(landedAt[0] != 0u);
+	BOOST_TEST(fxAt == landedAt[0]);
+	BOOST_TEST(guardsDied == landedAt[0] + 1);
+	BOOST_TEST((killer == rangers[0]));
+	BOOST_TEST(firstDied == landedAt[0] + 1);
+	for (std::size_t index = 1; index < rangers.size(); ++index)
+	{
+		BOOST_TEST_REQUIRE(world.IsAlive(rangers[index]));
+		const auto *seat = world.Get<gp::Passenger>(rangers[index]);
+		BOOST_TEST_REQUIRE(seat != nullptr);
+		BOOST_TEST((seat->transport == chalet));
+	}
+	BOOST_TEST(!world.Has<gameplay::CombatDrop>(chinook));
+	step();
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

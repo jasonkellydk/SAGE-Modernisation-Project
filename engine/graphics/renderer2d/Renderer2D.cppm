@@ -1,20 +1,5 @@
-module;
-
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <initializer_list>
-#include <limits>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Renderer2D;
+import std;
 
 import engine.profiling;
 export import Graphics.RenderGraph.Execution;
@@ -828,8 +813,20 @@ private:
                 bound_page = batch.texture_page;
             }
 			const std::size_t pipeline_index = static_cast<std::size_t>(batch.blend);
+			// The batches' clips are in the 2D space's pixels (Begin's size); drawn onto a larger or smaller target they
+			// scale with it, as the vertices do.
+			RHIScissorRect scissor = batch.scissor;
+			if (viewport.width != m_width || viewport.height != m_height) {
+				const double sx = static_cast<double>(viewport.width) / static_cast<double>(m_width);
+				const double sy = static_cast<double>(viewport.height) / static_cast<double>(m_height);
+				const auto left = static_cast<std::uint32_t>(std::floor(batch.scissor.x * sx));
+				const auto top = static_cast<std::uint32_t>(std::floor(batch.scissor.y * sy));
+				const auto right = static_cast<std::uint32_t>(std::ceil((batch.scissor.x + batch.scissor.width) * sx));
+				const auto bottom = static_cast<std::uint32_t>(std::ceil((batch.scissor.y + batch.scissor.height) * sy));
+				scissor = {viewport.x + left, viewport.y + top, right - left, bottom - top};
+			}
 			if (pipeline_index >= m_pipelines.size() || !commands.Bind_Pipeline(m_pipelines[pipeline_index])
-				|| !commands.Set_Scissor(batch.scissor)
+				|| !commands.Set_Scissor(scissor)
 				|| !commands.Draw_Indexed(batch.index_count, batch.first_index))
 				return false;
 		}

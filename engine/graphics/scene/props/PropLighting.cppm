@@ -1,8 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cmath>
 export module Graphics.Scene.Props.Lighting;
+import std;
 namespace Graphics
 {
 export struct PropLight final

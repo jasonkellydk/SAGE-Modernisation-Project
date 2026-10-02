@@ -1,0 +1,316 @@
+#define BOOST_TEST_MODULE GeneralsZhGameSetup
+#include <boost/test/included/unit_test.hpp>
+
+#include <string>
+#include <optional>
+#include <vector>
+#include <algorithm>
+
+import games.generalszh.session.setup.game_setup;
+import games.generalszh.session.setup.match_plan;
+import games.generalszh.session.setup.replay_body;
+import games.generalszh.session.setup.start_positions;
+import games.generalszh.session.setup.map_metadata;
+
+using namespace generalszh::session::setup;
+
+BOOST_AUTO_TEST_SUITE(game_setup)
+
+// Legacy parity (GameInfoToAsciiString / ParseAsciiStringToGameInfo): a real Skirmish.ini's
+// SlotList reads back as the original wrote it, and writes out byte for byte the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_real_slot_list_round_trips)
+{
+	const std::string written = "US=1;M=03maps/tournament continent;MC=7D024EDA;MS=639753;SD=226989;C=100;SR=0;SC=50000;O=N;"
+								"S=HJason,0,0,TT,1,13,2,0,1:CH,-1,-1,-1,0:CH,-1,-1,-1,1:CH,-1,3,-1,1:X:X:X:X:;";
+	const auto setup = ParseOptionsString(written);
+	BOOST_TEST_REQUIRE(setup.has_value());
+	BOOST_TEST(setup->map == "maps\\tournament continent\\tournament continent.map");
+	BOOST_TEST(setup->mapCrc == 0x7D024EDAu);
+	BOOST_TEST(setup->mapSize == 639753u);
+	BOOST_TEST(setup->mapContentsMask == 3);
+	BOOST_TEST(setup->seed == 226989);
+	BOOST_TEST(setup->startingCash == 50000u);
+	BOOST_TEST(setup->Players() == 4);
+	const GameSlot &me = setup->slots[0];
+	BOOST_TEST(me.Human());
+	BOOST_TEST((me.name == u"Jason"));
+	BOOST_TEST(me.color == 1);           // ColorRed
+	BOOST_TEST(me.playerTemplate == 13); // FactionGLAStealthGeneral
+	BOOST_TEST(me.startPos == 2);
+	BOOST_TEST(me.team == 0);
+	BOOST_TEST((setup->slots[1].state == SlotState::HardAI));
+	BOOST_TEST(setup->slots[3].playerTemplate == 3); // FactionChina
+	BOOST_TEST(setup->slots[3].team == 1);
+	BOOST_TEST((setup->slots[4].state == SlotState::Closed));
+	BOOST_TEST(ToOptionsString(*setup) == written);
+}
+
+// ParseAsciiStringToGameInfo refuses what the original refuses.
+BOOST_AUTO_TEST_CASE(legacy_parity_broken_or_out_of_range_options_are_refused)
+{
+	const std::string head = "US=1;M=03maps/x;MC=1;MS=1;SD=1;C=100;";
+	BOOST_TEST(ParseOptionsString(head + "S=X:X:X:X:X:X:X:X:;").has_value());
+	BOOST_TEST(!ParseOptionsString("US=1;M=03maps/x;MC=1;SD=1;C=100;S=X:X:X:X:X:X:X:X:;").has_value()); // no MS
+	BOOST_TEST(!ParseOptionsString(head + "S=CH,8,-1,-1,0:X:X:X:X:X:X:X:;").has_value());                // colour 8 of 8
+	BOOST_TEST(!ParseOptionsString(head + "S=CH,-1,-1,-1,4:X:X:X:X:X:X:X:;").has_value());               // team 4 of 4
+	BOOST_TEST(!ParseOptionsString(head + "S=CZ,-1,-1,-1,0:X:X:X:X:X:X:X:;").has_value());               // no such AI
+	BOOST_TEST(!ParseOptionsString("US=1;M=03../x;MC=1;MS=1;SD=1;C=100;S=X:X:X:X:X:X:X:X:;").has_value()); // outside the map folders
+	BOOST_TEST(!ParseOptionsString(head + "Q=1;S=X:X:X:X:X:X:X:X:;").has_value());                       // an unknown key
+}
+
+// GameSlot::setState and GameInfo::adjustSlotsForMap.
+BOOST_AUTO_TEST_CASE(legacy_parity_slot_states_and_map_player_counts)
+{
+	GameSlot slot;
+	slot.SetState(SlotState::EasyAI);
+	slot.color = 3, slot.playerTemplate = 4, slot.team = 1;
+	slot.SetState(SlotState::HardAI); // an AI changing level keeps its choices
+	BOOST_TEST(slot.color == 3);
+	slot.SetState(SlotState::Open); // leaving: back to random
+	BOOST_TEST(slot.color == Random);
+	BOOST_TEST(slot.accepted);
+	slot.SetState(SlotState::Player, u"Me");
+	BOOST_TEST(!slot.accepted);
+
+	GameSetup setup;
+	GameSlot me, ai;
+	me.SetState(SlotState::Player, u"Me");
+	ai.SetState(SlotState::MediumAI);
+	setup.SetSlot(0, me);
+	setup.SetSlot(5, ai);
+	setup.AdjustSlotsForMap(4); // two taken: two more open, the rest close; no one is removed
+	int open = 0;
+	for (const GameSlot &each : setup.slots)
+		open += each.state == SlotState::Open ? 1 : 0;
+	BOOST_TEST(open == 2);
+	BOOST_TEST((setup.slots[1].state == SlotState::Open));
+	BOOST_TEST((setup.slots[2].state == SlotState::Open));
+	BOOST_TEST((setup.slots[3].state == SlotState::Closed));
+	BOOST_TEST((setup.slots[5].state == SlotState::MediumAI));
+	BOOST_TEST(setup.slots[0].accepted); // the host always is
+}
+
+// A match plan (a saved game's way back to its level) reads back as written: a skirmish's whole setup (names in full,
+// every slot's choices), and a challenge's campaign, mission, difficulty and general; a damaged one reads as none.
+BOOST_AUTO_TEST_CASE(a_match_plan_round_trips)
+{
+	using namespace generalszh::session::setup;
+	MatchPlan plan;
+	plan.setup.map = "Maps\\Tournament Desert\\Tournament Desert.map";
+	plan.setup.seed = -12345;
+	plan.setup.startingCash = 50000;
+	plan.setup.slots[0].SetState(SlotState::Player, u"A rather long player name that the options string would cut");
+	plan.setup.slots[0].playerTemplate = 3;
+	plan.setup.slots[0].startPos = 1;
+	plan.setup.slots[1].SetState(SlotState::HardAI);
+	plan.setup.slots[1].team = 2;
+	plan.kind = MatchKind::Challenge;
+	plan.campaign = "challenge_0";
+	plan.mission = "mission03";
+	plan.difficulty = 2;
+	plan.playerTemplate = "FactionAmericaAirForceGeneral";
+	plan.rankPoints = 1234;
+	engine::core::serialization::ByteWriter writer;
+	WriteMatchPlan(writer, plan);
+	const std::vector<std::byte> bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	const auto read = ReadMatchPlan(reader);
+	BOOST_TEST_REQUIRE(read.has_value());
+	BOOST_TEST((read->kind == MatchKind::Challenge));
+	BOOST_TEST(read->setup.map == plan.setup.map);
+	BOOST_TEST(read->setup.seed == -12345);
+	BOOST_TEST(read->setup.startingCash == 50000u);
+	BOOST_TEST((read->setup.slots[0].name == plan.setup.slots[0].name));
+	BOOST_TEST((read->setup.slots[1].state == SlotState::HardAI));
+	BOOST_TEST(read->setup.slots[1].team == 2);
+	BOOST_TEST(read->setup.slots[0].startPos == 1);
+	BOOST_TEST(read->mission == "mission03");
+	BOOST_TEST(read->difficulty == 2);
+	BOOST_TEST(read->playerTemplate == "FactionAmericaAirForceGeneral");
+	BOOST_TEST(read->rankPoints == 1234);
+	const std::vector<std::byte> cut(bytes.begin(), bytes.begin() + 10);
+	engine::core::serialization::ByteReader damaged(cut);
+	BOOST_TEST(!ReadMatchPlan(damaged).has_value());
+}
+
+// A replay's game after its header (RecorderClass::startRecording: difficulty, original game mode, rank points, max FPS;
+// then this port's plan and recorded ticks) reads back as written; an original's GameMessage stream (no ZHREPLAY) or a
+// cut file reads as none.
+BOOST_AUTO_TEST_CASE(a_replay_body_round_trips)
+{
+	using namespace generalszh::session::setup;
+	ReplayBody body;
+	body.difficulty = 2;
+	body.originalGameMode = 3;
+	body.rankPoints = 0;
+	body.maxFps = 30;
+	body.plan.setup.map = "Maps\\Tournament Desert\\Tournament Desert.map";
+	body.plan.setup.seed = 77;
+	body.recording.endTick = 500;
+	body.recording.ticks.push_back({12, {{0x1234u, 0u, {std::byte{1}, std::byte{2}}}, {0x99u, 1u, {}}}});
+	body.recording.ticks.push_back({400, {{0x55u, 0u, {std::byte{3}}}}});
+	body.recording.hashes = {{99, 0xAAu}, {199, 0xBBu}};
+	engine::core::serialization::ByteWriter writer;
+	WriteReplayBody(writer, body);
+	const std::vector<std::byte> bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	const auto read = ReadReplayBody(reader);
+	BOOST_TEST_REQUIRE(read.has_value());
+	BOOST_TEST(read->difficulty == 2);
+	BOOST_TEST(read->originalGameMode == 3);
+	BOOST_TEST(read->maxFps == 30);
+	BOOST_TEST(read->plan.setup.map == body.plan.setup.map);
+	BOOST_TEST(read->plan.setup.seed == 77);
+	BOOST_TEST(read->recording.endTick == 500u);
+	BOOST_TEST_REQUIRE(read->recording.ticks.size() == 2u);
+	BOOST_TEST((read->recording.ticks[0].commands == body.recording.ticks[0].commands));
+	BOOST_TEST(read->recording.ticks[1].tick == 400u);
+	BOOST_TEST((read->recording.hashes == body.recording.hashes));
+	const std::vector<std::byte> original(bytes.begin(), bytes.begin() + 16); // the four ints, then GameMessages
+	engine::core::serialization::ByteReader legacy(original);
+	BOOST_TEST(!ReadReplayBody(legacy).has_value());
+	const std::vector<std::byte> cut(bytes.begin(), bytes.end() - 5);
+	engine::core::serialization::ByteReader damaged(cut);
+	BOOST_TEST(!ReadReplayBody(damaged).has_value());
+}
+
+// legacy_parity: GameLogic.cpp populateRandomStartPosition ("the new way"), on a square of four start spots
+// (Player_1_Start (0,0), Player_2_Start (100,0), Player_3_Start (0,100), Player_4_Start (100,100)): the first random
+// player, when nobody picked a spot, takes GameLogicRandomValue(0, 3), drawn again while any slot holds it; the next
+// without a placed team takes the free spot whose summed distance to the taken ones is greatest (the first such on a
+// tie); a teammate the free spot nearest its team's (the first on a tie); a picked spot stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_random_start_spots_spread_teams_and_group_teammates)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	const std::vector<std::optional<FixedVector2>> square{FixedVector2{Fixed::FromInt(0), Fixed::FromInt(0)},
+		FixedVector2{Fixed::FromInt(100), Fixed::FromInt(0)}, FixedVector2{Fixed::FromInt(0), Fixed::FromInt(100)},
+		FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}};
+	const auto drawing = [](std::vector<int> values) {
+		return [values = std::move(values), next = std::size_t{0}](int high) mutable {
+			BOOST_TEST(high == 3);
+			return values[(std::min)(next++, values.size() - 1)];
+		};
+	};
+	const auto occupy = [](GameSetup &setup, int slot, SlotState state, int team = -1, int start = -1, int playerTemplate = -1) {
+		GameSlot &each = setup.slots[static_cast<std::size_t>(slot)];
+		each.state = state;
+		each.team = team;
+		each.startPos = start;
+		each.playerTemplate = playerTemplate;
+	};
+
+	// No teams: the first at random (spot 4), the next farthest from it (spot 1, 141 away), the third tied at 200
+	// between spots 2 and 3 takes the first (spot 2).
+	GameSetup spread;
+	occupy(spread, 0, SlotState::Player);
+	occupy(spread, 1, SlotState::EasyAI);
+	occupy(spread, 2, SlotState::HardAI);
+	auto chosen = PopulateRandomStartPositions(spread, 4, square, drawing({3}));
+	BOOST_TEST(chosen[0] == 3);
+	BOOST_TEST(chosen[1] == 0);
+	BOOST_TEST(chosen[2] == 1);
+	BOOST_TEST(chosen[3] == -1);
+
+	// Teams: team 0 starts at spot 1 (drawn), team 1 the farthest (spot 4), team 0's second the nearest free to spot 1
+	// (spots 2 and 3 both 100 away: spot 2).
+	GameSetup teams;
+	occupy(teams, 0, SlotState::Player, 0);
+	occupy(teams, 1, SlotState::EasyAI, 1);
+	occupy(teams, 2, SlotState::EasyAI, 0);
+	chosen = PopulateRandomStartPositions(teams, 4, square, drawing({0}));
+	BOOST_TEST(chosen[0] == 0);
+	BOOST_TEST(chosen[1] == 3);
+	BOOST_TEST(chosen[2] == 1);
+
+	// A spot picked: no draw; the random player goes farthest from it (spot 3 picked: spot 2 is 141 away).
+	GameSetup fixed;
+	occupy(fixed, 0, SlotState::Player, -1, 2);
+	occupy(fixed, 1, SlotState::EasyAI);
+	chosen = PopulateRandomStartPositions(fixed, 4, square, [](int) {
+		BOOST_TEST(false);
+		return 0;
+	});
+	BOOST_TEST(chosen[0] == 2);
+	BOOST_TEST(chosen[1] == 1);
+
+	// An observer holding spot 2 does not count as a pick, but its spot is drawn again (isStartPositionTaken).
+	GameSetup watched;
+	occupy(watched, 0, SlotState::Player, -1, 1, ObserverTemplate);
+	occupy(watched, 1, SlotState::EasyAI);
+	chosen = PopulateRandomStartPositions(watched, 4, square, drawing({1, 2}));
+	BOOST_TEST(chosen[0] == -1);
+	BOOST_TEST(chosen[1] == 2);
+
+	// A start spot missing from the map is 1000000 from every other: the farthest.
+	std::vector<std::optional<FixedVector2>> holed = square;
+	holed[1].reset();
+	chosen = PopulateRandomStartPositions(spread, 4, holed, drawing({3}));
+	BOOST_TEST(chosen[0] == 3);
+	BOOST_TEST(chosen[1] == 1);
+}
+
+// legacy_parity: MapUtil.cpp loadMap / MapCache::addMap / WaypointMap::update / getExtent: the cache's record of a map
+// it loads: InitialCameraPosition and Player_1_Start on to the first missing (Player_4_Start without Player_3_Start is
+// not counted), at least one start counted, multiplayer from two on; tech buildings, else preview supplies, in object
+// order; the extent from 0,0 to (width - 2 border, height - 2 border) cells x 10; WorldInfo's mapName as the tag.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_loaded_map_is_described_as_the_cache_records_it)
+{
+	using Engine::Math::Fixed;
+	engine::level::Level level;
+	level.terrain.width = 120;
+	level.terrain.height = 100;
+	level.terrain.border = 10;
+	level.properties.Set("mapName", std::string("MAP:Duel"));
+	const auto marker = [&](std::string name, int x, int y) {
+		engine::level::Marker each;
+		each.name = std::move(name);
+		each.position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		level.markers.push_back(each);
+	};
+	marker("Player_1_Start", 100, 100);
+	marker("InitialCameraPosition", 50, 60);
+	marker("Player_2_Start", 900, 700);
+	marker("Player_4_Start", 400, 400);
+	const auto place = [&](std::string type, int x, int y) {
+		engine::level::Placement each;
+		each.type = std::move(type);
+		each.position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		level.placements.push_back(each);
+	};
+	place("TechOilDerrick", 10, 20);
+	place("SupplyDock", 30, 40);
+	place("Tree", 1, 1);
+	place("TechHospital", 50, 60);
+	const auto kind = [](std::string_view type) {
+		return type.starts_with("Tech") ? MapPreviewKind::TechBuilding : type == "SupplyDock" ? MapPreviewKind::SupplyOnPreview : MapPreviewKind::None;
+	};
+	const generalszh::content::MapMetaData map = DescribeMap(level, 99u, kind);
+	BOOST_TEST(map.crc == 99u);
+	BOOST_TEST(map.players == 2);
+	BOOST_TEST(map.multiplayer);
+	BOOST_TEST_REQUIRE(map.starts.size() == 2u);
+	BOOST_TEST(map.starts[1].x.Floor() == 900);
+	BOOST_TEST(map.hasInitialCamera);
+	BOOST_TEST(map.initialCamera.y.Floor() == 60);
+	BOOST_TEST_REQUIRE(map.techs.size() == 2u);
+	BOOST_TEST(map.techs[1].x.Floor() == 50);
+	BOOST_TEST(map.supplies.size() == 1u);
+	BOOST_TEST(map.extentMin.x.Floor() == 0);
+	BOOST_TEST(map.extentMax.x.Floor() == 1000);
+	BOOST_TEST(map.extentMax.y.Floor() == 800);
+	BOOST_TEST(map.nameLookupTag == "MAP:Duel");
+
+	// No start spots: one counted, not multiplayer; no camera, no tag.
+	engine::level::Level bare;
+	bare.terrain.width = 10;
+	bare.terrain.height = 10;
+	const generalszh::content::MapMetaData empty = DescribeMap(bare, 1u, {});
+	BOOST_TEST(empty.players == 1);
+	BOOST_TEST(!empty.multiplayer);
+	BOOST_TEST(empty.starts.empty());
+	BOOST_TEST(!empty.hasInitialCamera);
+	BOOST_TEST(empty.nameLookupTag.empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

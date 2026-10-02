@@ -1,9 +1,5 @@
-module;
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-
 export module engine.time.simulation_clock;
+import std;
 export import engine.time.simulation_time;
 
 export namespace engine::time

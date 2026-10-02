@@ -1,6 +1,5 @@
-module;
-#include <cstdint>
 export module Graphics.Materials.Ordering;
+import std;
 import Graphics.Materials.State;
 
 namespace Graphics {

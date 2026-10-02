@@ -1,20 +1,10 @@
 module;
 
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
 
 export module Assets.Cache.FontLoadTask;
+import std;
 
 import Assets.Fonts;
 import Assets.Identity;

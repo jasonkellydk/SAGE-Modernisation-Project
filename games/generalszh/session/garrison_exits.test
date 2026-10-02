@@ -1,0 +1,819 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <cmath>
+#include <optional>
+#include <array>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <variant>
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.containment.components.garrison;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.commands.game_commands;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import engine.gameplay.common.identity.components.team_member;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.combat.components.aggression;
+import games.generalszh.content.combat.loadout_content;
+import engine.gameplay.rts.loadout.components.loadout;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.rts.production.components.production_queue;
+import engine.gameplay.common.appearance.components.appearance;
+import games.generalszh.content.objects.model_conditions;
+import engine.gameplay.common.spatial.algorithms.geometry_collision;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.physics.components.physics_body;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.blocking.components.blocked_state;
+import games.generalszh.gameplay.containment.algorithms.garrisons;
+import games.generalszh.hud.control_bar_view_model;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import engine.gameplay.rts.veterancy.components.experience;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.rts.containment.components.cargo_size;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import games.generalszh.gameplay.containment.algorithms.transport_riders;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+
+// GarrisonContain's evacuation sides (GarrisonContain.cpp: exitObjectViaDoor) on the shipped Alpine Assault, and the
+// control bar's transport and structure inventories with a player's single-rider exit (MSG_EXIT).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// Two human seats with nobody at them on Alpine Assault.
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Alpine Assault/Alpine Assault.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 2);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+}
+
+BOOST_AUTO_TEST_SUITE(garrison_exits)
+
+// Legacy parity (ScriptActions::doNamedSetGarrisonEvacDisposition; GarrisonContain::exitObjectViaDoor with EVAC_TO_LEFT /
+// EVAC_TO_RIGHT): a Chalet (GeometryMajorRadius 25, MinorRadius 55) set to evacuate to its left lets each occupant out at
+// a random spot in its own frame x within a quarter of 25 of its middle and y 27.5 to 110 out on the left, facing as the
+// chalet, walking on to a spot x within 25 and y 550 out; to its right the same on the other side. A 4-worker run hashes
+// the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_garrison_evacuates_to_one_side)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	for (const std::uint8_t side : {std::uint8_t{1}, std::uint8_t{2}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		session::Session four(match->skirmish.level, shell.game, match->Options(4));
+		auto &world = game.World();
+		const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+		const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+		ecs::Entity chalet;
+		std::vector<ecs::Entity> guards;
+		for (session::Session *session : {&game, &four})
+		{
+			const ecs::Entity house = session->Place("Chalet", site, Engine::Math::TurnAngle{0x20000000u}, china);
+			auto &garrison = *session->World().Get<gp::Garrison>(house);
+			garrison.evac = side;
+			garrison.halfLength = Fixed::FromInt(25);
+			garrison.halfWidth = Fixed::FromInt(55);
+			for (int index = 0; index < 3; ++index)
+			{
+				const ecs::Entity guard = session->Place("ChinaInfantryRedguard", site, {}, china);
+				gameplay::PutInside(session->Game(), house, guard);
+				if (session == &game)
+					guards.push_back(guard);
+			}
+			if (session == &game)
+				chalet = house;
+		}
+		game.Tick();
+		four.Tick();
+		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::Evacuate{{chalet}})};
+		orders.front().player = 1;
+		game.Tick(orders);
+		four.Tick(orders);
+		const auto &frame = *world.Get<gp::Transform>(chalet);
+		const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+		const auto local = [&](Engine::Math::FixedVector2 at) {
+			const auto d = at - frame.position.XY();
+			return Engine::Math::FixedVector2{d.x * c + d.y * s, d.y * c - d.x * s};
+		};
+		const Fixed sign = side == 1 ? Fixed::One() : Fixed{} - Fixed::One();
+		std::size_t out = 0;
+		std::vector<bool> seen(guards.size(), false);
+		for (int tick = 0; tick < 300 && out < guards.size(); ++tick)
+		{
+			for (std::size_t index = 0; index < guards.size(); ++index)
+				if (!seen[index] && !world.Has<gp::OffMap>(guards[index]))
+				{
+					seen[index] = true;
+					++out;
+					const auto at = local(world.Get<gp::Transform>(guards[index])->position.XY());
+					// Fixed point turning the spot into the world and back: within 1/64.
+					const Fixed slack = Fixed::FromRatio(1, 64);
+					BOOST_TEST((Engine::Math::Abs(at.x) <= Fixed::FromRatio(25, 4) + slack));
+					BOOST_TEST((at.y * sign >= Fixed::FromRatio(55, 2) - slack));
+					BOOST_TEST((at.y * sign <= Fixed::FromInt(110) + slack));
+					const auto *order = world.Get<gp::MoveOrder>(guards[index]);
+					BOOST_TEST_REQUIRE(order != nullptr);
+					const auto to = local(order->destination);
+					BOOST_TEST((Engine::Math::Abs(to.x) <= Fixed::FromInt(25) + slack));
+					BOOST_TEST((Engine::Math::Abs(to.y - Fixed::FromInt(550) * sign) <= slack));
+				}
+			game.Tick();
+			four.Tick();
+		}
+		BOOST_TEST(out == guards.size());
+		BOOST_TEST((four.StateHash() == game.StateHash()));
+	}
+}
+
+namespace
+{
+std::string ArtOf(session::SessionView &view, ecs::Entity entity)
+{
+	const auto index = view.DefinitionOf(entity);
+	return index ? view.Definition(*index).buttonImage : std::string{};
+}
+
+bool IsExit(const hud::CommandSlot &slot)
+{
+	return slot.button != nullptr && slot.button->commandName == "EXIT_CONTAINER";
+}
+}
+
+// Legacy parity (ControlBar::doTransportInventoryUI / populateInvDataCallback / updateContextCommand /
+// getCommandAvailability, ControlBarCommand.cpp; CommandSet.ini): a Humvee (Slots 5; AmericaVehicleHumveeCommandSet's
+// Command_TransportExit in slots 4..8) with two Rangers aboard shows the first in window 4 and the second in window 5,
+// each with its ButtonImage (SARanger) and rank chevron (a veteran SSChevron1L, a heroic one SSChevron3L); windows 6..8
+// show the button's own art, empty, and enabled (getCommandAvailability has nothing against EXIT_CONTAINER). A Chinook
+// (Slots 8, exits in slots 1..8) carrying a Humvee (TransportSlotCount 3: two extra slots) and a Ranger shows the Humvee
+// first, the Ranger second, windows 1..6 and hides 7 and 8. Subdued, its buttons grey (COMMAND_RESTRICTED); unmanned,
+// they all hide.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_control_bar_shows_a_transports_riders)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	const ecs::Entity veteran = game.Place("AmericaInfantryRanger", site, {}, america);
+	const ecs::Entity hero = game.Place("AmericaInfantryRanger", site, {}, america);
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(veteran) != nullptr);
+	world.Get<gp::Experience>(veteran)->level = 1;
+	world.Get<gp::Experience>(hero)->level = 3;
+	gameplay::PutInside(game.Game(), humvee, veteran);
+	gameplay::PutInside(game.Game(), humvee, hero);
+	const std::uint32_t player = world.Get<gp::Owner>(humvee)->player;
+	session::SessionView &view = game;
+	const std::array<ecs::Entity, 1> selection{humvee};
+	hud::ControlBarState bar = hud::ReadControlBar(view, player, selection);
+	for (std::size_t slot = 3; slot < 8; ++slot)
+	{
+		BOOST_TEST_REQUIRE(IsExit(bar.slots[slot]));
+		BOOST_TEST((bar.slots[slot].state == gameplay::ButtonState::Available));
+	}
+	BOOST_TEST((bar.slots[3].rider == veteran));
+	BOOST_TEST(bar.slots[3].image == ArtOf(game, veteran));
+	BOOST_TEST(bar.slots[3].image == "SARanger");
+	BOOST_TEST(bar.slots[3].overlay == "SSChevron1L");
+	BOOST_TEST((bar.slots[4].rider == hero));
+	BOOST_TEST(bar.slots[4].overlay == "SSChevron3L");
+	for (std::size_t slot = 5; slot < 8; ++slot)
+	{
+		BOOST_TEST((bar.slots[slot].rider == ecs::Entity{}));
+		BOOST_TEST(bar.slots[slot].image == bar.slots[slot].button->buttonImage);
+		BOOST_TEST(bar.slots[slot].overlay.empty());
+	}
+	BOOST_TEST(!IsExit(bar.slots[2]));
+
+	// Subdued: greyed; unmanned: hidden.
+	if (!world.Has<gp::Disabled>(humvee))
+		world.Add<gp::Disabled>(humvee);
+	world.Get<gp::Disabled>(humvee)->mask = gp::disabled_type::Subdued;
+	bar = hud::ReadControlBar(view, player, selection);
+	for (std::size_t slot = 3; slot < 8; ++slot)
+		BOOST_TEST((bar.slots[slot].state == gameplay::ButtonState::Restricted));
+	world.Get<gp::Disabled>(humvee)->mask = gp::disabled_type::Unmanned;
+	bar = hud::ReadControlBar(view, player, selection);
+	for (std::size_t slot = 3; slot < 8; ++slot)
+		BOOST_TEST((bar.slots[slot].state == gameplay::ButtonState::Hidden));
+	world.Get<gp::Disabled>(humvee)->mask = 0;
+
+	// A Chinook: the Humvee's extra room hides the last two windows.
+	const ecs::Entity chinook = game.Place("AmericaVehicleChinook", site + Engine::Math::FixedVector2{Fixed::FromInt(200), Fixed{}}, {}, america);
+	const ecs::Entity carried = game.Place("AmericaVehicleHumvee", site, {}, america);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", site, {}, america);
+	BOOST_TEST_REQUIRE(world.Get<gp::CargoSize>(carried) != nullptr);
+	BOOST_TEST(world.Get<gp::CargoSize>(carried)->slots == 3u);
+	gameplay::PutInside(game.Game(), chinook, carried, world.Get<gp::CargoSize>(carried)->slots);
+	gameplay::PutInside(game.Game(), chinook, ranger);
+	const std::array<ecs::Entity, 1> helicopter{chinook};
+	bar = hud::ReadControlBar(view, player, helicopter);
+	for (std::size_t slot = 0; slot < 8; ++slot)
+	{
+		BOOST_TEST_REQUIRE(IsExit(bar.slots[slot]));
+		BOOST_TEST(((bar.slots[slot].state == gameplay::ButtonState::Hidden) == (slot >= 6)));
+	}
+	BOOST_TEST((bar.slots[0].rider == carried));
+	BOOST_TEST(bar.slots[0].image == "SAHummer");
+	BOOST_TEST((bar.slots[1].rider == ranger));
+	BOOST_TEST((bar.slots[2].rider == ecs::Entity{}));
+}
+
+// Legacy parity (ControlBar::processCommandUI GUI_COMMAND_EXIT_CONTAINER, ControlBarCommandProcessing.cpp;
+// GameLogic::onExit, GameLogicDispatch.cpp; AIUpdateInterface::privateExit and AIExitState::update, AIStates.cpp;
+// TransportContain::reserveDoorForExit / exitObjectViaDoor): pressing the second Ranger's window of a Humvee sends MSG_EXIT
+// for it; applied at the start of a frame, that Ranger (and only it) is out by the end of that same frame, the other still
+// aboard and the bar now showing it alone. Another player's MSG_EXIT for the Humvee's rider does nothing (the rider must be
+// the sender's).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_riders_button_lets_exactly_that_rider_out)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	const ecs::Entity first = game.Place("AmericaInfantryRanger", site, {}, america);
+	const ecs::Entity second = game.Place("AmericaInfantryRanger", site, {}, america);
+	gameplay::PutInside(game.Game(), humvee, first);
+	gameplay::PutInside(game.Game(), humvee, second);
+	game.Tick();
+	const std::uint32_t player = world.Get<gp::Owner>(humvee)->player;
+	session::SessionView &view = game;
+	const std::array<ecs::Entity, 1> selection{humvee};
+	std::vector<commands::GameCommand> sent;
+	hud::ControlBarViewModel model([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	model.Apply(hud::ReadControlBar(view, player, selection));
+	BOOST_TEST(model.commandImage[4].Get() == "SARanger");
+	BOOST_TEST(model.commandClicked[4].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(std::holds_alternative<commands::Exit>(sent[0]));
+	BOOST_TEST((std::get<commands::Exit>(sent[0]).rider == second));
+	BOOST_TEST((std::get<commands::Exit>(sent[0]).container == humvee));
+
+	// Another player's order for it: nothing.
+	gameplay::ApplyCommand(game.Game(), player + 1, sent[0]);
+	game.Tick();
+	BOOST_TEST(world.Has<gp::Passenger>(second));
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Count(humvee) == 2u);
+
+	gameplay::ApplyCommand(game.Game(), player, sent[0]);
+	game.Tick();
+	BOOST_TEST(!world.Has<gp::Passenger>(second));
+	BOOST_TEST(!world.Has<gp::OffMap>(second));
+	BOOST_TEST(world.Has<gp::Passenger>(first));
+	BOOST_TEST(world.Resource<gp::CargoManifest>().Count(humvee) == 1u);
+	const hud::ControlBarState bar = hud::ReadControlBar(view, player, selection);
+	BOOST_TEST((bar.slots[3].rider == first));
+	BOOST_TEST((bar.slots[4].rider == ecs::Entity{}));
+}
+
+// Legacy parity (TransportContain::onContaining / onRemoving: letRidersUpgradeWeaponSet with
+// ArmedRidersUpgradeMyWeaponSet; wakeUpAndAttemptToTarget with ResetMoodCheckTimeOnExit): the Air Force General's
+// Combat Chinook takes WEAPONSET_PLAYER_UPGRADE (its ListeningOutpostUpgradedDummyWeapon) on the tick a Ranger (a
+// ranged damage weapon) gets in, and drops it on the tick the Ranger gets out; the Ranger, walked out, looks for a target
+// ForceIdle frames after its exit path ends (its exit state is no idle one, so the wake-up on exit passes it by). One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_combat_chinook_arms_with_its_riders)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const std::uint32_t upgraded = content::SetFlag(content::WeaponSetFlagNames, "PLAYER_UPGRADE");
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+		const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+		const ecs::Entity chinook = game.Place("AirF_AmericaVehicleChinook", site, {}, america);
+		const ecs::Entity ranger = game.Place("AmericaInfantryRanger", site + Engine::Math::FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, america);
+		BOOST_TEST_REQUIRE(world.Get<gp::Transport>(chinook)->definition.armedRidersUpgrade);
+		game.Tick();
+		gameplay::OrderBoard(game.Game(), ranger, chinook, true);
+		std::uint64_t boarded = 0;
+		for (int tick = 0; tick < 900 && boarded == 0; ++tick)
+		{
+			game.Tick();
+			if (world.Has<gp::Passenger>(ranger))
+			{
+				boarded = game.CurrentTick();
+				BOOST_TEST(((world.Get<gp::Loadout>(chinook)->weaponFlags & upgraded) != 0));
+			}
+			else
+				BOOST_TEST(((world.Get<gp::Loadout>(chinook)->weaponFlags & upgraded) == 0));
+		}
+		BOOST_TEST_REQUIRE(boarded != 0u);
+		for (int tick = 0; tick < 30; ++tick)
+			game.Tick();
+		const std::uint32_t player = world.Get<gp::Owner>(chinook)->player;
+		gameplay::ApplyCommand(game.Game(), player, commands::Exit{ranger, chinook});
+		std::uint64_t out = 0;
+		for (int tick = 0; tick < 300 && out == 0; ++tick)
+		{
+			game.Tick();
+			if (!world.Has<gp::Passenger>(ranger))
+			{
+				out = game.CurrentTick();
+				BOOST_TEST(((world.Get<gp::Loadout>(chinook)->weaponFlags & upgraded) == 0));
+			}
+		}
+		BOOST_TEST_REQUIRE(out != 0u);
+		// Walked out (OpenContain::exitObjectViaDoor's aiFollowPath: not idle as it leaves, so wakeUpAndAttemptToTarget
+		// does nothing), then idle at the end of its exit path: AIIdleState::onEnter's resetNextMoodCheckTime,
+		// ForceIdleMSEC (Data/INI/Default/AIData.ini 67 ms: parseDurationUnsignedInt's ceil(2.01), 3 frames) on.
+		std::uint64_t idle = 0;
+		for (int tick = 0; tick < 300 && idle == 0; ++tick)
+		{
+			game.Tick();
+			if (world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Idle)
+				idle = game.CurrentTick();
+		}
+		BOOST_TEST_REQUIRE(idle != 0u);
+		BOOST_TEST(idle > out);
+		// (Its targeting runs before its movement: it takes the idle entry of the tick its move ended the tick after.)
+		game.Tick();
+		BOOST_TEST(world.Get<gp::Aggression>(ranger)->nextScan == idle + 3);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (TransportContain::isExitBusy with DelayExitInAir, AIExitState::update): a GLAVehicleBattleBus
+// (DelayExitInAir Yes) thrown into the air with a Rebel aboard who asked to get out keeps him in while it is above the
+// terrain at all; he gets out on the frame it is back down. One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_battle_bus_in_the_air_lets_no_one_out)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const auto gla = *game.Teams().FindTeam(match->skirmish.players[1].team);
+		const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+		const ecs::Entity bus = game.Place("GLAVehicleBattleBus", site, {}, gla);
+		const ecs::Entity rebel = game.Place("GLAInfantryRebel", site, {}, gla);
+		BOOST_TEST_REQUIRE(world.Get<gp::Transport>(bus)->definition.delayExitInAir);
+		gameplay::PutInside(game.Game(), bus, rebel);
+		game.Tick();
+		// Thrown up (as by a shock wave: physics alone moves it until it lands).
+		world.Get<gp::Transform>(bus)->position.z += Fixed::FromInt(40);
+		world.Get<gp::PhysicsBody>(bus)->Set(gp::physics_flag::Pushed, true);
+		const std::uint32_t player = world.Get<gp::Owner>(bus)->player;
+		gameplay::ApplyCommand(game.Game(), player, commands::Exit{rebel, bus});
+		std::uint64_t landed = 0, out = 0;
+		for (int tick = 0; tick < 300 && out == 0; ++tick)
+		{
+			game.Tick();
+			const auto &at = world.Get<gp::Transform>(bus)->position;
+			const bool above = at.z > game.Game().ground.At(at.XY());
+			if (landed == 0 && !above)
+				landed = game.CurrentTick();
+			if (!world.Has<gp::Passenger>(rebel))
+				out = game.CurrentTick();
+			else if (landed != 0)
+				BOOST_TEST_MESSAGE("down at " << landed << " still in at " << game.CurrentTick());
+		}
+		BOOST_TEST_REQUIRE(landed != 0u);
+		BOOST_TEST(out == landed);
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (MissileAIUpdate::projectileHandleCollision with GarrisonHitKillCount): a China Dragon tank's flame
+// (DragonTankFlameProjectile: GarrisonHitKillCount 2, GarrisonHitKillRequiredKindOf INFANTRY) that runs into a Chalet
+// holding four American Rangers kills two of them outright (Object::kill, the Dragon credited) and is gone without
+// going off. The building takes nothing from that flame, and the other two stay inside until the next flame. One and
+// four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dragon_tanks_flame_clears_a_garrison_two_at_a_time)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+		const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+		const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+		const ecs::Entity house = game.Place("Chalet", site, {}, america);
+		std::vector<ecs::Entity> rangers;
+		for (int index = 0; index < 4; ++index)
+		{
+			rangers.push_back(game.Place("AmericaInfantryRanger", site, {}, america));
+			gameplay::PutInside(game.Game(), house, rangers.back());
+		}
+		const ecs::Entity dragon = game.Place("ChinaTankDragon", site + Engine::Math::FixedVector2{Fixed::FromInt(90), Fixed{}}, {}, china);
+		game.Tick();
+		const Fixed whole = world.Get<gp::Health>(house)->current;
+		gameplay::OrderAttack(game.Game(), dragon, house);
+		const auto alive = [&] {
+			return std::count_if(rangers.begin(), rangers.end(), [&](ecs::Entity ranger) {
+				return world.IsAlive(ranger) && world.Get<gp::Health>(ranger)->current > Fixed{};
+			});
+		};
+		std::vector<std::uint64_t> clears;
+		std::ptrdiff_t before = alive();
+		for (int tick = 0; tick < 600 && clears.size() < 2; ++tick)
+		{
+			game.Tick();
+			const std::ptrdiff_t now = alive();
+			if (now != before)
+			{
+				BOOST_TEST(before - now == 2);
+				clears.push_back(game.CurrentTick());
+				before = now;
+			}
+		}
+		BOOST_TEST_REQUIRE(clears.size() == 2u);
+		BOOST_TEST(alive() == 0);
+		// No flame went off on the building while it held someone.
+		BOOST_TEST((world.Get<gp::Health>(house)->current == whole));
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (TransportAIUpdate::privateAttackPosition): a player's attack-position order to a Humvee (TransportAIUpdate,
+// PassengersAllowedToFire) goes to each Ranger riding in it first (aiAttackPosition with the same shots), then the
+// Humvee attacks the spot itself. Its own AI's order stays its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_transport_passes_an_attack_position_order_to_its_riders)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	std::vector<ecs::Entity> rangers;
+	for (int index = 0; index < 2; ++index)
+	{
+		rangers.push_back(game.Place("AmericaInfantryRanger", site, {}, america));
+		gameplay::PutInside(game.Game(), humvee, rangers.back());
+	}
+	game.Tick();
+	const Engine::Math::FixedVector3 spot{site.x + Fixed::FromInt(120), site.y, game.Game().ground.At(site + Engine::Math::FixedVector2{Fixed::FromInt(120), Fixed{}})};
+	gameplay::OrderAttackPosition(game.Game(), humvee, spot, 3, false);
+	for (const ecs::Entity ranger : rangers)
+		BOOST_TEST(world.Get<gp::AttackTarget>(ranger)->atPosition == 0u); // its own AI's: not passed on
+	gameplay::OrderAttackPosition(game.Game(), humvee, spot, 3, true);
+	for (const ecs::Entity ranger : rangers)
+	{
+		const auto &attack = *world.Get<gp::AttackTarget>(ranger);
+		BOOST_TEST(attack.atPosition == 1u);
+		BOOST_TEST((attack.position == spot));
+		BOOST_TEST(attack.shotsLeft == 3u);
+	}
+	BOOST_TEST(world.Get<gp::AttackTarget>(humvee)->atPosition == 1u);
+}
+
+// Legacy parity (ControlBar::evaluateContextUI / populateStructureInventory / populateButtonProc,
+// ControlBarStructureInventory.cpp): a Tent01 (GarrisonContain ContainMax 4, no CommandSet) of the player's shows the
+// structure inventory: Command_StructureExit in windows 1..4, disabled and dimmed (ALWAYS_COLOR) while empty, 5..10
+// hidden; its riders fill windows from the first (art, rank, enabled); Stop (window 11) and Evacuate (window 12) are
+// enabled only with someone inside. A Chalet (ContainMax 10) of the neutral player, empty, shows the same to the player
+// (NEUTRAL to it): ten disabled windows, Stop and Evacuate disabled. Pressing a rider's window lets that one out.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_garrisoned_building_shows_its_structure_inventory)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity tent = game.Place("Tent01", site, {}, america);
+	const std::uint32_t player = world.Get<gp::Owner>(tent)->player;
+	session::SessionView &view = game;
+	const std::array<ecs::Entity, 1> selection{tent};
+	hud::ControlBarState bar = hud::ReadControlBar(view, player, selection);
+	BOOST_TEST((bar.selected == tent));
+	for (std::size_t slot = 0; slot < hud::StructureInventoryButtons; ++slot)
+	{
+		BOOST_TEST_REQUIRE(bar.slots[slot].button != nullptr);
+		BOOST_TEST(bar.slots[slot].button->name == "Command_StructureExit");
+		BOOST_TEST(bar.slots[slot].alwaysColor);
+		BOOST_TEST((bar.slots[slot].state == (slot < 4 ? gameplay::ButtonState::Restricted : gameplay::ButtonState::Hidden)));
+	}
+	BOOST_TEST_REQUIRE(bar.slots[hud::StructureStopSlot].button != nullptr);
+	BOOST_TEST(bar.slots[hud::StructureStopSlot].button->name == "Command_Stop");
+	BOOST_TEST((bar.slots[hud::StructureStopSlot].state == gameplay::ButtonState::Restricted));
+	BOOST_TEST_REQUIRE(bar.slots[hud::StructureEvacuateSlot].button != nullptr);
+	BOOST_TEST(bar.slots[hud::StructureEvacuateSlot].button->name == "Command_Evacuate");
+	BOOST_TEST((bar.slots[hud::StructureEvacuateSlot].state == gameplay::ButtonState::Restricted));
+	BOOST_TEST(bar.slots[12].button == nullptr);
+
+	const ecs::Entity first = game.Place("AmericaInfantryRanger", site, {}, america);
+	const ecs::Entity second = game.Place("AmericaInfantryRanger", site, {}, america);
+	world.Get<gp::Experience>(second)->level = 2;
+	gameplay::PutInside(game.Game(), tent, first);
+	gameplay::PutInside(game.Game(), tent, second);
+	game.Tick();
+	bar = hud::ReadControlBar(view, player, selection);
+	BOOST_TEST((bar.slots[0].rider == first));
+	BOOST_TEST((bar.slots[0].state == gameplay::ButtonState::Available));
+	BOOST_TEST(bar.slots[0].image == "SARanger");
+	BOOST_TEST((bar.slots[1].rider == second));
+	BOOST_TEST(bar.slots[1].overlay == "SSChevron2L");
+	BOOST_TEST((bar.slots[2].state == gameplay::ButtonState::Restricted));
+	BOOST_TEST((bar.slots[hud::StructureStopSlot].state == gameplay::ButtonState::Available));
+	BOOST_TEST((bar.slots[hud::StructureEvacuateSlot].state == gameplay::ButtonState::Available));
+
+	std::vector<commands::GameCommand> sent;
+	hud::ControlBarViewModel model([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	model.Apply(bar);
+	BOOST_TEST(model.commandAlwaysColor[1].Get());
+	BOOST_TEST(model.commandOverlay[1].Get() == "SSChevron2L");
+	BOOST_TEST(model.commandClicked[0].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	gameplay::ApplyCommand(game.Game(), player, sent[0]);
+	game.Tick();
+	BOOST_TEST(!world.Has<gp::Passenger>(first));
+	BOOST_TEST(world.Has<gp::Passenger>(second));
+
+	// A neutral building: its inventory, empty.
+	const auto neutral = game.Teams().FindTeam("team");
+	BOOST_TEST_REQUIRE(neutral.has_value());
+	const ecs::Entity chalet = game.Place("Chalet", site + Engine::Math::FixedVector2{Fixed::FromInt(300), Fixed{}}, {}, *neutral);
+	const std::uint32_t nobody = world.Get<gp::Owner>(chalet)->player;
+	BOOST_TEST_REQUIRE((world.Resource<gp::Relationships>().Between(player, nobody) == gp::Relationship::Neutral));
+	const std::array<ecs::Entity, 1> theirs{chalet};
+	bar = hud::ReadControlBar(view, player, theirs);
+	BOOST_TEST((bar.selected == chalet));
+	for (std::size_t slot = 0; slot < hud::StructureInventoryButtons; ++slot)
+		BOOST_TEST((bar.slots[slot].state == gameplay::ButtonState::Restricted));
+	BOOST_TEST((bar.slots[hud::StructureEvacuateSlot].state == gameplay::ButtonState::Restricted));
+	// An enemy's: nothing.
+	const auto china = *game.Teams().FindTeam(match->skirmish.players[1].team);
+	const ecs::Entity enemyTent = game.Place("Tent01", site + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed{}}, {}, china);
+	const std::array<ecs::Entity, 1> enemy{enemyTent};
+	bar = hud::ReadControlBar(view, player, enemy);
+	BOOST_TEST((bar.selected == ecs::Entity{}));
+	BOOST_TEST(bar.slots[0].button == nullptr);
+}
+
+// Legacy parity (TunnelContain::iterateContained / isContained, TunnelTracker; AIExitState via the selected tunnel): a
+// rebel that went into one GLA tunnel shows in another tunnel of the same network's inventory (GLATunnelNetworkCommandSet
+// exits in slots 1..10, MaxTunnelCapacity 10), and its button there lets it out of that other tunnel, in that same frame.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_tunnel_lets_a_rider_out_where_it_is_selected)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity near = game.Place("GLATunnelNetwork", site, {}, america);
+	const ecs::Entity far = game.Place("GLATunnelNetwork", site + Engine::Math::FixedVector2{Fixed::FromInt(400), Fixed{}}, {}, america);
+	const ecs::Entity rebel = game.Place("GLAInfantryRebel", site, {}, america);
+	gameplay::PutInside(game.Game(), near, rebel);
+	game.Tick();
+	const std::uint32_t player = world.Get<gp::Owner>(far)->player;
+	session::SessionView &view = game;
+	const std::array<ecs::Entity, 1> selection{far};
+	const hud::ControlBarState bar = hud::ReadControlBar(view, player, selection);
+	for (std::size_t slot = 0; slot < 10; ++slot)
+	{
+		BOOST_TEST_REQUIRE(IsExit(bar.slots[slot]));
+		BOOST_TEST((bar.slots[slot].state == gameplay::ButtonState::Available));
+	}
+	BOOST_TEST((bar.slots[0].rider == rebel));
+	BOOST_TEST(bar.slots[0].image == "SURebel");
+	gameplay::ApplyCommand(game.Game(), player, commands::Exit{rebel, far});
+	game.Tick();
+	BOOST_TEST(!world.Has<gp::Passenger>(rebel));
+	const auto at = world.Get<gp::Transform>(rebel)->position.XY();
+	BOOST_TEST((Engine::Math::DistanceSquared(at, world.Get<gp::Transform>(far)->position.XY()) <
+		Engine::Math::DistanceSquared(at, world.Get<gp::Transform>(near)->position.XY())));
+}
+
+// Legacy parity (OpenContain::exitObjectViaDoor with NumberOfExitPaths, m_whichExitPath; Object::
+// getSingleLogicalBonePosition): an America Humvee (NumberOfExitPaths 3) lets its three riders out at its ExitStart01,
+// ExitStart02 and ExitStart03 bones in turn (where they rest in its model, turned and moved with it), each facing the
+// Humvee's way, walking to the matching ExitEnd bone and ignoring collisions for a second (setIgnoreCollisionTime 30).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_humvees_riders_leave_by_its_exit_paths_in_turn)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto paths = shell.game.transportExitPaths.find("AmericaVehicleHumvee");
+	BOOST_TEST_REQUIRE((paths != shell.game.transportExitPaths.end()));
+	BOOST_TEST_REQUIRE(paths->second.starts.size() == 3u);
+	BOOST_TEST((paths->second.starts[0] != paths->second.starts[1] && paths->second.starts[1] != paths->second.starts[2]));
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-200), Fixed::FromInt(-250)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, Engine::Math::TurnFromDegrees(30), america);
+	std::array<ecs::Entity, 3> rangers{};
+	for (auto &ranger : rangers)
+	{
+		ranger = game.Place("GLAInfantryRebel", site, {}, america);
+		gameplay::PutInside(game.Game(), humvee, ranger);
+	}
+	game.Tick();
+	const std::uint32_t player = world.Get<gp::Owner>(humvee)->player;
+	gameplay::ApplyCommand(game.Game(), player, commands::Evacuate{{humvee}});
+	const auto frame = *world.Get<gp::Transform>(humvee);
+	const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+	const auto inWorld = [&](const Engine::Math::FixedVector3 &bone) {
+		return frame.position + Engine::Math::FixedVector3{bone.x * c - bone.y * s, bone.x * s + bone.y * c, bone.z};
+	};
+	std::vector<ecs::Entity> order;
+	for (int tick = 0; tick < 300 && order.size() < 3; ++tick)
+	{
+		game.Tick();
+		for (const ecs::Entity ranger : rangers)
+			if (!world.Has<gp::Passenger>(ranger) && std::ranges::find(order, ranger) == order.end())
+			{
+				const std::size_t path = order.size();
+				order.push_back(ranger);
+				const auto &at = *world.Get<gp::Transform>(ranger);
+				BOOST_TEST((at.position.XY() == inWorld(paths->second.starts[path]).XY()));
+				BOOST_TEST((at.facing.units == frame.facing.units));
+				BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->destination == inWorld(paths->second.ends[path]).XY()));
+				if (const auto *blocked = world.Get<gp::BlockedState>(ranger))
+					BOOST_TEST(blocked->ignoreUntil == game.CurrentTick() + 30);
+			}
+	}
+	BOOST_TEST(order.size() == 3u);
+}
+
+// Legacy parity (TransportContain::onRemoving with ResetMoodCheckTimeOnExit (default Yes) -> AIUpdateInterface::
+// wakeUpAndAttemptToTarget: m_nextMoodCheckTime = now, m_randomlyOffsetMoodCheck = TRUE; getNextMoodTarget: the look
+// after that MoodAttackCheckRate on, moved by GameLogicRandomValue(-rate / 2, rate / 2) once, the flag then cleared): an
+// idle Ranger leaving a Humvee looks for a target on the next targeting pass, and its look after is the check rate on,
+// offset by at most half of it; the one after that exactly the rate.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_rider_out_of_a_transport_looks_at_once_then_randomly_offset)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", site + Engine::Math::FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, america);
+	BOOST_TEST_REQUIRE(world.Get<gp::Transport>(humvee)->definition.resetMoodOnExit);
+	for (int tick = 0; tick < 60; ++tick) // settled idle: its idle entry's offset look long done
+		game.Tick();
+	BOOST_TEST_REQUIRE((world.Get<gp::Aggression>(ranger)->moodFlags & gp::mood_flag::OffsetNext) == 0);
+	// It gets out (onRemoving), idle where it stands.
+	game.Game().manifest.Board(humvee, ranger, true);
+	game.Game().manifest.ClearChanges();
+	BOOST_TEST_REQUIRE((game.Game().manifest.Take(humvee, ranger) == ranger));
+	const std::uint64_t out = game.Game().tick;
+	gameplay::ApplyTransportRiders(game.Game());
+	game.Game().manifest.ClearChanges();
+	const gp::Aggression &aggression = *world.Get<gp::Aggression>(ranger);
+	BOOST_TEST(aggression.nextScan == out);
+	BOOST_TEST((aggression.moodFlags & gp::mood_flag::OffsetNext) != 0);
+	const std::uint64_t rate = aggression.scanInterval;
+	const std::uint64_t half = rate >> 1;
+	game.Tick(); // its look: the next targeting pass
+	const std::uint64_t looked = game.CurrentTick();
+	BOOST_TEST(aggression.nextScan >= looked + rate - half);
+	BOOST_TEST(aggression.nextScan <= looked + rate + half);
+	BOOST_TEST((aggression.moodFlags & gp::mood_flag::OffsetNext) == 0);
+	const std::uint64_t offset = aggression.nextScan;
+	while (game.CurrentTick() < offset)
+		game.Tick();
+	BOOST_TEST(aggression.nextScan == offset + rate);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

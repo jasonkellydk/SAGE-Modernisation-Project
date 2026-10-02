@@ -1,15 +1,6 @@
-module;
-
-#include <cassert>
-#include <cstddef>
-#include <limits>
-#include <memory>
-#include <new>
-#include <stdexcept>
-#include <utility>
-#include <vector>
-
 export module engine.ecs.storage.chunk;
+import std;
+import engine.core.contracts;
 
 export import engine.ecs.core.entity;
 export import engine.ecs.core.component_registry;
@@ -75,7 +66,7 @@ Chunk::Chunk(ChunkLayout layout, std::vector<const ComponentInfo *> components) 
 
 Chunk::~Chunk()
 {
-	assert(m_reservedRow == InvalidRow);
+	engine::core::Assert(m_reservedRow == InvalidRow);
 	for (std::size_t row = 0; row < m_size; ++row)
 	{
 		for (const ComponentInfo *info : m_components)
@@ -90,16 +81,16 @@ Chunk::~Chunk()
 
 std::size_t Chunk::ReserveRow() noexcept
 {
-	assert(!IsFull());
-	assert(m_reservedRow == InvalidRow);
+	engine::core::Assert(!IsFull());
+	engine::core::Assert(m_reservedRow == InvalidRow);
 	m_reservedRow = m_size;
 	return m_reservedRow;
 }
 
 void Chunk::PublishRow(const Entity entity, const std::size_t row) noexcept
 {
-	assert(m_reservedRow == row);
-	assert(row == m_size);
+	engine::core::Assert(m_reservedRow == row);
+	engine::core::Assert(row == m_size);
 	Entities()[row] = entity;
 	++m_size;
 	m_reservedRow = InvalidRow;
@@ -107,7 +98,7 @@ void Chunk::PublishRow(const Entity entity, const std::size_t row) noexcept
 
 void Chunk::CancelRow(const std::size_t row) noexcept
 {
-	assert(m_reservedRow == row);
+	engine::core::Assert(m_reservedRow == row);
 	m_reservedRow = InvalidRow;
 }
 
@@ -173,8 +164,8 @@ void Chunk::AddEntity(Entity entity)
 
 Entity Chunk::RemoveSwap(std::size_t row)
 {
-	assert(m_reservedRow == InvalidRow);
-	assert(row < m_size);
+	engine::core::Assert(m_reservedRow == InvalidRow);
+	engine::core::Assert(row < m_size);
 	const std::size_t last = m_size - 1;
 	if (row == last)
 	{

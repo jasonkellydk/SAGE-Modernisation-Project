@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Scene.Lines.Tracer;
+import std;
 
 export import Graphics.Scene.Props.Geometry;
 export import Graphics.Scene.Props.Renderer;

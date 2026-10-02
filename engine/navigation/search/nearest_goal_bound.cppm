@@ -1,11 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <optional>
-#include <stdexcept>
-
 export module engine.navigation.search.nearest_goal_bound;
+import std;
 export namespace navigation {
 // Resumable distance-only endpoint bound. Acceptance must read a stable view
 // throughout the scan. One work credit is one in-bounds layer candidate.

@@ -1,0 +1,490 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <random>
+#include <vector>
+
+import games.generalszh.presentation.objects.algorithms.emp_look;
+import games.generalszh.presentation.objects.algorithms.emp_sparks;
+import games.generalszh.presentation.objects.systems.disable_presentation_systems;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import games.generalszh.presentation.effects.effects_content;
+import engine.effects.particles.simulation.particle_world;
+
+using namespace generalszh::presentation;
+
+namespace
+{
+// Timed as the shipped EMPPulseEffectSpheroid (StartFadeTime 300 ms: 9 ticks, Lifetime 3000 ms: 90 ticks), with
+// a start scale of 0.3 and colours chosen apart so every channel is seen: StartColor R:255 G:0 B:128, EndColor
+// R:0 G:255 B:51.
+DefinitionLooks Pulse()
+{
+	DefinitionLooks looks;
+	looks.emp = true;
+	looks.empStartScale = 0.3f;
+	looks.empFadeTicks = 9;
+	looks.empStartTint = {255.0f / 255.0f * 2.0f - 1.0f, -1.0f, 128.0f / 255.0f * 2.0f - 1.0f};
+	looks.empEndTint = {-2.5f, 2.5f, 51.0f / 255.0f * 5.0f - 2.5f};
+	return looks;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(emp_look)
+
+// EMPUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/EMPUpdate.cpp): made on tick 100 (pulse
+// tick 109, dying 190) with a target of 2: on tick 100 it is still its start scale, untinted; each later tick
+// m_currentScale += (target - current) * 0.05 (tick 101: 0.385, tick 102: 0.46575); until tick 108 it is tinted
+// saturateRGB(StartColor, 2) (colorTint: a zero-frame attack, there at once); on tick 109 colorFlash(saturateRGB(
+// EndColor, 5), attack m_tintEnvFadeFrames = 81) and TintEnvelope::update's first step: 1/81 of the way, 41/81 on tick
+// 149, all of it on tick 189, held after. Float tolerance 1e-5 for pow against the repeated multiply.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_emp_pulse_grows_and_fades_its_tint_tick_by_tick)
+{
+	const DefinitionLooks looks = Pulse();
+	const auto at = [&](double tick) { return EmpPulseLook(looks, 2.0f, 109, 190, tick); };
+	BOOST_TEST(at(100).scale == 0.3f);
+	BOOST_TEST((at(100).tint == std::array<float, 3>{}));
+	BOOST_TEST(std::abs(at(101).scale - 0.385f) < 1e-5f);
+	BOOST_TEST(std::abs(at(102).scale - 0.46575f) < 1e-5f);
+	float current = 0.3f;
+	for (int tick = 101; tick <= 180; ++tick)
+	{
+		current += (2.0f - current) * 0.05f;
+		BOOST_TEST_REQUIRE(std::abs(at(tick).scale - current) < 1e-5f);
+	}
+	for (int tick = 101; tick <= 108; ++tick)
+		for (std::size_t channel = 0; channel < 3; ++channel)
+			BOOST_TEST_REQUIRE(std::abs(at(tick).tint[channel] - looks.empStartTint[channel]) < 1e-6f);
+	const auto step = [&](std::size_t channel, float steps) {
+		return looks.empStartTint[channel] + (looks.empEndTint[channel] - looks.empStartTint[channel]) * steps / 81.0f;
+	};
+	for (std::size_t channel = 0; channel < 3; ++channel)
+	{
+		BOOST_TEST(std::abs(at(109).tint[channel] - step(channel, 1.0f)) < 1e-5f);
+		BOOST_TEST(std::abs(at(149).tint[channel] - step(channel, 41.0f)) < 1e-5f);
+		BOOST_TEST(std::abs(at(189).tint[channel] - looks.empEndTint[channel]) < 1e-5f);
+		BOOST_TEST(std::abs(at(195).tint[channel] - looks.empEndTint[channel]) < 1e-5f);
+	}
+	// Between ticks it moves smoothly (half a tick past 101: between 101's and 102's scale).
+	const float between = at(101.5).scale;
+	BOOST_TEST((between > at(101).scale && between < at(102).scale));
+}
+
+// EMPUpdate::doDisableAttack: MAX(15, ceil(SparksPerCubicFoot * footprint area * MIN(height, 10))) emitters. A tank-sized
+// box (major 20, minor 10: 800 square feet, 12 high: counted as 10) at 0.01 gets 80; at the default 0.001 it gets the 15
+// least; a cylinder of radius 40, 30 high, at 0.01: ceil(pi * 1600 * 10 * 0.01) = 503.
+BOOST_AUTO_TEST_CASE(legacy_parity_emp_sparks_are_counted_by_footprint_and_height)
+{
+	DefinitionLooks tank;
+	tank.boxFootprint = true;
+	tank.majorRadius = 20.0f;
+	tank.minorRadius = 10.0f;
+	tank.constructionHeight = 12.0f;
+	BOOST_TEST(EmpSparkCount(0.01f, tank) == 80u);
+	BOOST_TEST(EmpSparkCount(0.001f, tank) == 15u);
+	DefinitionLooks silo;
+	silo.majorRadius = 40.0f;
+	silo.constructionHeight = 30.0f;
+	BOOST_TEST(EmpSparkCount(0.01f, silo) == 503u);
+}
+
+// makeRandomOffsetWithinFootprint and the dome: every spark lies over its footprint, at a whole height of 3 up to its
+// height, and no farther from its centre than its height allows (a spark beyond its height from the centre has its
+// height brought down to height * z / distance).
+BOOST_AUTO_TEST_CASE(legacy_parity_emp_sparks_sit_in_a_dome_over_the_footprint)
+{
+	DefinitionLooks box;
+	box.boxFootprint = true;
+	box.majorRadius = 30.0f;
+	box.minorRadius = 8.0f;
+	box.constructionHeight = 12.0f;
+	DefinitionLooks round;
+	round.majorRadius = 5.0f;
+	round.constructionHeight = 40.0f;
+	std::mt19937 random{7};
+	for (int index = 0; index < 500; ++index)
+	{
+		const auto b = EmpSparkOffset(box, random);
+		BOOST_TEST_REQUIRE((std::abs(b[0]) <= 30.0f && std::abs(b[1]) <= 8.0f && b[2] > 0.0f && b[2] <= 12.0f));
+		const float flat = std::sqrt(b[0] * b[0] + b[1] * b[1]);
+		if (flat + 3.0f > 12.0f) // beyond its height from the centre: brought down
+			BOOST_TEST_REQUIRE(b[2] < 12.0f);
+		const auto r = EmpSparkOffset(round, random);
+		BOOST_TEST_REQUIRE((r[0] * r[0] + r[1] * r[1] <= 25.0f + 1e-3f));
+		BOOST_TEST_REQUIRE((r[2] > 0.0f && r[2] <= 40.0f));
+		BOOST_TEST_REQUIRE(std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]) <= std::sqrt(25.0f + 1600.0f));
+		// Inside its height from the centre it keeps its whole height.
+		if (std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]) < 40.0f)
+			BOOST_TEST_REQUIRE((r[2] >= 3.0f && r[2] == std::floor(r[2])));
+	}
+	// No higher than 3: its height (GameClientRandomValue(3, 2) is 2).
+	DefinitionLooks flat;
+	flat.majorRadius = 1.0f;
+	flat.constructionHeight = 2.0f;
+	BOOST_TEST(EmpSparkOffset(flat, random)[2] <= 2.0f);
+}
+
+// Object::setDisabledUntil / clearDisabled: a structure hears BuildingDisabled and a vehicle VehicleDisabled on the tick
+// it first loses power (EMP here); an already underpowered structure hit by EMP hears nothing more, nor anything while it
+// stays so; the last of its power losses taken away it hears BuildingReenabled (a vehicle VehicleReenabled); losing power
+// again is heard again; infantry hear nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_losing_power_is_heard_once)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<DisableHeard>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(3);
+	catalog.known.assign(3, 1);
+	catalog.byDefinition[0].structure = true;
+	catalog.byDefinition[1].vehicle = true;
+	catalog.buildingDisabledSound = "BuildingPowerDown";
+	catalog.vehicleDisabledSound = "VehiclePowerDown";
+	catalog.buildingReenabledSound = "BuildingPowerUp";
+	catalog.vehicleReenabledSound = "VehiclePowerUp";
+	world.EmplaceResource<SoundRequests>();
+	world.EmplaceResource<generalszh::gameplay::UnmannedNotices>();
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Transform>(entity);
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		world.Add<gp::Disabled>(entity);
+		return entity;
+	};
+	const ecs::Entity plant = make(0), tank = make(1), soldier = make(2), dark = make(0);
+	world.Get<gp::Disabled>(dark)->mask = gp::disabled_type::Underpowered;
+	DisabledSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	auto &heard = world.Resource<SoundRequests>().pending;
+	const auto step = [&] {
+		heard.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<std::string> names;
+		for (const auto &sound : heard)
+			names.push_back(sound.sound);
+		return names;
+	};
+	BOOST_TEST(step().size() == 1u); // the one already dark when first seen
+	for (const ecs::Entity victim : {plant, tank, soldier, dark})
+		world.Get<gp::Disabled>(victim)->mask |= gp::disabled_type::Emp;
+	const auto first = step();
+	BOOST_TEST_REQUIRE(first.size() == 2u);
+	BOOST_TEST(first[0] == "BuildingPowerDown");
+	BOOST_TEST(first[1] == "VehiclePowerDown");
+	BOOST_TEST(step().empty());
+	world.Get<gp::Disabled>(plant)->mask = 0;
+	world.Get<gp::Disabled>(dark)->mask = gp::disabled_type::Underpowered; // still dark: nothing
+	const auto back = step();
+	BOOST_TEST_REQUIRE(back.size() == 1u);
+	BOOST_TEST(back[0] == "BuildingPowerUp");
+	world.Get<gp::Disabled>(tank)->mask = 0;
+	world.Get<gp::Disabled>(soldier)->mask = 0;
+	const auto rolling = step();
+	BOOST_TEST_REQUIRE(rolling.size() == 1u);
+	BOOST_TEST(rolling[0] == "VehiclePowerUp");
+	world.Get<gp::Disabled>(plant)->mask = gp::disabled_type::Hacked;
+	const auto again = step();
+	BOOST_TEST_REQUIRE(again.size() == 1u);
+	BOOST_TEST(again[0] == "BuildingPowerDown");
+}
+
+// Object::setDisabledUntil(DISABLED_UNMANNED) (Object.cpp) on anything not a DRONE: MiscAudio's SplatterVehiclePilotsBrain
+// where it is, for each call (ActiveBody::attemptDamage's KILL_PILOT, NeutronBlastBehavior, a script's SET_UNMANNED), a
+// vehicle already unmanned set so again too (a second neutron shell over it); a drone left unmanned splatters nothing;
+// losing a pilot is not losing power (no BuildingDisabled / VehicleDisabled).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sniped_pilot_splatters_where_his_vehicle_is)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<DisableHeard>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(2);
+	catalog.known.assign(2, 1);
+	catalog.byDefinition[0].vehicle = true;
+	catalog.byDefinition[1].vehicle = true;
+	catalog.byDefinition[1].drone = true;
+	catalog.pilotSplatterSound = "VehicleSnipeVictim";
+	catalog.vehicleDisabledSound = "BuildingDisabled";
+	world.EmplaceResource<SoundRequests>();
+	auto &notices = world.EmplaceResource<generalszh::gameplay::UnmannedNotices>().list;
+	const auto make = [&](std::uint32_t definition, int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Transform>(entity);
+		world.Get<gp::Transform>(entity)->position = {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(5), Engine::Math::Fixed::FromInt(1)};
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		world.Add<gp::Disabled>(entity);
+		return entity;
+	};
+	const ecs::Entity tank = make(0, 40), drone = make(1, 80);
+	DisabledSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	auto &heard = world.Resource<SoundRequests>().pending;
+	const auto step = [&] {
+		heard.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		notices.clear(); // the simulation's, cleared as the next tick begins
+	};
+	step();
+	BOOST_TEST(heard.empty());
+	world.Get<gp::Disabled>(tank)->mask |= gp::disabled_type::Unmanned;
+	world.Get<gp::Disabled>(drone)->mask |= gp::disabled_type::Unmanned;
+	notices = {{tank, 0}, {drone, 1}};
+	step();
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "VehicleSnipeVictim");
+	BOOST_TEST(heard[0].at[0] == 40.0f);
+	BOOST_TEST(heard[0].at[1] == 5.0f);
+	BOOST_TEST(heard[0].at[2] == 1.0f);
+	BOOST_TEST(heard[0].positioned);
+	step();
+	BOOST_TEST(heard.empty()); // unmanned it stays; nothing set it so again
+	notices = {{tank, 0}}; // a second neutron shell over it: setDisabled(DISABLED_UNMANNED) again
+	step();
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "VehicleSnipeVictim");
+}
+
+// EMPUpdate::doDisableAttack on a victim (a 20 by 10 box, 12 high: 15 emitters at the default density): each of its
+// sparks rides on it (attachToObject), starts 1 to 100 frames on (setInitialDelay) and runs for the disable less 30
+// frames (900: 870, setSystemLifetime, past the shipped EMPSparks' own SystemLifetime 150): all still running 800
+// frames on, all gone by 1100.
+BOOST_AUTO_TEST_CASE(legacy_parity_emp_victims_crackle_for_their_disable)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<FxEmission>();
+	world.RegisterComponent<TintEnvelope>();
+	world.RegisterComponent<SelectionFlash>();
+	world.FinalizeComponents();
+	EffectsContent effects;
+	effects.particles.Define("EMPSparks").systemLifetime = 150;
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	world.EmplaceResource<PresentationRandom>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(2);
+	catalog.known.assign(2, 1);
+	catalog.byDefinition[0].emp = true;
+	catalog.byDefinition[0].empSparks = "EMPSparks";
+	DefinitionLooks &tank = catalog.byDefinition[1];
+	tank.boxFootprint = true;
+	tank.majorRadius = 20.0f;
+	tank.minorRadius = 10.0f;
+	tank.constructionHeight = 12.0f;
+	const auto make = [&](std::uint32_t definition) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Transform>(entity);
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		return entity;
+	};
+	const ecs::Entity pulse = make(0), victim = make(1);
+	world.EmplaceResource<generalszh::gameplay::AbilityNotices>();
+	world.EmplaceResource<gp::EmpStrikes>().list.push_back({victim, pulse, 900});
+	EmpSparkSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(particles.SystemCount() == 15u);
+	const FxEmission *riding = world.Side<FxEmission>().Get(victim);
+	BOOST_TEST_REQUIRE(riding != nullptr);
+	BOOST_TEST(riding->systems.size() == 15u);
+	for (const AttachedSystem &spark : riding->systems)
+		BOOST_TEST((std::abs(spark.local[0]) <= 20.0f && std::abs(spark.local[1]) <= 10.0f && spark.local[2] > 0.0f && spark.local[2] <= 12.0f));
+	for (int frame = 0; frame < 800; ++frame)
+		particles.Step();
+	BOOST_TEST(particles.SystemCount() == 15u);
+	for (int frame = 800; frame < 1100; ++frame)
+		particles.Step();
+	BOOST_TEST(particles.SystemCount() == 0u);
+}
+
+// TintEnvelope::play / update (GeneralsMD/Code/GameEngine/Source/GameClient/Drawable.cpp) for TINT_STATUS_DISABLED
+// (DARK_GRAY_DISABLED_COLOR, attack 30, decay 30, SUSTAIN_INDEFINITELY) at a logic frame a drawn frame: -0.5 / 30 more
+// each frame, -0.25 after 15; the 30th frame finds its step longer than what is left in floats (as the original's
+// Vector3 lengths do) and it holds there, one step short: -0.5 * 29 / 30;
+// released, it falls by 0.5 / 30 a frame and is at rest (no tint) once a step would pass zero. Released mid-attack (at
+// -0.25 after 15 frames) it falls at the same rate, gone after 8 more. Float tolerance 1e-5 for the summed steps.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_disabled_tint_fades_in_and_out_over_thirty_frames)
+{
+	const std::array<float, 3> gray{-0.5f, -0.5f, -0.5f};
+	TintEnvelope tint;
+	PlayTint(tint, gray, 30, 30, static_cast<float>(0xFFFFFFFEu));
+	for (int frame = 1; frame <= 15; ++frame)
+		StepTint(tint, 1.0f);
+	BOOST_TEST(std::abs(tint.current[0] + 0.25f) < 1e-5f);
+	BOOST_TEST(tint.affect == 1u);
+	for (int frame = 16; frame <= 31; ++frame)
+		StepTint(tint, 1.0f);
+	BOOST_TEST(tint.state == TintEnvelope::Sustain);
+	BOOST_TEST(std::abs(tint.current[1] + 0.5f * 29.0f / 30.0f) < 1e-4f);
+	for (int frame = 0; frame < 1000; ++frame)
+		StepTint(tint, 1.0f);
+	BOOST_TEST(tint.state == TintEnvelope::Sustain);
+	ReleaseTint(tint);
+	int frames = 0;
+	while (tint.affect != 0 && frames < 100)
+	{
+		StepTint(tint, 1.0f);
+		++frames;
+	}
+	BOOST_TEST(tint.state == TintEnvelope::Rest);
+	BOOST_TEST((frames >= 29 && frames <= 31));
+	StepTint(tint, 1.0f);
+	BOOST_TEST((tint.current == std::array<float, 3>{}));
+
+	TintEnvelope half;
+	PlayTint(half, gray, 30, 30, static_cast<float>(0xFFFFFFFEu));
+	for (int frame = 0; frame < 15; ++frame)
+		StepTint(half, 1.0f);
+	ReleaseTint(half);
+	frames = 0;
+	while (half.affect != 0 && frames < 100)
+	{
+		StepTint(half, 1.0f);
+		++frames;
+	}
+	BOOST_TEST((frames >= 14 && frames <= 16));
+}
+
+// TintStatusSystem: an EMP-disabled tank darkens; held or unmanned alone it does not; once its EMP ends it fades back.
+BOOST_AUTO_TEST_CASE(legacy_parity_disabled_things_are_tinted_dark_grey)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<TintEnvelope>();
+	world.RegisterComponent<SelectionFlash>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PresentationFrame>().seconds = 1.0f / 30.0f;
+	world.EmplaceResource<LookCatalog>();
+	const auto make = [&](std::uint32_t mask) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::Disabled>(entity);
+		world.Get<gp::Disabled>(entity)->mask = mask;
+		return entity;
+	};
+	const ecs::Entity tank = make(gp::disabled_type::Emp), held = make(gp::disabled_type::Held | gp::disabled_type::Unmanned);
+	TintStatusSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t frame = 0;
+	const auto run = [&](int frames) {
+		for (int index = 0; index < frames; ++index)
+			scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	};
+	run(40);
+	const TintEnvelope *dark = world.Side<TintEnvelope>().Get(tank);
+	BOOST_TEST_REQUIRE(dark != nullptr);
+	BOOST_TEST(std::abs(dark->current[0] + 0.5f * 29.0f / 30.0f) < 1e-4f); // held one step short (see above)
+	BOOST_TEST(world.Side<TintEnvelope>().Get(held) == nullptr);
+	world.Get<gp::Disabled>(tank)->mask = 0;
+	run(40);
+	BOOST_TEST(world.Side<TintEnvelope>().Get(tank)->affect == 0u);
+}
+
+// Drawable::updateDrawable's tint ladder, from Object::notifySubdualDamage: a tank gaining subdual damage fades to
+// SUBDUAL_DAMAGE_COLOR (-0.2, -0.2, 0.8) over 150 frames (held one step short, as the dark grey); subdued, dark grey
+// takes precedence (30 frames); no longer gaining nor disabled, it fades back.
+BOOST_AUTO_TEST_CASE(legacy_parity_things_gaining_subdual_damage_are_tinted_blue)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<gp::Subdual>();
+	world.RegisterComponent<TintEnvelope>();
+	world.RegisterComponent<SelectionFlash>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PresentationFrame>().seconds = 1.0f / 30.0f;
+	world.EmplaceResource<LookCatalog>();
+	const ecs::Entity tank = world.Create();
+	world.Add<gp::DefinitionRef>(tank);
+	world.Add<gp::Disabled>(tank);
+	world.Add<gp::Subdual>(tank);
+	world.Get<gp::Subdual>(tank)->gaining = 1;
+	TintStatusSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t frame = 0;
+	const auto run = [&](int frames) {
+		for (int index = 0; index < frames; ++index)
+			scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
+	};
+	// TintEnvelope::play / update's attack, step by step as the original's floats go: a step while more than one is left.
+	const auto attack = [](std::array<float, 3> current, const std::array<float, 3> &peak, int frames, int steps) {
+		const auto length = [](float x, float y, float z) { return std::sqrt(x * x + y * y + z * z); };
+		const std::array<float, 3> rate{(peak[0] - current[0]) * (1.0f / frames), (peak[1] - current[1]) * (1.0f / frames),
+			(peak[2] - current[2]) * (1.0f / frames)};
+		for (int step = 0; step < steps; ++step)
+		{
+			const float left = length(current[0] - peak[0], current[1] - peak[1], current[2] - peak[2]);
+			if (length(rate[0], rate[1], rate[2]) > left || left <= 0.001f)
+				break;
+			for (std::size_t channel = 0; channel < 3; ++channel)
+				current[channel] = rate[channel] + current[channel];
+		}
+		return current;
+	};
+	run(75);
+	const TintEnvelope *blue = world.Side<TintEnvelope>().Get(tank);
+	BOOST_TEST_REQUIRE(blue != nullptr);
+	BOOST_TEST(blue->status == 2u);
+	const std::array<float, 3> halfWay = attack({}, SubdualDamageColor, 150, 75);
+	BOOST_TEST(std::abs(blue->current[2] - halfWay[2]) < 1e-5f);
+	BOOST_TEST(std::abs(blue->current[2] - 0.4f) < 0.01f); // half way
+	run(100);
+	const std::array<float, 3> peak = attack({}, SubdualDamageColor, 150, 175);
+	BOOST_TEST(std::abs(blue->current[2] - peak[2]) < 1e-5f);
+	BOOST_TEST(std::abs(blue->current[0] - peak[0]) < 1e-5f);
+	world.Get<gp::Disabled>(tank)->mask = gp::disabled_type::Subdued;
+	run(40);
+	BOOST_TEST(world.Side<TintEnvelope>().Get(tank)->status == 1u);
+	const std::array<float, 3> grey = attack(peak, DarkGrayDisabledColor, 30, 40);
+	BOOST_TEST(std::abs(world.Side<TintEnvelope>().Get(tank)->current[2] - grey[2]) < 1e-5f);
+	BOOST_TEST(std::abs(grey[2] + 0.5f) < 1.3f / 30.0f + 1e-4f); // one step (1.3 / 30) short of the grey
+	world.Get<gp::Disabled>(tank)->mask = 0;
+	world.Get<gp::Subdual>(tank)->gaining = 0;
+	run(40);
+	BOOST_TEST(world.Side<TintEnvelope>().Get(tank)->affect == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

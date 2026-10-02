@@ -2,11 +2,8 @@ module;
 #define NOMINMAX
 #define BOOST_TEST_MODULE ImageColorTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstddef>
-#include <limits>
-#include <span>
 export module Assets.Images.Color.Tests;
+import std;
 import Assets.Images.Color;
 using namespace Assets;
 

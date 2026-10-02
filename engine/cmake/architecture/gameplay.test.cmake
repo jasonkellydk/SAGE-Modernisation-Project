@@ -2,8 +2,6 @@ cmake_minimum_required(VERSION 3.25)
 if(NOT DEFINED TEST_ROOT)
     message(FATAL_ERROR "Pass an isolated -DTEST_ROOT=<temporary directory>")
 endif()
-# Isolated fixtures per invocation: changing a probe's source path must not leave
-# yesterday's file in today's source tree. This identity is test IO, not simulation.
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef fixture_run)
 set(TEST_ROOT "${TEST_ROOT}/${fixture_run}")
 function(probe name path source expected)
@@ -22,62 +20,38 @@ function(probe name path source expected)
         message(FATAL_ERROR "${name}: expected ${expected}: ${output}${error}")
     endif()
 endfunction()
-set(feature "engine/gameplay/example/example.cppm")
-probe(doormixed "games/generalszh/gameplay/production/doors/production_door.cppm"
-    "template<> struct ComponentTraits<DoorOpening> {};" component-outside-components)
-probe(doorcomponent "games/generalszh/gameplay/production/doors/components/door.cppm"
-    "template<> struct ComponentTraits<DoorOpening> {};" pass)
-probe(doorwrongexecution "games/generalszh/gameplay/production/doors/components/door.cppm"
-    "struct FactoryExitSystem {};" system-outside-systems)
-probe(doorfacade "games/generalszh/gameplay/production/doors/production_door.cppm"
-    "export import games.generalszh.gameplay.production.doors.components.door;" pass)
-probe(componentanywhere "engine/gameplay/example/mixed.cppm" "template<> struct ComponentTraits<Value> {};" component-outside-components)
-probe(systemanywhere "games/generalszh/gameplay/example/mixed.cppm" "struct RealSystem {};" system-outside-systems)
-set(feature "engine/gameplay/example/systems/example.cppm")
-probe(system "${feature}" "struct IncomeSystem { using Query = QueryType; void Execute(Query::Chunk, SystemContext&); };" pass)
-probe(wrapper "${feature}" "class HarvestSystems {};" feature-wrapper)
-probe(movementstep "${feature}" "struct MovementPrepareSystem {};" rejected-step-system)
-probe(accountstep "${feature}" "struct AccountPublishSystem {};" rejected-step-system)
-probe(snapshotstep "${feature}" "template<bool AfterMovement> class TargetSnapshotSystem {};" rejected-step-system)
-probe(derivedindex "${feature}" "class TargetIndex { Query targets; void Rebuild(); };" pass)
-probe(cohesivelifecycle "${feature}" "struct MovementSystem { using Query = QueryType; void BeforeChunks(Query&, SystemContext&); void Execute(Query::Chunk, SystemContext&); };" pass)
-probe(adapterwrapper "games/generalszh/adapters/content/example.cppm" "class EconomySystems {};" feature-wrapper)
-probe(hostwrapper "games/generalszh/hosts/example.cppm" "class FeatureSimulation {};" feature-wrapper)
-probe(renamed "${feature}" "class HarvestFacade { ecs::Scheduler scheduler; };" feature-execution-owner-reference)
-probe(alias "${feature}" "using Runner = ecs::Scheduler; class Facade { Runner loop; };" feature-execution-owner-reference)
-probe(pointer "${feature}" "class Facade { std::unique_ptr<ecs::SystemRegistry> registry; };" feature-execution-owner-reference)
-probe(registration "${feature}" "inline void RegisterHealthSystems(ecs::SystemRegistry &registry, HealthSystem &system) { registry.Register(system); }" pass)
-probe(managerregistration "${feature}" "class Facade { void Register(ecs::SystemRegistry &registry); };" feature-execution-owner-reference)
-probe(schedulerhelper "${feature}" "inline void RegisterBad(ecs::Scheduler &scheduler) {}" feature-execution-owner-reference)
-probe(import "engine/events/example.cppm" "export import games.generalszh.rules;" engine-game-import)
-probe(order "games/generalszh/simulation/orders/order_simulation.cppm"
-    "class OrderInputSystem { HarvestState state; };" order-input-feature-coupling)
-probe(root "games/generalszh/composition/game_session.cppm"
-    "class GameSession { void Finalize() { } ecs::Scheduler scheduler; ecs::SystemRegistry registry; };" pass)
-probe(legitImpl "games/generalszh/composition/game_session_impl.cppm"
-    "class GameSession::Impl { ecs::Scheduler scheduler; }; const ecs::SystemRegistry &GameSession::Systems() const noexcept;" pass)
-probe(implExtraOwner "games/generalszh/composition/game_session_impl.cppm"
-    "class GameSession::Impl { ecs::Scheduler scheduler; }; class ExtraSystems {};" feature-wrapper)
-probe(implExtraScheduler "games/generalszh/composition/game_session_impl.cppm"
-    "class GameSession::Impl { ecs::Scheduler scheduler; }; class Facade { ecs::Scheduler scheduler; };" feature-execution-owner-reference)
-probe(wrongPathImpl "games/generalszh/composition/other.cppm"
-    "class GameSession::Impl { ecs::Scheduler scheduler; };" feature-execution-owner-reference)
-probe(wrongAccessor "games/generalszh/composition/other.cppm"
-    "const ecs::SystemRegistry &GameSession::Systems() const noexcept;" feature-execution-owner-reference)
-probe(wrongroot "games/generalszh/composition/other.cppm"
-    "class GameSession { ecs::Scheduler scheduler; };" feature-execution-owner-reference)
-foreach(pair "income/IncomeSimulation" "lifetime/LifetimeSimulation" "power/PowerSimulation" "radar/RadarSimulation")
-    string(REPLACE "/" ";" parts "${pair}")
-    list(GET parts 0 feature_name)
-    list(GET parts 1 type)
-    set(path "games/generalszh/simulation/${feature_name}/${feature_name}_simulation.cppm")
-    probe(${feature_name} "${path}" "class ${type} { ecs::Scheduler scheduler; };" pass)
-endforeach()
-probe(extra "games/generalszh/simulation/income/income_simulation.cppm"
-    "class IncomeSimulation { ecs::Scheduler scheduler; }; class NewSystems {};" feature-wrapper)
-probe(extraowner "games/generalszh/simulation/income/income_simulation.cppm"
-    "class IncomeSimulation { ecs::Scheduler scheduler; }; class Facade { ecs::Scheduler scheduler; };" feature-execution-owner-reference)
-probe(wrongtype "games/generalszh/simulation/income/income_simulation.cppm"
-    "class OtherSimulation {};" feature-wrapper)
-probe(comments "${feature}" "// class OldSystems {};\n/* ecs::Scheduler x; */\nstruct RealSystem {};" pass)
+
+set(component "engine/gameplay/common/health/components/health.cppm")
+set(system "engine/gameplay/common/health/systems/health_system.cppm")
+set(definition "engine/gameplay/rts/power/definitions/power_definition.cppm")
+set(game "games/generalszh/gameplay/supply/systems/supply_system.cppm")
+
+probe(component "${component}" "template<> struct ComponentTraits<Health> {};" pass)
+probe(system "${system}" "struct HealthSystem { using Query = Q; };" pass)
+probe(definition "${definition}" "struct PowerDefinition { int produced; };" pass)
+probe(gamesystem "${game}" "struct SupplySystem {};" pass)
+probe(resource "engine/gameplay/rts/power/resources/power_ledger.cppm" "struct PowerLedger {};" pass)
+
+probe(badgenre "engine/gameplay/strategy/power/systems/x.cppm" "struct X {};" domain-layout)
+probe(inputsfolder "engine/gameplay/rts/orders/inputs/order_batch.cppm" "struct OrderBatch {};" domain-layout)
+probe(nested "engine/gameplay/common/combat/damage/systems/x.cppm" "struct X {};" domain-layout)
+probe(domainroot "engine/gameplay/common/health/health.cppm" "export import a;" domain-layout)
+probe(gamenested "games/generalszh/gameplay/production/doors/components/door.cppm" "struct Door {};" domain-layout)
+
+probe(componentinsystems "${system}" "template<> struct ComponentTraits<Health> {};" component-outside-components)
+probe(systemincomponents "${component}" "struct HealthSystem {};" system-outside-systems)
+probe(wrapper "${system}" "class HealthSystems {};" feature-wrapper)
+probe(simulation "games/generalszh/session/x.cppm" "class PowerSimulation {};" feature-wrapper)
+
+probe(scheduler "${system}" "class Facade { ecs::Scheduler scheduler; };" execution-owner)
+probe(registry "${system}" "std::unique_ptr<ecs::SystemRegistry> registry;" execution-owner)
+probe(helper "${system}" "inline void RegisterHealthSystems(ecs::SystemRegistry &registry, HealthSystem &system) { registry.Register(system); }" pass)
+probe(root "games/generalszh/session/game_session.cppm" "class GameSession { ecs::Scheduler scheduler; ecs::SystemRegistry registry; };" pass)
+
+probe(engineimport "engine/ecs/x.cppm" "export import games.generalszh.session;" engine-game-import)
+probe(comments "${system}" "// class OldSystems {};\n/* ecs::Scheduler x; */\nstruct HealthSystem {};" pass)
+# Presentation is ECS too: no stateful directors or entity-keyed maps outside the recorded debt.
+probe(presentation_director "games/generalszh/presentation/audio/sound_director.cppm" "class SoundDirector { };" "presentation-object-style")
+probe(presentation_entity_map "games/generalszh/hosts/game/view.cpp" "std::unordered_map<std::uint64_t, Look> looks;" "presentation-object-style")
+probe(presentation_system "games/generalszh/presentation/objects/systems/look_systems.cppm" "struct LookSystem { using Query = Q; };" pass)
 message(STATUS "Gameplay architecture checker self-tests passed")

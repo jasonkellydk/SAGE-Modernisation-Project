@@ -2,15 +2,9 @@ module;
 
 #define BOOST_TEST_MODULE EmitterTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <vector>
 
 export module Graphics.Scene.Particles.Emitter.Tests;
+import std;
 
 import Assets.Math;
 import Assets.Particles;

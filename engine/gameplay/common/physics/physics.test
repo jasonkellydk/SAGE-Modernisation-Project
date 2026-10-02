@@ -1,0 +1,525 @@
+#define BOOST_TEST_MODULE EngineGameplayPhysics
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <vector>
+
+import engine.gameplay.common.physics.systems.physics_system;
+import engine.gameplay.common.physics.systems.shock_wave_system;
+import engine.core.serialization.byte_stream;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+engine::level::Heightfield Flat()
+{
+	engine::level::Heightfield field;
+	field.width = field.height = 8;
+	field.cellSize = Fixed::FromInt(100);
+	field.heights.assign(64, Fixed{});
+	return field;
+}
+
+// A body flung up and sideways, tumbling, that bounces.
+PhysicsBody Flung()
+{
+	PhysicsBody body;
+	body.mass = Fixed::FromInt(2);
+	body.flags = physics_flag::AllowBouncing | physics_flag::AuthoredBouncing | physics_flag::AllowToFall;
+	body.pitchRate = 20000000;
+	body.rollRate = -15000000;
+	ApplyForce(body, {Fixed::FromInt(4), Fixed::FromInt(2), Fixed::FromInt(6)});
+	return body;
+}
+
+struct Scene
+{
+	explicit Scene(std::size_t workers, std::size_t count = 1)
+	{
+		Register(world);
+		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
+		world.EmplaceResource<PhysicsSettings>(PhysicsSettings{Fixed::FromRatio(-64, 900), Fixed::FromRatio(8, 10), 7, 9});
+		world.EmplaceResource<FallDamage>();
+		world.EmplaceResource<Landings>();
+		for (std::size_t index = 0; index < count; ++index)
+		{
+			const ecs::Entity entity = world.Create();
+			world.Add<Transform>(entity);
+			world.Add<PhysicsBody>(entity);
+			world.Add<Attitude>(entity);
+			world.Get<Transform>(entity)->position = {Fixed::FromInt(static_cast<std::int32_t>(index % 40) * 10), Fixed::FromInt(100), Fixed{}};
+			PhysicsBody body = Flung();
+			ApplyForce(body, {Fixed::FromRatio(static_cast<std::int64_t>(index % 7), 3), Fixed{}, Fixed{}});
+			*world.Get<PhysicsBody>(entity) = body;
+			entities.push_back(entity);
+		}
+		registry.Register(physics);
+		registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});
+		scheduler->Finalize(engine::time::FixedStep{30});
+	}
+
+	static void Register(ecs::World &target)
+	{
+		target.RegisterComponent<Transform>();
+		target.RegisterComponent<PhysicsBody>();
+		target.RegisterComponent<Attitude>();
+		target.RegisterComponent<OffMap>();
+		target.RegisterComponent<Lifetime>();
+		target.RegisterComponent<Health>();
+		target.RegisterComponent<Disabled>();
+		target.RegisterComponent<BounceSound>();
+		target.RegisterComponent<SurfaceLayer>();
+		target.FinalizeComponents();
+	}
+
+	void Step() { scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}}); }
+
+	engine::level::Heightfield field{Flat()};
+	ecs::World world{ecs::WorldConfig{4}};
+	PhysicsSystem physics;
+	ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler;
+	std::vector<ecs::Entity> entities;
+	std::uint64_t tick{0};
+};
+}
+
+BOOST_AUTO_TEST_SUITE(physics)
+
+BOOST_AUTO_TEST_CASE(a_flung_body_arcs_bounces_lower_each_time_and_comes_to_rest)
+{
+	Scene scene(2);
+	const ecs::Entity body = scene.entities[0];
+	std::vector<Fixed> peaks;
+	Fixed height{}, previous{};
+	bool rising = true;
+	std::uint64_t landings = 0;
+	for (int step = 0; step < 400; ++step)
+	{
+		scene.Step();
+		height = scene.world.Get<Transform>(body)->position.z;
+		BOOST_TEST_REQUIRE((height >= Fixed{})); // never through the ground
+		if (rising && height < previous)
+			peaks.push_back(previous);
+		landings += (previous > Fixed{} && height == Fixed{}) ? 1u : 0u;
+		rising = height > previous;
+		previous = height;
+	}
+	BOOST_TEST_REQUIRE(peaks.size() >= 2u);
+	for (std::size_t index = 1; index < peaks.size(); ++index)
+		BOOST_TEST((peaks[index] < peaks[index - 1]));
+	BOOST_TEST(landings >= 2u);
+	// Ground friction stops it; it moved on from where it was flung.
+	const PhysicsBody &state = *scene.world.Get<PhysicsBody>(body);
+	BOOST_TEST((state.velocity.x == Fixed{}));
+	BOOST_TEST((state.velocity.z == Fixed{}));
+	BOOST_TEST((scene.world.Get<Transform>(body)->position.x > Fixed::FromInt(10)));
+	BOOST_TEST(state.pitchRate == 0);
+}
+
+// Drops a 50-mass body with hit points from `height` moving sideways at
+// `sideways` per tick; returns the falling damage it took on landing.
+Fixed Drop(int height, Fixed sideways, bool immune = false)
+{
+	Scene scene(1);
+	const ecs::Entity body = scene.entities[0];
+	PhysicsBody state;
+	state.mass = Fixed::FromInt(50);
+	state.flags = physics_flag::AllowToFall | physics_flag::WasAirborne | (immune ? physics_flag::ImmuneToFalling : 0u);
+	state.velocity.x = sideways;
+	state.minFallSpeed = scene.world.Resource<PhysicsSettings>().FallSpeed(Fixed::FromInt(40));
+	state.fallDamageFactor = Fixed::One();
+	*scene.world.Get<PhysicsBody>(body) = state;
+	scene.world.Add<Health>(body);
+	*scene.world.Get<Health>(body) = {Fixed::FromInt(500), Fixed::FromInt(500), 0};
+	scene.world.Get<Transform>(body)->position.z = Fixed::FromInt(height);
+	Fixed taken{};
+	for (int step = 0; step < 120; ++step)
+	{
+		scene.Step();
+		scene.world.Resource<FallDamage>().ForEach([&](const DamageRecord &record) {
+			BOOST_TEST(record.damageType == 7u);
+			BOOST_TEST(record.deathType == 9u);
+			taken += record.amount;
+		});
+	}
+	return taken;
+}
+
+BOOST_AUTO_TEST_CASE(a_hard_steep_landing_hurts_and_a_short_or_sliding_one_does_not)
+{
+	// From 100: lands at sqrt(2 g 100) ~ 3.77 a tick; over the 40-high threshold (~2.39) by ~1.38, times mass 50.
+	const Fixed hard = Drop(100, Fixed{});
+	BOOST_TEST((hard > Fixed::FromInt(60)));
+	BOOST_TEST((hard < Fixed::FromInt(80)));
+	BOOST_TEST((Drop(30, Fixed{}) == Fixed{}));                 // below the threshold
+	BOOST_TEST((Drop(100, Fixed::FromInt(3)) == Fixed{}));      // not steep: going down a slope
+	BOOST_TEST((Drop(100, Fixed{}, true) == Fixed{}));          // immune
+	BOOST_TEST((Drop(400, Fixed{}) > hard));
+}
+
+// PhysicsBehavior::update's ground for a body on a bridge layer (TerrainLogic::getLayerHeight): a body on a deck 20 up
+// (wide enough for where it is flung) comes to rest on the deck; the same body on the ground comes to rest on the ground.
+BOOST_AUTO_TEST_CASE(a_body_on_a_deck_comes_to_rest_on_it)
+{
+	Scene scene(2, 2);
+	const Fixed z = Fixed::FromInt(20);
+	DeckGeometry deck;
+	deck.from = {Fixed::FromInt(-100), Fixed::FromInt(100), z};
+	deck.to = {Fixed::FromInt(500), Fixed::FromInt(100), z};
+	deck.fromLeft = {Fixed::FromInt(-100), Fixed::FromInt(400), z};
+	deck.fromRight = {Fixed::FromInt(-100), Fixed::FromInt(-200), z};
+	deck.toLeft = {Fixed::FromInt(500), Fixed::FromInt(400), z};
+	deck.toRight = {Fixed::FromInt(500), Fixed::FromInt(-200), z};
+	scene.world.Resource<DeckSurfaces>().decks.push_back(deck);
+	const ecs::Entity onDeck = scene.entities[0], onGround = scene.entities[1];
+	scene.world.Add<SurfaceLayer>(onDeck);
+	*scene.world.Get<SurfaceLayer>(onDeck) = SurfaceLayer{1};
+	scene.world.Get<Transform>(onDeck)->position.z = z;
+	for (int step = 0; step < 400; ++step)
+		scene.Step();
+	BOOST_TEST((scene.world.Get<Transform>(onDeck)->position.z == z));
+	BOOST_TEST((scene.world.Get<Transform>(onGround)->position.z == Fixed{}));
+}
+
+BOOST_AUTO_TEST_CASE(gravity_matches_the_original)
+{
+	// -64 per second squared: after one second of falling from rest, about -64/30 per tick.
+	Scene scene(1);
+	const ecs::Entity body = scene.entities[0];
+	*scene.world.Get<PhysicsBody>(body) = {};
+	scene.world.Get<Transform>(body)->position.z = Fixed::FromInt(1000);
+	for (int step = 0; step < 30; ++step)
+		scene.Step();
+	const Fixed speed = scene.world.Get<PhysicsBody>(body)->velocity.z;
+	BOOST_TEST((speed < Fixed::FromRatio(-21, 10)));
+	BOOST_TEST((speed > Fixed::FromRatio(-22, 10)));
+}
+
+BOOST_AUTO_TEST_CASE(a_bounce_rights_a_tumbling_body)
+{
+	Scene scene(1);
+	const ecs::Entity body = scene.entities[0];
+	bool tumbled = false, righted = false;
+	for (int step = 0; step < 120 && !righted; ++step)
+	{
+		scene.Step();
+		const Attitude attitude = *scene.world.Get<Attitude>(body);
+		tumbled = tumbled || attitude.pitch.units != 0;
+		righted = tumbled && attitude.pitch.units == 0 && attitude.roll.units == 0;
+	}
+	BOOST_TEST(tumbled);
+	BOOST_TEST(righted);
+}
+
+BOOST_AUTO_TEST_CASE(debris_that_comes_to_rest_is_given_a_life_that_ends)
+{
+	Scene scene(2);
+	const ecs::Entity body = scene.entities[0];
+	scene.world.Get<PhysicsBody>(body)->Set(physics_flag::KillWhenResting, true);
+	std::uint64_t restedAt = 0;
+	for (int step = 0; step < 400 && restedAt == 0; ++step)
+	{
+		scene.Step();
+		if (const Lifetime *life = scene.world.Get<Lifetime>(body))
+			restedAt = life->expiresTick;
+	}
+	BOOST_TEST_REQUIRE(restedAt != 0u);
+	BOOST_TEST(restedAt > 10u); // it flew first
+	BOOST_TEST((scene.world.Get<Transform>(body)->position.z == Fixed{}));
+	BOOST_TEST(!scene.world.Get<PhysicsBody>(body)->Has(physics_flag::KillWhenResting));
+}
+
+// An unmanned drone (SlavedUpdate: master lost): the original runs its AIUpdate only while HELD, so its
+// hovering locomotor no longer holds it up, while PhysicsBehavior (every disabled type) pulls it down; at rest
+// on the ground KillWhenRestingOnGround kills it, as "a dead or unmanned drone" (PhysicsBehavior::update).
+// A drone its AI still flies is left to its locomotor, and one set down by it is not killed.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_unmanned_drone_falls_and_is_killed_at_rest)
+{
+	const auto run = [](bool unmanned) {
+		Scene scene(1);
+		const ecs::Entity drone = scene.entities[0];
+		PhysicsBody body;
+		body.flags = physics_flag::Locomotive | physics_flag::Drone | physics_flag::KillWhenResting;
+		*scene.world.Get<PhysicsBody>(drone) = body;
+		scene.world.Get<Transform>(drone)->position.z = Fixed::FromInt(30);
+		if (unmanned)
+		{
+			scene.world.Add<Disabled>(drone);
+			scene.world.Get<Disabled>(drone)->mask = disabled_type::Unmanned;
+		}
+		std::uint64_t killedAt = 0;
+		for (int step = 0; step < 200 && killedAt == 0; ++step)
+		{
+			scene.Step();
+			if (const Lifetime *life = scene.world.Get<Lifetime>(drone))
+				killedAt = life->expiresTick;
+		}
+		return std::make_pair(killedAt, scene.world.Get<Transform>(drone)->position.z);
+	};
+	const auto [crashed, groundZ] = run(true);
+	BOOST_TEST(crashed > 0u);
+	BOOST_TEST((groundZ == Fixed{}));
+	const auto [held, heldZ] = run(false);
+	BOOST_TEST(held == 0u);
+	BOOST_TEST((heldZ == Fixed::FromInt(30))); // its locomotor's to move
+
+	// Down on the ground but manned (its AI runs, e.g. HELD only): a drone is not killed at rest.
+	Scene scene(1);
+	const ecs::Entity drone = scene.entities[0];
+	PhysicsBody body;
+	body.flags = physics_flag::Locomotive | physics_flag::Drone | physics_flag::KillWhenResting;
+	*scene.world.Get<PhysicsBody>(drone) = body;
+	scene.world.Add<Disabled>(drone);
+	scene.world.Get<Disabled>(drone)->mask = disabled_type::Held | disabled_type::Emp; // AI runs while HELD: still its locomotor's
+	for (int step = 0; step < 50; ++step)
+		scene.Step();
+	BOOST_TEST(!scene.world.Has<Lifetime>(drone));
+	// A disabled drone that is not unmanned (EMP) comes down under physics but is not killed at rest.
+	scene.world.Get<Disabled>(drone)->mask = disabled_type::Emp;
+	scene.world.Get<Transform>(drone)->position.z = Fixed::FromInt(20);
+	for (int step = 0; step < 150; ++step)
+		scene.Step();
+	BOOST_TEST((scene.world.Get<Transform>(drone)->position.z == Fixed{}));
+	BOOST_TEST(!scene.world.Has<Lifetime>(drone));
+}
+
+// PhysicsBehavior::update: a DISABLED_HELD object gets no gravity, friction or movement (it hangs where it is
+// held); its acceleration still clears. Let go, it falls.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_held_body_hangs_until_released)
+{
+	Scene scene(1);
+	const ecs::Entity body = scene.entities[0];
+	*scene.world.Get<PhysicsBody>(body) = PhysicsBody{};
+	scene.world.Get<Transform>(body)->position.z = Fixed::FromInt(20);
+	scene.world.Add<Disabled>(body);
+	scene.world.Get<Disabled>(body)->mask = disabled_type::Held;
+	for (int step = 0; step < 30; ++step)
+		scene.Step();
+	BOOST_TEST((scene.world.Get<Transform>(body)->position.z == Fixed::FromInt(20)));
+	BOOST_TEST((scene.world.Get<PhysicsBody>(body)->velocity.z == Fixed{}));
+	scene.world.Get<Disabled>(body)->mask = 0;
+	scene.Step();
+	BOOST_TEST((scene.world.Get<Transform>(body)->position.z < Fixed::FromInt(20)));
+}
+
+// legacy_parity: PhysicsBehavior::update's CenterOfMassOffset (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/
+// PhysicsUpdate.cpp): with an offset the pitch step (pitch rate x PitchRollYawFactor) is scaled by sin of the angle left
+// to straight down (pitch a: sin(PI/2 - a) = cos a), for a negative offset sin(-PI/2 + a) = -cos a; none without one. A
+// body in the air with offset 2 and a pitch rate of 2 degrees a frame (factor 1) pitches a(n+1) = a(n) + 2 cos a(n): 2
+// degrees on frame 1, 3.9988 on 2, 19.6606 on 10, 51.6210 on 30, 76.3049 on 60, 85.2622 on 90, 88.3674 on 120 (never
+// past straight down), first at 45 or more on frame 26 (44.889 on 25). The same with offset -2 and a rate of -2 (as
+// offset x ExitPitchRate gives it). Without an offset: 2 a frame. Numbers from the formula in doubles; fixed point's
+// turn units and cosine follow within 0.01 degrees.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_body_with_a_center_of_mass_offset_eases_its_pitch_toward_straight_down)
+{
+	const PhysicsSettings settings{};
+	const auto degrees = [](Engine::Math::TurnAngle angle) { return static_cast<double>(static_cast<std::int32_t>(angle.units)) * 360.0 / 4294967296.0; };
+	const auto fly = [&](Fixed offset, int rateDegrees) {
+		PhysicsBody body;
+		body.mass = Fixed::One();
+		body.rateFactor = Fixed::One();
+		body.centerOfMassOffset = offset;
+		body.pitchRate = static_cast<std::int32_t>(Engine::Math::TurnFromDegrees(Fixed::FromInt(rateDegrees)).units);
+		Transform transform;
+		transform.position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(5000)};
+		Attitude attitude;
+		std::vector<double> pitches{0.0};
+		for (int frame = 1; frame <= 120; ++frame)
+		{
+			StepBody(body, transform, &attitude, settings, [](Engine::Math::FixedVector2) { return Fixed{}; });
+			pitches.push_back(degrees(attitude.pitch));
+		}
+		return pitches;
+	};
+	const std::pair<int, double> expected[] = {{1, 2.0}, {2, 3.998782}, {10, 19.660589}, {30, 51.621042}, {60, 76.304893}, {90, 85.262244},
+		{120, 88.367387}};
+	for (const auto &[offset, rate] : {std::pair{Fixed::FromInt(2), 2}, std::pair{Fixed::FromInt(-2), -2}})
+	{
+		const std::vector<double> pitches = fly(offset, rate);
+		for (const auto &[frame, pitch] : expected)
+			BOOST_TEST(std::abs(pitches[static_cast<std::size_t>(frame)] - pitch) < 0.01, "offset " << rate << " frame " << frame);
+		const auto first45 = std::ranges::find_if(pitches, [](double pitch) { return pitch >= 45.0; }) - pitches.begin();
+		BOOST_TEST(first45 == 26);
+		BOOST_TEST(*std::ranges::max_element(pitches) < 90.0);
+	}
+	const std::vector<double> plain = fly(Fixed{}, 2);
+	BOOST_TEST(std::abs(plain[30] - 60.0) < 0.01);
+}
+
+BOOST_AUTO_TEST_CASE(bodies_move_the_same_on_any_number_of_workers)
+{
+	Scene one(1, 300), four(4, 300);
+	for (int step = 0; step < 90; ++step)
+	{
+		one.Step();
+		four.Step();
+		BOOST_TEST_REQUIRE(one.world.StateHash() == four.world.StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(a_checkpoint_in_flight_continues_the_same_flight)
+{
+	Scene saved(2, 20);
+	for (int step = 0; step < 10; ++step)
+		saved.Step();
+	engine::core::serialization::ByteWriter writer;
+	saved.world.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	Scene loaded(3, 0);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST_REQUIRE(loaded.world.LoadCheckpoint(reader));
+	loaded.tick = saved.tick;
+	for (int step = 0; step < 60; ++step)
+	{
+		saved.Step();
+		loaded.Step();
+		BOOST_TEST_REQUIRE(loaded.world.StateHash() == saved.world.StateHash());
+	}
+}
+
+// PhysicsBehavior::update and doBounceSound: a body airborne at the end of the last step and not at the end of this one
+// (not immune to falling damage) plays its bounce sound; a flung scrap piece with one (OCL_CombatBikeAirDeath's
+// BounceSound) is heard at each landing, where it lands; one immune to falling, or without a sound, is not.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bouncing_piece_is_heard_each_time_it_lands)
+{
+	for (const bool immune : {false, true})
+	{
+		Scene scene(2, 2);
+		const ecs::Entity loud = scene.entities[0], silent = scene.entities[1];
+		scene.world.Add<BounceSound>(loud);
+		scene.world.Get<BounceSound>(loud)->sound = 42;
+		if (immune)
+			scene.world.Get<PhysicsBody>(loud)->Set(physics_flag::ImmuneToFalling, true);
+		std::size_t heard = 0, landed = 0;
+		Fixed previous = scene.world.Get<Transform>(loud)->position.z;
+		for (int step = 0; step < 400; ++step)
+		{
+			scene.Step();
+			const Fixed height = scene.world.Get<Transform>(loud)->position.z;
+			const bool landing = previous > Fixed{} && height == Fixed{};
+			landed += landing ? 1u : 0u;
+			std::size_t now = 0;
+			scene.world.Resource<Landings>().ForEach([&](const Landing &record) {
+				BOOST_TEST((record.entity == loud));
+				BOOST_TEST(record.sound == 42u);
+				BOOST_TEST(record.position.z.Raw() == 0);
+				++now;
+			});
+			BOOST_TEST(now == (landing && !immune ? 1u : 0u));
+			heard += now;
+			previous = height;
+		}
+		BOOST_TEST(landed >= 2u);
+		BOOST_TEST(heard == (immune ? 0u : landed));
+		(void)silent;
+	}
+}
+
+// Object::attemptDamage's shock wave (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Object.cpp) with
+// PhysicsBehavior::applyShock / applyRandomRotation: a 75 shock reaching 75 with TaperOff 0.33, from 50 away along
+// (0.6, 0.8): taper 50/75 * 0.67, so 0.55333 of it, (24.9, 33.2) sideways and as much again (41.5) up; on a mass-2
+// body with ShockResistance 0.5: acceleration (6.225, 8.3, 10.375). Each turn rate gains within its ShockMax; a body
+// sticking to the ground does not turn; airborne things and projectiles are not pushed; a unit on its locomotor is
+// pushed off it (Pushed) until physics sets it down again. Fixed point: within 1/1000.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shock_wave_pushes_up_and_away_and_spins)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<PhysicsBody>();
+	world.RegisterComponent<Attitude>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<Lifetime>();
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<Disabled>();
+	world.RegisterComponent<BounceSound>();
+	world.RegisterComponent<Targetable>();
+	world.FinalizeComponents();
+	const engine::level::Heightfield field = Flat();
+	world.EmplaceResource<GroundHeight>(field);
+	world.EmplaceResource<DeckSurfaces>();
+	world.EmplaceResource<PhysicsSettings>(PhysicsSettings{Fixed::FromRatio(-64, 900), Fixed::FromRatio(8, 10), 7, 9});
+	world.EmplaceResource<FallDamage>();
+	world.EmplaceResource<Landings>();
+	world.EmplaceResource<RandomSeed>(RandomSeed{11});
+	auto &shocks = world.EmplaceResource<ShockWaves>().list;
+	const auto make = [&](std::uint32_t flags, std::uint32_t classes) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<PhysicsBody>(entity);
+		world.Add<Attitude>(entity);
+		world.Add<Targetable>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(300), Fixed::FromInt(300), Fixed{}};
+		PhysicsBody &body = *world.Get<PhysicsBody>(entity);
+		body.mass = Fixed::FromInt(2);
+		body.shockResistance = Fixed::FromRatio(1, 2);
+		body.flags = flags;
+		world.Get<Targetable>(entity)->classes = classes;
+		return entity;
+	};
+	const ecs::Entity unit = make(physics_flag::Locomotive, target_class::Ground | target_class::Vehicle);
+	const ecs::Entity planted = make(physics_flag::StickToGround, target_class::Ground);
+	const ecs::Entity flyer = make(0, target_class::AirborneVehicle);
+	const ecs::Entity missile = make(0, target_class::Projectile);
+	for (const ecs::Entity entity : {unit, planted, flyer, missile})
+		shocks.push_back({entity, {Fixed::FromInt(30), Fixed::FromInt(40), Fixed{}}, Fixed::FromInt(75), Fixed::FromInt(75), Fixed::FromRatio(33, 100)});
+	ShockWaveSystem shock;
+	PhysicsSystem physics;
+	ecs::SystemRegistry registry;
+	registry.Register(shock);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	const PhysicsBody &pushed = *world.Get<PhysicsBody>(unit);
+	const auto within = [](Fixed value, double expected) { return std::abs(static_cast<double>(value.Raw()) / 65536.0 - expected) < 0.001; };
+	BOOST_TEST(within(pushed.acceleration.x, 6.225));
+	BOOST_TEST(within(pushed.acceleration.y, 8.3));
+	BOOST_TEST(within(pushed.acceleration.z, 10.375));
+	BOOST_TEST(pushed.Has(physics_flag::Pushed));
+	BOOST_TEST(pushed.Has(physics_flag::AllowBouncing));
+	BOOST_TEST(std::abs(static_cast<std::int64_t>(pushed.yawRate)) <= static_cast<std::int64_t>(pushed.shockMaxYaw));
+	BOOST_TEST(std::abs(static_cast<std::int64_t>(pushed.pitchRate)) <= static_cast<std::int64_t>(pushed.shockMaxPitch));
+	BOOST_TEST((pushed.yawRate != 0 || pushed.pitchRate != 0 || pushed.rollRate != 0));
+	const PhysicsBody &stuck = *world.Get<PhysicsBody>(planted);
+	BOOST_TEST((stuck.yawRate == 0 && stuck.pitchRate == 0 && stuck.rollRate == 0));
+	BOOST_TEST(within(stuck.acceleration.z, 10.375));
+	BOOST_TEST((world.Get<PhysicsBody>(flyer)->acceleration.z == Fixed{}));
+	BOOST_TEST((world.Get<PhysicsBody>(missile)->acceleration.z == Fixed{}));
+
+	// Physics carries it off its locomotor's path until it rests on the ground again.
+	shocks.clear();
+	ecs::SystemRegistry stepping;
+	stepping.Register(physics);
+	stepping.Finalize(world.Components());
+	ecs::Scheduler steps(world, stepping, engine::jobs::JobSystemConfig{2});
+	steps.Finalize(engine::time::FixedStep{30});
+	Fixed highest{};
+	int ticks = 0;
+	while (world.Get<PhysicsBody>(unit)->Has(physics_flag::Pushed) && ticks < 600)
+	{
+		steps.Execute(engine::time::SimulationTime{static_cast<std::uint64_t>(2 + ticks), engine::time::FixedStep{30}});
+		highest = (std::max)(highest, world.Get<Transform>(unit)->position.z);
+		++ticks;
+	}
+	BOOST_TEST_MESSAGE("set down after " << ticks << " ticks");
+	BOOST_TEST(!world.Get<PhysicsBody>(unit)->Has(physics_flag::Pushed));
+	BOOST_TEST((highest > Fixed::FromInt(10)));
+	BOOST_TEST((world.Get<Transform>(unit)->position.x > Fixed::FromInt(300)));
+	BOOST_TEST((world.Get<Transform>(unit)->position.z == Fixed{}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

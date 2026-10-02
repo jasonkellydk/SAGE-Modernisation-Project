@@ -1,0 +1,28 @@
+#include <boost/test/unit_test.hpp>
+
+import engine.config.adapters.preferences.preferences_file;
+
+using engine::config::Preferences;
+
+BOOST_AUTO_TEST_SUITE(preferences_file)
+
+// Legacy parity (Core UserPreferences::load / write / getBool).
+BOOST_AUTO_TEST_CASE(legacy_parity_reads_key_value_lines_and_writes_them_sorted)
+{
+	const Preferences read = Preferences::Parse("MusicVolume = 13\r\nSFXVolume=12\n  Gamma   =  50  \n\nBroken line\nEmpty =\n = orphan\nMusicVolume = 40\nRetaliation = Yes\n");
+	BOOST_TEST(read.Size() == 4u);
+	BOOST_TEST(read.Number("MusicVolume", 0) == 40); // the last wins
+	BOOST_TEST(read.Number("SFXVolume", 0) == 12);
+	BOOST_TEST(read.Number("Gamma", 0) == 50);
+	BOOST_TEST(read.Number("VoiceVolume", 70) == 70);
+	BOOST_TEST(read.Flag("Retaliation", false));
+	BOOST_TEST(!read.Find("Empty").has_value());
+	BOOST_TEST(read.Write() == "Gamma = 50\nMusicVolume = 40\nRetaliation = Yes\nSFXVolume = 12\n");
+	Preferences written = read;
+	written.Set("VoiceVolume", 55);
+	written.SetBool("Retaliation", false);
+	BOOST_TEST(!Preferences::Parse(written.Write()).Flag("Retaliation", true));
+	BOOST_TEST(Preferences::Parse(written.Write()).Number("VoiceVolume", 0) == 55);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

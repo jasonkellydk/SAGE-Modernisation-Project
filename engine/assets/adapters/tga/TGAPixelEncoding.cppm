@@ -1,5 +1,5 @@
-module;
 export module Assets.Adapters.TGA.PixelEncoding;
+import std;
 export import Assets.Images.PixelEncoding;
 
 namespace Assets

@@ -1,6 +1,5 @@
-module;
-
 export module Engine.Core.Math.Rectangle2;
+import std;
 
 import Engine.Core.Math.Vector2;
 

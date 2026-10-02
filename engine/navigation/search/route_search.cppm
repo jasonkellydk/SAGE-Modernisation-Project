@@ -1,15 +1,5 @@
-module;
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <vector>
-#include <utility>
-#include <optional>
-#include <cmath>
-#include <functional>
-#include <stdexcept>
-
 export module engine.navigation.search.route_search;
+import std;
 import engine.navigation.search_workspace;
 
 export namespace navigation {

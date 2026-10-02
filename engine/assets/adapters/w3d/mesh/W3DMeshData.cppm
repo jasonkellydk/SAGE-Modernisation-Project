@@ -1,14 +1,5 @@
-module;
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <optional>
-#include <string>
-#include <utility>
-#include <variant>
-#include <vector>
 export module Assets.Adapters.W3D.MeshData;
+import std;
 import Assets.Math;
 import Assets.MeshBoundsTree;
 import Assets.Adapters.W3D.Chunks;

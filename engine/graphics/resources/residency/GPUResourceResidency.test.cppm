@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-
 export module Graphics.Resources.Residency.GPUResourceResidency.Tests;
+import std;
 
 import Graphics.Resources.Residency.GPUResourceResidency;
 

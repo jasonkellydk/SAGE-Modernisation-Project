@@ -1,4 +1,5 @@
 export module engine.platform.text_input.interface;
+import std;
 import engine.platform.text_input;
 import engine.platform.core.types;
 

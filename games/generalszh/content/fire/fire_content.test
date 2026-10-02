@@ -1,0 +1,47 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.fire.fire_content;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(fire_content)
+
+BOOST_AUTO_TEST_CASE(shipped_trees_burn_and_spread_their_fire)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	const engine::time::FixedStep step{30};
+	BindContext context{loader.DiagnosticsFor(document), step};
+	const auto objects = BuildObjectCatalog(document, context);
+
+	// The generic tree catches fire, crackles, and every 1-2 s sets the closest within 50 alight.
+	const ObjectDefinition &tree = *objects.Find("GenericTree");
+	const auto fire = ReadObjectFire(tree, step);
+	BOOST_TEST_REQUIRE(fire.has_value());
+	BOOST_TEST(fire->burningSound == "GenericFireMediumLoop");
+	const auto spread = ReadObjectFireSpread(tree, step);
+	BOOST_TEST_REQUIRE(spread.has_value());
+	BOOST_TEST(spread->spread.minDelay == 30u);
+	BOOST_TEST(spread->spread.maxDelay == 60u);
+	BOOST_TEST(spread->spread.range.Floor() == 50);
+	BOOST_TEST(spread->embers == "OCL_BurningEmbers");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

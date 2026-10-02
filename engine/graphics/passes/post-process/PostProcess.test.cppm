@@ -4,12 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <array>
-#include <cstdint>
-#include <span>
-#include <type_traits>
-
 export module Graphics.Passes.PostProcess.Tests;
+import std;
 
 import Graphics.Passes.Opaque;
 import Graphics.Passes.PostProcess;

@@ -1,0 +1,78 @@
+#define BOOST_TEST_MODULE EngineCompression
+#include <boost/test/included/unit_test.hpp>
+
+#include <cstddef>
+#include <initializer_list>
+#include <string>
+#include <vector>
+
+import engine.compression.refpack.refpack_decoder;
+
+using namespace engine::compression;
+
+namespace
+{
+std::vector<std::byte> Bytes(std::initializer_list<int> values)
+{
+	std::vector<std::byte> out;
+	for (const int value : values)
+		out.push_back(static_cast<std::byte>(value));
+	return out;
+}
+
+std::string Text(const std::vector<std::byte> &bytes)
+{
+	return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+}
+}
+
+BOOST_AUTO_TEST_SUITE(refpack_decoder)
+
+BOOST_AUTO_TEST_CASE(decodes_literals_and_overlapping_back_references)
+{
+	// 4 literals "abcd", copy 6 bytes from 4 back (overlapping), end.
+	const auto stream = Bytes({0x10, 0xFB, 0x00, 0x00, 0x0A, 0xE0, 'a', 'b', 'c', 'd', 0x0C, 0x03, 0xFC});
+	BOOST_TEST(refpack::IsRefPack(stream));
+	const auto decoded = refpack::Decode(stream);
+	BOOST_TEST_REQUIRE(decoded.has_value(), (decoded ? "" : decoded.error()));
+	BOOST_TEST(Text(*decoded) == "abcdabcdab");
+}
+
+BOOST_AUTO_TEST_CASE(decodes_medium_and_long_forms_and_trailing_literals)
+{
+	// "wxyz" literal, medium copy (4 bytes, distance 3), long copy (5, distance 7),
+	// end command carrying 2 trailing literals.
+	const auto stream = Bytes({0x10, 0xFB, 0x00, 0x00, 0x0F,
+		0xE0, 'w', 'x', 'y', 'z',
+		0x80, 0x00, 0x03,
+		0xC0, 0x00, 0x07, 0x00,
+		0xFE, '!', '?'});
+	const auto decoded = refpack::Decode(stream);
+	BOOST_TEST_REQUIRE(decoded.has_value(), (decoded ? "" : decoded.error()));
+	BOOST_TEST(Text(*decoded) == "wxyzwxyzwxyzw!?");
+}
+
+BOOST_AUTO_TEST_CASE(four_byte_size_and_skipped_size_fields)
+{
+	const auto stream = Bytes({0x91, 0xFB, 9, 9, 9, 9, 0x00, 0x00, 0x00, 0x04, 0xE0, 'q', 'r', 's', 't', 0xFC});
+	const auto decoded = refpack::Decode(stream);
+	BOOST_TEST_REQUIRE(decoded.has_value(), (decoded ? "" : decoded.error()));
+	BOOST_TEST(Text(*decoded) == "qrst");
+}
+
+BOOST_AUTO_TEST_CASE(corrupt_streams_are_rejected_not_overrun)
+{
+	BOOST_TEST(!refpack::Decode(Bytes({0x12, 0x34})).has_value());
+	// back-reference before the start of the output
+	BOOST_TEST(!refpack::Decode(Bytes({0x10, 0xFB, 0x00, 0x00, 0x05, 0x01, 0x10, 'a', 0xFC})).has_value());
+	// literal runs past the input
+	BOOST_TEST(!refpack::Decode(Bytes({0x10, 0xFB, 0x00, 0x00, 0x04, 0xE0, 'a', 'b'})).has_value());
+	// output larger than the header claims
+	BOOST_TEST(!refpack::Decode(Bytes({0x10, 0xFB, 0x00, 0x00, 0x02, 0xE0, 'a', 'b', 'c', 'd', 0xFC})).has_value());
+	// missing end command
+	BOOST_TEST(!refpack::Decode(Bytes({0x10, 0xFB, 0x00, 0x00, 0x04, 0xE0, 'a', 'b', 'c', 'd'})).has_value());
+	// size mismatch at the end
+	BOOST_TEST(!refpack::Decode(Bytes({0x10, 0xFB, 0x00, 0x00, 0x09, 0xE0, 'a', 'b', 'c', 'd', 0xFC})).has_value());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

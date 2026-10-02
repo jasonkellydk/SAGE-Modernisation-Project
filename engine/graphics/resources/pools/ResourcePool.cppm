@@ -1,12 +1,5 @@
-module;
-
-#include <cstddef>
-#include <limits>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Resources.Pools.ResourcePool;
+import std;
 
 import Graphics.Resources.Handles.ResourceHandle;
 

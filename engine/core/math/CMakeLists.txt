@@ -52,3 +52,25 @@ if(BUILD_TESTING)
     target_link_libraries(engine_core_math_test PRIVATE engine_core_math)
     add_test(NAME engine_core_math_test COMMAND engine_core_math_test)
 endif()
+
+# Deterministic fixed-point half, for all simulation code (the float types
+# above are for client code: rendering, audio, UI). presentation/ is the only
+# bridge from fixed to float.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/module_library.cmake")
+engine_add_module_library(engine_core_math_fixed
+	MODULES
+		fixed/scalar/UInt128.cppm
+		fixed/scalar/Fixed.cppm
+		fixed/angle/FixedAngleTables.cppm
+		fixed/angle/FixedAngle.cppm
+		fixed/vector/FixedVector.cppm
+		fixed/random/FixedRandom.cppm
+		fixed/presentation/FixedPresentation.cppm
+	DEPENDS engine_core_math
+	TESTS
+		fixed/tests/Fixed.test
+		fixed/tests/FixedAngle.test
+		fixed/tests/FixedVector.test
+		fixed/tests/FixedRandom.test
+		fixed/tests/FixedPresentation.test
+	TESTS_OPTION ENGINE_MATH_BUILD_TESTS)

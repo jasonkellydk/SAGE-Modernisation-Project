@@ -2,15 +2,10 @@ module;
 
 #define BOOST_TEST_MODULE W3DNullTests
 
-#include <array>
 #include <boost/test/included/unit_test.hpp>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <string>
-#include <vector>
 
 export module Assets.Tests.Adapters.W3D.Null;
+import std;
 
 import Assets.Adapters.W3D.Null;
 

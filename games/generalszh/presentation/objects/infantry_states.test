@@ -1,0 +1,571 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <initializer_list>
+#include <vector>
+#include <set>
+#include <cctype>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.objects.algorithms.look_setup;
+import games.generalszh.presentation.objects.algorithms.look_models;
+import games.generalszh.presentation.objects.algorithms.model_state_changes;
+import games.generalszh.session.session;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.content.objects.model_conditions;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.appearance.components.appearance;
+import engine.gameplay.common.health.components.pending_damage;
+import games.generalszh.presentation.models.model_entry;
+import Assets.Cache;
+import Assets.Models;
+import Assets.Identity;
+import games.generalszh.content.combat.combat_catalog;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct ShellContent
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	std::optional<engine::level::generals_map::ReadResult> map;
+
+	bool Load()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return false;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		auto read = engine::level::generals_map::Read(*files.Read("Maps/ShellMapMD/ShellMapMD.map"));
+		if (!read)
+			return false;
+		map.emplace(std::move(*read));
+		return true;
+	}
+};
+
+ShellContent &Content()
+{
+	static ShellContent content;
+	static const bool loaded = content.Load();
+	(void)loaded;
+	return content;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(infantry_states)
+
+// W3DModelDraw::setModelState / doDrawModule (Core/GameEngineDevice/.../W3DModelDraw.cpp) on the ranger's own condition
+// states, fed the conditions the simulation sets (AIUpdate's MODELCONDITION_MOVING while its locomotor moves it): a
+// ranger standing shows its rest state (AIRngr_STA); ordered to walk, it first plays the transition between its states'
+// keys once (TransitionState: AIRngr_STA2RNA), then shows the state its MOVING conditions pick (AIRngr_RNA) while it
+// walks, and the rest state again once it stops. (Every clip here lasts one second.)
+BOOST_AUTO_TEST_CASE(legacy_parity_a_walking_ranger_shows_its_run_state)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const FixedVector2 at = low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)};
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at, {}, america);
+	game.Tick();
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const auto definition = game.DefinitionIndex("AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(definition.has_value());
+	const DefinitionLooks &looks = catalog.byDefinition[*definition];
+	BOOST_TEST_REQUIRE(!looks.states.Empty());
+	LookClips clips;
+	clips.byLook.assign(catalog.looks.size(), LookClip{30.0f, 30.0f}); // every clip one second long
+	const auto pick = [&] {
+		return static_cast<std::uint32_t>(content::SelectModelState(looks.states, game.World().Get<gp::Appearance>(ranger)->flags));
+	};
+	const std::uint32_t rest = pick();
+	ShownLook shown;
+	double clock = 0.0;
+	ShowModelState(shown, looks, clips, rest, clock, ModelStateRolls{1, 0}, false);
+	shown.state = rest;
+	const auto animationOf = [&](std::uint32_t look) { return LookModelOf(catalog, nullptr, look).animation; };
+	const std::string restAnimation = animationOf(shown.look);
+	gameplay::OrderMove(game.Game(), ranger, at + FixedVector2{Fixed::FromInt(150), Fixed{}});
+	bool ran = false, transitioned = false;
+	std::uint64_t frame = 0;
+	for (int tick = 0; tick < 120; ++tick)
+	{
+		game.Tick();
+		for (int half = 0; half < 2; ++half) // two frames a tick
+		{
+			clock += 1.0 / 60.0;
+			StepModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, ++frame});
+		}
+		const bool moving = game.World().Get<gp::Appearance>(ranger)->Test(content::model_condition::Moving);
+		transitioned = transitioned || animationOf(shown.look) == "AIRngr_SKL.AIRngr_STA2RNA";
+		if (moving && tick > 45) // past the one-second transition
+		{
+			BOOST_TEST_REQUIRE(shown.shown == pick(), "tick " << tick);
+			BOOST_TEST_REQUIRE(animationOf(shown.look) == "AIRngr_SKL.AIRngr_RNA", "tick " << tick);
+			ran = true;
+		}
+	}
+	BOOST_TEST(restAnimation == "AIRngr_SKL.AIRngr_STA");
+	BOOST_TEST(transitioned);
+	BOOST_TEST(ran);
+	// Stopped, it stands again.
+	for (int tick = 0; tick < 120; ++tick)
+	{
+		game.Tick();
+		clock += 1.0 / 30.0;
+		StepModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, ++frame});
+	}
+	BOOST_TEST(!game.World().Get<gp::Appearance>(ranger)->Test(content::model_condition::Moving));
+	BOOST_TEST(shown.shown == pick());
+}
+
+// SlowDeathBehavior::onDie / update (GeneralsMD .../Behavior/SlowDeathBehavior.cpp: FLUNG_INTO_AIR sets EXPLODED_FLAILING,
+// BOUNCED on touching the ground swaps it for EXPLODED_BOUNCING) and W3DModelDraw::setModelState on the Ranger's own
+// states: killed by an EXPLODED death, a Ranger flails in the air (DYING EXPLODED_FLAILING: AIRngr_ADTF2, after its
+// TRANS_Dying -> TRANS_Flailing transition AIRngr_ADTF1) and, once down, shows its bounce (DYING EXPLODED_BOUNCING:
+// AIRngr_ADTF3, held on its last frame) until it is gone; no look it shows is without an animation (a model drawn
+// without one stands in its bind pose: the reported T-pose on landing).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_exploded_ranger_flails_then_lands_on_its_bounce_animation)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	const auto america = *game.Teams().FindTeam("teamPlyrAmerica");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", low + FixedVector2{Fixed::FromInt(200), Fixed::FromInt(600)}, {}, america);
+	game.Tick();
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const auto definition = game.DefinitionIndex("AmericaInfantryRanger");
+	BOOST_TEST_REQUIRE(definition.has_value());
+	const DefinitionLooks &looks = catalog.byDefinition[*definition];
+	LookClips clips;
+	clips.byLook.assign(catalog.looks.size(), LookClip{30.0f, 30.0f});
+	const auto pick = [&] {
+		return static_cast<std::uint32_t>(content::SelectModelState(looks.states, game.World().Get<gp::Appearance>(ranger)->flags));
+	};
+	const auto animationOf = [&](std::uint32_t look) { return LookModelOf(catalog, nullptr, look).animation; };
+	ShownLook shown;
+	double clock = 0.0;
+	ShowModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, 0}, false);
+	shown.state = pick();
+	auto &world = game.World();
+	world.Add<gp::PendingDamage>(ranger);
+	*world.Get<gp::PendingDamage>(ranger) = gp::PendingDamage{{}, gp::HugeDamage(), *content::DamageTypeIndex("EXPLOSION"), *content::DeathTypeIndex("EXPLODED")};
+	bool flailed = false, bounced = false;
+	std::vector<std::string> shownWithout;
+	std::uint64_t frame = 0;
+	for (int tick = 0; tick < 300 && world.IsAlive(ranger); ++tick)
+	{
+		game.Tick();
+		if (!world.IsAlive(ranger))
+			break;
+		clock += 1.0 / 30.0;
+		StepModelState(shown, looks, clips, pick(), clock, ModelStateRolls{1, ++frame});
+		const std::string animation = animationOf(shown.look);
+		if (animation.empty())
+			shownWithout.push_back("tick " + std::to_string(tick));
+		const auto *look = world.Get<gp::Appearance>(ranger);
+		if (look->Test(content::model_condition::ExplodedFlailing))
+			flailed = true;
+		if (look->Test(content::model_condition::ExplodedBouncing) && shown.pending == ShownLook::NoState)
+		{
+			BOOST_TEST_REQUIRE(animation == "AIRngr_SKL.AIRngr_ADTF3", "tick " << tick << " shows " << animation);
+			bounced = true;
+		}
+	}
+	BOOST_TEST(flailed);
+	BOOST_TEST(bounced);
+	BOOST_TEST(shownWithout.empty());
+}
+
+// W3DModelDraw::setModelState for every infantry type's own condition states (the shipped INI): the state an infantry's
+// DYING EXPLODED_BOUNCING conditions pick (SlowDeathBehavior's landing after an EXPLODED death) must draw an animation
+// whose W3D file ships (Art/W3D/<clip>.W3D); a look without one, or with a missing clip, draws the model in its bind
+// pose (the reported T-pose on landing). Lists every offender.
+BOOST_AUTO_TEST_CASE(legacy_parity_every_infantry_lands_on_an_animation_it_has)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	std::vector<std::pair<std::string, std::uint32_t>> infantry;
+	for (const auto &[name, definition] : shell.game.objects)
+		if (definition.Is("INFANTRY"))
+			if (const auto index = game.DefinitionIndex(name))
+				infantry.emplace_back(name, *index);
+	BOOST_TEST_REQUIRE(infantry.size() > 50u);
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	content::ConditionBits landed{};
+	for (const std::uint32_t bit : {content::model_condition::Dying, content::model_condition::ExplodedBouncing})
+		landed[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	std::vector<std::string> offenders;
+	for (const auto &[name, index] : infantry)
+	{
+		if (index >= catalog.byDefinition.size())
+			continue;
+		const DefinitionLooks &looks = catalog.byDefinition[index];
+		if (looks.states.Empty())
+			continue;
+		const auto state = content::SelectModelState(looks.states, landed);
+		if (state >= looks.stateLooks.size())
+			continue;
+		const std::string animation = LookModelOf(catalog, nullptr, looks.stateLooks[state]).animation;
+		if (animation.empty())
+		{
+			offenders.push_back(name + ": no animation");
+			continue;
+		}
+		const auto dot = animation.find('.');
+		const std::string clip = animation.substr(dot == std::string::npos ? 0 : dot + 1);
+		if (!shell.files.Read("Art/W3D/" + clip + ".w3d").has_value())
+			offenders.push_back(name + ": " + animation + " missing");
+	}
+	// The shipped data's own gaps, drawn the same way by the original (W3DModelDraw finds no clip either): the invisible
+	// angry mob nexus objects (no DYING EXPLODED_BOUNCING animation), the Secret Police (no death animations of its own)
+	// and the civilian woman whose landing clip CINFCIV01_ADTA3 never shipped.
+	const std::vector<std::string> shipped{"Boss_InfantryAngryMobNexus: no animation", "CINE_CheeringGenericFemale02: CINFCIV01_SKL.CINFCIV01_ADTA3 missing",
+		"CINE_GLAInfantryAngryMobNexus: no animation", "Chem_GLAInfantryAngryMobNexus: no animation", "ChinaInfantrySecretPolice: no animation",
+		"Demo_GLAInfantryAngryMobNexus: no animation", "GLAInfantryAngryMobNexus: no animation", "GenericFemale02: CINFCIV01_SKL.CINFCIV01_ADTA3 missing",
+		"Slth_GLAInfantryAngryMobNexus: no animation"};
+	for (const std::string &offender : offenders)
+		BOOST_TEST_MESSAGE(offender);
+	BOOST_TEST((offenders == shipped), offenders.size() << " infantry land without an animation (" << shipped.size() << " expected from the data)");
+}
+
+// W3DModelDraw plays a state's clip on the model's hierarchy (HAnimClass on the HLOD's HTree) from its first frame to its
+// last, holding the last for a ONCE clip: for every infantry type's own landing state (DYING EXPLODED_BOUNCING) the
+// shipped clip, prepared onto the shipped model as the model library does (PrepareAnimation), must sample at every
+// half frame through to its end and past it. A sample that fails makes the port stop the animation for good and draw
+// the model at rest (PoseOf): the T-pose on landing.
+BOOST_AUTO_TEST_CASE(legacy_parity_every_infantry_landing_clip_plays_to_its_end)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	std::vector<std::pair<std::string, std::uint32_t>> infantry;
+	for (const auto &[name, definition] : shell.game.objects)
+		if (definition.Is("INFANTRY"))
+			if (const auto index = game.DefinitionIndex(name))
+				infantry.emplace_back(name, *index);
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	content::ConditionBits landed{};
+	for (const std::uint32_t bit : {content::model_condition::Dying, content::model_condition::ExplodedBouncing})
+		landed[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	const auto lower = [](std::string text) {
+		for (char &c : text)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return text;
+	};
+	Assets::AssetCache cache([&](const Assets::AssetIdentity &identity) -> std::vector<std::byte> {
+		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
+		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
+			name = name.substr(name.find('.') + 1) + ".w3d";
+		if (std::filesystem::path(name).extension().empty())
+			name += ".w3d";
+		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	});
+	std::set<std::string> checked;
+	std::vector<std::string> failures;
+	for (const auto &[name, index] : infantry)
+	{
+		if (index >= catalog.byDefinition.size() || catalog.byDefinition[index].states.Empty())
+			continue;
+		const DefinitionLooks &looks = catalog.byDefinition[index];
+		const auto state = content::SelectModelState(looks.states, landed);
+		if (state >= looks.stateLooks.size())
+			continue;
+		const ObjectModel look = LookModelOf(catalog, nullptr, looks.stateLooks[state]);
+		if (look.animation.empty() || look.model.empty() || !checked.insert(look.model + "|" + look.animation).second)
+			continue;
+		std::string error;
+		const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, look.model, error);
+		const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, look.animation, error);
+		if (modelRig == nullptr || clipRig == nullptr)
+			continue; // a clip that does not ship (the data's own gaps: see the test above)
+		Assets::ModelAssetDesc description;
+		description.name = look.model;
+		description.rig = *modelRig;
+		const Assets::ModelAsset asset({Assets::AssetType::Model, look.model}, std::move(description));
+		ModelAnimation animation;
+		if (!PrepareAnimation(asset, clipRig.get(), AnimationRequest{look.animation, ObjectAnimationMode::Once, false}, animation, error))
+		{
+			failures.push_back(name + " " + look.animation + ": " + error);
+			continue;
+		}
+		for (float frame = 0.0f; frame <= static_cast<float>(animation.frameCount) + 2.0f; frame += 0.5f)
+			if (!animation.pose.Evaluate(0, frame, false))
+			{
+				failures.push_back(name + " " + look.animation + ": fails at frame " + std::to_string(frame) + " of " + std::to_string(animation.frameCount));
+				break;
+			}
+	}
+	for (const std::string &failure : failures)
+		BOOST_TEST_MESSAGE(failure);
+	BOOST_TEST(checked.size() > 20u);
+	BOOST_TEST(failures.empty(), failures.size() << " landing clips stop before their end");
+}
+
+// Issue #40 (W3DModelDraw::adjustAnimation: START_FRAME_LAST sets the clip on its last frame; ANIM_MODE_MANUAL holds
+// the frame it was set to). The Particle Cannon uplink's dish (its second W3DModelDraw, ABSDILink_A1) shows DEPLOYED as
+// the MANUAL clip ABSDILink_A1 started on its last frame: the dish raised, whatever the time. The port played MANUAL
+// clips at frame 0 always (the dish folded down onto the ground), so the FXConnector / FXMain bones the ready and
+// firing effects are placed at sat low. Pure: a MANUAL clip of 30 frames started at its last shows frame 29 at any time,
+// started at its first frame 0; a model state's frame (ShownClipFrame) the same.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_manual_clip_holds_its_start_frame_and_the_uplink_dish_stands_raised)
+{
+	ModelAnimation manual;
+	manual.mode = ObjectAnimationMode::Manual;
+	manual.frameCount = 30;
+	manual.frameRate = 30.0f;
+	bool loop = true;
+	BOOST_TEST(AnimationFrame(manual, 0.0, 1.0f, loop) == 29.0f);
+	BOOST_TEST(!loop);
+	BOOST_TEST(AnimationFrame(manual, 12.5, 1.0f, loop) == 29.0f);
+	BOOST_TEST(AnimationFrame(manual, 12.5, 0.0f, loop) == 0.0f);
+	ModelAnimation once = manual;
+	once.mode = ObjectAnimationMode::Once;
+	BOOST_TEST(AnimationFrame(once, 0.5, 0.0f, loop) == 15.0f); // running clips still run
+	ShownLook held;
+	held.start = 1.0f;
+	held.speed = 1.0f;
+	held.since = 0.0;
+	BOOST_TEST(ShownClipFrame(held, LookClip{30.0f, 30.0f}, content::ModelAnimationMode::Manual, 7.0) == 29.0);
+
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto lower = [](std::string text) {
+		for (char &c : text)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return text;
+	};
+	Assets::AssetCache cache([&](const Assets::AssetIdentity &identity) -> std::vector<std::byte> {
+		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
+		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
+			name = name.substr(name.find('.') + 1) + ".w3d";
+		if (std::filesystem::path(name).extension().empty())
+			name += ".w3d";
+		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	});
+	std::string error;
+	const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, "ABSDILink_A1", error);
+	const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, "ABSDILink_A1.ABSDILink_A1", error);
+	BOOST_TEST_REQUIRE((modelRig != nullptr && clipRig != nullptr), error);
+	Assets::ModelAssetDesc description;
+	description.name = "ABSDILink_A1";
+	description.rig = *modelRig;
+	const Assets::ModelAsset asset({Assets::AssetType::Model, "ABSDILink_A1"}, std::move(description));
+	const auto connectorHeight = [&](float start) {
+		ModelAnimation animation;
+		std::string why;
+		BOOST_TEST_REQUIRE(PrepareAnimation(asset, clipRig.get(), AnimationRequest{"ABSDILink_A1.ABSDILink_A1", ObjectAnimationMode::Manual, false}, animation, why), why);
+		ModelEntry entry;
+		entry.animation = std::move(animation);
+		bool failed = false;
+		const auto *pose = PoseOf(entry, 3.0, start, failed);
+		BOOST_TEST_REQUIRE(pose != nullptr);
+		const std::size_t bone = pose->Bone_Index("FXConnector");
+		Graphics::RenderTransform transform;
+		BOOST_TEST_REQUIRE(pose->Bone_Transform(bone, transform));
+		return transform.matrix[11];
+	};
+	const float folded = connectorHeight(0.0f), raised = connectorHeight(1.0f);
+	BOOST_TEST_MESSAGE("FXConnector: " << folded << " folded, " << raised << " raised");
+	BOOST_TEST(raised > folded + 1.0f);
+}
+
+// Issue #25 (SlowDeathBehavior::onDie / update: DYING EXPLODED_FLAILING in the air, DYING EXPLODED_BOUNCING once down;
+// W3DModelDraw::setModelState: a TransitionState between their keys first; every look always posed by its clip). For
+// every infantry type, every look an explosive death shows (DYING, the flight, the landing, and the transitions between
+// those states) is bound as the model library binds it (PrepareAnimation in the look's own AnimationMode) and posed as
+// the renderer poses it (PoseOf) every 1/30 s from its start to 10 seconds on: a look that cannot be posed is drawn in
+// its bind pose (the T-pose). Clips the data never shipped are the data's own gaps (skipped, listed in the test above).
+BOOST_AUTO_TEST_CASE(legacy_parity_every_explosive_death_look_is_posed_through_flight_and_landing)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	LookCatalog catalog;
+	KnowLooks(catalog, game);
+	const auto lower = [](std::string text) {
+		for (char &c : text)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return text;
+	};
+	Assets::AssetCache cache([&](const Assets::AssetIdentity &identity) -> std::vector<std::byte> {
+		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
+		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
+			name = name.substr(name.find('.') + 1) + ".w3d";
+		if (std::filesystem::path(name).extension().empty())
+			name += ".w3d";
+		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	});
+	const auto bits = [](std::initializer_list<std::uint32_t> list) {
+		content::ConditionBits flags{};
+		for (const std::uint32_t bit : list)
+			flags[bit / 64] |= std::uint64_t{1} << (bit % 64);
+		return flags;
+	};
+	namespace mc = content::model_condition;
+	const std::array<content::ConditionBits, 3> phases{bits({mc::Dying}), bits({mc::Dying, mc::ExplodedFlailing}), bits({mc::Dying, mc::ExplodedBouncing})};
+	std::set<std::string> checked;
+	std::vector<std::string> failures;
+	for (const auto &[name, definition] : shell.game.objects)
+	{
+		if (!definition.Is("INFANTRY"))
+			continue;
+		const auto index = game.DefinitionIndex(name);
+		if (!index || *index >= catalog.byDefinition.size() || catalog.byDefinition[*index].states.Empty())
+			continue;
+		const DefinitionLooks &looks = catalog.byDefinition[*index];
+		std::vector<std::size_t> states;
+		for (const auto &phase : phases)
+			states.push_back(content::SelectModelState(looks.states, phase));
+		for (std::size_t from = 0; from < phases.size(); ++from)
+			for (std::size_t to = from + 1; to < phases.size(); ++to)
+				if (const auto transition = content::FindTransition(looks.states, states[from], states[to]))
+					states.push_back(*transition);
+		for (const std::size_t state : states)
+		{
+			if (state >= looks.stateLooks.size())
+				continue;
+			const std::uint32_t variants = state < looks.stateVariants.size() ? (std::max)(looks.stateVariants[state], 1u) : 1u;
+			for (std::uint32_t variant = 0; variant < variants; ++variant)
+			{
+				const ObjectModel look = LookModelOf(catalog, nullptr, looks.stateLooks[state] + variant);
+				if (look.animation.empty() || look.model.empty() ||
+					!checked.insert(look.model + "|" + look.animation + "#" + std::to_string(static_cast<int>(look.animationMode))).second)
+					continue;
+				std::string error;
+				const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, look.model, error);
+				const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, look.animation, error);
+				if (modelRig == nullptr || clipRig == nullptr)
+					continue;
+				Assets::ModelAssetDesc description;
+				description.name = look.model;
+				description.rig = *modelRig;
+				const Assets::ModelAsset asset({Assets::AssetType::Model, look.model}, std::move(description));
+				ModelAnimation animation;
+				if (!PrepareAnimation(asset, clipRig.get(), AnimationRequest{look.animation, look.animationMode, look.repeat}, animation, error))
+				{
+					failures.push_back(name + " " + look.animation + ": " + error);
+					continue;
+				}
+				ModelEntry entry;
+				entry.animation = std::move(animation);
+				for (int frame = 0; frame <= 300; ++frame)
+				{
+					bool failed = false;
+					if (PoseOf(entry, frame / 30.0, 0.0f, failed) == nullptr)
+					{
+						failures.push_back(name + " " + look.animation + ": not posed at " + std::to_string(frame) + "/30 s");
+						break;
+					}
+				}
+			}
+		}
+	}
+	for (const std::string &failure : failures)
+		BOOST_TEST_MESSAGE(failure);
+	BOOST_TEST(checked.size() > 60u);
+	BOOST_TEST(failures.empty(), failures.size() << " explosive-death looks draw in their bind pose");
+}
+
+// Issue #18 (W3DModelDraw: a helicopter's default state plays its model's own LOOP clip, AVChinook.AVChinook /
+// AVComanche.AVComanche, whose quaternion channels turn the PROPELLER01 / PROPELLER02 pivots every frame). Each shipped
+// helicopter's rotor bones, posed as the renderer poses them (PrepareAnimation in LOOP, PoseOf), must turn between one
+// 1/30 s frame and the next; frozen, the blades stand still.
+BOOST_AUTO_TEST_CASE(legacy_parity_helicopter_rotor_bones_turn_every_frame)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto lower = [](std::string text) {
+		for (char &c : text)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return text;
+	};
+	Assets::AssetCache cache([&](const Assets::AssetIdentity &identity) -> std::vector<std::byte> {
+		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
+		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
+			name = name.substr(name.find('.') + 1) + ".w3d";
+		if (std::filesystem::path(name).extension().empty())
+			name += ".w3d";
+		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
+	});
+	for (const std::string model : {"AVChinook", "AVComanche"})
+	{
+		std::string error;
+		const auto modelRig = cache.Load_Rig(Assets::AssetType::Model, model, error);
+		const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, model + "." + model, error);
+		BOOST_TEST_REQUIRE((modelRig != nullptr && clipRig != nullptr), model << ": " << error);
+		Assets::ModelAssetDesc description;
+		description.name = model;
+		description.rig = *modelRig;
+		const Assets::ModelAsset asset({Assets::AssetType::Model, model}, std::move(description));
+		ModelAnimation animation;
+		BOOST_TEST_REQUIRE(PrepareAnimation(asset, clipRig.get(), AnimationRequest{model + "." + model, ObjectAnimationMode::Loop, false}, animation, error),
+			model << ": " << error);
+		ModelEntry entry;
+		entry.animation = std::move(animation);
+		const auto rotor = [&](double seconds) {
+			bool failed = false;
+			const auto *pose = PoseOf(entry, seconds, 0.0f, failed);
+			BOOST_TEST_REQUIRE(pose != nullptr);
+			const std::size_t bone = pose->Bone_Index("PROPELLER01");
+			Graphics::RenderTransform transform;
+			BOOST_TEST_REQUIRE(pose->Bone_Transform(bone, transform));
+			return std::array<float, 2>{transform.matrix[0], transform.matrix[4]}; // its x axis across the ground
+		};
+		int turned = 0;
+		for (int frame = 0; frame < 20; ++frame)
+		{
+			const auto now = rotor(frame / 30.0), next = rotor((frame + 1) / 30.0);
+			if (std::fabs(now[0] - next[0]) + std::fabs(now[1] - next[1]) > 1e-3f)
+				++turned;
+		}
+		BOOST_TEST(turned == 20, model << ": the rotor turned on " << turned << " of 20 frames");
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

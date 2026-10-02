@@ -1,0 +1,285 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <array>
+#include <vector>
+#include <optional>
+#include <algorithm>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.maps.map_cache;
+import games.generalszh.content.global.multiplayer_settings;
+import games.generalszh.content.global.player_templates;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.maps.map_strings;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+namespace
+{
+const char *Install()
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	return install != nullptr && std::filesystem::exists(install) ? install : nullptr;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(game_setup_content)
+
+// The shipped Maps\MapCache.ini (INI::parseMapCacheDefinition). Tournament Continent's size and
+// CRC are those a real Skirmish.ini's options string carries (MC=7D024EDA;MS=639753).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_map_cache_describes_each_map)
+{
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Maps/MapCache"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const MapCache cache = BindMapCache(document, context);
+	BOOST_TEST_MESSAGE("MapCache.ini: " << cache.maps.size() << " maps");
+	BOOST_TEST(cache.maps.size() > 100u);
+	const MapMetaData *map = cache.Find("Maps\\Tournament Continent\\Tournament Continent.map");
+	BOOST_TEST_REQUIRE(map != nullptr);
+	BOOST_TEST(map->file == "maps\\tournament continent\\tournament continent.map");
+	BOOST_TEST(map->crc == 0x7D024EDAu);
+	BOOST_TEST(map->fileSize == 639753u);
+	BOOST_TEST(map->official);
+	BOOST_TEST(map->multiplayer);
+	BOOST_TEST(map->players == 4);
+	BOOST_TEST(map->starts.size() == 4u);
+	BOOST_TEST(map->nameLookupTag == "MAP:TournamentContinent");
+	BOOST_TEST(map->extentMax.x.Floor() == 3750);
+	BOOST_TEST(map->starts[0].x.Floor() == 2249);
+	BOOST_TEST((map->DisplayName([](const std::string &) { return std::u16string(u"Tournament Continent"); }) == u"Tournament Continent (4)"));
+}
+
+// Multiplayer.ini (MultiplayerSettings), PlayerTemplate.ini and ChallengeMode.ini as the setup screens index them.
+BOOST_AUTO_TEST_CASE(legacy_parity_colours_money_and_factions_in_the_originals_order)
+{
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &multiplayer = loader.Load({"Data/INI/Default/Multiplayer", "Data/INI/Multiplayer"});
+	BindContext context{loader.DiagnosticsFor(multiplayer), engine::time::FixedStep{30}};
+	const MultiplayerSettings settings = BindMultiplayerSettings(multiplayer, context);
+	BOOST_TEST_REQUIRE(settings.colors.size() == 8u);
+	BOOST_TEST(settings.colors[1].name == "ColorRed"); // a real Skirmish.ini's Color = 1
+	BOOST_TEST(settings.colors[1].tooltipName == "Color:Red");
+	BOOST_TEST(settings.colors[0].day.r == 221);
+	BOOST_TEST(settings.startingMoney.size() == 4u);
+	BOOST_TEST(settings.defaultStartingMoney == 10000u);
+
+	const Document &templates = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	const Document &challenge = loader.Load({"Data/INI/ChallengeMode"});
+	BindContext templateContext{loader.DiagnosticsFor(templates), engine::time::FixedStep{30}};
+	const PlayerTemplates store = BindPlayerTemplates(templates, &challenge, templateContext);
+	BOOST_TEST_REQUIRE(store.templates.size() == 15u);
+	BOOST_TEST(store.At(13)->name == "FactionGLAStealthGeneral"); // a real Skirmish.ini's PlayerTemplate = 13
+	BOOST_TEST(store.At(3)->side == "China");
+	BOOST_TEST(store.At(1)->observer);
+	BOOST_TEST(store.At(0)->startingBuilding.empty()); // civilians cannot be picked
+	BOOST_TEST(store.At(14)->name == "FactionBossGeneral");
+	BOOST_TEST(store.At(14)->startsLocked); // StartsEnabled = no
+	BOOST_TEST(!store.At(13)->startsLocked);
+}
+
+// legacy_parity: Common/crc.h CRC::computeCRC (release) as MapUtil.cpp calcCRC uses it over a map file: each byte added
+// to the value shifted left once, the bit shifted out added back (1, 2, 3 -> 1, 4, 11; 0x80000000 then 0 -> 1). The
+// shipped Tournament Continent.map's bytes give the cache's own fileCRC (0x7D024EDA) and fileSize (639753).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_map_files_crc_is_the_caches)
+{
+	const std::array<std::byte, 3> bytes{std::byte{1}, std::byte{2}, std::byte{3}};
+	BOOST_TEST(MapFileCrc(bytes) == 11u);
+	const std::array<std::byte, 1> zero{std::byte{0}};
+	BOOST_TEST(MapFileCrc(zero, 0x80000000u) == 1u);
+	const std::array<std::byte, 1> high{std::byte{0xFF}};
+	BOOST_TEST(MapFileCrc(high, 0xFFFFFFFFu) == 0xFFFFFFFFu + 0u - 1u + 0xFFu + 1u); // (0xFFFFFFFE + 0xFF + 1) mod 2^32
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	const auto map = files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(map.has_value());
+	BOOST_TEST(map->size() == 639753u);
+	BOOST_TEST(MapFileCrc(*map) == 0x7D024EDAu);
+}
+
+// legacy_parity: MapUtil.cpp MapCache::addMap / loadUserMaps / clearUnseenMaps: a cached map holds while its file's size
+// is the cached one and its CRC is set; a map not in a folder of its own name is skipped; a map new or changed is
+// described anew (not official, keyed by its lower-case path); cached maps of the folder no longer there go; nothing
+// described or removed reports no change (no MapCache.ini written).
+BOOST_AUTO_TEST_CASE(legacy_parity_user_maps_are_cached_again_only_when_their_size_changes)
+{
+	MapMetaData cached;
+	cached.file = "c:\\data\\maps\\old\\old.map";
+	cached.fileSize = 100;
+	cached.crc = 7;
+	BOOST_TEST(MapCacheEntryHolds(&cached, 100));
+	BOOST_TEST(!MapCacheEntryHolds(&cached, 101));
+	cached.crc = 0;
+	BOOST_TEST(!MapCacheEntryHolds(&cached, 100));
+	BOOST_TEST(!MapCacheEntryHolds(nullptr, 100));
+	cached.crc = 7;
+
+	MapCache cache;
+	cache.maps.push_back(cached);
+	MapMetaData gone;
+	gone.file = "c:\\data\\maps\\gone\\gone.map";
+	gone.fileSize = 5;
+	gone.crc = 9;
+	cache.maps.push_back(gone);
+	MapMetaData elsewhere;
+	elsewhere.file = "maps\alpine assault\alpine assault.map";
+	cache.maps.insert(cache.maps.end(), elsewhere);
+	std::ranges::sort(cache.maps, {}, &MapMetaData::file);
+
+	std::vector<std::string> described;
+	const auto describe = [&](const MapFile &file) -> std::optional<MapMetaData> {
+		described.push_back(file.path);
+		MapMetaData map;
+		map.players = 2;
+		map.multiplayer = true;
+		map.crc = 42;
+		map.official = true; // addMap records it as not official whatever is read
+		return map;
+	};
+	const std::vector<MapFile> found{{"C:\\Data\\Maps\\Old\\Old.map", 100}, {"C:\\Data\\Maps\\New\\New.map", 300},
+		{"C:\\Data\\Maps\\Stray.map", 50}, {"C:\\Data\\Maps\\Wrong\\Other.map", 60}};
+	BOOST_TEST(UpdateUserMaps(cache, "C:\\Data\\Maps", found, describe));
+	BOOST_TEST_REQUIRE(described.size() == 1u);
+	BOOST_TEST(described[0] == "C:\\Data\\Maps\\New\\New.map");
+	const MapMetaData *added = cache.Find("c:\\data\\maps\\new\\new.map");
+	BOOST_TEST_REQUIRE((added != nullptr));
+	BOOST_TEST(added->fileSize == 300u);
+	BOOST_TEST(added->crc == 42u);
+	BOOST_TEST(!added->official);
+	BOOST_TEST((cache.Find("c:\\data\\maps\\gone\\gone.map") == nullptr));
+	BOOST_TEST((cache.Find("c:\\data\\maps\\old\\old.map") != nullptr));
+	BOOST_TEST((cache.Find("maps\alpine assault\alpine assault.map") != nullptr)); // not the folder's
+
+	// Again with nothing changed: nothing described, nothing to write.
+	described.clear();
+	const std::vector<MapFile> same{{"C:\\Data\\Maps\\Old\\Old.map", 100}, {"C:\\Data\\Maps\\New\\New.map", 300}};
+	BOOST_TEST(!UpdateUserMaps(cache, "C:\\Data\\Maps", same, describe));
+	BOOST_TEST(described.empty());
+	// The size changed: described again.
+	const std::vector<MapFile> grown{{"C:\\Data\\Maps\\Old\\Old.map", 100}, {"C:\\Data\\Maps\\New\\New.map", 301}};
+	BOOST_TEST(UpdateUserMaps(cache, "C:\\Data\\Maps", grown, describe));
+	BOOST_TEST(described.size() == 1u);
+
+	// The user's maps as the files list them under their folder's "Maps" mount (the cache keeps the full path).
+	BOOST_TEST(UserMapFileKey("c:\\data\\maps\\new\\new.map", "C:\\Data\\Maps").value_or("") == "maps\\new\\new.map");
+	BOOST_TEST(!UserMapFileKey("maps\\alpine assault\\alpine assault.map", "C:\\Data\\Maps").has_value());
+	BOOST_TEST(!UserMapFileKey("c:\\data\\mapsextra\\x\\x.map", "C:\\Data\\Maps").has_value());
+}
+
+// legacy_parity: MapCache::writeCacheINI's format for the folder's maps, read back by parseMapCacheDefinition: the key
+// quoted-printable, size, CRC, timestamps, yes/no flags, players, extent and positions at two decimals, the name tag,
+// InitialCameraPosition then the start spots, tech then supply positions, END.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_user_map_cache_is_written_as_the_original_writes_it)
+{
+	using Engine::Math::Fixed;
+	MapCache cache;
+	MapMetaData map;
+	map.file = "c:\\data\\maps\\duel\\duel.map";
+	map.fileSize = 1234;
+	map.crc = 4000000000u;
+	map.multiplayer = true;
+	map.players = 2;
+	map.extentMax = {Fixed::FromInt(1000), Fixed::FromInt(800), Fixed{}};
+	map.nameLookupTag = "MAP:Duel";
+	map.hasInitialCamera = true;
+	map.initialCamera = {Fixed::FromInt(10), Fixed::FromInt(20), Fixed{}};
+	map.starts = {{Fixed::FromInt(100), Fixed::FromInt(200), Fixed{}}, {Fixed::FromRatio(901, 2), Fixed::FromInt(600), Fixed{}}};
+	map.techs = {{Fixed::FromInt(5), Fixed::FromInt(6), Fixed{}}};
+	map.supplies = {{Fixed::FromInt(7), Fixed::FromInt(8), Fixed{}}};
+	cache.maps.push_back(map);
+	const std::string written = WriteMapCacheIni(cache, "c:\\data\\maps", "c:\\data\\maps\\MapCache.ini");
+	const std::string expected = "; FILE: c:\\data\\maps\\MapCache.ini /////////////////////////////////////////////////////////////\n"
+								 "; This INI file is auto-generated - do not modify\n"
+								 "; /////////////////////////////////////////////////////////////////////////////\n"
+								 "\nMapCache c_3A_5Cdata_5Cmaps_5Cduel_5Cduel_2Emap\n"
+								 "  fileSize = 1234\n"
+								 "  fileCRC = 4000000000\n"
+								 "  timestampLo = 0\n"
+								 "  timestampHi = 0\n"
+								 "  isOfficial = no\n"
+								 "  isMultiplayer = yes\n"
+								 "  numPlayers = 2\n"
+								 "  extentMin = X:0.00 Y:0.00 Z:0.00\n"
+								 "  extentMax = X:1000.00 Y:800.00 Z:0.00\n"
+								 "  nameLookupTag = MAP:Duel\n"
+								 "  InitialCameraPosition = X:10.00 Y:20.00 Z:0.00\n"
+								 "  Player_1_Start = X:100.00 Y:200.00 Z:0.00\n"
+								 "  Player_2_Start = X:450.50 Y:600.00 Z:0.00\n"
+								 "  techPosition = X:5.00 Y:6.00 Z:0.00\n"
+								 "  supplyPosition = X:7.00 Y:8.00 Z:0.00\n"
+								 "END\n\n";
+	BOOST_TEST(written == expected);
+	Document document;
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	ini::Read(document, document.AddSource("MapCache.ini", written), ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const MapCache back = BindMapCache(document, context);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	BOOST_TEST_REQUIRE(back.maps.size() == 1u);
+	BOOST_TEST(back.maps[0].file == map.file);
+	BOOST_TEST(back.maps[0].crc == 4000000000u);
+	BOOST_TEST(back.maps[0].players == 2);
+	BOOST_TEST(back.maps[0].hasInitialCamera);
+	BOOST_TEST(back.maps[0].starts.size() == 2u);
+	BOOST_TEST(back.maps[0].techs.size() == 1u);
+	BOOST_TEST(back.maps[0].nameLookupTag == "MAP:Duel");
+}
+
+// legacy_parity: GameLogic::startNewGame (TheGameText->initMapStringFile("<map folder>\map.str")) and
+// GameTextManager::fetch (Generals.csf's table first, then the map's): a label of the game's own wins over the map's;
+// one only the map has comes from its map.str; the shipped MD_GLA02_CINE's objective line is its map's own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_maps_strings_come_after_the_games)
+{
+	BOOST_TEST(MapStringsPath("Maps/MD_GLA02_CINE/MD_GLA02_CINE.map") == "Maps/MD_GLA02_CINE/map.str");
+	BOOST_TEST(MapStringsPath("maps\\duel\\duel.map") == "maps\\duel\\map.str");
+	engine::localization::StringTable game, map;
+	game.Set("GUI:Shared", {"game's"});
+	map.Set("GUI:Shared", {"map's"});
+	map.Set("MAP:Only", {"only the map's"});
+	BOOST_TEST_REQUIRE((FindGameOrMapString(game, map, "GUI:Shared") != nullptr));
+	BOOST_TEST(FindGameOrMapString(game, map, "GUI:Shared")->text == "game's");
+	BOOST_TEST_REQUIRE((FindGameOrMapString(game, map, "MAP:Only") != nullptr));
+	BOOST_TEST(FindGameOrMapString(game, map, "MAP:Only")->text == "only the map's");
+	BOOST_TEST((FindGameOrMapString(game, map, "MAP:Nowhere") == nullptr));
+	if (Install() == nullptr)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, Install());
+	const engine::localization::StringTable strings = ReadMapStrings(files, "Maps/MD_GLA02_CINE/MD_GLA02_CINE.map");
+	const auto *objective = strings.Find("MDGLA02:OBJ1");
+	BOOST_TEST_REQUIRE((objective != nullptr));
+	BOOST_TEST(objective->text.find("OBJECTIVE - Capture Kassad's Command Centers") != std::string::npos);
+	BOOST_TEST(ReadMapStrings(files, "Maps/NoSuchMap/NoSuchMap.map").Size() == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

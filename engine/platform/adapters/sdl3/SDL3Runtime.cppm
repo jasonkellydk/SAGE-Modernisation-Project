@@ -1,8 +1,8 @@
 module;
 #include <SDL3/SDL.h>
 #include <SDL3_net/SDL_net.h>
-#include <stdexcept>
 export module engine.platform.adapters.sdl3.runtime;
+import std;
 export namespace engine::platform::sdl3
 {
 class SDL3Runtime final

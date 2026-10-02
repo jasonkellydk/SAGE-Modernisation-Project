@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelAssetPoseTests
 #include <boost/test/included/unit_test.hpp>
-#include <cmath>
-#include <string>
 export module Graphics.Scene.Models.AssetPose.Tests;
+import std;
 import Graphics.Scene.Models.AssetPose;
 import Assets.ModelRig;
 using namespace Graphics;

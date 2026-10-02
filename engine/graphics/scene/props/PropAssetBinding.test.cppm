@@ -1,20 +1,8 @@
 module;
 #define BOOST_TEST_MODULE PropAssetBindingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <algorithm>
-#include <cstddef>
-#include <cmath>
-#include <cctype>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <iomanip>
-#include <memory>
-#include <string>
-#include <vector>
 export module Graphics.Scene.Props.AssetBinding.Tests;
+import std;
 import Graphics.Scene.Props.AssetBinding;
 import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -247,6 +235,75 @@ BOOST_AUTO_TEST_CASE(converted_airfield_renders_through_typed_asset_and_prop_bin
         frame.format=Engine::Video::PixelFormat::RGBA8; frame.pixels=pixels;
         BOOST_REQUIRE(Engine::Video::Write_Frame_Image(preview,frame));
     }
+    binding.Clear(); renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+// The original's opacity override (Drawable::setDrawableOpacity -> MeshClass alpha override; the legacy path in
+// ModelMeshDrawing: an opaque shader turns to source alpha over what is behind, alpha tested at 96 x opacity). A part
+// drawn through Draw_Part_Translucent at 0.45 lands, where it is drawn, 0.45 of the way from the clear colour to the
+// same part drawn opaque (within 4 of 255 for 8-bit rounding of both captures). Run on e.g. NBAirfield.W3D.
+BOOST_AUTO_TEST_CASE(translucent_parts_blend_at_the_opacity_override)
+{
+    const char* source=std::getenv("GENERALS_W3D_TRANSLUCENT_ASSET");
+    const char* textures=std::getenv("GENERALS_W3D_TRANSLUCENT_TEXTURES");
+    if(!source || !textures) { BOOST_TEST_MESSAGE("Set a W3D model and its texture folder for the translucent draw"); return; }
+    const auto bytes=Read(source); BOOST_REQUIRE(!bytes.empty());
+    Assets::AssetCache assets([&](const Assets::AssetIdentity& identity) {
+        if(identity.type==Assets::AssetType::Model) return bytes;
+        auto path=std::filesystem::path(textures)/identity.canonical_name;
+        auto data=Read(path);
+        if(data.empty()) { path.replace_extension(".dds"); data=Read(path); }
+        return data;
+    });
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
+    const auto handle=assets.Request_Model(std::filesystem::path(source).filename().string()); assets.Wait(handle);
+    const auto* model=assets.Try_Get_Model(handle); BOOST_REQUIRE_MESSAGE(model!=nullptr,assets.Get_Error(handle));
+    std::string error; ModelAssetPose pose; BOOST_REQUIRE_MESSAGE(pose.Initialize(model->Rig(),error),error);
+    GraphicsTestDevice device({true}); PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    PropAssetBinding binding; BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
+    constexpr unsigned extent=512;
+    const auto target=device.Create_Texture({extent,extent,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({extent,extent,1,RHITextureFormat::D32_Float,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    const auto& bounds=model->Bounds();
+    const float x=(bounds.minimum.x+bounds.maximum.x)*.5f,y=(bounds.minimum.y+bounds.maximum.y)*.5f,z=(bounds.minimum.z+bounds.maximum.z)*.5f;
+    const float span=(std::max)({bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y,bounds.maximum.z-bounds.minimum.z});
+    BOOST_REQUIRE(span>0); const float s=1.2f/span;
+    PropParameters parameters;
+    parameters.view_projection={.7f*s,.7f*s,0,-.7f*s*(x+y),-.35f*s,.35f*s,.8f*s,s*(.35f*x-.35f*y-.8f*z),-.2f*s,.2f*s,-.2f*s,.5f+s*(.2f*x-.2f*y+.2f*z),0,0,0,1};
+    parameters.camera_position={300,-450,600,1}; parameters.scene_ambient={.7f,.75f,.8f,1};
+    parameters.light_direction[0]={.3f,-.5f,.8f,1}; parameters.light_diffuse[0]={1,1,1,1};
+    auto& commands=device.Immediate_Command_List();
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth)); BOOST_REQUIRE(commands.Set_Viewport({0,0,extent,extent}));
+    // One part at a time, so each pixel is a single surface over the clear colour (parts crossing each other blend
+    // over what is already there, as the original's did).
+    const auto capture=[&](std::size_t part,bool translucent) {
+        BOOST_REQUIRE(commands.Clear({.2f,.2f,.2f,1},1));
+        PropParameters drawn=parameters;
+        if(translucent) drawn.vertex_material_override={.45f,1,0,1};
+        BOOST_REQUIRE(translucent ? binding.Draw_Part_Translucent(commands,part,drawn,.45f,&pose) : binding.Draw_Part(commands,part,drawn,&pose));
+        std::vector<std::byte> pixels(extent*extent*4);
+        BOOST_REQUIRE(device.Readback_Texture(target,pixels,extent*4));
+        return pixels;
+    };
+    constexpr int clear=51;
+    std::size_t exact=0;
+    for(std::size_t part=0;part<binding.Part_Count();++part) {
+        const auto opaque=capture(part,false),blended=capture(part,true);
+        std::size_t partCovered=0,partBetween=0;
+        for(std::size_t pixel=0;pixel<opaque.size();pixel+=4) {
+            const int drawn=std::to_integer<int>(opaque[pixel+1]),mixed=std::to_integer<int>(blended[pixel+1]);
+            if(std::abs(drawn-clear)<40 || mixed==clear) continue; // not drawn, or cut by the alpha test
+            ++partCovered;
+            if(std::abs(static_cast<float>(mixed)-(clear+.45f*static_cast<float>(drawn-clear)))<=4.0f) ++partBetween;
+        }
+        BOOST_TEST_MESSAGE(binding.Part_Name(part)<<": "<<partBetween<<" of "<<partCovered);
+        if(partCovered>=400 && partBetween==partCovered) ++exact;
+    }
+    // Opaque parts that do not cross themselves land exactly there (the airfield's cylinder, house colour and
+    // helipad); parts folding over themselves blend over their own nearer faces, and already blended parts
+    // (banners, lights) keep their own blending.
+    BOOST_TEST(exact>=3u);
     binding.Clear(); renderer.Shutdown(); device.Destroy_Texture(target); device.Destroy_Texture(depth);
 }
 

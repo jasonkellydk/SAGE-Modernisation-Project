@@ -1,0 +1,294 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <map>
+#include <random>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+import engine.ecs.scheduler.scheduler;
+
+namespace side_test
+{
+struct Position // simulation state, in the archetypes
+{
+	std::int64_t x{0};
+};
+
+struct Look // presentation state, in a side table
+{
+	std::uint32_t look{0};
+	float since{0.0f};
+};
+
+struct Handle // presentation state holding an outside resource
+{
+	int sound{0};
+};
+}
+
+namespace ecs
+{
+template<>
+struct ComponentTraits<side_test::Position>
+{
+	static constexpr std::string_view StableName = "tests.side.position";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
+};
+template<>
+struct ComponentTraits<side_test::Look>
+{
+	static constexpr std::string_view StableName = "tests.side.look";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<side_test::Handle>
+{
+	static constexpr std::string_view StableName = "tests.side.handle";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+}
+
+using namespace side_test;
+
+namespace
+{
+void RegisterSimulation(ecs::World &world, bool presentation)
+{
+	world.RegisterComponent<Position>();
+	if (presentation)
+	{
+		world.RegisterComponent<Look>();
+		world.RegisterComponent<Handle>();
+	}
+	world.FinalizeComponents();
+}
+
+std::vector<ecs::Entity> Populate(ecs::World &world)
+{
+	std::vector<ecs::Entity> entities;
+	for (int index = 0; index < 50; ++index)
+	{
+		const ecs::Entity entity = world.Create<Position>();
+		world.Get<Position>(entity)->x = index;
+		entities.push_back(entity);
+	}
+	world.Destroy(entities[7]);
+	return entities;
+}
+
+// Chunk-parallel presentation: moves each entity's look on, per row.
+struct LookAnimation
+{
+	using Query = ecs::Query<ecs::Read<Position>>;
+	using SideTables = ecs::SideTables<ecs::Write<Look>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		auto &looks = context.Side<SideTables, Look>();
+		const auto entities = chunk.Entities();
+		const auto positions = chunk.Get<Position>();
+		for (std::size_t row = 0; row < positions.size(); ++row)
+			if (Look *look = looks.Get(entities[row]))
+				look->look = static_cast<std::uint32_t>(positions[row].x) + 1000;
+	}
+};
+
+// Gives every entity without a look one, through commands.
+struct LookSpawner
+{
+	using Query = ecs::Query<ecs::Read<Position>>;
+	using SideTables = ecs::SideTables<ecs::Read<Look>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const auto &looks = context.SideRead<SideTables, Look>();
+		for (const ecs::Entity entity : chunk.Entities())
+			if (!looks.Contains(entity))
+				context.Commands().Add<Look>(entity, Look{1, 0.0f});
+	}
+};
+
+struct OtherLookWriter
+{
+	using Query = ecs::Query<ecs::Read<Position>>;
+	using SideTables = ecs::SideTables<ecs::Write<Look>>;
+	void Execute(Query::Chunk, ecs::SystemContext &) const {}
+};
+
+struct NamesSideInQuery
+{
+	using Query = ecs::Query<ecs::Read<Look>>;
+	void Execute(Query::Chunk, ecs::SystemContext &) const {}
+};
+}
+
+namespace ecs
+{
+template<>
+struct SystemTraits<LookAnimation>
+{
+	static constexpr std::string_view StableName = "tests.side.look_animation";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<LookSpawner>;
+};
+template<>
+struct SystemTraits<LookSpawner>
+{
+	static constexpr std::string_view StableName = "tests.side.look_spawner";
+	static constexpr SystemPhase Phase = SystemPhase::PreSimulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<OtherLookWriter>
+{
+	static constexpr std::string_view StableName = "tests.side.other_look_writer";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<NamesSideInQuery>
+{
+	static constexpr std::string_view StableName = "tests.side.names_side_in_query";
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+}
+
+BOOST_AUTO_TEST_SUITE(side_tables)
+
+BOOST_AUTO_TEST_CASE(side_components_never_touch_the_simulation_layout)
+{
+	ecs::World rendering(ecs::WorldConfig{8});
+	RegisterSimulation(rendering, true);
+	ecs::World headless(ecs::WorldConfig{8});
+	RegisterSimulation(headless, false);
+	const auto entities = Populate(rendering);
+	Populate(headless);
+	// Same simulation ids and schema whatever presentation a peer registers.
+	BOOST_TEST(rendering.Components().SchemaHash() == headless.Components().SchemaHash());
+	BOOST_TEST(rendering.Components().TryGet(typeid(Position)) == headless.Components().TryGet(typeid(Position)));
+	const auto hash = rendering.StateHash();
+	BOOST_TEST(hash == headless.StateHash());
+	const std::size_t archetypes = rendering.ArchetypeCount();
+
+	for (std::size_t index = 0; index < entities.size(); index += 2)
+		rendering.Add<Look>(entities[index]);
+	rendering.Add<Handle>(entities[1]);
+	BOOST_TEST(rendering.ArchetypeCount() == archetypes);
+	BOOST_TEST(rendering.StateHash() == hash);
+	BOOST_TEST(rendering.Has<Look>(entities[2]));
+	BOOST_TEST(!rendering.Has<Look>(entities[1]));
+	BOOST_TEST(!rendering.Has<Look>(entities[7])); // destroyed
+
+	// A rendering peer's checkpoint loads on a headless one and back.
+	engine::core::serialization::ByteWriter writer;
+	rendering.SaveCheckpoint(writer);
+	const auto bytes = writer.Take();
+	ecs::World loaded(ecs::WorldConfig{8});
+	RegisterSimulation(loaded, false);
+	engine::core::serialization::ByteReader reader(bytes);
+	BOOST_TEST(loaded.LoadCheckpoint(reader));
+	BOOST_TEST(loaded.StateHash() == hash);
+
+	// Side components never go into archetypes.
+	BOOST_CHECK_THROW((rendering.Create<Position, Look>()), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(entries_follow_their_entity_and_hooks_release_resources)
+{
+	ecs::World world(ecs::WorldConfig{8});
+	RegisterSimulation(world, true);
+	const auto entities = Populate(world);
+	std::vector<int> released;
+	world.Side<Handle>().OnRemove([&](ecs::Entity, Handle &handle) { released.push_back(handle.sound); });
+	*world.Side<Handle>().Emplace(entities[3]) = Handle{33};
+	*world.Side<Handle>().Emplace(entities[4]) = Handle{44};
+	world.Side<Handle>().Emplace(entities[5], Handle{55});
+	BOOST_TEST(world.Get<Handle>(entities[4])->sound == 44);
+	world.Remove<Handle>(entities[4]);  // removed: hook runs
+	world.Destroy(entities[5]);         // entity gone: its entries go, hook runs
+	BOOST_TEST((released == std::vector<int>{44, 55}));
+	BOOST_TEST(world.Side<Handle>().Size() == 1u);
+	BOOST_TEST(world.Get<Handle>(entities[3])->sound == 33);
+	// A recycled index does not see the old entity's entry.
+	const ecs::Entity reused = world.Create<Position>();
+	BOOST_TEST(reused.index == entities[5].index);
+	BOOST_TEST(!world.Has<Handle>(reused));
+}
+
+BOOST_AUTO_TEST_CASE(the_sparse_set_matches_a_reference_under_churn)
+{
+	ecs::SideTable<Look> table;
+	std::map<std::uint32_t, std::uint32_t> reference;
+	std::mt19937 random(7);
+	for (int step = 0; step < 20000; ++step)
+	{
+		const auto index = static_cast<std::uint32_t>(random() % 9000); // spans three sparse pages
+		const ecs::Entity entity{index, 1};
+		if (random() % 3 == 0)
+		{
+			BOOST_TEST_REQUIRE(table.Erase(entity) == reference.erase(index) > 0);
+		}
+		else if (Look *look = table.Get(entity))
+		{
+			look->look = static_cast<std::uint32_t>(step);
+			reference[index] = static_cast<std::uint32_t>(step);
+		}
+		else
+		{
+			table.Emplace(entity, Look{static_cast<std::uint32_t>(step), 0.0f});
+			reference[index] = static_cast<std::uint32_t>(step);
+		}
+	}
+	BOOST_TEST_REQUIRE(table.Size() == reference.size());
+	for (std::size_t dense = 0; dense < table.Size(); ++dense)
+		BOOST_TEST_REQUIRE(reference.at(table.Entities()[dense].index) == table.Value(dense).look);
+}
+
+BOOST_AUTO_TEST_CASE(systems_declare_side_access_and_add_entries_through_commands)
+{
+	ecs::World world(ecs::WorldConfig{8});
+	RegisterSimulation(world, true);
+	const auto entities = Populate(world);
+	LookSpawner spawner;
+	LookAnimation animation;
+	ecs::SystemRegistry systems;
+	systems.Register(spawner);
+	systems.Register(animation);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{4});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute({1, engine::time::FixedStep{30}}); // spawn looks (pre-simulation), then animate them
+	BOOST_TEST(world.Side<Look>().Size() == 49u);
+	BOOST_TEST(world.Get<Look>(entities[10])->look == 1010u);
+
+	// Two unordered writers of one side table are an ambiguous conflict.
+	ecs::World other(ecs::WorldConfig{8});
+	RegisterSimulation(other, true);
+	LookAnimation first;
+	OtherLookWriter second;
+	ecs::SystemRegistry conflicting;
+	conflicting.Register(first);
+	conflicting.Register(second);
+	conflicting.Finalize(other.Components());
+	ecs::Scheduler ambiguous(other, conflicting);
+	BOOST_CHECK_THROW(ambiguous.Finalize(engine::time::FixedStep{30}), std::logic_error);
+
+	// Queries match archetype components only.
+	NamesSideInQuery wrong;
+	ecs::SystemRegistry queries;
+	queries.Register(wrong);
+	queries.Finalize(other.Components());
+	BOOST_CHECK_THROW((ecs::Query<ecs::Read<Look>>(other)), std::logic_error);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,0 +1,36 @@
+#define BOOST_TEST_MODULE GeneralsZhPresentationScripted
+#include <boost/test/included/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.scripted.resources.scripted_presentation;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(scripted_presentation)
+
+// Legacy parity (GameLogic::reset: m_drawIconUI = TRUE before every new game; Radar::reset; W3DShroud::init): a shell
+// map's scripts turn the icon UI off (DRAW_ICON_UI), and a match started after it draws icons and radius cursors again;
+// its end, input, forced radar, seen defeat and border shroud start over, while a radar a script hid stays hidden (the
+// retail Radar::reset keeps it).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_new_match_draws_the_icon_ui_again)
+{
+	ScriptedPresentation settings;
+	settings.drawIconUi = false;
+	settings.matchEnd = ScriptedPresentation::MatchEnd::Victory;
+	settings.inputDisabled = true;
+	settings.radarForced = true;
+	settings.localDefeatSeen = true;
+	settings.borderShroudDisabled = true;
+	settings.radarHidden = true;
+	ResetForNewMatch(settings);
+	BOOST_TEST(settings.drawIconUi);
+	BOOST_TEST((settings.matchEnd == ScriptedPresentation::MatchEnd::None));
+	BOOST_TEST(!settings.inputDisabled);
+	BOOST_TEST(!settings.radarForced);
+	BOOST_TEST(!settings.localDefeatSeen);
+	BOOST_TEST(!settings.borderShroudDisabled);
+	BOOST_TEST(settings.radarHidden);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

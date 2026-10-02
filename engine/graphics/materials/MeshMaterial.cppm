@@ -1,10 +1,5 @@
-module;
-#include <array>
-#include <bit>
-#include <cstdint>
-#include <memory>
-#include <string>
 export module Graphics.Materials.MeshMaterial;
+import std;
 import Graphics.Scene.Props.Material;
 import Graphics.Materials.TextureMapping;
 

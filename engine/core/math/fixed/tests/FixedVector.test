@@ -1,0 +1,46 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+
+import Engine.Core.Math.FixedVector;
+
+using namespace Engine::Math;
+using namespace Engine::Math::Literals;
+
+BOOST_AUTO_TEST_SUITE(fixed_vector)
+
+BOOST_AUTO_TEST_CASE(arithmetic_and_products)
+{
+	const FixedVector3 a{1_fx, 2_fx, 3_fx};
+	const FixedVector3 b{4_fx, 5_fx, 6_fx};
+	BOOST_TEST((a + b == FixedVector3{5_fx, 7_fx, 9_fx}));
+	BOOST_TEST((b - a == FixedVector3{3_fx, 3_fx, 3_fx}));
+	BOOST_TEST((a * 2_fx == FixedVector3{2_fx, 4_fx, 6_fx}));
+	BOOST_TEST(Dot(a, b).Raw() == (32_fx).Raw());
+	BOOST_TEST((Cross(a, b) == FixedVector3{-3_fx, 6_fx, -3_fx}));
+	BOOST_TEST(Cross(FixedVector2{1_fx, 0_fx}, FixedVector2{0_fx, 1_fx}).Raw() == (1_fx).Raw());
+	BOOST_TEST((a.XY() == FixedVector2{1_fx, 2_fx}));
+}
+
+BOOST_AUTO_TEST_CASE(lengths_cover_whole_map_distances)
+{
+	BOOST_TEST(Length(FixedVector2{3_fx, 4_fx}).Raw() == (5_fx).Raw());
+	BOOST_TEST(Distance(FixedVector3{0_fx, 0_fx, 0_fx}, FixedVector3{2_fx, 3_fx, 6_fx}).Raw() == (7_fx).Raw());
+	// Large maps are ~10,000 units across; squared distance must not overflow.
+	const FixedVector2 corner{10000_fx, 10000_fx};
+	BOOST_TEST(DistanceSquared(FixedVector2{}, corner).Raw() == (200000000_fx).Raw());
+	BOOST_TEST(Distance(FixedVector2{}, FixedVector2{6000_fx, 8000_fx}).Raw() == (10000_fx).Raw());
+}
+
+BOOST_AUTO_TEST_CASE(normalize_and_direction)
+{
+	const FixedVector2 unit = Normalize(FixedVector2{3_fx, 4_fx});
+	BOOST_TEST((unit == FixedVector2{0.6_fx, 0.8_fx}));
+	BOOST_TEST((Normalize(FixedVector2{}) == FixedVector2{}));
+	BOOST_TEST((Direction(TurnFromDegrees(90)) == FixedVector2{0_fx, 1_fx}));
+	BOOST_TEST(Heading(FixedVector2{0_fx, 5_fx}).units == TurnFromDegrees(90).units);
+	const FixedVector2 rotated = Rotate(FixedVector2{1_fx, 0_fx}, TurnFromDegrees(180));
+	BOOST_TEST((rotated == FixedVector2{-1_fx, 0_fx}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

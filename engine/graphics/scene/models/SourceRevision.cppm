@@ -1,8 +1,5 @@
-module;
-#include <atomic>
-#include <cstdint>
-#include <memory>
 export module Graphics.Scene.Models.SourceRevision;
+import std;
 
 namespace Graphics {
 // Copies share a mutation domain, just as their source arrays share storage.

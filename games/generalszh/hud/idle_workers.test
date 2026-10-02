@@ -1,0 +1,166 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <variant>
+
+import games.generalszh.hud.control_bar_view_model;
+import games.generalszh.hud.idle_workers;
+import games.generalszh.gameplay.construction.components.builder_boredom;
+import engine.gameplay.rts.movement.components.move_order;
+import Engine.Core.Math.Fixed;
+import games.generalszh.hud.control_bar_state;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.commands.game_commands;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.upgrades.resources.player_upgrades;
+import engine.gameplay.rts.teams.resources.team_roster;
+
+// The idle worker button (real data).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+// idleMarked is the tick a worker went on the list plus one: the starting dozer on tick 0, the one placed on tick 1
+// found idle on tick 2.
+constexpr std::uint64_t FIRST_MARK = 1, SECOND_MARK = 3;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(idle_workers)
+
+// Legacy parity (DozerAIUpdate.cpp DozerPrimaryIdleState::update / onExit, InGameUI.cpp addIdleWorker / removeIdleWorker
+// / selectNextIdleWorker / getUniqueIdleWorkers): a dozer idle in its primary idle state goes on its player's idle worker
+// list once (the tick it is found idle), a second one after it; ordered to move it comes off, and goes back on (last)
+// once it stands idle again; building it comes off (onExit). The button is enabled while the list has one. Pressed with
+// nothing selected it picks the first; with one selected the one after it, wrapping round; with something else selected
+// the first. The marks are simulation state: alike on 1 and 4 workers, restored from a checkpoint.
+BOOST_AUTO_TEST_CASE(legacy_parity_idle_workers_line_up_and_the_button_walks_them)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int america = -1;
+	for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+		if (shell.game.playerTemplates.templates[index].name == "FactionAmerica")
+			america = static_cast<int>(index);
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = america;
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = america;
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{3, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	session::SessionOptions wide = options;
+	wide.workers = 4;
+	session::Session game4(skirmish.level, shell.game, wide);
+	const auto both = [&](auto step) {
+		step(game);
+		step(game4);
+	};
+	both([](session::Session &g) { g.Tick(); });
+	const std::uint32_t player = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().DefaultTeam(player);
+	ecs::Entity dozer{};
+	for (const ecs::Entity member : game.Teams().TeamAt(team).members)
+		if (const auto *ref = game.World().Get<gp::DefinitionRef>(member); ref != nullptr && game.DefinitionName(ref->index) == "AmericaVehicleDozer")
+			dozer = member;
+	BOOST_TEST_REQUIRE((dozer != ecs::Entity{}));
+	const auto marked = [&](ecs::Entity entity) { return game.World().Get<generalszh::gameplay::BuilderBoredom>(entity)->idleMarked; };
+	BOOST_TEST(marked(dozer) == FIRST_MARK);
+	BOOST_TEST((hud::IdleWorkers(game, player) == std::vector<ecs::Entity>{dozer}));
+	BOOST_TEST(hud::ReadControlBar(game, player, {}).idleWorkers == 1u);
+	const auto at = game.World().Get<gp::Transform>(dozer)->position.XY();
+	ecs::Entity second{}, ranger{};
+	both([&](session::Session &g) {
+		second = g.Place("AmericaVehicleDozer", {at.x + Fixed::FromInt(40), at.y}, {}, team);
+		ranger = g.Place("AmericaInfantryRanger", {at.x - Fixed::FromInt(40), at.y}, {}, team);
+		g.Tick();
+	});
+	BOOST_TEST(marked(second) == SECOND_MARK);
+	const std::vector<ecs::Entity> idle = hud::IdleWorkers(game, player);
+	BOOST_TEST((idle == std::vector<ecs::Entity>{dozer, second}));
+	BOOST_TEST((hud::NextIdleWorker(game, idle, {}) == dozer));
+	BOOST_TEST((hud::NextIdleWorker(game, idle, std::array{dozer}) == second));
+	BOOST_TEST((hud::NextIdleWorker(game, idle, std::array{second}) == dozer));
+	BOOST_TEST((hud::NextIdleWorker(game, idle, std::array{ranger}) == dozer));
+	BOOST_TEST((hud::NextIdleWorker(game, idle, std::array{ranger, second}) == dozer));
+	BOOST_TEST(!hud::NextIdleWorker(game, {}, {}).has_value());
+
+	// Ordered to move: off the list; once it stands again, back on after the second.
+	both([&](session::Session &g) {
+		auto move = commands::Encode(commands::MoveTo{{dozer}, {at.x + Fixed::FromInt(60), at.y + Fixed::FromInt(60)}});
+		move.player = 0;
+		g.Tick(std::span(&move, 1));
+	});
+	BOOST_TEST(marked(dozer) == 0u);
+	BOOST_TEST((hud::IdleWorkers(game, player) == std::vector<ecs::Entity>{second}));
+	std::optional<std::uint64_t> back;
+	for (int tick = 0; tick < 600 && !back; ++tick)
+	{
+		both([](session::Session &g) { g.Tick(); });
+		if (marked(dozer) != 0)
+			back = marked(dozer);
+	}
+	BOOST_TEST_REQUIRE(back.has_value());
+	BOOST_TEST(*back == 172u); // its move over, it stands idle on tick 171
+	BOOST_TEST_MESSAGE("marks: first " << FIRST_MARK << ", second " << marked(second) << ", back " << *back);
+	BOOST_TEST((hud::IdleWorkers(game, player) == std::vector<ecs::Entity>{second, dozer}));
+	BOOST_TEST(game.StateHash() == game4.StateHash());
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+	BOOST_TEST((hud::IdleWorkers(*restored, player) == std::vector<ecs::Entity>{second, dozer}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

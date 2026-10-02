@@ -1,19 +1,6 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cassert>
-#include <cmath>
-#include <cstring>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <functional>
-#include <limits>
-#include <numeric>
-#include <span>
-#include <vector>
-
 export module Graphics.Scene.Shadows.DirectionalRenderer;
+import std;
+import engine.core.contracts;
 import engine.profiling;
 export import Graphics.Scene.Shadows;
 export import Graphics.Scene.Props.Renderer;
@@ -476,7 +463,7 @@ private:
         m_instance_indices.resize(m_casters.size());
         for (std::size_t first=0; first<m_caster_order.size();) {
             const auto& caster = m_casters[m_caster_order[first]];
-            assert(caster.style.color_write_mask == 0 && !caster.style.stencil.enabled);
+            engine::core::Assert(caster.style.color_write_mask == 0 && !caster.style.stencil.enabled);
             auto* renderer = caster.source != nullptr ? caster.source : &m_renderer;
             auto mesh = caster.source_mesh;
             std::uint32_t first_index = 0, index_count = 0;

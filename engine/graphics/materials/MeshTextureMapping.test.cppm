@@ -1,9 +1,8 @@
 module;
 #define BOOST_TEST_MODULE MeshTextureMappingTests
 #include <boost/test/included/unit_test.hpp>
-#include <array>
-#include <cstdint>
 export module Graphics.Materials.MeshTextureMapping.Tests;
+import std;
 import Assets.Math;
 import Assets.Materials.TextureMapping;
 import Graphics.Materials.MeshMaterial;

@@ -7,16 +7,11 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <algorithm>
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <vector>
 #include <windows.h>
 #include "dx11/DX11DeviceHealth.h"
 
 export module Graphics.Backends.Tests;
+import std;
 
 #ifndef GRAPHICS_TEST_SHADER_DIRECTORY
 #define GRAPHICS_TEST_SHADER_DIRECTORY "."
@@ -534,7 +529,7 @@ BOOST_AUTO_TEST_CASE(dx11_draw_submission_counts_follow_successful_topologies_an
         if (mode == RHIBufferUpdateMode::Preserve) {
             for (unsigned vertex=0; vertex<vertices.size(); ++vertex)
                 BOOST_REQUIRE(device.Update_Buffer(vertex_buffer,
-                    vertex*sizeof(SubmissionTestVertex)+offsetof(SubmissionTestVertex,color),std::as_bytes(std::span(green))));
+                    vertex*sizeof(SubmissionTestVertex)+__builtin_offsetof(SubmissionTestVertex,color),std::as_bytes(std::span(green))));
             BOOST_REQUIRE(device.Update_Buffer(index_buffer,0,std::as_bytes(std::span(degenerate))));
         } else {
             auto updated = vertices;

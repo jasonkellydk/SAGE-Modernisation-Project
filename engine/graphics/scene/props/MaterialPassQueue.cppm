@@ -1,13 +1,5 @@
-module;
-#include <algorithm>
-#include <array>
-#include <cstring>
-#include <cstddef>
-#include <cstdint>
-#include <limits>
-#include <span>
-#include <vector>
 export module Graphics.Scene.Props.MaterialPassQueue;
+import std;
 export import Graphics.Scene.Props.Renderer;
 import Graphics.Scene.Props.BatchBounds;
 namespace Graphics {

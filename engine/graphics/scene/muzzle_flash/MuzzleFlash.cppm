@@ -1,9 +1,5 @@
-module;
-#include <array>
-#include <cmath>
-#include <cstdint>
-
 export module Graphics.Scene.MuzzleFlash;
+import std;
 export import Graphics.Scene.Props.Renderer;
 
 namespace Graphics

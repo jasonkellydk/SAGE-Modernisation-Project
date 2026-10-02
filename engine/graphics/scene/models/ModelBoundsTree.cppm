@@ -1,9 +1,5 @@
-module;
-#include <cstddef>
-#include <cstdint>
-#include <span>
-#include <utility>
 export module Graphics.Scene.Models.BoundsTree;
+import std;
 import Assets.Math;
 import Assets.MeshBoundsTree;
 

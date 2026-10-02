@@ -1,12 +1,5 @@
-module;
-
-#include <array>
-#include <bit>
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module Graphics.Scene.Particles.EmitterRenderer;
+import std;
 
 import Assets.Math;
 import Assets.Particles;

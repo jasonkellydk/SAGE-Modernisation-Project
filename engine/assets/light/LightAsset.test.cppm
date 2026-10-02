@@ -4,9 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <limits>
-
 export module Assets.Tests.Lights;
+import std;
 
 import Assets.Lights;
 

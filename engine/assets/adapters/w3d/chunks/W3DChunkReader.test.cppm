@@ -4,11 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
 export module Assets.Tests.W3DChunkReader;
+import std;
 
 import Assets.Adapters.W3D.Chunks;
 

@@ -1,13 +1,5 @@
-module;
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <memory>
-#include <span>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Props.Extraction;
+import std;
 export import Graphics.Scene.Props.Geometry;
 
 namespace Graphics

@@ -1,0 +1,264 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <stdexcept>
+#include <string_view>
+
+import engine.ecs.core.world;
+import engine.ecs.system.system;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+
+namespace access_test
+{
+struct Health
+{
+	std::int64_t value{0};
+};
+
+struct Target
+{
+	ecs::Entity entity{};
+	std::int64_t seen{-1};
+};
+
+// World-owned resource: systems hold no data and reach it through their
+// context, checked against the declared access.
+struct Ledger
+{
+	std::int64_t total{0};
+};
+}
+
+namespace ecs
+{
+template<>
+struct ResourceTraits<access_test::Ledger>
+{
+	static constexpr std::string_view StableName = "tests.access.ledger";
+};
+}
+
+namespace access_test
+{
+
+struct LedgerWriterA
+{
+	using Query = ecs::Query<ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Write<Ledger>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		Ledger &ledger = context.Write<Ledger>();
+		for (const Health &health : chunk.Get<Health>())
+			ledger.total += health.value;
+	}
+};
+
+struct LedgerWriterB
+{
+	using Query = ecs::Query<ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Write<Ledger>>;
+	void Execute(Query::Chunk, ecs::SystemContext &context) const { context.Write<Ledger>().total *= 2; }
+};
+
+struct LedgerReader
+{
+	using Query = ecs::Query<ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Read<Ledger>>;
+	void Execute(Query::Chunk, ecs::SystemContext &) const {}
+};
+
+struct LedgerReaderTwo
+{
+	using Query = ecs::Query<ecs::Read<Health>>;
+	using Resources = ecs::Resources<ecs::Read<Ledger>>;
+	void Execute(Query::Chunk, ecs::SystemContext &) const {}
+};
+
+struct TargetingSystem
+{
+	using Query = ecs::Query<ecs::Write<Target>>;
+	using Lookup = ecs::Lookup<ecs::Read<Health>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
+	{
+		const auto lookup = context.Lookup<Lookup>();
+		for (Target &target : chunk.Get<Target>())
+		{
+			const Health *health = lookup.Get<Health>(target.entity);
+			target.seen = health == nullptr ? -2 : health->value;
+		}
+	}
+};
+
+struct HealthWriter
+{
+	using Query = ecs::Query<ecs::Write<Health>>;
+	void Execute(Query::Chunk chunk, ecs::SystemContext &) const
+	{
+		for (Health &health : chunk.Get<Health>())
+			health.value += 1;
+	}
+};
+
+struct UndeclaredLookupSystem
+{
+	using Query = ecs::Query<ecs::Write<Target>>;
+	void Execute(Query::Chunk, ecs::SystemContext &context) const
+	{
+		(void)context.Lookup<ecs::Lookup<ecs::Read<Health>>>();
+	}
+};
+}
+
+namespace ecs
+{
+#define ACCESS_TEST_COMPONENT(Type, Name)                                                \
+	template<>                                                                          \
+	struct ComponentTraits<access_test::Type>                                           \
+	{                                                                                   \
+		static constexpr std::string_view StableName = Name;                            \
+		static constexpr std::uint32_t Version = 1;                                     \
+		static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;  \
+	};
+ACCESS_TEST_COMPONENT(Health, "tests.access.health")
+ACCESS_TEST_COMPONENT(Target, "tests.access.target")
+#undef ACCESS_TEST_COMPONENT
+
+#define ACCESS_TEST_SYSTEM(Type, Name, ...)                                     \
+	template<>                                                                  \
+	struct SystemTraits<access_test::Type>                                      \
+	{                                                                           \
+		static constexpr std::string_view StableName = Name;                    \
+		static constexpr SystemPhase Phase = SystemPhase::Simulation;           \
+		using Before = SystemTypeList<__VA_ARGS__>;                             \
+		using After = SystemTypeList<>;                                         \
+	};
+ACCESS_TEST_SYSTEM(LedgerWriterA, "tests.access.ledger_writer_a")
+ACCESS_TEST_SYSTEM(LedgerWriterB, "tests.access.ledger_writer_b")
+ACCESS_TEST_SYSTEM(LedgerReader, "tests.access.ledger_reader")
+ACCESS_TEST_SYSTEM(LedgerReaderTwo, "tests.access.ledger_reader_two")
+ACCESS_TEST_SYSTEM(TargetingSystem, "tests.access.targeting")
+ACCESS_TEST_SYSTEM(HealthWriter, "tests.access.health_writer", access_test::TargetingSystem)
+ACCESS_TEST_SYSTEM(UndeclaredLookupSystem, "tests.access.undeclared_lookup")
+#undef ACCESS_TEST_SYSTEM
+}
+
+namespace
+{
+using namespace access_test;
+
+void Register(ecs::World &world)
+{
+	world.RegisterComponent<Health>();
+	world.RegisterComponent<Target>();
+	world.FinalizeComponents();
+}
+
+template<typename... Systems>
+bool SchedulerAccepts(ecs::World &world, Systems &...systems)
+{
+	ecs::SystemRegistry registry;
+	(registry.Register(systems), ...);
+	registry.Finalize(world.Components());
+	try
+	{
+		ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+		scheduler.Finalize(engine::time::FixedStep{30});
+	}
+	catch (const std::logic_error &)
+	{
+		return false;
+	}
+	return true;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(ecs_access_declarations)
+
+BOOST_AUTO_TEST_CASE(resource_writers_must_be_ordered_but_readers_may_share)
+{
+	ecs::World world;
+	Register(world);
+	world.EmplaceResource<Ledger>();
+	LedgerWriterA writerA;
+	LedgerWriterB writerB;
+	LedgerReader reader;
+	LedgerReaderTwo readerTwo;
+	BOOST_TEST(!SchedulerAccepts(world, writerA, writerB));
+	BOOST_TEST(!SchedulerAccepts(world, writerA, reader));
+	BOOST_TEST(SchedulerAccepts(world, reader, readerTwo));
+}
+
+BOOST_AUTO_TEST_CASE(resource_access_is_recorded_once_with_write_winning)
+{
+	ecs::World world;
+	Register(world);
+	world.EmplaceResource<Ledger>();
+	LedgerWriterA writer;
+	ecs::SystemRegistry registry;
+	registry.Register(writer);
+	registry.Finalize(world.Components());
+	const auto &resources = registry.Get(0).Access().Resources();
+	BOOST_TEST(resources.size() == 1u);
+	BOOST_TEST((resources.front().mode == ecs::AccessMode::Write));
+	BOOST_TEST(resources.front().stableName == "tests.access.ledger");
+}
+
+BOOST_AUTO_TEST_CASE(lookup_reads_other_entities_and_is_ordered_against_writers)
+{
+	ecs::World world;
+	Register(world);
+	const auto victim = world.Create<Health>();
+	world.Get<Health>(victim)->value = 40;
+	const auto hunter = world.Create<Target>();
+	world.Get<Target>(hunter)->entity = victim;
+	const auto stale = world.Create<Target>();
+	world.Get<Target>(stale)->entity = ecs::Entity{12345, 1};
+
+	TargetingSystem targeting;
+	HealthWriter writer;
+	ecs::SystemRegistry registry;
+	registry.Register(targeting);
+	registry.Register(writer);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	// HealthWriter is declared Before TargetingSystem, so targeting sees the
+	// updated value; without an order the pair is rejected as ambiguous.
+	BOOST_TEST(world.Get<Target>(hunter)->seen == 41);
+	BOOST_TEST(world.Get<Target>(stale)->seen == -2);
+	BOOST_TEST(world.Get<Health>(victim)->value == 41);
+}
+
+BOOST_AUTO_TEST_CASE(lookup_without_declared_order_is_an_ambiguous_conflict)
+{
+	ecs::World world;
+	Register(world);
+	TargetingSystem targeting;
+	HealthWriter writer;
+	ecs::SystemRegistry registry;
+	registry.Register(targeting);
+	registry.Register(writer);
+	registry.Finalize(world.Components());
+	const auto &targetingAccess = registry.Get(registry.TryGet<TargetingSystem>()).Access();
+	const auto &writerAccess = registry.Get(registry.TryGet<HealthWriter>()).Access();
+	BOOST_TEST(targetingAccess.ConflictsWith(writerAccess));
+}
+
+BOOST_AUTO_TEST_CASE(undeclared_lookup_is_rejected_at_run_time)
+{
+	ecs::World world;
+	Register(world);
+	world.Create<Target>();
+	UndeclaredLookupSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	BOOST_CHECK_THROW(scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}}), std::exception);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

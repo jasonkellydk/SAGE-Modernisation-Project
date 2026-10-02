@@ -2,30 +2,15 @@ module;
 
 #define NOMINMAX
 
-#include <algorithm>
-#include <array>
-#include <bit>
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
-#include <fstream>
-#include <limits>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <utility>
-#include <vector>
 #include <windows.h>
 #include <wrl/client.h>
 
 export module Graphics.Backends.DX12;
+import std;
+import engine.core.contracts;
 
 import engine.profiling;
 export import Graphics.RHI;
@@ -266,7 +251,7 @@ struct DX12MappedBufferSlice final
 	void Release() noexcept
 	{
 		if (page) {
-			assert(page->live_slices != 0);
+			engine::core::Assert(page->live_slices != 0);
 			--page->live_slices;
 			page = nullptr;
 		}
@@ -296,7 +281,7 @@ public:
 	DX12MappedBufferSlice Allocate(ID3D12Device *device, std::uint32_t size,
 		std::uint64_t completed) noexcept
 	{
-		assert(device != nullptr && size != 0 && size % 256u == 0);
+		engine::core::Assert(device != nullptr && size != 0 && size % 256u == 0);
 		try {
 			if (m_current < m_pages.size()) {
 				auto &page = m_pages[m_current];
@@ -829,13 +814,13 @@ static DX12MappedBufferSlice Allocate_Storage_Version(DX12DeviceState& state,
 
 static std::uint32_t Constant_Root_Parameter(std::uint32_t slot) noexcept
 {
-	assert(slot < RootCBVCount);
+	engine::core::Assert(slot < RootCBVCount);
 	return slot == 0 ? 5 : slot == 1 ? 4 : slot + 4;
 }
 
 static void Publish_Shader_Resource(DX12DeviceState &state, DX12DescriptorRange view) noexcept
 {
-	assert(view.Is_Valid());
+	engine::core::Assert(view.Is_Valid());
 	state.device.Get()->CopyDescriptorsSimple(view.count,
 		state.gpu_resources.Cpu(PersistentDescriptorBase + view.index),
 		state.CpuResource(view.index), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -863,10 +848,9 @@ static void __stdcall DX12_Debug_Message_Callback(D3D12_MESSAGE_CATEGORY categor
 	D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id, LPCSTR description, void *context)
 {
 	(void)context;
-	std::fprintf(stderr, "Graphics.DX12 debug [%u/%u/%u]: %s\n",
-		static_cast<unsigned>(category), static_cast<unsigned>(severity), static_cast<unsigned>(id),
-		description != nullptr ? description : "(no description)");
-	std::fflush(stderr);
+	std::println(std::cerr, "Graphics.DX12 debug [{}/{}/{}]: {}", static_cast<unsigned>(category), static_cast<unsigned>(severity),
+		static_cast<unsigned>(id), description != nullptr ? description : "(no description)");
+	std::cerr.flush();
 }
 
 void DX12DeviceState::Unregister_Debug_Messages() noexcept
@@ -990,12 +974,12 @@ static bool Texture_Transfer_Layout(const RHITexture &description, std::uint32_t
 		? static_cast<std::uint64_t>((width + 3u) / 4u)
 			* (description.format == RHITextureFormat::BC1_UNorm ? 8u : 16u)
 		: static_cast<std::uint64_t>(width) * Texture_Bytes_Per_Pixel(description.format);
-	if (row_bytes == 0 || row_bytes > UINT32_MAX)
+	if (row_bytes == 0 || row_bytes > std::numeric_limits<std::uint32_t>::max())
 		return false;
 	if (row_pitch == 0)
 		row_pitch = static_cast<std::uint32_t>(row_bytes);
 	const std::uint64_t minimum_slice = static_cast<std::uint64_t>(row_pitch) * rows;
-	if (row_pitch < row_bytes || minimum_slice > UINT32_MAX)
+	if (row_pitch < row_bytes || minimum_slice > std::numeric_limits<std::uint32_t>::max())
 		return false;
 	if (slice_pitch == 0)
 		slice_pitch = static_cast<std::uint32_t>(minimum_slice);
@@ -1250,7 +1234,7 @@ void DX12DeviceState::Collect_Deferred() noexcept
 {
 	if (fence.Get() != nullptr) {
 		const auto completed=fence.Get()->GetCompletedValue();
-		if (completed==UINT64_MAX) {
+		if (completed==std::numeric_limits<std::uint64_t>::max()) {
 			if (!removed) Report_HResult("Device removed while polling fence",device.Get()->GetDeviceRemovedReason());
 			removed=true;
 			return;
@@ -1722,7 +1706,7 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
     // on this validated cache without repeating public-input validation.
     resources = m_bindless_cache;
     for (const auto &resource : resources)
-        assert(Valid_Bindless_Resource(*m_state, resource));
+        engine::core::Assert(Valid_Bindless_Resource(*m_state, resource));
     if (!changed && !m_resource_indices_dirty && !m_graphics_state_dirty && m_bindless_page != InvalidDescriptor)
         return true;
     if (m_graphics_state_dirty && m_pipeline.Is_Valid() && !Bind_Pipeline(m_pipeline))
@@ -1743,7 +1727,7 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
         if (resource.type == RHIResourceType::Texture) {
             if (!rebuild_indices) continue;
             DX12Texture *texture = m_state->textures.Resolve(resource.texture);
-            assert(texture != nullptr && resource.index.Get_Index() < BindlessSRVCount);
+            engine::core::Assert(texture != nullptr && resource.index.Get_Index() < BindlessSRVCount);
             const bool target_conflict = resource.texture == m_color_target || resource.texture == m_depth_target;
             const bool sampleable = !target_conflict && texture->shader_resource_view.Is_Valid();
             if (sampleable && (!texture->uniform_state || texture->states.empty()
@@ -1756,14 +1740,14 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
         } else if (resource.type == RHIResourceType::Buffer) {
             if (!rebuild_indices) continue;
             DX12Buffer *buffer = m_state->buffers.Resolve(resource.buffer);
-            assert(buffer != nullptr && buffer->shader_resource_view.Is_Valid() && storage_slot != 0);
+            engine::core::Assert(buffer != nullptr && buffer->shader_resource_view.Is_Valid() && storage_slot != 0);
             if (!Prepare_Storage_Descriptor(*m_state,*buffer)) return false;
             indices[storage_slot] = indices[BindlessSRVCount + storage_slot]
                 = buffer->mapped_storage ? buffer->storage_descriptor : PersistentDescriptorBase + buffer->shader_resource_view.index;
             --storage_slot;
         } else if (resource.type == RHIResourceType::Material) {
             const DX12Buffer *buffer = m_state->buffers.Resolve(resource.buffer);
-            assert(buffer != nullptr && buffer->constants.page);
+            engine::core::Assert(buffer != nullptr && buffer->constants.page);
             if (resource.constant_buffer_slot>=RootCBVCount && !has_extended) {
                 std::fill(constants.begin()+RootCBVCount,constants.end(),null_address);
                 has_extended=true;
@@ -1793,7 +1777,7 @@ bool DX12CommandList::Bindless_Resources_Internal(std::span<const RHIBindlessRes
             if (resource.type != RHIResourceType::Material || resource.constant_buffer_slot < RootCBVCount)
                 continue;
             const DX12Buffer *buffer = m_state->buffers.Resolve(resource.buffer);
-            assert(buffer != nullptr);
+            engine::core::Assert(buffer != nullptr);
             D3D12_CONSTANT_BUFFER_VIEW_DESC view{};
             view.BufferLocation = buffer->constants.GPU_Address();
             view.SizeInBytes = buffer->capacity;
@@ -2458,13 +2442,13 @@ RHIBufferHandle DX12Device::Create_Buffer_Initialized(const RHIBuffer &descripti
 			&& description.usage != RHIBufferUsage::Vertex
 			&& description.usage != RHIBufferUsage::Index)
 		|| initial_data.size() != 0 && initial_data.size() != description.byte_size
-		|| initial_data.size() > UINT32_MAX)
+		|| initial_data.size() > std::numeric_limits<std::uint32_t>::max())
 		return {};
 	if (description.usage == RHIBufferUsage::Storage
 		&& (description.stride == 0 || description.byte_size % description.stride != 0))
 		return {};
 	if ((description.usage == RHIBufferUsage::Constant || description.update_mode == RHIBufferUpdateMode::Discard)
-        && description.byte_size > UINT32_MAX - 255u)
+        && description.byte_size > std::numeric_limits<std::uint32_t>::max() - 255u)
 		return {};
 	std::uint32_t capacity = description.usage == RHIBufferUsage::Constant || description.update_mode == RHIBufferUpdateMode::Discard
 		? (description.byte_size + 255u) & ~255u : description.byte_size;
@@ -2839,7 +2823,7 @@ bool DX12Device::Update_Buffer(RHIBufferHandle buffer, std::uint32_t offset,
 	std::span<const std::byte> data) noexcept
 {
 	engine::profiling::Scope profile_scope_2840("Graphics.DX12.UpdateBuffer");
-	if (!Is_Valid() || data.empty() || data.size() > UINT32_MAX)
+	if (!Is_Valid() || data.empty() || data.size() > std::numeric_limits<std::uint32_t>::max())
 		return false;
 	DX12Buffer *resource = m_state->buffers.Resolve(buffer);
 	if (resource == nullptr || offset > resource->byte_size
@@ -2973,7 +2957,7 @@ bool DX12Device::Map_Texture(RHITextureHandle texture, std::uint32_t mip,
 	TextureTransferLayout layout;
 	if (resource == nullptr || resource->object.Get() == nullptr
 		|| (!read_only && Has_Texture_Usage(resource->description, RHITextureUsage::DepthStencil))
-		|| !Texture_Transfer_Layout(resource->description, mip, layer, 0, 0, SIZE_MAX, layout))
+		|| !Texture_Transfer_Layout(resource->description, mip, layer, 0, 0, std::numeric_limits<std::size_t>::max(), layout))
 		return false;
 	for (const auto &mapping : resource->mappings)
 		if (mapping->subresource == layout.subresource)
@@ -3314,7 +3298,7 @@ static bool Generate_Raster_Mips(DX12DeviceState &state, DX12Texture &resource) 
 		blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
 		blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
 		blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-		desc.SampleMask = UINT_MAX;
+		desc.SampleMask = std::numeric_limits<unsigned int>::max();
 		desc.SampleDesc.Count = 1;
 		desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 		desc.NumRenderTargets = 1;
@@ -3482,7 +3466,7 @@ bool DX12Device::Retain_Texture(RHITextureHandle texture) noexcept
 	if (!Is_Valid())
 		return false;
 	DX12Texture *resource = m_state->textures.Resolve(texture);
-	if (resource == nullptr || resource->references == UINT32_MAX)
+	if (resource == nullptr || resource->references == std::numeric_limits<std::uint32_t>::max())
 		return false;
 	++resource->references;
 	return true;
@@ -3639,7 +3623,7 @@ std::uint32_t DX12DeviceState::Acquire_Sampler(const D3D12_SAMPLER_DESC &descrip
 		auto &slot = sampler_slots[index];
 		if (std::memcmp(&slot.description, &description, sizeof(description)) == 0) {
 			if (index == 0) return 0;
-			if (slot.references == UINT32_MAX) return InvalidDescriptor;
+			if (slot.references == std::numeric_limits<std::uint32_t>::max()) return InvalidDescriptor;
 			++slot.references;
 			return index;
 		}
@@ -3663,7 +3647,7 @@ void DX12DeviceState::Release_Samplers(std::span<const std::uint32_t> indices,
 	for (const auto index : indices) {
 		if (index == 0) continue; // The default sampler belongs to the device.
 		auto &slot = sampler_slots[index];
-		assert(slot.references != 0);
+		engine::core::Assert(slot.references != 0);
 		--slot.references;
 		slot.retirement_fence = (std::max)(slot.retirement_fence, fence_value);
 	}
@@ -4289,7 +4273,7 @@ static bool Create_DX12_Pipeline(DX12DeviceState &state, const RHIPipeline &desc
 	native.InputLayout = {input_elements.data(), input_count};
 	native.PrimitiveTopologyType = To_DX12_Topology_Type(description.topology);
 	native.SampleDesc.Count = 1;
-	native.SampleMask = UINT_MAX;
+	native.SampleMask = std::numeric_limits<unsigned int>::max();
 	native.NumRenderTargets = 1;
 	native.RasterizerState.FillMode = description.wireframe ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
 	native.RasterizerState.CullMode = To_DX12_Cull(description.cull_mode);

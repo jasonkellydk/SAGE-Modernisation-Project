@@ -1,0 +1,1045 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.unit_vocabulary;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+
+namespace
+{
+// Records the unit actions the scripts ask for.
+struct RecordingHost final : generalszh::scripting::UnitScriptHost
+{
+	std::vector<std::string> calls;
+
+	void CreateNamedOnTeam(const std::string &, const std::string &, const std::string &, const std::string &) override {}
+	void DeleteNamed(const std::string &) override {}
+	void KillNamed(const std::string &) override {}
+	void NamedFollowWaypoints(const std::string &, const std::string &) override {}
+	void MoveNamedTo(const std::string &, const std::string &) override {}
+	void CreateReinforcements(const std::string &, const std::string &) override {}
+	void TeamFollowWaypoints(const std::string &, const std::string &, bool) override {}
+	void TeamFollowApproachPath(std::size_t, const std::string &team, const std::string &path, bool asTeam) override
+	{
+		calls.push_back(team + " follows " + path + (asTeam ? " as team" : ""));
+	}
+	void TeamMoveToApproachPath(std::size_t, const std::string &team, const std::string &path) override { calls.push_back(team + " moves to " + path); }
+	void TeamCaptureNearestUnowned(const std::string &team) override { calls.push_back(team + " captures nearest unmanned"); }
+	void TeamGuardInTunnelNetwork(const std::string &team) override { calls.push_back(team + " guards tunnels"); }
+	void NamedHunt(const std::string &unit) override { calls.push_back(unit + " hunts"); }
+	void HumansIdleOrResume(bool idle) override { calls.push_back(idle ? "humans idle" : "humans resume"); }
+	void TeamWander(const std::string &team, const std::string &path, bool panic) override { calls.push_back(team + (panic ? " panics " : " wanders ") + path); }
+	void TeamWanderInPlace(const std::string &team) override { calls.push_back(team + " wanders in place"); }
+	std::string UnitReference(std::uint64_t subject, const std::string &name) override
+	{
+		return name == "<This Object>" ? "unit#" + std::to_string(subject & 0xFFFFu) : name;
+	}
+	std::optional<std::uint64_t> UnitSubject(const std::string &unit) override
+	{
+		if (unit != "Tank")
+			return std::nullopt;
+		return (std::uint64_t{1} << 62) | 7u;
+	}
+	void NamedCustomColor(const std::string &unit, std::uint32_t argb) override { calls.push_back(unit + " colour " + std::to_string(argb)); }
+	void AllowBonuses(bool allow) override { calls.push_back(allow ? "bonuses on" : "bonuses off"); }
+	void DeleteAllUnmanned() override { calls.push_back("delete unmanned"); }
+	void ObjectPanelFlag(const std::string &who, bool team, const std::string &flag, bool value) override
+	{
+		calls.push_back(who + (team ? " team " : " ") + flag + (value ? " on" : " off"));
+	}
+	void NamedAttackTeam(const std::string &unit, const std::string &team) override { calls.push_back(unit + " attacks team " + team); }
+	void TeamAttackTeam(const std::string &team, const std::string &victims) override { calls.push_back(team + " attacks team " + victims); }
+	void ChooseVictimAlwaysUsesNormal(bool enable) override { calls.push_back(std::string("normal victims ") + (enable ? "on" : "off")); }
+	void NamedPowerCountdown(const std::string &unit, const std::string &power, int edit, std::int64_t seconds) override
+	{
+		calls.push_back(unit + " " + power + " " + std::to_string(edit) + " " + std::to_string(seconds));
+	}
+	void FollowWaypointsExact(const std::string &who, const std::string &path, bool team, bool asTeam) override
+	{
+		calls.push_back(who + (team ? " team" : "") + " exactly along " + path + (asTeam ? " as team" : ""));
+	}
+	void TeamAttackNamed(const std::string &team, const std::string &unit) override { calls.push_back(team + " attacks " + unit); }
+	void CreateObject(const std::string &name, const std::string &type, const std::string &team, Engine::Math::FixedVector3 at, Engine::Math::Fixed angle) override
+	{
+		calls.push_back("make " + name + ":" + type + "@" + team + " " + std::to_string(at.x.Floor()) + "," + std::to_string(at.y.Floor()) + " " +
+			std::to_string(angle.Floor()));
+	}
+	void SetRelationOverride(std::size_t, OverrideKind kind, const std::string &from, const std::string &to, std::optional<std::int64_t> relationship) override
+	{
+		calls.push_back(std::to_string(static_cast<int>(kind)) + " " + from + ">" + to + (relationship ? "=" + std::to_string(*relationship) : " off"));
+	}
+	void ClearTeamOverrides(const std::string &team) override { calls.push_back(team + " overrides off"); }
+	void NamedSetAttitude(const std::string &unit, std::int64_t attitude) override { calls.push_back(unit + " mood " + std::to_string(attitude)); }
+	void TeamSetAttitude(const std::string &team, std::int64_t attitude) override { calls.push_back(team + " mood " + std::to_string(attitude)); }
+	void TeamDelete(const std::string &) override {}
+	void TeamMergeInto(const std::string &, const std::string &) override {}
+	bool TeamCreated(const std::string &) const override { return false; }
+	std::map<std::string, std::string> states;
+	void SetTeamState(const std::string &team, const std::string &state) override { states[team] = state; }
+	std::optional<std::string> TeamState(const std::string &team) const override
+	{
+		const auto found = states.find(team);
+		return found != states.end() ? std::optional(found->second) : std::nullopt;
+	}
+	bool UnitEmptied(const std::string &unit) override { return unit == "Emptied"; }
+	bool TeamOwnedBy(const std::string &team, std::size_t, const std::string &player) override { return team == "Squad" && player == "Me"; }
+	bool TeamDestroyed(const std::string &) const override { return false; }
+	bool NamedHasObjectStatus(const std::string &unit, const std::string &status) override { return unit == "Tank" && status == "IS_FIRING_WEAPON"; }
+	bool TeamHasObjectStatus(const std::string &team, const std::string &status, bool entireTeam) override
+	{
+		return team == "Squad" && status == "STEALTHED" && !entireTeam;
+	}
+	void TeamEnterNamed(const std::string &, const std::string &) override {}
+	void NamedGarrisonSpecific(const std::string &unit, const std::string &building) override { calls.push_back(unit + " garrisons " + building); }
+	void TeamGarrisonSpecific(const std::string &team, const std::string &building) override { calls.push_back(team + " garrison " + building); }
+	void NamedGarrisonNearest(const std::string &unit) override { calls.push_back(unit + " garrisons nearest"); }
+	void TeamGarrisonNearest(const std::string &team) override { calls.push_back(team + " garrison nearest"); }
+	void PlayerGarrisonAll(const std::string &player) override { calls.push_back(player + " garrisons all"); }
+	void NamedExitAll(const std::string &) override {}
+	void NamedEnterNamed(const std::string &unit, const std::string &transport) override { calls.push_back(unit + " enters " + transport); }
+	void NamedFace(const std::string &unit, const std::string &waypoint, const std::string &object) override
+	{
+		calls.push_back(unit + " faces " + waypoint + object);
+	}
+	void TeamFace(const std::string &team, const std::string &waypoint, const std::string &object) override
+	{
+		calls.push_back(team + " face " + waypoint + object);
+	}
+	void SetRepulsor(const std::string &unit, bool on) override { calls.push_back(unit + (on ? " repulses" : " repulses not")); }
+	void TeamSetRepulsor(const std::string &team, bool on) override { calls.push_back(team + (on ? " repulse" : " repulse not")); }
+	void SetStealthEnabled(const std::string &unit, bool enabled) override { calls.push_back(unit + (enabled ? " may stealth" : " may not stealth")); }
+	void NamedExitBuilding(const std::string &unit) override { calls.push_back(unit + " exits"); }
+	void TeamExitAllBuildings(const std::string &team) override { calls.push_back(team + " exit"); }
+	void ExitSpecificBuilding(const std::string &building) override { calls.push_back(building + " empties"); }
+	void NamedSetBoobytrapped(const std::string &type, const std::string &unit) override { calls.push_back(unit + " trapped with " + type); }
+	void TeamSetBoobytrapped(const std::string &type, const std::string &team) override { calls.push_back(team + " trapped with " + type); }
+	void TeamSetStealthEnabled(const std::string &team, bool enabled) override { calls.push_back(team + (enabled ? " may stealth" : " may not stealth")); }
+	void PlayerObjectsEnabled(const std::string &player, const std::string &type, bool enable) override
+	{
+		calls.push_back(player + (enable ? " enables " : " disables ") + type);
+	}
+	void NamedStoppingDistance(const std::string &unit, Engine::Math::Fixed distance) override
+	{
+		calls.push_back(unit + " stops within " + std::to_string(distance.Floor()));
+	}
+	void TeamStoppingDistance(const std::string &team, Engine::Math::Fixed distance) override
+	{
+		calls.push_back(team + " stop within " + std::to_string(distance.Floor()));
+	}
+	bool NamedGuard(const std::string &unit) override
+	{
+		calls.push_back(unit + " guards");
+		return true;
+	}
+	void SetUnmanned(const std::string &unit) override { calls.push_back(unit + " unmanned"); }
+	void TeamSetUnmanned(const std::string &team) override { calls.push_back(team + " unmanned"); }
+	void TeamUseCommandButtonAtWaypoint(const std::string &team, const std::string &button, const std::string &waypoint) override
+	{
+		calls.push_back(team + " uses " + button + " at " + waypoint);
+	}
+	bool NamedIdle(const std::string &name) override
+	{
+		calls.push_back(name + " idles");
+		return true;
+	}
+	void TeamExitAll(const std::string &) override {}
+	void NamedUseCommandButtonAtWaypoint(const std::string &, const std::string &, const std::string &) override {}
+	void NamedUseCommandButtonUsingWaypointPath(const std::string &, const std::string &, const std::string &) override {}
+	void NamedFireSpecialPowerAtWaypoint(const std::string &, const std::string &, const std::string &) override {}
+	void NamedFireSpecialPowerAtNamed(const std::string &, const std::string &, const std::string &) override {}
+	void NamedHideSpecialPowerDisplay(const std::string &, bool) override {}
+	void TeamHunt(const std::string &) override {}
+	void BuildTeam(const std::string &) override {}
+	void TeamGuard(const std::string &, const std::string &) override {}
+	void TeamGuardObject(const std::string &team, const std::string &unit) override { calls.push_back(team + " guards " + unit); }
+	void TeamGuardSupplyCenter(const std::string &team, std::int64_t supplies) override { calls.push_back(team + " guards supplies " + std::to_string(supplies)); }
+	void NamedAttackNamed(const std::string &, const std::string &) override {}
+	void NamedSetHeld(const std::string &, bool) override {}
+	void NamedSetEvacDisposition(const std::string &, std::int64_t) override {}
+	void SetTrainHeld(const std::string &name, bool held) override { calls.push_back(name + (held ? " held" : " let go")); }
+	void NamedStop(const std::string &name) override { calls.push_back(name + " stops"); }
+	void TeamStop(const std::string &team, bool disband) override { calls.push_back(team + (disband ? " disbands" : " stops")); }
+	void TeamMoveTo(const std::string &team, const std::string &waypoint) override { calls.push_back(team + " to " + waypoint); }
+	void NamedDamage(const std::string &name, std::int64_t amount) override { calls.push_back(name + " -" + std::to_string(amount)); }
+	void TeamDamage(const std::string &team, Engine::Math::Fixed amount) override { calls.push_back(team + " -" + std::to_string(amount.Floor())); }
+	void TeamKill(const std::string &team) override { calls.push_back(team + " killed"); }
+	void TeamDeleteLiving(const std::string &team) override { calls.push_back(team + " deleted living"); }
+	void PlayerKill(const std::string &player) override { calls.push_back(player + " killed"); }
+	void PlayerTransferAssets(const std::string &from, const std::string &to) override { calls.push_back(from + " to " + to); }
+	void DestroyAllContained(const std::string &unit) override { calls.push_back(unit + " emptied dead"); }
+	bool NamedSelected(const std::string &unit) override { return unit == "Picked"; }
+	void SetToppleDirection(const std::string &unit, Engine::Math::FixedVector3) override { calls.push_back(unit + " topple direction"); }
+	void NamedTransferToPlayer(const std::string &name, const std::string &player) override { calls.push_back(name + " to " + player); }
+	void TeamTransferToPlayer(const std::string &team, const std::string &player) override { calls.push_back(team + " to " + player); }
+	void PlayerGiveMoney(const std::string &player, std::int64_t amount) override { calls.push_back(player + " +$" + std::to_string(amount)); }
+	void PlayerSetMoney(const std::string &player, std::int64_t amount) override { calls.push_back(player + " =$" + std::to_string(amount)); }
+	bool InArea(std::size_t, AreaQuery test, const std::string &subject, const std::string &area, std::int64_t surfaces) override
+	{
+		calls.push_back(subject + " in " + area + " #" + std::to_string(static_cast<int>(test)) + " s" + std::to_string(surfaces));
+		return true;
+	}
+	std::optional<std::int64_t> CountInArea(std::size_t, int what, const std::string &player, const std::string &area, const std::string &types,
+		std::int64_t kind) override
+	{
+		calls.push_back(player + " has " + std::to_string(what) + " " + types + "/" + std::to_string(kind) + " in " + area);
+		return 2;
+	}
+	bool SuppliesNear(std::size_t, const std::string &player, Engine::Math::Fixed distance, const std::string &area, Engine::Math::Fixed value) override
+	{
+		calls.push_back(player + " supplies near " + area + " +" + std::to_string(distance.Floor()) + " > " + std::to_string(value.Floor()));
+		return true;
+	}
+	bool TechBuildingNear(std::size_t, const std::string &player, Engine::Math::Fixed distance, const std::string &area) override
+	{
+		calls.push_back(player + " tech near " + area + " +" + std::to_string(distance.Floor()));
+		return true;
+	}
+	std::int64_t UnownedFactionUnits() override { return 3; }
+	void PlayerSellEverything(const std::string &player) override { calls.push_back(player + " sells everything"); }
+	void TeamLoadTransports(const std::string &team) override { calls.push_back(team + " loads"); }
+	std::optional<std::uint32_t> TeamIndex(const std::string &team) override { return team == "Squad" ? std::optional<std::uint32_t>(4) : std::nullopt; }
+	void TeamUseCommandButton(const std::string &team, const std::string &button, std::optional<Engine::Math::Fixed> percentage) override
+	{
+		calls.push_back(team + " uses " + button + (percentage ? " " + std::to_string(percentage->Floor()) + "%" : std::string{}));
+	}
+	void TeamHuntWithCommandButton(const std::string &team, const std::string &button) override { calls.push_back(team + " hunts with " + button); }
+	void NamedUseCommandButton(const std::string &unit, const std::string &button, const std::optional<std::string> &target) override
+	{
+		calls.push_back(unit + " uses " + button + (target ? " on " + *target : std::string{}));
+	}
+	void TeamUseCommandButtonOnNamed(const std::string &team, const std::string &button, const std::string &target, bool checked) override
+	{
+		calls.push_back(team + (checked ? " all use " : " use ") + button + " on " + target);
+	}
+	void TeamUseCommandButtonOnNearest(const std::string &team, const std::string &button, int nearest, std::int64_t kind, const std::string &type) override
+	{
+		calls.push_back(team + " use " + button + " on nearest " + std::to_string(nearest) + " " + std::to_string(kind) + " " + type);
+	}
+	void TeamUseCommandButtonOnMostValuable(const std::string &team, const std::string &button, Engine::Math::Fixed range) override
+	{
+		calls.push_back(team + " use " + button + " on most valuable within " + std::to_string(range.Floor()));
+	}
+	void TeamAttackNearestGroupWithValue(const std::string &team, std::int32_t comparison, std::int64_t value) override
+	{
+		calls.push_back(team + " attack nearest group " + std::to_string(comparison) + " " + std::to_string(value));
+	}
+	bool allReady{false}, anyReady{false};
+	bool TeamCommandButtonReady(const std::string &team, const std::string &button, bool all) override
+	{
+		calls.push_back(team + " " + button + (all ? " all ready?" : " any ready?"));
+		return all ? allReady : anyReady;
+	}
+	bool contained{false};
+	bool TeamContained(const std::string &team, bool all) override
+	{
+		calls.push_back(team + (all ? " all aboard?" : " any aboard?"));
+		return contained;
+	}
+	void SetAttackPriorityThing(const std::string &set, const std::string &type, std::int64_t priority) override
+	{
+		calls.push_back(set + ": " + type + "=" + std::to_string(priority));
+	}
+	void SetAttackPriorityKind(const std::string &set, std::int64_t kind, std::int64_t priority) override
+	{
+		calls.push_back(set + ": kind " + std::to_string(kind) + "=" + std::to_string(priority));
+	}
+	void SetDefaultAttackPriority(const std::string &set, std::int64_t priority) override { calls.push_back(set + ": default=" + std::to_string(priority)); }
+	void ApplyAttackPrioritySet(const std::string &subject, bool team, const std::string &set) override
+	{
+		calls.push_back(subject + (team ? " (team)" : "") + " uses " + set);
+	}
+	void UnitMoveTowardsNearest(std::size_t, const std::string &unit, const std::string &type, const std::string &area) override
+	{
+		calls.push_back(unit + " towards " + type + " in " + area);
+	}
+	void TeamMoveTowardsNearest(std::size_t, const std::string &team, const std::string &type, const std::string &area) override
+	{
+		calls.push_back(team + " towards " + type + " in " + area);
+	}
+	bool SupplySourceAttacked(const std::string &player) override { return player == "Attacked"; }
+	bool SupplySourceSafe(const std::string &player, std::int64_t minimum) override
+	{
+		calls.push_back(player + " safe " + std::to_string(minimum));
+		return true;
+	}
+	void TeamRecruitable(const std::string &team, bool recruitable) override { calls.push_back(team + (recruitable ? " recruitable" : " kept")); }
+	void AreaOrder(std::size_t, const std::string &subject, bool team, const std::string &area, bool guard) override
+	{
+		calls.push_back(subject + (team ? " (team)" : "") + (guard ? " guards " : " attacks ") + area);
+	}
+	bool AreaExists(std::size_t, const std::string &area) override
+	{
+		calls.push_back(area + " exists");
+		return true;
+	}
+	void NamedReceiveUpgrade(const std::string &name, const std::string &upgrade) override { calls.push_back(name + " <- " + upgrade); }
+	void SetRankLimit(std::int64_t) override {}
+	void EnableUnitConstruction(const std::string &) override {}
+	void DisableUnitConstruction(const std::string &player) override { calls.push_back(player + " builds no units"); }
+	void SetWarehouseValue(const std::string &warehouse, std::int64_t cash) override { calls.push_back(warehouse + " $" + std::to_string(cash)); }
+	void SetCaveIndex(const std::string &cave, std::int64_t index) override { calls.push_back(cave + " cave " + std::to_string(index)); }
+	void PlayerBuildUpgrade(const std::string &player, const std::string &upgrade) override { calls.push_back(player + " builds " + upgrade); }
+	std::vector<std::string> recruited;
+	void RecruitTeam(const std::string &team, Engine::Math::Fixed radius) override { recruited.push_back(team + ":" + std::to_string(radius.Floor())); }
+	void ChangeTeamPriority(const std::string &team, bool success) override { recruited.push_back(team + (success ? "+" : "-")); }
+	std::string TeamReference(std::uint64_t, const std::string &name) override { return name; }
+	std::string PlayerNamed(std::size_t, const std::string &name) override { return name == "<This Player>" ? std::string("me") : name; }
+};
+
+level::ScriptCall Call(std::string name, std::vector<std::string> texts)
+{
+	level::ScriptCall call;
+	call.name = std::move(name);
+	for (std::string &text : texts)
+	{
+		level::ScriptParameter parameter;
+		parameter.text = std::move(text);
+		call.parameters.push_back(std::move(parameter));
+	}
+	return call;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(zero_hour_unit_vocabulary)
+
+// ScriptActions::doUnitReceiveUpgrade (NAMED_RECEIVE_UPGRADE: unit name, upgrade name) reaches the host once.
+BOOST_AUTO_TEST_CASE(legacy_parity_named_receive_upgrade_gives_the_unit_its_upgrade)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "arm";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	script.actions = {Call("NAMED_RECEIVE_UPGRADE", {"Ranger1", "Upgrade_AmericaChemicalSuits"}),
+		Call("AI_PLAYER_BUILD_UPGRADE", {"PlyrChina", "Upgrade_Nationalism"})};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	for (std::uint64_t tick = 1; tick <= 5; ++tick)
+		runtime.Tick(tick);
+	BOOST_TEST_REQUIRE(host.calls.size() == 2u);
+	BOOST_TEST(host.calls[0] == "Ranger1 <- Upgrade_AmericaChemicalSuits");
+	// ScriptActions::doBuildUpgrade (AI_PLAYER_BUILD_UPGRADE: player, upgrade).
+	BOOST_TEST(host.calls[1] == "PlyrChina builds Upgrade_Nationalism");
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions' garrison actions (NAMED_ / TEAM_GARRISON_SPECIFIC_BUILDING, NAMED_ / TEAM_GARRISON_NEAREST_BUILDING,
+// PLAYER_GARRISON_ALL_BUILDINGS) reach the host with their parameters.
+BOOST_AUTO_TEST_CASE(garrison_actions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "garrison";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	script.actions = {Call("NAMED_GARRISON_SPECIFIC_BUILDING", {"Ranger1", "Hotel"}), Call("TEAM_GARRISON_SPECIFIC_BUILDING", {"Squad", "Hotel"}),
+		Call("NAMED_GARRISON_NEAREST_BUILDING", {"Ranger2"}), Call("TEAM_GARRISON_NEAREST_BUILDING", {"Squad"}),
+		Call("PLAYER_GARRISON_ALL_BUILDINGS", {"PlyrGLA"})};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(host.calls.size() == 5u);
+	BOOST_TEST(host.calls[0] == "Ranger1 garrisons Hotel");
+	BOOST_TEST(host.calls[1] == "Squad garrison Hotel");
+	BOOST_TEST(host.calls[2] == "Ranger2 garrisons nearest");
+	BOOST_TEST(host.calls[3] == "Squad garrison nearest");
+	BOOST_TEST(host.calls[4] == "PlyrGLA garrisons all");
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions' stop, damage, kill, transfer and money actions reach the host with their parameters (players as the
+// script names them: "<This Player>" its own).
+BOOST_AUTO_TEST_CASE(legacy_parity_orders_damage_kills_transfers_and_money_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "misc";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	const auto withNumbers = [](level::ScriptCall call, std::size_t index, std::int64_t value) {
+		call.parameters[index].integer = value;
+		call.parameters[index].number = Engine::Math::Fixed::FromInt(value);
+		return call;
+	};
+	script.actions = {Call("NAMED_STOP", {"Tank"}), Call("TEAM_STOP", {"Squad"}), Call("TEAM_STOP_AND_DISBAND", {"Squad"}),
+		Call("MOVE_TEAM_TO", {"Squad", "Here"}), withNumbers(Call("NAMED_DAMAGE", {"Tank", ""}), 1, 50),
+		withNumbers(Call("DAMAGE_MEMBERS_OF_TEAM", {"Squad", ""}), 1, 25), Call("TEAM_KILL", {"Squad"}), Call("TEAM_DELETE_LIVING", {"Squad"}),
+		Call("PLAYER_KILL", {"<This Player>"}), Call("NAMED_TRANSFER_OWNERSHIP_PLAYER", {"Tank", "PlyrGLA"}),
+		Call("TEAM_TRANSFER_TO_PLAYER", {"Squad", "<This Player>"}), withNumbers(Call("PLAYER_GIVE_MONEY", {"PlyrGLA", ""}), 1, -300),
+		withNumbers(Call("PLAYER_SET_MONEY", {"<This Player>", ""}), 1, 5000)};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Tank stops", "Squad stops", "Squad disbands", "Squad to Here", "Tank -50", "Squad -25", "Squad killed",
+		"Squad deleted living", "me killed", "Tank to PlyrGLA", "Squad to me", "PlyrGLA +$-300", "me =$5000"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions::doSetCaveIndex: SET_CAVE_INDEX(cave, index) asks the host for the named cave and the index (Desert Fury's
+// scripts call it; the host finds no CaveContain on a Zero Hour object and does nothing).
+BOOST_AUTO_TEST_CASE(legacy_parity_set_cave_index_reaches_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "cave";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	level::ScriptCall call = Call("SET_CAVE_INDEX", {"Cave1", ""});
+	call.parameters[1].integer = 3;
+	call.parameters[1].number = Engine::Math::Fixed::FromInt(3);
+	script.actions = {call};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(host.calls.size() == 1u);
+	BOOST_TEST(host.calls[0] == "Cave1 cave 3");
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptConditions::evaluateCondition UNIT_HAS_OBJECT_STATUS (unit, status), TEAM_ALL_HAS_OBJECT_STATUS and
+// TEAM_SOME_HAVE_OBJECT_STATUS (team, status: evaluateTeamHasObjectStatus, entireTeam true / false) ask the host.
+BOOST_AUTO_TEST_CASE(legacy_parity_object_status_conditions_ask_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	const auto make = [&](std::string name, level::ScriptCall condition, level::ScriptCall action) {
+		level::Script script;
+		script.name = std::move(name);
+		script.oneShot = true;
+		script.conditions = {{std::move(condition)}};
+		script.actions = {std::move(action)};
+		participant.scripts.scripts.push_back(std::move(script));
+	};
+	make("unit", Call("UNIT_HAS_OBJECT_STATUS", {"Tank", "IS_FIRING_WEAPON"}), Call("NAMED_STOP", {"Tank"}));
+	make("all", Call("TEAM_ALL_HAS_OBJECT_STATUS", {"Squad", "STEALTHED"}), Call("TEAM_STOP", {"Squad"}));
+	make("some", Call("TEAM_SOME_HAVE_OBJECT_STATUS", {"Squad", "STEALTHED"}), Call("TEAM_STOP_AND_DISBAND", {"Squad"}));
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Tank stops", "Squad disbands"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// ScriptConditions::evaluateNamedSelected asks the host; UNIT_DESTROY_ALL_CONTAINED, NAMED_SET_TOPPLE_DIRECTION and
+// PLAYER_TRANSFER_OWNERSHIP_PLAYER reach it with their parameters.
+// ScriptActions::executeAction SET_TRAIN_HELD (unit, held: doNamedSetTrainHeld) reaches the host.
+BOOST_AUTO_TEST_CASE(legacy_parity_set_train_held_reaches_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "hold";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	script.actions = {Call("SET_TRAIN_HELD", {"Train", ""}), Call("SET_TRAIN_HELD", {"Other", ""})};
+	script.actions[0].parameters[1].integer = 1;
+	script.actions[1].parameters[1].integer = 0;
+	participant.scripts.scripts.push_back(std::move(script));
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Train held", "Other let go"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+BOOST_AUTO_TEST_CASE(legacy_parity_selection_condition_and_unit_actions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	const auto make = [&](std::string name, level::ScriptCall condition, level::ScriptCall action) {
+		level::Script script;
+		script.name = std::move(name);
+		script.oneShot = true;
+		script.conditions = {{std::move(condition)}};
+		script.actions = {std::move(action)};
+		participant.scripts.scripts.push_back(std::move(script));
+	};
+	make("picked", Call("NAMED_SELECTED", {"Picked"}), Call("UNIT_DESTROY_ALL_CONTAINED", {"Bunker"}));
+	make("other", Call("NAMED_SELECTED", {"Other"}), Call("NAMED_STOP", {"Other"}));
+	make("tree", Call("CONDITION_TRUE", {}), Call("NAMED_SET_TOPPLE_DIRECTION", {"Tree"}));
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Bunker emptied dead", "Tree topple direction"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions::executeAction SKIRMISH_FOLLOW_APPROACH_PATH (team, path, as team: doTeamFollowSkirmishApproachPath) and
+// SKIRMISH_MOVE_TO_APPROACH_PATH (team, path: doTeamMoveToSkirmishApproachPath) reach the host with their parameters.
+BOOST_AUTO_TEST_CASE(legacy_parity_skirmish_approach_paths_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "approach";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	auto follow = Call("SKIRMISH_FOLLOW_APPROACH_PATH", {"Squad", "Center", ""});
+	follow.parameters[2].integer = 1;
+	auto loose = Call("SKIRMISH_FOLLOW_APPROACH_PATH", {"Squad", "Flank", ""});
+	loose.parameters[2].integer = 0;
+	auto sleepy = Call("NAMED_SET_ATTITUDE", {"Tank", ""});
+	sleepy.parameters[1].integer = -2;
+	auto angry = Call("TEAM_SET_ATTITUDE", {"Squad", ""});
+	angry.parameters[1].integer = 2;
+	script.actions = {follow, loose, Call("SKIRMISH_MOVE_TO_APPROACH_PATH", {"Squad", "Backdoor"}), Call("TEAM_CAPTURE_NEAREST_UNOWNED_FACTION_UNIT", {"Squad"}),
+		sleepy, angry, Call("TEAM_GUARD_IN_TUNNEL_NETWORK", {"Squad"})};
+	auto friends = Call("TEAM_SET_OVERRIDE_RELATION_TO_TEAM", {"Squad", "Civilians", ""});
+	friends.parameters[2].integer = 2;
+	auto hostile = Call("PLAYER_SET_OVERRIDE_RELATION_TO_TEAM", {"PlyrGLA", "Squad", ""});
+	hostile.parameters[2].integer = 0;
+	script.actions.push_back(friends);
+	script.actions.push_back(hostile);
+	script.actions.push_back(Call("TEAM_REMOVE_OVERRIDE_RELATION_TO_PLAYER", {"Squad", "PlyrGLA"}));
+	script.actions.push_back(Call("TEAM_REMOVE_ALL_OVERRIDE_RELATIONS", {"Squad"}));
+	script.actions.push_back(Call("NAMED_HUNT", {"Tank"}));
+	script.actions.push_back(Call("PLAYER_DISABLE_UNIT_CONSTRUCTION", {"PlyrGLA"}));
+	auto countdown = Call("NAMED_ADD_SPECIAL_POWER_COUNTDOWN", {"Tank", "SuperweaponScudStorm", ""});
+	countdown.parameters[2].integer = 30;
+	script.actions.push_back(countdown);
+	script.actions.push_back(Call("NAMED_STOP_SPECIAL_POWER_COUNTDOWN", {"Tank", "SuperweaponScudStorm"}));
+	script.actions.push_back(Call("NAMED_ATTACK_TEAM", {"Tank", "Enemies"}));
+	script.actions.push_back(Call("TEAM_ATTACK_TEAM", {"Squad", "Enemies"}));
+	auto normal = Call("CHOOSE_VICTIM_ALWAYS_USES_NORMAL", {""});
+	normal.parameters[0].integer = 1;
+	script.actions.push_back(normal);
+	script.actions.push_back(Call("IDLE_ALL_UNITS", {}));
+	script.actions.push_back(Call("RESUME_SUPPLY_TRUCKING", {}));
+	auto godly = Call("UNIT_AFFECT_OBJECT_PANEL_FLAGS", {"Tank", "Indestructible", ""});
+	godly.parameters[2].integer = 1;
+	script.actions.push_back(godly);
+	script.actions.push_back(Call("TEAM_AFFECT_OBJECT_PANEL_FLAGS", {"Squad", "Enabled", ""}));
+	script.actions.push_back(Call("OBJECT_ALLOW_BONUSES", {""}));
+	script.actions.push_back(Call("DELETE_ALL_UNMANNED", {}));
+	auto colour = Call("NAMED_CUSTOM_COLOR", {"Tank", ""});
+	colour.parameters[1].integer = 0xFFFF0000;
+	script.actions.push_back(colour);
+	script.actions.push_back(Call("TEAM_WANDER", {"Squad", "Road"}));
+	script.actions.push_back(Call("TEAM_WANDER_IN_PLACE", {"Squad"}));
+	auto cash = Call("WAREHOUSE_SET_VALUE", {"Depot", ""});
+	cash.parameters[1].integer = 1250;
+	script.actions.push_back(cash);
+	script.actions.push_back(Call("NAMED_FOLLOW_WAYPOINTS_EXACT", {"Tank", "Road"}));
+	auto exactTeam = Call("TEAM_FOLLOW_WAYPOINTS_EXACT", {"Squad", "Road", ""});
+	exactTeam.parameters[2].integer = 1;
+	script.actions.push_back(exactTeam);
+	script.actions.push_back(Call("TEAM_ATTACK_NAMED", {"Squad", "Tank"}));
+	auto made = Call("CREATE_OBJECT", {"AmericaTankCrusader", "Squad", "", ""});
+	made.parameters[2].position = {Engine::Math::Fixed::FromInt(100), Engine::Math::Fixed::FromInt(200), {}};
+	made.parameters[3].number = Engine::Math::Fixed::FromInt(3);
+	script.actions.push_back(made);
+	auto spawned = Call("UNIT_SPAWN_NAMED_LOCATION_ORIENTATION", {"Boss", "AmericaTankCrusader", "Squad", "", ""});
+	spawned.parameters[3].position = {Engine::Math::Fixed::FromInt(5), Engine::Math::Fixed::FromInt(6), {}};
+	spawned.parameters[4].number = Engine::Math::Fixed::FromInt(1);
+	script.actions.push_back(spawned);
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Squad follows Center as team", "Squad follows Flank", "Squad moves to Backdoor", "Squad captures nearest unmanned",
+		"Tank mood -2", "Squad mood 2", "Squad guards tunnels", "0 Squad>Civilians=2", "2 PlyrGLA>Squad=0", "1 Squad>PlyrGLA off",
+		"Squad overrides off", "Tank hunts", "PlyrGLA builds no units", "Tank SuperweaponScudStorm 1 30", "Tank SuperweaponScudStorm 2 0",
+		"Tank attacks team Enemies", "Squad attacks team Enemies", "normal victims on", "humans idle", "humans resume", "Tank Indestructible on",
+		"Squad team Enabled off", "bonuses off", "delete unmanned", "Tank colour 4294901760", "Squad wanders Road", "Squad wanders in place", "Depot $1250", "Tank exactly along Road", "Squad team exactly along Road as team", "Squad attacks Tank", "make :AmericaTankCrusader@Squad 100,200 3", "make Boss:AmericaTankCrusader@Squad 5,6 1"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptConditions' area conditions reach the host with their unit or team, area and surfaces (a unit: any surface).
+BOOST_AUTO_TEST_CASE(legacy_parity_area_conditions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "areas";
+	script.oneShot = true;
+	level::ScriptCall teamCall = Call("TEAM_ENTERED_AREA_PARTIALLY", {"Squad", "[Skirmish]MyInnerPerimeter", ""});
+	teamCall.parameters[2].integer = 1;
+	script.conditions = {{Call("NAMED_INSIDE_AREA", {"Tank", "Gate"}), teamCall, Call("NAMED_EXITED_AREA", {"Tank", "Gate"})}};
+	script.actions = {Call("NAMED_STOP", {"Tank"})};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Tank in Gate #0 s3", "Squad in [Skirmish]MyInnerPerimeter #8 s1", "Tank in Gate #3 s3", "Tank stops"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// The skirmish area counts reach the host (player, what, types or kind, area) and compare as asked (the host has 2).
+BOOST_AUTO_TEST_CASE(legacy_parity_area_counts_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "counts";
+	script.oneShot = true;
+	const auto number = [](level::ScriptCall call, std::size_t index, std::int64_t value) {
+		call.parameters[index].integer = value;
+		return call;
+	};
+	level::ScriptCall byType = number(number(Call("PLAYER_HAS_COMPARISON_UNIT_TYPE_IN_TRIGGER_AREA", {"<This Player>", "", "", "Tanks", "Gate"}), 1, 3), 2, 2);
+	level::ScriptCall byKind = number(number(number(Call("PLAYER_HAS_COMPARISON_UNIT_KIND_IN_TRIGGER_AREA", {"PlyrGLA", "", "", "", "Gate"}), 1, 2), 2, 2), 3, 9);
+	level::ScriptCall value = number(number(Call("SKIRMISH_VALUE_IN_AREA", {"PlyrGLA", "", "", "[Skirmish]MyOuterPerimeter"}), 1, 0), 2, 3);
+	script.conditions = {{byType, byKind, Call("SKIRMISH_NAMED_AREA_EXIST", {"", "Gate"}), Call("SKIRMISH_PLAYER_HAS_UNITS_IN_AREA", {"PlyrGLA", "Gate"}), value}};
+	script.actions = {Call("NAMED_STOP", {"Tank"})};
+	level::Script outside = script;
+	outside.name = "outside";
+	outside.conditions = {{Call("SKIRMISH_PLAYER_IS_OUTSIDE_AREA", {"PlyrGLA", "Gate"})}};
+	outside.actions = {Call("NAMED_STOP", {"Never"})};
+	participant.scripts.scripts = {script, outside};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"me has 0 Tanks/-1 in Gate", "PlyrGLA has 1 /9 in Gate", "Gate exists", "PlyrGLA has 2 /-1 in Gate",
+		"PlyrGLA has 3 /-1 in [Skirmish]MyOuterPerimeter", "Tank stops", "PlyrGLA has 2 /-1 in Gate"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// TEAM_ATTACK_AREA(team, area), NAMED_ATTACK_AREA(unit, area), TEAM_GUARD_AREA(team, area) reach the host.
+BOOST_AUTO_TEST_CASE(legacy_parity_area_orders_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "orders";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	script.actions = {Call("TEAM_ATTACK_AREA", {"Squad", "[Skirmish]EnemyInnerPerimeter"}), Call("NAMED_ATTACK_AREA", {"Tank", "Gate"}),
+		Call("TEAM_GUARD_AREA", {"Squad", "[Skirmish]MyOuterPerimeter"}), Call("TEAM_AVAILABLE_FOR_RECRUITMENT", {"Squad", ""})};
+	script.actions.back().parameters[1].integer = 1;
+	script.actions.push_back(Call("PLAYER_SELL_EVERYTHING", {"<This Player>"}));
+	script.actions.push_back(Call("TEAM_LOAD_TRANSPORTS", {"Squad"}));
+	script.actions.push_back(Call("TEAM_MOVE_TOWARDS_NEAREST_OBJECT_TYPE", {"Squad", "Oil", "[Skirmish]EnemyOuterPerimeter"}));
+	script.actions.push_back(Call("UNIT_MOVE_TOWARDS_NEAREST_OBJECT_TYPE", {"Tank", "Oil", "Gate"}));
+	script.actions.push_back(Call("PLAYER_CREATE_TEAM_FROM_CAPTURED_UNITS", {"<This Player>", "Squad"}));
+	script.actions.push_back(Call("TEAM_COLLECT_NEARBY_FOR_TEAM", {"Squad"}));
+	script.actions.push_back(Call("NAMED_SET_BOOBYTRAPPED", {"BoobyTrap", "Tank"}));
+	script.actions.push_back(Call("TEAM_SET_BOOBYTRAPPED", {"BoobyTrap", "Squad"}));
+	script.actions.push_back(Call("TEAM_USE_COMMANDBUTTON_ABILITY", {"Squad", "Command_Frenzy"}));
+	level::ScriptCall partial = Call("TEAM_PARTIAL_USE_COMMANDBUTTON", {"", "Squad", "Command_ConstructAmericaVehicleScoutDrone"});
+	partial.parameters[0].number = Engine::Math::Fixed::FromInt(50);
+	script.actions.push_back(partial);
+	script.actions.push_back(Call("TEAM_HUNT_WITH_COMMAND_BUTTON", {"Squad", "Command_RangerCaptureBuilding"}));
+	script.actions.push_back(Call("NAMED_USE_COMMANDBUTTON_ABILITY", {"Ranger", "Command_RangerCaptureBuilding"}));
+	script.actions.push_back(Call("NAMED_USE_COMMANDBUTTON_ABILITY_ON_NAMED", {"Ranger", "Command_RangerCaptureBuilding", "Depot"}));
+	script.actions.push_back(Call("TEAM_USE_COMMANDBUTTON_ABILITY_ON_NAMED", {"Squad", "Command_RangerCaptureBuilding", "Depot"}));
+	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NAMED", {"Squad", "Command_RangerCaptureBuilding", "Depot"}));
+	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_UNIT", {"Squad", "Command_Snipe"}));
+	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_GARRISONED_BUILDING", {"Squad", "Command_Clear"}));
+	level::ScriptCall kindOf = Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_KINDOF", {"Squad", "Command_Hack", ""});
+	kindOf.parameters[2].integer = 7;
+	script.actions.push_back(kindOf);
+	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING", {"Squad", "Command_RangerCaptureBuilding"}));
+	level::ScriptCall buildingClass = Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_ENEMY_BUILDING_CLASS", {"Squad", "Command_RangerCaptureBuilding", ""});
+	buildingClass.parameters[2].integer = 9;
+	script.actions.push_back(buildingClass);
+	script.actions.push_back(Call("TEAM_ALL_USE_COMMANDBUTTON_ON_NEAREST_OBJECTTYPE", {"Squad", "Command_RangerCaptureBuilding", "TechOilDerrick"}));
+	level::ScriptCall valuable = Call("SKIRMISH_PERFORM_COMMANDBUTTON_ON_MOST_VALUABLE_OBJECT", {"Squad", "Command_Snipe", "", ""});
+	valuable.parameters[2].number = Engine::Math::Fixed::FromInt(300);
+	valuable.parameters[3].integer = 1;
+	script.actions.push_back(valuable);
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Squad (team) attacks [Skirmish]EnemyInnerPerimeter", "Tank attacks Gate", "Squad (team) guards [Skirmish]MyOuterPerimeter",
+		"Squad recruitable", "me sells everything", "Squad loads", "Squad towards Oil in [Skirmish]EnemyOuterPerimeter", "Tank towards Oil in Gate", "Tank trapped with BoobyTrap", "Squad trapped with BoobyTrap",
+		"Squad uses Command_Frenzy", "Squad uses Command_ConstructAmericaVehicleScoutDrone 50%", "Squad hunts with Command_RangerCaptureBuilding",
+		"Ranger uses Command_RangerCaptureBuilding",
+		"Ranger uses Command_RangerCaptureBuilding on Depot", "Squad use Command_RangerCaptureBuilding on Depot", "Squad all use Command_RangerCaptureBuilding on Depot",
+		"Squad use Command_Snipe on nearest 0 -1 ", "Squad use Command_Clear on nearest 1 -1 ", "Squad use Command_Hack on nearest 2 7 ",
+		"Squad use Command_RangerCaptureBuilding on nearest 3 -1 ", "Squad use Command_RangerCaptureBuilding on nearest 4 9 ",
+		"Squad use Command_RangerCaptureBuilding on nearest 5 -1 TechOilDerrick", "Squad use Command_Snipe on most valuable within 300"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// SKIRMISH_TECH_BUILDING_WITHIN_DISTANCE(player, distance, area), SKIRMISH_UNOWNED_FACTION_UNIT_EXISTS(player,
+// comparison, count), SUPPLY_SOURCE_SAFE(player, minimum) and SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE(player, distance,
+// area, value) reach the host (the host has 3 unmanned things).
+BOOST_AUTO_TEST_CASE(legacy_parity_skirmish_ai_questions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "questions";
+	script.oneShot = true;
+	level::ScriptCall tech = Call("SKIRMISH_TECH_BUILDING_WITHIN_DISTANCE", {"<This Player>", "", "[Skirmish]MyOuterPerimeter"});
+	tech.parameters[1].number = Engine::Math::Fixed::FromInt(250);
+	level::ScriptCall unowned = Call("SKIRMISH_UNOWNED_FACTION_UNIT_EXISTS", {"<This Player>", "", ""});
+	unowned.parameters[1].integer = 3; // >=
+	unowned.parameters[2].integer = 3;
+	level::ScriptCall safe = Call("SUPPLY_SOURCE_SAFE", {"<This Player>", ""});
+	safe.parameters[1].integer = 1000;
+	level::ScriptCall supplies = Call("SKIRMISH_SUPPLIES_VALUE_WITHIN_DISTANCE", {"<This Player>", "", "[Skirmish]MyInnerPerimeter", ""});
+	supplies.parameters[1].number = Engine::Math::Fixed::FromInt(100);
+	supplies.parameters[3].number = Engine::Math::Fixed::FromInt(5000);
+	script.conditions = {{tech, unowned, safe, supplies}};
+	script.actions = {Call("NAMED_STOP", {"Tank"})};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"me tech near [Skirmish]MyOuterPerimeter +250", "me safe 1000",
+		"me supplies near [Skirmish]MyInnerPerimeter +100 > 5000", "Tank stops"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// The attack priority set actions reach the host (set, type or kind, priority; the unit or team and set).
+BOOST_AUTO_TEST_CASE(legacy_parity_attack_priority_actions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "priorities";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	level::ScriptCall thing = Call("SET_ATTACK_PRIORITY_THING", {"Rush", "AmericaVehicleHumvee", ""});
+	thing.parameters[2].integer = 10;
+	level::ScriptCall kind = Call("SET_ATTACK_PRIORITY_KIND_OF", {"Rush", "", ""});
+	kind.parameters[1].integer = 9;
+	kind.parameters[2].integer = 5;
+	level::ScriptCall fallback = Call("SET_DEFAULT_ATTACK_PRIORITY", {"Rush", ""});
+	fallback.parameters[1].integer = 2;
+	script.actions = {thing, kind, fallback, Call("NAMED_APPLY_ATTACK_PRIORITY_SET", {"Tank", "Rush"}), Call("TEAM_APPLY_ATTACK_PRIORITY_SET", {"Squad", "Rush"})};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"Rush: AmericaVehicleHumvee=10", "Rush: kind 9=5", "Rush: default=2", "Tank uses Rush", "Squad (team) uses Rush"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// doTeamStartSequentialScript and the sequential wait actions over the real runtime (a team always idle here): the team
+// idles, then its script runs an action at a time as it stays idle, all on the first tick until TEAM_IDLE_FOR_FRAMECOUNT
+// makes it wait two frames (ticks 2 and 3), the rest on tick 4; TEAM_WAIT_FOR_NOT_CONTAINED_ALL holds it while the team
+// is aboard.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_runs_a_sequential_script)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script plan;
+	plan.name = "Plan";
+	plan.subroutine = true;
+	level::ScriptCall idle = Call("TEAM_IDLE_FOR_FRAMECOUNT", {"Squad", ""});
+	idle.parameters[1].integer = 2;
+	plan.actions = {Call("NAMED_STOP", {"First"}), idle, Call("TEAM_WAIT_FOR_NOT_CONTAINED_ALL", {"Squad"}), Call("NAMED_STOP", {"Last"})};
+	level::Script start;
+	start.name = "Start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE", {})}};
+	start.actions = {Call("TEAM_EXECUTE_SEQUENTIAL_SCRIPT", {"Squad", "Plan"})};
+	participant.scripts.scripts = {plan, start};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	host.contained = true;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((host.calls == std::vector<std::string>{"#4 stops", "First stops", "#4 stops"}));
+	runtime.Tick(2);
+	runtime.Tick(3);
+	BOOST_TEST(host.calls.size() == 3u);
+	runtime.Tick(4); // the wait is over: held while aboard
+	BOOST_TEST(host.calls.back() == "Squad all aboard?");
+	host.contained = false;
+	runtime.Tick(5);
+	BOOST_TEST((std::vector<std::string>(host.calls.end() - 2, host.calls.end()) == std::vector<std::string>{"Squad all aboard?", "Last stops"}));
+	BOOST_TEST(runtime.SequenceCount() == 0u);
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// doTeamSpinForFramecount: the team's sequence waits two frames (ticks 2 and 3) and does nothing else; the next action
+// runs on tick 4.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_spins_for_a_framecount)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script plan;
+	plan.name = "Plan";
+	plan.subroutine = true;
+	level::ScriptCall spin = Call("TEAM_SPIN_FOR_FRAMECOUNT", {"Squad", ""});
+	spin.parameters[1].integer = 2;
+	plan.actions = {spin, Call("NAMED_STOP", {"Last"})};
+	level::Script start;
+	start.name = "Start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE", {})}};
+	start.actions = {Call("TEAM_EXECUTE_SEQUENTIAL_SCRIPT", {"Squad", "Plan"})};
+	participant.scripts.scripts = {plan, start};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((host.calls == std::vector<std::string>{"#4 stops"})); // the sequence's start
+	runtime.Tick(2);
+	runtime.Tick(3);
+	BOOST_TEST(host.calls.size() == 1u);
+	runtime.Tick(4);
+	BOOST_TEST(host.calls.back() == "Last stops");
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions::doNamedEnterNamed, doNamedFaceNamed / doNamedFaceWaypoint / doTeamFaceNamed / doTeamFaceWaypoint,
+// doNamedSetRepulsor / doTeamSetRepulsor (a boolean parameter) and doNamedEnableStealth reach the host as such.
+BOOST_AUTO_TEST_CASE(legacy_parity_enter_face_repulse_and_stealth_actions)
+{
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	level::Scenario scenario;
+	ScriptRuntime runtime(scenario, vocabulary);
+	const auto act = [&](level::ScriptCall call, std::optional<std::int64_t> flag = std::nullopt) {
+		if (flag)
+			call.parameters[1].integer = *flag;
+		ScriptCallContext context{runtime, 0, NoSubject, call, 1};
+		(*vocabulary.FindAction(call.name))(context);
+	};
+	act(Call("NAMED_ENTER_NAMED", {"Ranger", "Humvee"}));
+	act(Call("NAMED_FACE_NAMED", {"Ranger", "Humvee"}));
+	act(Call("NAMED_FACE_WAYPOINT", {"Ranger", "Hill"}));
+	act(Call("TEAM_FACE_NAMED", {"Squad", "Humvee"}));
+	act(Call("TEAM_FACE_WAYPOINT", {"Squad", "Hill"}));
+	act(Call("NAMED_SET_REPULSOR", {"Ranger", ""}), 1);
+	act(Call("TEAM_SET_REPULSOR", {"Squad", ""}), 0);
+	act(Call("NAMED_SET_STEALTH_ENABLED", {"Ranger", ""}), 0);
+	act(Call("NAMED_EXIT_BUILDING", {"Ranger"}));
+	act(Call("TEAM_EXIT_ALL_BUILDINGS", {"Squad"}));
+	act(Call("EXIT_SPECIFIC_BUILDING", {"Bunker"}));
+	act(Call("NAMED_GUARD", {"Ranger"}));
+	act(Call("NAMED_SET_UNMANNED_STATUS", {"Humvee"}));
+	act(Call("TEAM_SET_UNMANNED_STATUS", {"Squad"}));
+	act(Call("TEAM_USE_COMMANDBUTTON_ABILITY_AT_WAYPOINT", {"Squad", "Command_Frenzy", "Hill"}));
+	BOOST_TEST((host.calls == std::vector<std::string>{"Ranger enters Humvee", "Ranger faces Humvee", "Ranger faces Hill", "Squad face Humvee",
+					"Squad face Hill", "Ranger repulses", "Squad repulse not", "Ranger may not stealth", "Ranger exits", "Squad exit", "Bunker empties",
+					"Ranger guards", "Humvee unmanned", "Squad unmanned", "Squad uses Command_Frenzy at Hill"}));
+}
+
+// ScriptActions::doSetTeamState and ScriptConditions::evaluateTeamStateIs / IsNot: a team that is not there is in no
+// state (both false); UNIT_EMPTIED and TEAM_OWNED_BY_PLAYER as the host answers them.
+BOOST_AUTO_TEST_CASE(legacy_parity_team_states_and_ownership)
+{
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	level::Scenario scenario;
+	ScriptRuntime runtime(scenario, vocabulary);
+	const auto run = [&](const level::ScriptCall &call) {
+		ScriptCallContext context{runtime, 0, NoSubject, call, 1};
+		if (const auto *condition = vocabulary.FindCondition(call.name))
+			return (*condition)(context);
+		(*vocabulary.FindAction(call.name))(context);
+		return true;
+	};
+	BOOST_TEST(!run(Call("TEAM_STATE_IS", {"Squad", "Attack"})));
+	BOOST_TEST(!run(Call("TEAM_STATE_IS_NOT", {"Squad", "Attack"})));
+	run(Call("TEAM_SET_STATE", {"Squad", "Attack"}));
+	BOOST_TEST(run(Call("TEAM_STATE_IS", {"Squad", "Attack"})));
+	BOOST_TEST(!run(Call("TEAM_STATE_IS_NOT", {"Squad", "Attack"})));
+	BOOST_TEST(run(Call("TEAM_STATE_IS_NOT", {"Squad", "Defend"})));
+	BOOST_TEST(run(Call("UNIT_EMPTIED", {"Emptied"})));
+	BOOST_TEST(!run(Call("UNIT_EMPTIED", {"Full"})));
+	BOOST_TEST(run(Call("TEAM_OWNED_BY_PLAYER", {"Squad", "Me"})));
+	BOOST_TEST(!run(Call("TEAM_OWNED_BY_PLAYER", {"Squad", "Them"})));
+}
+
+// ScriptEngine::evaluateAndProgressAllSequentialScripts: SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL holds the
+// sequence (m_dontAdvanceInstruction) each frame evaluateSkirmishCommandButtonIsReady(team, button, false) is false,
+// and the next action runs the frame it is true. ScriptConditions::evaluateCondition: SKIRMISH_COMMAND_BUTTON_READY_ALL
+// asks the same of all members.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sequence_waits_for_a_command_button)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script plan;
+	plan.name = "Plan";
+	plan.subroutine = true;
+	plan.actions = {Call("SKIRMISH_WAIT_FOR_COMMANDBUTTON_AVAILABLE_PARTIAL", {"", "Squad", "Command_Frenzy"}), Call("NAMED_STOP", {"Last"})};
+	level::Script start;
+	start.name = "Start";
+	start.oneShot = true;
+	start.conditions = {{Call("SKIRMISH_COMMAND_BUTTON_READY_ALL", {"", "Squad", "Command_Frenzy"})}};
+	start.actions = {Call("TEAM_EXECUTE_SEQUENTIAL_SCRIPT", {"Squad", "Plan"})};
+	participant.scripts.scripts = {plan, start};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(host.calls.back() == "Squad Command_Frenzy all ready?");
+	host.allReady = true;
+	runtime.Tick(2); // started: the wait holds it the same tick
+	BOOST_TEST(host.calls.back() == "Squad Command_Frenzy any ready?");
+	runtime.Tick(3);
+	BOOST_TEST(host.calls.back() == "Squad Command_Frenzy any ready?");
+	host.anyReady = true;
+	runtime.Tick(4);
+	BOOST_TEST((std::vector<std::string>(host.calls.end() - 2, host.calls.end()) == std::vector<std::string>{"Squad Command_Frenzy any ready?", "Last stops"}));
+	BOOST_TEST(runtime.SequenceCount() == 0u);
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// doUnitStartSequentialScript (UNIT_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING, twice) over the real runtime (a unit always idle
+// here): the script runs on the unit, "<This Object>" naming it (m_conditionObject), both times through on the first
+// tick; an unknown unit starts nothing; UNIT_STOP_SEQUENTIAL_SCRIPT ends a running one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_runs_a_sequential_script)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script plan;
+	plan.name = "Plan";
+	plan.subroutine = true;
+	level::ScriptCall self = Call("NAMED_STOP", {"<This Object>"});
+	self.parameters[0].kind = 14;
+	plan.actions = {self, Call("NAMED_STOP", {"Last"})};
+	level::Script start;
+	start.name = "Start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE", {})}};
+	level::ScriptCall twice = Call("UNIT_EXECUTE_SEQUENTIAL_SCRIPT_LOOPING", {"Tank", "Plan", ""});
+	twice.parameters[2].integer = 2;
+	start.actions = {twice, Call("UNIT_EXECUTE_SEQUENTIAL_SCRIPT", {"Nobody", "Plan"})};
+	participant.scripts.scripts = {plan, start};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((host.calls == std::vector<std::string>{"unit#7 stops", "Last stops", "unit#7 stops", "Last stops"}));
+	BOOST_TEST(runtime.SequenceCount() == 0u);
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// doUnitGuardForFramecount over the real runtime: the unit guards where it stands and its sequence waits two frames
+// (ticks 2 and 3); the next action runs on tick 4.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_guards_for_a_framecount)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script plan;
+	plan.name = "Plan";
+	plan.subroutine = true;
+	level::ScriptCall guard = Call("UNIT_GUARD_FOR_FRAMECOUNT", {"Tank", ""});
+	guard.parameters[1].integer = 2;
+	plan.actions = {guard, Call("NAMED_STOP", {"Last"})};
+	level::Script start;
+	start.name = "Start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE", {})}};
+	start.actions = {Call("UNIT_EXECUTE_SEQUENTIAL_SCRIPT", {"Tank", "Plan"})};
+	participant.scripts.scripts = {plan, start};
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST((host.calls == std::vector<std::string>{"Tank guards"}));
+	runtime.Tick(2);
+	runtime.Tick(3);
+	BOOST_TEST(host.calls.size() == 1u);
+	runtime.Tick(4);
+	BOOST_TEST(host.calls.back() == "Last stops");
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// doPlayerEnableFactories / doPlayerDisableFactories (player, object type), doNamedSetStoppingDistance and
+// doSetStoppingDistance (unit or team, distance) and doTeamEnableStealth (team, enabled) reach the host as such.
+BOOST_AUTO_TEST_CASE(legacy_parity_factory_and_stopping_distance_actions_reach_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "switches";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	level::ScriptCall named = Call("NAMED_SET_STOPPING_DISTANCE", {"Tank", ""});
+	named.parameters[1].number = Engine::Math::Fixed::FromInt(25);
+	level::ScriptCall team = Call("SET_STOPPING_DISTANCE", {"Squad", ""});
+	team.parameters[1].number = Engine::Math::Fixed::FromInt(40);
+	level::ScriptCall stealth = Call("TEAM_SET_STEALTH_ENABLED", {"Squad", ""});
+	stealth.parameters[1].integer = 0;
+	script.actions = {Call("PLAYER_DISABLE_FACTORIES", {"<This Player>", "AmericaBarracks"}), Call("PLAYER_ENABLE_FACTORIES", {"<This Player>", "AmericaBarracks"}),
+		named, team, stealth};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	const std::vector<std::string> expected{"me disables AmericaBarracks", "me enables AmericaBarracks", "Tank stops within 25", "Squad stop within 40",
+		"Squad may not stealth"};
+	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,6 +1,5 @@
-module;
-#include <array>
 export module Graphics.Scene.Props.Material;
+import std;
 export import Graphics.Scene.Props.Geometry;
 namespace Graphics
 {

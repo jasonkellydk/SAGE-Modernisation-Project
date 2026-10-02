@@ -1,6 +1,7 @@
 module;
 #include <SDL3/SDL.h>
 export module engine.platform.adapters.sdl3.text_input;
+import std;
 import engine.platform.text_input;
 import engine.platform.text_input.interface;
 import engine.platform.core.types;

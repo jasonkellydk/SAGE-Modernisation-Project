@@ -1,4 +1,5 @@
 export module engine.platform.threading.mutex;
+import std;
 export namespace engine::platform
 {
 class IMutex

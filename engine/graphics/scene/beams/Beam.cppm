@@ -1,19 +1,5 @@
-module;
-
-#include <array>
-#include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <limits>
-#include <memory>
-#include <span>
-#include <type_traits>
-#include <utility>
-#include <vector>
-
 export module Graphics.Scene.Beams;
+import std;
 
 import engine.profiling;
 export import Graphics.Resources.Bindless.BindlessResourceTable;
@@ -36,7 +22,9 @@ export enum class BeamFlags : std::uint32_t
 	Enabled = 1u << 0,
 	AlphaTest = 1u << 1,
 	Additive = 1u << 2,
-	Multiply = 1u << 3
+	Multiply = 1u << 3,
+	// Additive and never hidden by what is drawn (no depth test: W3DWaypointBuffer's PASS_ALWAYS lines).
+	NoDepthTest = 1u << 4
 };
 
 export constexpr BeamFlags operator|(BeamFlags left, BeamFlags right) noexcept
@@ -641,8 +629,13 @@ public:
 		m_pipelines[1] = m_shaders.Create_Pipeline(device, m_shader, additive_description);
 		m_pipelines[2] = m_shaders.Create_Pipeline(device, m_shader, multiply_description);
 		m_pipelines[3] = m_shaders.Create_Pipeline(device, m_shader, alpha_test_description);
+		PipelineDesc overlay_description = additive_description;
+		overlay_description.depth_test = false;
+		overlay_description.depth_write = false;
+		m_pipelines[4] = m_shaders.Create_Pipeline(device, m_shader, overlay_description);
 		m_pipeline = m_pipelines[0];
-		if (!m_pipelines[0].Is_Valid() || !m_pipelines[1].Is_Valid() || !m_pipelines[2].Is_Valid() || !m_pipelines[3].Is_Valid()) {
+		if (!m_pipelines[0].Is_Valid() || !m_pipelines[1].Is_Valid() || !m_pipelines[2].Is_Valid() || !m_pipelines[3].Is_Valid() ||
+			!m_pipelines[4].Is_Valid()) {
 			Shutdown();
 			return false;
 		}
@@ -749,6 +742,8 @@ public:
 
 	PipelineHandle Pipeline_For_Flags(BeamFlags flags) const noexcept
 	{
+		if (Has_Beam_Flag(flags, BeamFlags::NoDepthTest))
+			return m_pipelines[4];
 		if (Has_Beam_Flag(flags, BeamFlags::AlphaTest))
 			return m_pipelines[3];
 		if (Has_Beam_Flag(flags, BeamFlags::Additive))
@@ -940,7 +935,7 @@ private:
 	MaterialPool m_materials;
 	std::unique_ptr<GPUResourceResidency> m_residency;
 	MaterialHandle m_material{};
-	std::array<PipelineHandle, 4> m_pipelines{};
+	std::array<PipelineHandle, 5> m_pipelines{};
 	PipelineHandle m_pipeline{};
 	RHIBufferHandle m_material_constants{};
 	RHIBufferHandle m_vertex_buffer{};
@@ -1006,9 +1001,10 @@ std::array<float, 4> Transform(const std::array<float, 16> &matrix, Vec3 point) 
 
 void Write_Vertex(BeamVertex &vertex, const std::array<float, 4> &position, const std::array<float, 4> &color, float u, float v, std::uint32_t resource_index) noexcept
 {
-	vertex.position[0] = position[0];
-	vertex.position[1] = position[1];
-	vertex.position[2] = position[2];
+	// The shader takes the position as it is (w = 1): hand it the clip position divided through.
+	vertex.position[0] = position[0] / position[3];
+	vertex.position[1] = position[1] / position[3];
+	vertex.position[2] = position[2] / position[3];
 	vertex.color[0] = color[0];
 	vertex.color[1] = color[1];
 	vertex.color[2] = color[2];
@@ -1066,7 +1062,8 @@ export std::size_t Build_Beam_Vertices(
 		const std::array<float, 4> start_right_clip = Transform(view.view_projection, start_right);
 		const std::array<float, 4> end_clip = Transform(view.view_projection, end_left);
 		const std::array<float, 4> end_right_clip = Transform(view.view_projection, end_right);
-		if (start_clip[3] == 0.0f || start_right_clip[3] == 0.0f || end_clip[3] == 0.0f || end_right_clip[3] == 0.0f)
+		// Behind the eye (w not positive) a divided-through corner would flip: such beams are skipped.
+		if (!(start_clip[3] > 0.0f) || !(start_right_clip[3] > 0.0f) || !(end_clip[3] > 0.0f) || !(end_right_clip[3] > 0.0f))
 			continue;
 
 		const std::array<float, 4> color = {

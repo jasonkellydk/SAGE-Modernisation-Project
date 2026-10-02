@@ -1,11 +1,8 @@
 module;
 #define BOOST_TEST_MODULE ModelFactoryStoreTests
 #include <boost/test/included/unit_test.hpp>
-#include <memory>
-#include <string>
-#include <stdexcept>
-#include <vector>
 export module Graphics.Scene.Models.FactoryStore.Tests;
+import std;
 import Graphics.Scene.Models.FactoryStore;
 using namespace Graphics;
 struct Factory { int id; };

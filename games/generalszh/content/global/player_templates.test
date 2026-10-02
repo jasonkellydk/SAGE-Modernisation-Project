@@ -1,0 +1,317 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.global.player_templates;
+import games.generalszh.content.global.challenge_generals;
+import games.generalszh.content.global.campaigns;
+import games.generalszh.content.global.videos;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(player_templates)
+
+BOOST_AUTO_TEST_CASE(a_side_takes_its_own_colour_else_its_factions_else_white)
+{
+	FactionColors factions;
+	factions.byFaction = {{"FactionAmerica", Rgb{0, 0, 255}}, {"FactionChina", Rgb{255, 0, 0}}};
+	BOOST_TEST(SideColor(0xFF123456, factions, "FactionAmerica") == 0x123456u);
+	BOOST_TEST(SideColor(std::nullopt, factions, "FactionChina") == 0xFF0000u);
+	BOOST_TEST(SideColor(std::nullopt, factions, "") == 0xFFFFFFu);
+}
+
+BOOST_AUTO_TEST_CASE(the_shipped_factions_prefer_their_colours)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const FactionColors colors = BindFactionColors(document, context);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionAmerica") == 0x0000FFu);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionChina") == 0xFF0000u);
+	BOOST_TEST(SideColor(std::nullopt, colors, "FactionGLAToxinGeneral") == 0x00FF00u);
+}
+
+// CampaignManager (Campaign.ini): names lowercased; TRAINING's one mission; CHALLENGE_0 plays its seven maps in order
+// (getNextMission: NextMission, lowercased) and ends after the last (no NextMission); USA's first mission's briefing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_campaigns)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Campaign"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const CampaignCatalog catalog = BindCampaigns(document, context);
+	const Campaign *training = catalog.Find("TRAINING");
+	BOOST_TEST_REQUIRE(training != nullptr);
+	BOOST_TEST(training->name == "training");
+	const Mission *first = training->NextMission(nullptr);
+	BOOST_TEST_REQUIRE(first != nullptr);
+	BOOST_TEST(first->map == "Maps\\Training01\\Training01.map");
+	BOOST_TEST(first->voiceLength == 17);
+	BOOST_TEST(first->unitNames[1] == "OBJECT:Humvee");
+	BOOST_TEST(training->NextMission(first) == nullptr);
+	const Campaign *challenge = catalog.Find("challenge_0");
+	BOOST_TEST_REQUIRE(challenge != nullptr);
+	BOOST_TEST(challenge->challenge);
+	BOOST_TEST(challenge->playerFaction == "FactionAmericaAirForceGeneral");
+	std::vector<std::string> maps;
+	for (const Mission *mission = challenge->NextMission(nullptr); mission != nullptr && maps.size() < 20; mission = challenge->NextMission(mission))
+		maps.push_back(mission->map);
+	BOOST_TEST(maps.size() == 7u);
+	BOOST_TEST(maps.front() == "Maps\\GC_ChemGeneral\\GC_ChemGeneral.map");
+	BOOST_TEST(maps.back() == "Maps\\GC_ChinaBoss\\GC_ChinaBoss.map");
+	BOOST_TEST(challenge->MissionNumber(challenge->FindMission("mission03")) == 2);
+	BOOST_TEST(challenge->FindMission("Mission03") == nullptr); // getMission compares as given
+	BOOST_TEST(catalog.Find("usa") != nullptr);
+}
+
+// ChallengeGenerals (ChallengeMode.ini): nine generals start open, the boss and two empty spots locked;
+// each shows its faction's medallions.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_challenge_generals)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &templates = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	const Document &challenge = loader.Load({"Data/INI/ChallengeMode"});
+	BindContext context{loader.DiagnosticsFor(challenge), engine::time::FixedStep{30}};
+	const ChallengeGenerals generals = BindChallengeGenerals(challenge, &templates, context);
+	int open = 0;
+	for (const GeneralPersona &general : generals)
+		open += general.startsEnabled ? 1 : 0;
+	BOOST_TEST(open == 9);
+	BOOST_TEST(generals[0].playerTemplate == "FactionAmericaAirForceGeneral");
+	BOOST_TEST(generals[0].campaign == "CHALLENGE_0");
+	BOOST_TEST(generals[0].bioName == "GUI:BioNameEntry_Pos0");
+	BOOST_TEST(generals[0].bioPortraitSmall == "PAAirGen_S");
+	BOOST_TEST(generals[0].previewSound == "Taunts_GCAnnouncer07");
+	BOOST_TEST(!generals[0].medallionNormal.empty());
+	BOOST_TEST(generals[0].medallionNormal != generals[0].medallionSelected);
+	BOOST_TEST(generals[9].playerTemplate == "FactionBossGeneral");
+	BOOST_TEST(!generals[9].startsEnabled);
+	BOOST_TEST(!generals[11].startsEnabled);
+}
+
+// PlayerTemplate.cpp's parse table: DisplayName, Features and LoadScreenMusic as MultiPlayerLoadScreen::init reads them
+// (getDisplayName, getGeneralFeatures, getLoadScreenMusic) for the shipped USA faction and the Air Force General.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_factions_load_screen_fields)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &set = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	BindContext context{loader.DiagnosticsFor(set), engine::time::FixedStep{30}};
+	const PlayerTemplates templates = BindPlayerTemplates(set, nullptr, context);
+	const PlayerTemplateInfo *usa = nullptr;
+	const PlayerTemplateInfo *airForce = nullptr;
+	for (const PlayerTemplateInfo &info : templates.templates)
+	{
+		usa = info.name == "FactionAmerica" ? &info : usa;
+		airForce = info.name == "FactionAmericaAirForceGeneral" ? &info : airForce;
+	}
+	BOOST_TEST_REQUIRE(usa != nullptr);
+	BOOST_TEST_REQUIRE(airForce != nullptr);
+	BOOST_TEST(usa->displayName == "INI:FactionAmerica");
+	BOOST_TEST(usa->features == "GUI:BioFeatures_USA");
+	BOOST_TEST(usa->loadScreenMusic == "Load_USA");
+	BOOST_TEST(!airForce->features.empty());
+	BOOST_TEST(airForce->loadScreenMusic == "Load_USA");
+}
+
+// legacy_parity: PlayerTemplate.cpp's parse table (ScoreScreenMusic, SideIconImage) over the shipped PlayerTemplate.ini, and
+// the slot rule of ScoreScreen.cpp ScoreScreenUpdate / LoadScreen.cpp MultiPlayerLoadScreen::init (the local slot's
+// template when it names one, else FactionObserver's): USA Score_USA / GameinfoAMRCA, GLA Score_GLA / GameinfoGLA, China
+// GameinfoCHINA; an observer's (-2) or an unresolved (-1) slot takes FactionObserver: Score_USA / GameinfoOBSRVR.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_factions_score_screen_fields)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &set = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	BindContext context{loader.DiagnosticsFor(set), engine::time::FixedStep{30}};
+	const PlayerTemplates templates = BindPlayerTemplates(set, nullptr, context);
+	const PlayerTemplateInfo *usa = templates.Find("FactionAmerica");
+	const PlayerTemplateInfo *gla = templates.Find("FactionGLA");
+	const PlayerTemplateInfo *china = templates.Find("FactionChina");
+	BOOST_TEST_REQUIRE(usa != nullptr);
+	BOOST_TEST_REQUIRE(gla != nullptr);
+	BOOST_TEST_REQUIRE(china != nullptr);
+	BOOST_TEST(usa->scoreScreenMusic == "Score_USA");
+	BOOST_TEST(usa->sideIconImage == "GameinfoAMRCA");
+	BOOST_TEST(gla->scoreScreenMusic == "Score_GLA");
+	BOOST_TEST(gla->sideIconImage == "GameinfoGLA");
+	BOOST_TEST(china->sideIconImage == "GameinfoCHINA");
+	const int usaIndex = static_cast<int>(usa - templates.templates.data());
+	BOOST_TEST(templates.ForSlot(usaIndex) == usa);
+	for (const int slot : {-2, -1})
+	{
+		const PlayerTemplateInfo *observer = templates.ForSlot(slot);
+		BOOST_TEST_REQUIRE(observer != nullptr);
+		BOOST_TEST(observer->name == "FactionObserver");
+		BOOST_TEST(observer->scoreScreenMusic == "Score_USA");
+		BOOST_TEST(observer->sideIconImage == "GameinfoOBSRVR");
+	}
+}
+
+// VideoPlayer::init (Video.ini) and Movie_File_Name / Open_Movie_File: each movie by its internal name; the USA
+// campaign's first mission's intro movie names a Video block whose file (with ".bik") is in the English Movies folder
+// of the install; a name no block has is looked for as it is.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_movies_are_found)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const VideoCatalog videos = BindVideos(loader.Load({"Data/INI/Default/Video", "Data/INI/Video"}));
+	BOOST_TEST_REQUIRE(!videos.files.empty());
+	const Document &campaignSet = loader.Load({"Data/INI/Campaign"});
+	BindContext context{loader.DiagnosticsFor(campaignSet), engine::time::FixedStep{30}};
+	const CampaignCatalog campaigns = BindCampaigns(campaignSet, context);
+	const Campaign *usa = campaigns.Find("usa");
+	BOOST_TEST_REQUIRE(usa != nullptr);
+	const Mission *first = usa->NextMission(nullptr);
+	BOOST_TEST_REQUIRE(first != nullptr);
+	BOOST_TEST_REQUIRE(!first->introMovie.empty());
+	BOOST_TEST(videos.files.contains(first->introMovie));
+	const auto paths = videos.Paths(first->introMovie, "English");
+	BOOST_TEST(std::filesystem::exists(std::filesystem::path(install) / paths[0]));
+	BOOST_TEST(videos.FileName("NoSuchMovie") == "NoSuchMovie.bik");
+	BOOST_TEST(videos.FileName("Already.BIK") == "Already.BIK");
+}
+
+// legacy_parity: ChallengeGenerals.cpp getGeneralByGeneralName / getPlayerGeneralByCampaignName and ChallengeGenerals.h
+// getRandomTauntSound, on the shipped ChallengeMode.ini and Campaign.ini: every challenge mission's GeneralName names a
+// persona by its BioNameString (ignoring case) and every challenge campaign a player persona by its Campaign; CHALLENGE_0's
+// first mission is against Dr. Thrax (GeneralPersona1: DefeatedImage PUThraxGen_L, VictoriousImage PUThraxGen_W, WinSound
+// Taunts_Toxin100, LossSound Taunts_Toxin101, PortraitMovieRightName PortraitDrThraxRight, NameSound Taunts_GCAnnouncer17)
+// played as GeneralPersona0 (PortraitMovieLeftName PortraitAirGenLeft, NameSound Taunts_GCAnnouncer14); rand() % 3 picks
+// TauntSound1, 2, 3.
+BOOST_AUTO_TEST_CASE(legacy_parity_challenge_missions_find_their_generals)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &challengeSet = loader.Load({"Data/INI/ChallengeMode"});
+	BindContext challengeContext{loader.DiagnosticsFor(challengeSet), engine::time::FixedStep{30}};
+	const ChallengeGenerals generals = BindChallengeGenerals(challengeSet, nullptr, challengeContext);
+	const Document &campaignSet = loader.Load({"Data/INI/Campaign"});
+	BindContext context{loader.DiagnosticsFor(campaignSet), engine::time::FixedStep{30}};
+	const CampaignCatalog campaigns = BindCampaigns(campaignSet, context);
+
+	std::size_t challengeMissions = 0;
+	for (const Campaign &campaign : campaigns.campaigns)
+	{
+		if (!campaign.challenge)
+			continue;
+		BOOST_TEST_INFO(campaign.name);
+		BOOST_TEST((PlayerGeneralByCampaignName(generals, campaign.name) != nullptr));
+		for (const Mission &mission : campaign.missions)
+		{
+			++challengeMissions;
+			BOOST_TEST_INFO(campaign.name + " " + mission.name);
+			BOOST_TEST((GeneralByGeneralName(generals, mission.generalName) != nullptr));
+		}
+	}
+	BOOST_TEST(challengeMissions > 0u);
+
+	const Campaign *first = campaigns.Find("challenge_0");
+	BOOST_TEST_REQUIRE((first != nullptr));
+	const Mission *mission = first->NextMission(nullptr);
+	BOOST_TEST_REQUIRE((mission != nullptr));
+	const GeneralPersona *opponent = GeneralByGeneralName(generals, mission->generalName);
+	BOOST_TEST_REQUIRE((opponent != nullptr));
+	BOOST_TEST((opponent == &generals[1]));
+	BOOST_TEST(opponent->defeatedImage == "PUThraxGen_L");
+	BOOST_TEST(opponent->victoriousImage == "PUThraxGen_W");
+	BOOST_TEST(opponent->defeatedString == "GUI:BioDefeatedEntry_Pos1");
+	BOOST_TEST(opponent->victoriousString == "GUI:BioVictoriousEntry_Pos1");
+	BOOST_TEST(opponent->winSound == "Taunts_Toxin100");
+	BOOST_TEST(opponent->lossSound == "Taunts_Toxin101");
+	BOOST_TEST(opponent->portraitMovieRight == "PortraitDrThraxRight");
+	BOOST_TEST(opponent->nameSound == "Taunts_GCAnnouncer17");
+	BOOST_TEST(TauntSoundFor(*opponent, 0) == "Taunts_Toxin097");
+	BOOST_TEST(TauntSoundFor(*opponent, 1) == "Taunts_Toxin098");
+	BOOST_TEST(TauntSoundFor(*opponent, 2) == "Taunts_Toxin099");
+	BOOST_TEST(TauntSoundFor(*opponent, 5) == "Taunts_Toxin099");
+	BOOST_TEST((GeneralByGeneralName(generals, "gui:bionameentry_pos1") == opponent));
+	const GeneralPersona *player = PlayerGeneralByCampaignName(generals, first->name);
+	BOOST_TEST_REQUIRE((player != nullptr));
+	BOOST_TEST((player == &generals[0]));
+	BOOST_TEST(player->portraitMovieLeft == "PortraitAirGenLeft");
+	BOOST_TEST(player->nameSound == "Taunts_GCAnnouncer14");
+	BOOST_TEST((GeneralByGeneralName(generals, "GUI:NoSuchGeneral") == nullptr));
+}
+
+// legacy_parity: INIVideo.cpp INI::parseVideoDefinition (m_internalName from the block's name, then the field parse:
+// VideoPlayer.cpp's Filename, InternalName, Comment) and VideoPlayer::addVideo (one of the same internal name replaced
+// whole): an InternalName field renames the movie; a later block of the same name replaces the earlier's file; Comment is
+// WorldBuilder's only.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_video_block_is_found_by_its_internal_name)
+{
+	Diagnostics grammarDiagnostics, diagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	Document document;
+	ini::Read(document,
+		document.AddSource("video.ini",
+			std::string("Video Sizzle\n  Filename = sizzle_review\n  Comment = This is the EA logo screen\nEnd\n"
+						"Video Renamed\n  Filename = renamed_file\n  InternalName = RealName\nEnd\n"
+						"Video Sizzle\n  Filename = sizzle_again\nEnd\n")),
+		grammar, diagnostics);
+	const VideoCatalog videos = BindVideos(document);
+	BOOST_TEST(videos.files.size() == 2u);
+	BOOST_TEST(videos.FileName("Sizzle") == "sizzle_again.bik");
+	BOOST_TEST(videos.FileName("RealName") == "renamed_file.bik");
+	BOOST_TEST(!videos.files.contains("Renamed"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -1,12 +1,6 @@
-module;
-#include <cassert>
-#include <bit>
-#include <cstdint>
-#include <cstring>
-#include <span>
-#include <type_traits>
-#include <vector>
 export module Graphics.Scene.Models.Deformation;
+import std;
+import engine.core.contracts;
 import Graphics.Scene.Models.GeometryMath;
 import Graphics.Scene.Models.Hierarchy;
 import Graphics.Scene.Models.SourceRevision;
@@ -26,8 +20,8 @@ public:
         std::span<const std::uint16_t> bones, const ModelHierarchy& hierarchy,
         std::uint64_t source_revision)
     {
-        assert(bones.size() == positions.size());
-        assert(normals.empty() || normals.size() == positions.size());
+        engine::core::Assert(bones.size() == positions.size());
+        engine::core::Assert(normals.empty() || normals.size() == positions.size());
         const bool same_source = source_revision != 0
             ? source_revision == m_source_revision && positions.data() == m_position_source
                 && normals.data() == m_normal_source && positions.size() == m_positions.size()

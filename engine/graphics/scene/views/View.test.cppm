@@ -4,10 +4,8 @@ module;
 
 #include <boost/test/included/unit_test.hpp>
 
-#include <cmath>
-#include <type_traits>
-
 export module Graphics.Scene.Views.View.Tests;
+import std;
 
 import Graphics.Scene.Views.View;
 
