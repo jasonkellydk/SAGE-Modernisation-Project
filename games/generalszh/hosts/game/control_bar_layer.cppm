@@ -777,6 +777,7 @@ private:
 		m_powersMenu.Refresh();
 	}
 
+public:
 	// HotKeyTranslator: a key released with no modifier, as its printable character: the button it marks (true: used),
 	// the one map asked in the order the original registers into it: the command windows, the shortcut bar's buttons
 	// (populateSpecialPowerShortcut after evaluateContextUI), then the General's Powers screen's while it shows.
@@ -808,6 +809,8 @@ private:
 				m_stage->Hide();
 		}
 	}
+
+private:
 
 	// TheTacticalView's height in display pixels as the bar's stage and showing set it (none before the bar is loaded).
 	std::optional<int> ViewHeight() const { return m_stage ? std::optional(m_stage->viewHeight.Get()) : std::nullopt; }

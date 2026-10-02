@@ -133,6 +133,8 @@ inline void OrderMovementSystems(ecs::SystemRegistry &registry)
 	// A formation move's group speed ends once its path's next leg is set and before anything moves.
 	registry.OrderBefore<gameplay::MovePathSystem, domain::FormationSpeedSystem>();
 	registry.OrderBefore<domain::FormationSpeedSystem, gameplay::MovementSystem>();
+	// A unit docking (a new move order) is seen by the formation speeds' check the same tick.
+	registry.OrderBefore<gameplay::DockSystem, domain::FormationSpeedSystem>();
 	registry.OrderBefore<gameplay::WanderSystem, gameplay::MovePathSystem>();
 	registry.OrderBefore<gameplay::DockSystem, domain::GoalClaimSystem>();
 	registry.OrderBefore<gameplay::LocomotorDamageSystem, gameplay::MovementSystem>();

@@ -150,7 +150,7 @@ inline void RegisterBridgeDecks(GameWorld &game)
 			if (bridges[row].layer != 0)
 				decks.emplace_back(bridges[row].layer, entities[row]);
 	});
-	std::ranges::sort(decks, {}, &std::pair<std::uint8_t, ecs::Entity>::first);
+	std::sort(decks.begin(), decks.end(), [](const auto &left, const auto &right) { return left.first < right.first; });
 	game.world.Resource<engine::gameplay::DeckSurfaces>().decks.clear();
 	for (const auto &[layer, object] : decks)
 		RegisterDeck(game, object, *game.world.Get<Bridge>(object));

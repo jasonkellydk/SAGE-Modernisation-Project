@@ -22,6 +22,7 @@ export import games.generalszh.session.composition.creation;
 export import games.generalszh.session.composition.death;
 export import games.generalszh.session.composition.delivery;
 export import games.generalszh.session.composition.docking;
+import games.generalszh.session.composition.cross_domain_order;
 export import games.generalszh.session.composition.economy;
 export import games.generalszh.session.composition.effects;
 export import games.generalszh.session.composition.emp;
@@ -273,6 +274,7 @@ inline void ComposeSimulation(ecs::World &world, ecs::SystemRegistry &registry, 
 	OrderPowersSystems(registry);
 	OrderEmpSystems(registry);
 	OrderMatchSystems(registry);
+	OrderCrossDomainSystems(registry);
 	OrderToppleSystems(registry);
 	OrderWaveGuidesSystems(registry);
 	OrderLifetimeSystems(registry);

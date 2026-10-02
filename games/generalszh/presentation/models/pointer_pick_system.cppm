@@ -49,7 +49,7 @@ struct PointerPickSystem
 				hits.hits.push_back({instance.key, std::sqrt(dx * dx + dy * dy + dz * dz) / length});
 			}
 		});
-		std::ranges::stable_sort(hits.hits, {}, &PointerHit::fraction);
+		std::stable_sort(hits.hits.begin(), hits.hits.end(), [](const PointerHit &left, const PointerHit &right) { return left.fraction < right.fraction; });
 	}
 };
 }

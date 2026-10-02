@@ -711,6 +711,7 @@ engine_add_module_library(generalszh_session
 		session/composition/emp.cppm
 		session/composition/tick_events.cppm
 		session/composition/simulation_setup.cppm
+		session/composition/cross_domain_order.cppm
 		session/composition/simulation.cppm
 		session/composition/areas.cppm
 		session/composition/topple.cppm

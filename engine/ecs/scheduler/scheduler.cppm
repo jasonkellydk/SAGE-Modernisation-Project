@@ -391,6 +391,8 @@ DependencyGraph Scheduler::BuildGraph(const SystemRegistry &systems)
 			throw std::logic_error(CycleDescription(systems, cycle));
 	}
 
+	// Every unordered conflict at once (the first as the message has always started; the rest after it, one a line).
+	std::string conflicts;
 	for (SystemId leftId = 0; leftId < graph.NodeCount(); ++leftId)
 	{
 		const SystemInfo &left = systems.Get(leftId);
@@ -401,12 +403,15 @@ DependencyGraph Scheduler::BuildGraph(const SystemRegistry &systems)
 				continue;
 			if (!graph.HasPath(leftId, rightId) && !graph.HasPath(rightId, leftId))
 			{
-				throw std::logic_error("Ambiguous ECS scheduler conflict between systems '" +
-					std::string(left.stableName) + "' and '" + std::string(right.stableName) +
-					"'; add an explicit Before/After dependency");
+				if (!conflicts.empty())
+					conflicts += '\n';
+				conflicts += "Ambiguous ECS scheduler conflict between systems '" + std::string(left.stableName) + "' and '" +
+					std::string(right.stableName) + "'; add an explicit Before/After dependency";
 			}
 		}
 	}
+	if (!conflicts.empty())
+		throw std::logic_error(conflicts);
 
 	return graph;
 }
