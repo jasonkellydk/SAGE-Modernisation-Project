@@ -181,6 +181,96 @@ BOOST_AUTO_TEST_CASE(a_jet_waits_parked_until_it_has_something_to_do)
 	BOOST_TEST((base.world.Get<Transform>(mig)->position.x == Fixed::FromInt(980)));
 }
 
+// JetOrHeliReturnForLandingState inherits AIInternalMoveToState: the return state completes when its movement does.
+// Kinematic Steer accepts max(closeEnough, speed): at speed 6 it may stop 5 units short of the approach. The cycle
+// must accept that endpoint, including the exact edge, but not an endpoint one fixed-point unit beyond it.
+BOOST_AUTO_TEST_CASE(a_kinematic_return_uses_the_movements_arrival_boundary)
+{
+	Airfield field;
+	field.spaceCount = field.runwayCount = 1;
+	field.runways[0] = {{Fixed::FromInt(1000), Fixed::FromInt(1000), {}}, {Fixed::FromInt(1100), Fixed::FromInt(1000), {}}};
+	const auto returns = [&](Fixed distance, Fixed speed, Fixed closeEnough) {
+		Jet jet;
+		jet.flight = Wings();
+		jet.state = JetState::Returning;
+		Locomotion motion = MakeLocomotion(Wings());
+		motion.speed = speed;
+		motion.locomotor.closeEnough = closeEnough;
+		Transform transform;
+		transform.position = {Fixed::FromInt(1175) + distance, Fixed::FromInt(1000), Fixed::FromInt(100)};
+		MoveOrder order;
+		RunwayTable table;
+		RunwayJetContext context;
+		context.field = &field;
+		context.table = &table;
+		context.tick = 1;
+		std::vector<DamageRecord> damage;
+		StepRunwayJet(context, jet, motion, order, transform, nullptr, nullptr, nullptr, nullptr, damage);
+		return jet.state;
+	};
+	BOOST_TEST((returns(Fixed::FromInt(5), Fixed::FromInt(6), Fixed::One()) == JetState::AwaitLanding));
+	BOOST_TEST((returns(Fixed::FromInt(6), Fixed::FromInt(6), Fixed::One()) == JetState::AwaitLanding));
+	BOOST_TEST((returns(Fixed::FromInt(6) + Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::One()) == JetState::Returning));
+	BOOST_TEST((returns(Fixed::FromInt(8), Fixed::FromInt(6), Fixed::FromInt(8)) == JetState::AwaitLanding));
+	BOOST_TEST((returns(Fixed::FromInt(8) + Fixed::FromRaw(1), Fixed::FromInt(6), Fixed::FromInt(8)) == JetState::Returning));
+	BOOST_TEST((returns(Fixed::One(), Fixed{}, Fixed::One()) == JetState::AwaitLanding));
+	BOOST_TEST((returns(Fixed::One() + Fixed::FromRaw(1), Fixed{}, Fixed::One()) == JetState::Returning));
+}
+
+// Locomotor::getMaxSpeedForCondition caps the authored rate by setMaxSpeed; landing sets that cap to MinSpeed
+// (JetTakeoffOrLandingState::onEnter). Kinematic flight, like force flight, brakes to that cap without rewriting its
+// definition. Releasing the cap makes its authored acceleration available again.
+BOOST_AUTO_TEST_CASE(a_kinematic_jet_brakes_to_its_landing_cap_and_accelerates_when_released)
+{
+	Transform transform;
+	Locomotion motion = MakeLocomotion(Wings());
+	motion.speed = Fixed::FromInt(6);
+	motion.speedCap = Fixed::FromInt(3);
+	const Engine::Math::FixedVector2 goal{Fixed::FromInt(1000), Fixed{}};
+	const int halfSpeeds[] = {11, 10, 9, 8, 7, 6, 6};
+	for (const int halfSpeed : halfSpeeds)
+	{
+		BOOST_TEST(!Steer(transform, motion, goal, true));
+		BOOST_TEST((motion.speed == Fixed::FromRatio(halfSpeed, 2)));
+		BOOST_TEST((motion.locomotor.maxSpeed == Fixed::FromInt(6)));
+	}
+	motion.speedCap = Fixed::FromInt(99999);
+	BOOST_TEST(!Steer(transform, motion, goal, true));
+	BOOST_TEST((motion.speed == Fixed::FromRatio(13, 4)));
+}
+
+BOOST_AUTO_TEST_CASE(a_landing_jet_keeps_its_cap_when_its_air_locomotor_set_changes)
+{
+	Airfield field;
+	field.spaceCount = field.runwayCount = 1;
+	Jet jet;
+	jet.flight = Wings();
+	jet.attack = Wings();
+	jet.attack.maxSpeed = Fixed::FromInt(12);
+	jet.attack.minSpeed = Fixed::FromInt(4);
+	jet.attackLocoUntil = 20;
+	jet.state = JetState::Landing;
+	jet.pathCount = 1;
+	jet.path[0] = {Fixed::FromInt(1000), Fixed::FromInt(1000), {}};
+	Locomotion motion = MakeLocomotion(Wings());
+	motion.speed = Fixed::FromInt(6);
+	motion.speedCap = Fixed::FromInt(3);
+	Transform transform;
+	transform.position = {Fixed::FromInt(1300), Fixed::FromInt(1000), Fixed::FromInt(100)};
+	MoveOrder order;
+	RunwayTable table;
+	RunwayJetContext context;
+	context.field = &field;
+	context.table = &table;
+	context.tick = 1;
+	std::vector<DamageRecord> damage;
+	StepRunwayJet(context, jet, motion, order, transform, nullptr, nullptr, nullptr, nullptr, damage);
+	BOOST_TEST((jet.state == JetState::Landing));
+	BOOST_TEST(jet.locoSet == 1u);
+	BOOST_TEST((motion.speedCap == Fixed::FromInt(4)));
+	BOOST_TEST((motion.locomotor.maxSpeed == Fixed::FromInt(12)));
+}
+
 BOOST_AUTO_TEST_CASE(a_hunting_jet_taxies_out_takes_off_down_the_runway_and_comes_back_to_reload)
 {
 	Base base(2);
@@ -445,7 +535,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_lands_the_way_it_took_off_in_reverse)
 	BOOST_TEST((jet.path[0] == Engine::Math::FixedVector3{Fixed::FromInt(1175), Fixed::FromInt(1000), Fixed::FromInt(50)}));
 	BOOST_TEST((jet.path[1] == Engine::Math::FixedVector3{Fixed::FromInt(1100), Fixed::FromInt(1000), Fixed{}}));
 	BOOST_TEST((jet.path[2] == Engine::Math::FixedVector3{Fixed::FromInt(1000), Fixed::FromInt(1000), Fixed{}}));
-	BOOST_TEST((base.world.Get<Locomotion>(mig)->locomotor.maxSpeed == Wings().minSpeed));
+	BOOST_TEST((base.world.Get<Locomotion>(mig)->speedCap == Wings().minSpeed));
+	BOOST_TEST((base.world.Get<Locomotion>(mig)->locomotor.maxSpeed == Wings().maxSpeed));
 	BOOST_TEST(jet.runwayHold == 1u);
 	// Down the runway westward.
 	Fixed lastX = base.world.Get<Transform>(mig)->position.x;

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -32,6 +33,7 @@ import engine.gameplay.rts.combat.systems.weapon_bonus_retime_system;
 import engine.gameplay.rts.combat.systems.damage_reaction_system;
 import engine.gameplay.rts.combat.algorithms.waypoint_weapon;
 import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
 import engine.ecs.core.world;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
@@ -92,6 +94,7 @@ struct Battle
 		field.cellSize = Fixed::FromInt(1000);
 		field.heights.assign(4, Fixed{});
 		world.EmplaceResource<GroundHeight>(field);
+		world.EmplaceResource<DeckSurfaces>();
 		world.EmplaceResource<LaunchLayouts>();
 		world.EmplaceResource<TemplateEquivalence>();
 		world.EmplaceResource<Detonations>();
@@ -846,6 +849,20 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_lookers_view_passes_over_slavers_and_its_fi
 		battle.world.Get<Slaved>(shooter)->master = shooterMaster;
 		const ecs::Entity owners[] = {stranger, victimMaster, shooterMaster};
 		grid.SetObstacle(obstacleCell, 10, owners[owner], ObstacleFootprint{}, false);
+		if (raised)
+		{
+			// Pathfinder::isAttackViewBlockedByObstacle (pathfinder.cppm:2656-2675): with a ground victim,
+			// a raised attacker walks its own layer. The obstacle must therefore exist in that layer's cells.
+			DeckLayer deck;
+			deck.x0 = 5;
+			deck.y0 = 8;
+			deck.width = 16;
+			deck.height = 5;
+			deck.type.assign(static_cast<std::size_t>(deck.width * deck.height), PathfindCellType::Clear);
+			deck.toGround.assign(deck.type.size(), 0);
+			deck.type[deck.Index(obstacleCell, 10)] = PathfindCellType::Obstacle;
+			grid.Decks().push_back(std::move(deck));
+		}
 		battle.Run(1, 16);
 		return battle.world.Get<AttackTarget>(shooter)->target == victim;
 	};
@@ -2666,13 +2683,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_burnt_out_missile_holds_then_is_killed_or_d
 // within it the aim succeeds as the body stands (onExit: setLocomotorGoalNone, so it turns no further). A rifle (no
 // AcceptableAimDelta) 1.5 degrees off its victim fires without turning; 2.5 degrees off it turns onto it first (30
 // degrees a tick). With AcceptableAimDelta 20 (GLARebelBikerMachineGun's), 15 degrees off it fires as it stands and 25
-// degrees off it turns. Turned, it faces the victim within 1024 turn units (~0.0001 degrees): the victim's spot is
-// placed with fixed-point sine and cosine.
+// degrees off it turns. Turned, it faces the actual quantized victim coordinates within 1024 turn units (~0.0001
+// degrees). PartitionManager::getRelativeAngle2D uses the vector between the actual positions, so the independent
+// atan2 oracle uses that vector, rather than the ideal angle used to place it with fixed-point sine and cosine.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 {
 	struct Result
 	{
 		Engine::Math::TurnAngle facing;
+		Engine::Math::TurnAngle bearing;
 		int shots{0};
 	};
 	const auto aim = [](Engine::Math::TurnAngle delta, Engine::Math::TurnAngle off) {
@@ -2686,6 +2705,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 			Fixed::FromInt(100) + Fixed::FromInt(80) * Engine::Math::Sin(off), {}};
 		*battle.world.Get<AttackTarget>(shooter) = {victim, true};
 		Result result;
+		const auto toTarget = battle.world.Get<Transform>(victim)->position.XY() - battle.world.Get<Transform>(shooter)->position.XY();
+		const double radians = std::atan2(static_cast<double>(toTarget.y.Raw()), static_cast<double>(toTarget.x.Raw()));
+		result.bearing.units = static_cast<std::uint32_t>(std::llround(radians * (4294967296.0 / (2.0 * std::numbers::pi))));
 		battle.Run(1, 1, [&](int) { battle.fired.ForEach([&](const Shot &shot) { result.shots += shot.source == shooter ? 1 : 0; }); });
 		result.facing = battle.world.Get<Transform>(shooter)->facing;
 		return result;
@@ -2696,12 +2718,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_body_turns_only_beyond_its_aim_delta)
 	BOOST_TEST(within.facing.units == 0u);
 	BOOST_TEST(within.shots == 1);
 	const Result beyond = aim({}, degrees(25));
-	BOOST_TEST(onto(beyond.facing, degrees(25)));
+	BOOST_TEST(onto(beyond.facing, beyond.bearing));
+	BOOST_TEST(beyond.shots == 1);
 	const Result loose = aim(Engine::Math::TurnFromDegrees(20), degrees(150));
 	BOOST_TEST(loose.facing.units == 0u);
 	BOOST_TEST(loose.shots == 1);
 	const Result tooFar = aim(Engine::Math::TurnFromDegrees(20), degrees(250));
-	BOOST_TEST(onto(tooFar.facing, degrees(250)));
+	BOOST_TEST(onto(tooFar.facing, tooFar.bearing));
+	BOOST_TEST(tooFar.shots == 1);
 }
 
 // WeaponTemplate::fireWeaponTemplate with DamageDealtAtSelfPosition (GeneralsMD Weapon.cpp): the damage is dealt at the

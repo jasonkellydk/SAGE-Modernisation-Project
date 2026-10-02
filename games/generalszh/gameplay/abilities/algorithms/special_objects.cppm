@@ -105,7 +105,7 @@ inline std::vector<ecs::Entity> SpecialObjectsOf(const GameWorld &game, ecs::Ent
 			if (objects[row].owner == owner && objects[row].slot == slot)
 				found.emplace_back(objects[row].sequence, entities[row]);
 	});
-	std::ranges::sort(found, {}, &std::pair<std::uint32_t, ecs::Entity>::first);
+	std::sort(found.begin(), found.end(), [](const auto &left, const auto &right) { return left.first < right.first; });
 	std::vector<ecs::Entity> out;
 	for (const auto &[sequence, entity] : found)
 		out.push_back(entity);

@@ -67,7 +67,7 @@ inline content::MapCache UpdateUserMapCache(content::ContentLoader &loader, cons
 			continue;
 		found.push_back({entry->path().string(), static_cast<std::uint32_t>(entry->file_size(error))});
 	}
-	std::ranges::sort(found, {}, &content::MapFile::path);
+	std::sort(found.begin(), found.end(), [](const content::MapFile &left, const content::MapFile &right) { return left.path < right.path; });
 	std::optional<engine::config::DefinitionTable<content::ObjectDefinition>> objects;
 	const auto describe = [&](const content::MapFile &file) -> std::optional<content::MapMetaData> {
 		const auto bytes = readFile(file.path);
