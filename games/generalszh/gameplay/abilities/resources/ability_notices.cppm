@@ -61,6 +61,18 @@ struct AbilityNotices
 		Sound sound{Sound::None};
 	};
 	std::vector<Sabotage> sabotages;
+	// A hack's disable effect (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_HACKER_DISABLE_BUILDING and
+	// SPECIAL_BLACKLOTUS_DISABLE_VEHICLE_HACK, while m_doDisableFXParticles): the unit's DisableFXParticleSystem for its
+	// power, riding on the target somewhere over its footprint, emitting for `ticks` (EffectDuration, doubled for a
+	// small building).
+	struct DisableFx
+	{
+		ecs::Entity unit;
+		ecs::Entity target;
+		std::uint32_t power{0};
+		std::uint64_t ticks{0};
+	};
+	std::vector<DisableFx> disableFx;
 };
 }
 

@@ -8,6 +8,9 @@ import games.generalszh.gameplay.objects.algorithms.object_factory;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.orders.algorithms.group_orders;
 import games.generalszh.gameplay.teams.algorithms.team_states;
+import games.generalszh.gameplay.ai.algorithms.team_path_follows;
+import games.generalszh.gameplay.ai.components.exact_path_follow;
+import engine.gameplay.rts.movement.components.desired_speed;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.identity.components.owner;
@@ -24,8 +27,12 @@ import games.generalszh.gameplay.score.algorithms.scoring;
 import games.generalszh.gameplay.upgrades.algorithms.research;
 import engine.gameplay.rts.upgrades.resources.player_upgrades;
 import engine.gameplay.rts.economy.resources.player_money;
+import games.generalszh.gameplay.world.resources.solo_play;
 import engine.gameplay.rts.match.resources.match_outcome;
 import engine.gameplay.common.identity.resources.relationships;
+import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.ai.resources.ai_players;
 
 // Players and teams as the level authored them, and what scripts do with
 // teams: reinforcements, paths, stances, merges, deletes, and the questions
@@ -172,19 +179,47 @@ inline void OnCapture(GameWorld &game, ecs::Entity entity)
 		ScoreCapture(game, owner->player, entity);
 }
 
+// Object::onCapture's parts that depend on who it went from and to (`from`, `to`: the old and new controlling players), as
+// EA's source has it: changing hands, its AI idles (aiIdle(CMD_FROM_AI)), allies or not (the fork's ally exception and its
+// dozer cancelAllTasks are not EA's); a skirmish computer player that takes a faction structure (isFactionStructure) sells
+// it (it does not know what else to do with it).
+inline void OnCaptureBetween(GameWorld &game, ecs::Entity entity, std::uint32_t from, std::uint32_t to)
+{
+	namespace gp = engine::gameplay;
+	if (from != to && (game.world.Has<gp::MoveOrder>(entity) || game.world.Has<gp::AttackTarget>(entity)))
+		AiIdle(game, entity);
+	OnCapture(game, entity);
+	if (from != to)
+		if (const auto *ais = game.world.FindResource<AiPlayers>(); ais != nullptr)
+			if (const AiPlayer *ai = ais->Of(to); ai != nullptr && ai->skirmish)
+				if (const auto *ref = game.world.Get<gp::DefinitionRef>(entity); ref != nullptr && content::IsFactionStructure(game.templates.DefinitionAt(ref->index)))
+					BeginSale(game, entity);
+}
+
 inline void ChangeTeam(GameWorld &game, ecs::Entity entity, std::uint32_t team)
 {
 	namespace gp = engine::gameplay;
+	// Object::setTeam: no useful units for a player who is dead (isPlayerActive): the neutral player's default team instead.
+	if (team < game.roster.TeamCount())
+		if (const std::uint32_t owner = game.roster.TeamAt(team).owner; owner < game.roster.PlayerCount() && game.roster.PlayerAt(owner).dead)
+			for (std::uint32_t player = 0; player < game.roster.PlayerCount(); ++player)
+				if (game.roster.PlayerAt(player).name.empty())
+				{
+					team = game.roster.DefaultTeam(player).value_or(team);
+					break;
+				}
 	auto *member = game.world.Get<gp::TeamMember>(entity);
 	if (member == nullptr || member->team == team || team >= game.roster.TeamCount())
 		return;
 	game.roster.Leave(member->team, entity);
 	member->team = team;
 	game.roster.Join(team, entity);
+	std::uint32_t from = game.roster.TeamAt(team).owner, to = from;
 	if (auto *owner = game.world.Get<gp::Owner>(entity))
 	{
-		const std::uint32_t from = owner->player;
+		from = owner->player;
 		owner->player = game.roster.TeamAt(team).owner;
+		to = owner->player;
 		// Player::becomingTeamMember's battle plan bonuses, and a Strategy Center's plan (onCapture).
 		MoveBattlePlan(game, entity, from, owner->player);
 	}
@@ -195,7 +230,7 @@ inline void ChangeTeam(GameWorld &game, ecs::Entity entity, std::uint32_t team)
 		if (const std::uint16_t set = TeamPrioritySet(game, team); set != 0)
 			aggression->prioritySet = set;
 	}
-	OnCapture(game, entity);
+	OnCaptureBetween(game, entity, from, to);
 }
 
 template<typename Visit>
@@ -227,14 +262,52 @@ std::optional<FixedVector2> TeamCentre(GameWorld &game, std::uint32_t team)
 }
 
 // doTeamFollowWaypoints: along the labelled path from its waypoint closest to the team's centre, the same waypoint for
-// every member (groupFollowWaypointPath / ...AsTeam both take the one waypoint); none on the path: nothing.
+// every member; none on the path: nothing. As a team (groupFollowWaypointPathAsTeam) the members keep together: their
+// offsets, the group's speed, the team's shared waypoint (FollowWaypointPathAsTeam). (Exactly as a team,
+// groupFollowWaypointPathAsTeamExact, they still follow the path each on its own: its offsets and speed wait on PathExact.)
 void TeamFollowWaypoints(GameWorld &game, const std::string &team, const std::string &label, bool asTeam, bool exact = false)
 {
-	(void)asTeam; // groupFollowWaypointPathAsTeam's keeping together is not ported yet: both follow the path
 	const auto teamIndex = ResolveTeam(game, team);
 	const auto centre = teamIndex ? TeamCentre(game, *teamIndex) : std::nullopt;
-	if (!centre || game.waypoints.ClosestOnPath(*centre, label) == gameplay::WaypointGraph::None)
+	const std::uint32_t way = centre ? game.waypoints.ClosestOnPath(*centre, label) : gameplay::WaypointGraph::None;
+	if (way == gameplay::WaypointGraph::None)
 		return;
+	if (asTeam && !exact)
+	{
+		const std::vector<ecs::Entity> members = game.roster.TeamAt(*teamIndex).members;
+		FollowWaypointPathAsTeam(game, members, way);
+		return;
+	}
+	if (asTeam && exact)
+	{
+		// groupFollowWaypointPathAsTeamExact -> AIFollowWaypointPathExactState with m_moveAsGroup: each member's path
+		// (setPathFromWaypoint) off by its offset from the group's centre (AIGroup::getCenter), at the group's speed
+		// (AIGroup::getSpeed); ExactPathFollowSystem keeps each next waypoint off by the offset.
+		const std::vector<ecs::Entity> members = game.roster.TeamAt(*teamIndex).members;
+		const auto groupCentre = team_path_detail::GroupCenter(game, members);
+		const auto speed = team_path_detail::GroupSpeed(game, members);
+		for (const ecs::Entity entity : members)
+		{
+			if (!game.world.IsAlive(entity))
+				continue;
+			OrderFollowPath(game, entity, label, *centre, true);
+			auto *order = game.world.Get<gameplay::MoveOrder>(entity);
+			if (order == nullptr || order->mode != gameplay::MoveMode::PathExact)
+				continue;
+			const FixedVector2 offset = groupCentre ? game.world.Get<gameplay::Transform>(entity)->position.XY() - *groupCentre : FixedVector2{};
+			order->destination = order->destination + offset;
+			if (!game.world.Has<ExactPathFollow>(entity))
+				game.world.Add<ExactPathFollow>(entity);
+			*game.world.Get<ExactPathFollow>(entity) = ExactPathFollow{offset, static_cast<std::uint8_t>(speed ? 1 : 0)};
+			if (speed)
+			{
+				if (!game.world.Has<gameplay::DesiredSpeed>(entity))
+					game.world.Add<gameplay::DesiredSpeed>(entity);
+				*game.world.Get<gameplay::DesiredSpeed>(entity) = gameplay::DesiredSpeed{*speed};
+			}
+		}
+		return;
+	}
 	ForTeam(game, team, [&](ecs::Entity entity) { OrderFollowPath(game, entity, label, *centre, exact); });
 }
 
@@ -405,13 +478,16 @@ void TeamStop(GameWorld &game, const std::string &team, bool disband)
 }
 
 // updateNamedSetAttitude / updateTeamSetAttitude (NAMED_ / TEAM_SET_ATTITUDE): the unit's AI (each of the team's members
-// with one: AIGroup::setAttitude) takes the attitude (AttitudeType, sleep -2 ... aggressive 2).
+// with one: AIGroup::setAttitude) takes the attitude (AttitudeType, sleep -2 ... aggressive 2), which is its mood from its
+// next update on (getMoodMatrixValue: the idle look, AttackFollowIfMoody's path following).
 void SetAttitude(GameWorld &game, ecs::Entity unit, std::int64_t attitude)
 {
 	if (!game.world.IsAlive(unit) || !HasAi(game, unit))
 		return;
 	if (auto *aggression = game.world.Get<gameplay::Aggression>(unit))
 		aggression->attitude = static_cast<std::int8_t>(attitude);
+	// Following a path, its next update sees the new mood: alert or aggressive, it attack-follows the path instead.
+	AttackFollowIfMoody(game, unit);
 }
 
 void TeamSetAttitude(GameWorld &game, const std::string &team, std::int64_t attitude)
@@ -490,15 +566,31 @@ void TeamLoadTransports(GameWorld &game, const std::string &team)
 			}
 }
 
-// Player::killPlayer: every team of the player emptied (evacuateTeam), then every one killed (killTeam).
+// Player::killPlayer: every team of the player emptied (evacuateTeam), then every one killed (killTeam); from then on it is
+// dead (m_isPlayerDead: no creation list that requires a live player makes anything for it), and its money is withdrawn
+// (heard); a computer player in a single-player game stays alive with its money (a solo mission uses it later).
 void PlayerKill(GameWorld &game, std::uint32_t player)
 {
+	if (player < game.roster.PlayerCount())
+		game.roster.PlayerAt(player).dead = true;
 	for (std::uint32_t team = 0; team < game.roster.TeamCount(); ++team)
 		if (game.roster.TeamAt(team).owner == player)
 			TeamEvacuate(game, "#" + std::to_string(team));
 	for (std::uint32_t team = 0; team < game.roster.TeamCount(); ++team)
 		if (game.roster.TeamAt(team).owner == player)
 			TeamKill(game, "#" + std::to_string(team));
+	if (player >= game.roster.PlayerCount())
+		return;
+	// A computer player in a single-player game is left alive (m_isPlayerDead FALSE again: later creation lists make
+	// units for it), its money kept.
+	if (const auto *solo = game.world.FindResource<SoloPlay>(); solo != nullptr && solo->singlePlayer && !game.roster.PlayerAt(player).human)
+	{
+		game.roster.PlayerAt(player).dead = false;
+		return;
+	}
+	// m_money.withdraw(countMoney()): no money left, heard.
+	auto &money = game.world.Resource<engine::gameplay::PlayerMoney>();
+	money.WithdrawUpTo(player, money.Balance(player));
 }
 
 // Player::transferAssetsFromThat: `from`'s player upgrades in production that `to` has or is making are cancelled
@@ -570,15 +662,8 @@ void TeamMergeInto(GameWorld &game, const std::string &source, const std::string
 	const auto to = ResolveTeam(game, target);
 	if (!from || !to || *from == *to)
 		return;
-	ForTeam(game, source, [&](ecs::Entity entity) {
-		game.roster.Leave(*from, entity);
-		game.roster.Join(*to, entity);
-		if (auto *member = game.world.Get<gameplay::TeamMember>(entity))
-			*member = {*to};
-		if (auto *owner = game.world.Get<gameplay::Owner>(entity))
-			*owner = {game.roster.TeamAt(*to).owner};
-		OnCapture(game, entity);
-	});
+	// Team::transferUnitsTo: each Object::setTeam(newTeam).
+	ForTeam(game, source, [&](ecs::Entity entity) { ChangeTeam(game, entity, *to); });
 }
 
 bool TeamCreated(const GameWorld &game, const std::string &team)

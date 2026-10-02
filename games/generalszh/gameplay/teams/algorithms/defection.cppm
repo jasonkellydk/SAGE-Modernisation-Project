@@ -78,7 +78,8 @@ inline void Defect(GameWorld &game, ecs::Entity unit, std::uint32_t team, std::u
 		for (std::size_t row = 0; row < rows.size(); ++row)
 		{
 			gp::Jet &jet = rows[row];
-			if (jet.airfield != unit)
+			// (defectAllParkedUnits walks its spaces: a helicopter holds none.)
+			if (jet.airfield != unit || jet.helicopter != 0)
 				continue;
 			const bool airborne = jet.state == gp::JetState::Flying || jet.state == gp::JetState::Returning || jet.state == gp::JetState::AwaitLanding ||
 				jet.state == gp::JetState::ReturnToDeadAirfield || jet.state == gp::JetState::CirclingDeadAirfield;

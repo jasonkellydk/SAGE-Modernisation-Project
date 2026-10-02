@@ -24,6 +24,7 @@ import engine.gameplay.rts.match.resources.match_outcome;
 import engine.gameplay.rts.construction.components.sale;
 import engine.gameplay.rts.construction.components.construction_progress;
 import engine.gameplay.common.appearance.components.indicator_color;
+import engine.gameplay.common.appearance.components.occlusion_safe;
 import games.generalszh.presentation.objects.systems.vehicle_motion_systems;
 import engine.gameplay.common.identity.resources.relationships;
 import engine.gameplay.common.spatial.components.object_shroud;
@@ -251,6 +252,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_science_models_draw_shows_only_to_those_wit
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -345,6 +347,7 @@ BOOST_AUTO_TEST_CASE(objects_are_drawn_between_ticks_in_their_look_restarting_it
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -606,6 +609,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_model_keeps_the_colour_it_was_made_with_unl
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -705,6 +709,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_building_rises_out_of_the_ground_as_it_is_b
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	world.RegisterComponent<engine::gameplay::ConstructionProgress>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
@@ -803,6 +808,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_wind_up_or_a_sale_stretches_the_animation_t
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	world.RegisterComponent<engine::gameplay::Armament>();
 	world.RegisterComponent<engine::gameplay::Sale>();
 	RegisterVehicleMotion(world);
@@ -903,6 +909,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_tree_sways_in_the_breeze)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1012,6 +1019,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_police_light_bars_and_light_pulses_are_the_fr
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1076,6 +1084,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_police_light_bars_and_light_pulses_are_the_fr
 	run(tick);
 	run(tick);
 	frame.seconds = 1.0f / 30.0f;
+	frame.realSeconds = 1.0f / 30.0f; // the pulse's frames (W3DDynamicLight::On_Frame_Update: per rendered frame)
 	frame.clock = 1.0;
 	run(draw); // the car's look starts
 	run(draw);
@@ -1148,6 +1157,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_fishing_boat_rocks_like_a_buoy)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1235,6 +1245,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_state_with_several_animations_picks_one_per
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1609,6 +1620,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_disabled_objects_animation_holds_its_frame)
 		world.RegisterComponent<engine::gameplay::Mounted>();
 		world.RegisterComponent<engine::gameplay::EmpPulse>();
 		world.RegisterComponent<engine::gameplay::IndicatorColor>();
+		world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 		world.RegisterComponent<engine::gameplay::Disabled>();
 	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
 	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
@@ -1713,6 +1725,7 @@ BOOST_AUTO_TEST_CASE(a_mounted_portable_structure_is_drawn_on_its_carriers_bone)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1819,6 +1832,8 @@ BOOST_AUTO_TEST_CASE(condition_states_run_their_particle_systems_on_bones_as_sid
 	ecs::World world{ecs::WorldConfig{4}};
 	world.RegisterComponent<engine::gameplay::DefinitionRef>();
 	world.RegisterComponent<engine::gameplay::DebrisLook>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>(); // EffectAttachmentSystem's shroud lookups
+	world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
 	EffectsContent effects;
@@ -1901,6 +1916,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_bone_particle_systems_follow_the_animated_bon
 		ecs::World world{ecs::WorldConfig{4}};
 		world.RegisterComponent<engine::gameplay::DefinitionRef>();
 		world.RegisterComponent<engine::gameplay::DebrisLook>();
+		world.RegisterComponent<engine::gameplay::ObjectShroud>(); // EffectAttachmentSystem's shroud lookups
+		world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
 		RegisterObjectPresentation(world);
 		world.FinalizeComponents();
 		EffectsContent effects;
@@ -2083,13 +2100,24 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_schedules_compose_without_conflicts)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	world.RegisterComponent<engine::gameplay::Disabled>();
 	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
 	world.RegisterComponent<engine::gameplay::UndetectedDefector>();
 	world.RegisterComponent<engine::gameplay::MissileFlight>();
+	world.RegisterComponent<generalszh::gameplay::AbilityLaser>();
+	world.RegisterComponent<engine::gameplay::GrantStealth>();
+	world.RegisterComponent<generalszh::gameplay::BattlePlan>();
+	world.RegisterComponent<generalszh::gameplay::LauncherDoor>();
+	world.RegisterComponent<engine::gameplay::Stealth>();
+	world.RegisterComponent<generalszh::gameplay::SpectreGunship>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>();
+	world.RegisterComponent<engine::gameplay::Lifetime>();
+	world.RegisterComponent<engine::gameplay::Transport>();
 	world.RegisterComponent<engine::gameplay::Targetable>();
 	world.RegisterComponent<engine::gameplay::Experience>();
 	world.RegisterComponent<generalszh::gameplay::ParticleCannon>();
+	world.RegisterComponent<generalszh::gameplay::WaveGuide>();
 	world.RegisterComponent<engine::gameplay::Sale>();
 	world.RegisterComponent<engine::gameplay::UnderConstruction>();
 	world.RegisterComponent<engine::gameplay::Subdual>();
@@ -2119,18 +2147,29 @@ BOOST_AUTO_TEST_CASE(the_hosts_presentation_schedules_compose_without_conflicts)
 	// Building the schedules checks every conflict is ordered.
 	ecs::Scheduler ticks(world, tick, engine::jobs::JobSystemConfig{2});
 	ecs::Scheduler frames(world, frame, engine::jobs::JobSystemConfig{2});
-	BOOST_CHECK_NO_THROW(ticks.Finalize(engine::time::FixedStep{30}));
-	BOOST_CHECK_NO_THROW(frames.Finalize(engine::time::FixedStep{30}));
+	for (ecs::Scheduler *scheduler : {&ticks, &frames})
+		try
+		{
+			scheduler->Finalize(engine::time::FixedStep{30});
+		}
+		catch (const std::exception &error)
+		{
+			BOOST_ERROR(error.what());
+		}
 }
 
 BOOST_AUTO_TEST_CASE(damage_states_start_their_effects_on_bones_and_stop_them_as_side_tables)
 {
 	ecs::World world{ecs::WorldConfig{4}};
 	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>(); // FxPlaybackSystem's sound owners
+	world.RegisterComponent<engine::gameplay::ObjectShroud>(); // DamageEffectSystem's shroud lookups
+	world.RegisterComponent<engine::gameplay::Transform>();    // and where hidden objects are
 	world.RegisterComponent<engine::gameplay::Health>();
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
 	EffectsContent effects;
@@ -2650,6 +2689,91 @@ BOOST_AUTO_TEST_CASE(legacy_parity_crate_pickups_sound_and_float_their_cash)
 	BOOST_TEST(fx.pending.front().at[0] == 100.0f);
 }
 
+// UnitCrateCollide::executeCrateBehavior: MiscAudio's CrateFreeUnit on the collector (setObjectID); HealCrateCollide::
+// executeCrateBehavior: CrateHeal where the collector is (setPosition); ShroudCrateCollide::executeCrateBehavior:
+// CrateShroud on the collector (setObjectID). Each is heard the tick the crate is taken, once, and nothing else is.
+BOOST_AUTO_TEST_CASE(legacy_parity_unit_heal_and_shroud_crates_sound_on_their_collector)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.crateFreeUnitSound = "CrateFreeUnit";
+	catalog.crateHealSound = "CrateHeal";
+	catalog.crateShroudSound = "CrateShroud";
+	catalog.crateMoneySound = "CrateMoney";
+	world.EmplaceResource<PresentationFrame>().clock = 1.0;
+	world.EmplaceResource<WorldAnimations>();
+	world.EmplaceResource<FloatingTextSettings>();
+	FloatingTexts &texts = world.EmplaceResource<FloatingTexts>();
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &fx = world.EmplaceResource<FxRequests>();
+	auto &pickups = world.EmplaceResource<generalszh::gameplay::CratePickups>();
+	const auto make = [&](int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::Transform>(entity);
+		world.Get<engine::gameplay::Transform>(entity)->position = {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(40), Engine::Math::Fixed::FromInt(2)};
+		return entity;
+	};
+	const ecs::Entity first = make(100), second = make(200), third = make(300);
+	CratePresentationSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	using Kind = generalszh::gameplay::CratePickup::Kind;
+	const Engine::Math::FixedVector3 crate{Engine::Math::Fixed::FromInt(7), Engine::Math::Fixed::FromInt(8), Engine::Math::Fixed{}};
+	pickups.list = {{first, Kind::Unit, 0, 1, crate, ""}, {second, Kind::Heal, 0, 1, crate, ""}, {third, Kind::Shroud, 0, 1, crate, ""}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 3u);
+	BOOST_TEST(sounds.pending[0].sound == "CrateFreeUnit");
+	BOOST_TEST(sounds.pending[0].at[0] == 100.0f); // on the collector, not where the crate lay
+	BOOST_TEST(sounds.pending[0].at[2] == 2.0f);
+	BOOST_TEST(sounds.pending[1].sound == "CrateHeal");
+	BOOST_TEST(sounds.pending[1].at[0] == 200.0f);
+	BOOST_TEST(sounds.pending[2].sound == "CrateShroud");
+	BOOST_TEST(sounds.pending[2].at[0] == 300.0f);
+	BOOST_TEST(texts.shown.empty());
+	BOOST_TEST(fx.pending.empty());
+	// The next tick took no crate: nothing more is heard.
+	sounds.pending.clear();
+	pickups.list.clear();
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(sounds.pending.empty());
+}
+
+// JetTakeoffOrLandingState::update (JetAIUpdate.cpp): a jet touching down plays MiscAudio's AircraftWheelScreech (the
+// shipped JetSkid) at its position (setPosition), for anyone in earshot; a tick without a touchdown plays nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_touching_down_screeches_where_it_is)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.FinalizeComponents();
+	world.EmplaceResource<LookCatalog>().aircraftWheelScreechSound = "JetSkid";
+	auto &sounds = world.EmplaceResource<SoundRequests>();
+	auto &touchdowns = world.EmplaceResource<engine::gameplay::JetTouchdowns>();
+	JetTouchdownSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	touchdowns.list = {{ecs::Entity{}, {Engine::Math::Fixed::FromInt(1100), Engine::Math::Fixed::FromInt(1000), Engine::Math::Fixed::FromRatio(1, 4)}}};
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(sounds.pending.size() == 1u);
+	BOOST_TEST(sounds.pending[0].sound == "JetSkid");
+	BOOST_TEST(sounds.pending[0].at[0] == 1100.0f);
+	BOOST_TEST(sounds.pending[0].at[1] == 1000.0f);
+	BOOST_TEST(sounds.pending[0].at[2] == 0.25f);
+	BOOST_TEST(sounds.pending[0].positioned);
+	BOOST_TEST(sounds.pending[0].owner == SoundRequest::NoOwner);
+	sounds.pending.clear();
+	touchdowns.list.clear();
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(sounds.pending.empty());
+}
+
 // Cash that changed hands floats up as it shows in the original: Player::doBountyForKill's bounty GUI:AddCash in
 // yellow, CashHackSpecialPower::doSpecialPowerAtObject's take GUI:AddCash in green and loss GUI:LoseCash in red, each
 // where the simulation put it (already raised over its object), at alpha 230, newest first.
@@ -2847,6 +2971,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_loaded_projectiles_hide_as_the_clip_empties)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
 	auto &weapons = world.EmplaceResource<engine::gameplay::WeaponCatalog>();
@@ -2919,6 +3044,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_what_the_shroud_hides)
 	world.RegisterComponent<engine::gameplay::Mounted>();
 	world.RegisterComponent<engine::gameplay::EmpPulse>();
 	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	world.RegisterComponent<engine::gameplay::ObjectShroud>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);

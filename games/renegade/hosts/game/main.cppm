@@ -69,6 +69,7 @@ import Graphics.Frame.Runtime;
 import Graphics.Frame.SceneRenderers;
 import Graphics.Scene.Props.AssetBinding;
 import Graphics.Scene.Props.Renderer;
+import Graphics.Scene.StaticDrawOrder;
 import Graphics.Scene.Models.AssetPose;
 import Graphics.Scene.Views.CameraState;
 import Graphics.Renderer2D;
@@ -132,7 +133,7 @@ struct MenuModel {
     bool animated{};
     bool Rebind(Graphics::Device& device,Assets::AssetCache& cache) {
         const auto quality=Graphics::Get_Texture_Quality_Settings();std::string error;
-        if(binding.Load(device,Graphics::Get_Prop_Renderer(),cache,asset,error,{},
+        if(binding.Load(device,Graphics::Get_Prop_Renderer(),cache,asset,error,{},{},
             static_cast<unsigned>(std::max(quality.mip_reduction,0)),static_cast<unsigned>(std::max(quality.minimum_dimension,1)))) return true;
         std::fprintf(stderr,"model texture replacement: %s\n",error.c_str());return false;
     }
@@ -159,7 +160,7 @@ struct MenuModel {
     bool Sample(float frame,bool loop) { return !animated || pose.Evaluate(0,frame,loop); }
     bool Draw(Graphics::CommandList& commands,Graphics::PropParameters parameters,const Graphics::PropTextureMappingContext& mapping) {
         for(std::size_t part=0;part<binding.Part_Count();++part)
-            if(!binding.Draw_Part(commands,part,parameters,pose.Bone_Count() ? &pose : nullptr,0,{},&mapping)) return false;
+            if(!binding.Draw_Part(commands,part,parameters,pose.Bone_Count() ? &pose : nullptr,0,{},nullptr,&mapping)) return false;
         return true;
     }
 };
@@ -601,12 +602,44 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
         const auto camera_position=s.camera.Get_Position();
         parameters.camera_position={camera_position.x,camera_position.y,camera_position.z,1};
         const Graphics::PropTextureMappingContext mapping{static_cast<std::uint32_t>(s.seconds*1000),s.camera.Get_Backend_Projection_Matrix().values};
-        if(!s.backdrop.Draw(commands,parameters,mapping)) return false;
         const bool main_visible=s.displayed_dialog==128 || s.displayed_dialog==129;
-        if(main_visible && (!s.logo.Draw(commands,parameters,mapping) || !s.title.Draw(commands,parameters,mapping))) return false;
-        Graphics::RenderTransform attachment;
-        if(s.title.pose.Bone_Transform(s.title.pose.Bone_Index("IF_GIZMOBONE"),attachment)) parameters.world=attachment.matrix;
-        if(main_visible && !s.gizmo.Draw(commands,parameters,mapping)) return false;
+        // The source scene traverses its head-inserted objects in this order.
+        // Static bins flush high to low; ordinary transparency flushes last.
+        struct DrawPart {MenuModel* model;std::size_t part;Graphics::PropParameters parameters;};
+        std::vector<DrawPart> parts;std::vector<std::int32_t> levels;
+        const auto collect=[&](MenuModel& model,const Graphics::PropParameters& state) {
+            for(std::size_t part=0;part<model.binding.Part_Count();++part) {
+                parts.push_back({&model,part,state});levels.push_back(model.binding.Part_Sort_Level(part));
+            }
+        };
+        if(main_visible) {
+            collect(s.logo,parameters);collect(s.title,parameters);
+            const auto bone=s.title.pose.Bone_Index("IF_GIZMOBONE");
+            Graphics::RenderTransform attachment;
+            if(s.title.pose.Visible(bone) && s.title.pose.Bone_Transform(bone,attachment)) {
+                auto attached=parameters;
+                attached.world=Graphics::Multiply_Affine({parameters.world},attachment).matrix;
+                collect(s.gizmo,attached);
+            }
+        }
+        collect(s.backdrop,parameters);
+        auto& submission=Graphics::Get_Prop_Submission();submission.Clear();
+        const std::array<float,4> camera_depth{parameters.view[8],parameters.view[9],parameters.view[10],parameters.view[11]};
+        for(std::size_t index=0;index<parts.size();++index) if(levels[index]==0) {
+            const auto& part=parts[index];const auto* pose=part.model->pose.Bone_Count() ? &part.model->pose : nullptr;
+            if(part.model->binding.Part_Requires_Transparency_Sorting(part.part)) {
+                if(!part.model->binding.Submit_Part(submission,part.part,part.parameters,
+                    Graphics::PropDrawPhase::Transparent,camera_depth,pose,0,&mapping)) return false;
+            } else if(!part.model->binding.Draw_Part(commands,part.part,part.parameters,pose,0,{},nullptr,&mapping)) return false;
+        }
+        std::vector<std::size_t> ordered;
+        if(!Graphics::Build_Static_Draw_Order(levels,ordered)) return false;
+        for(const auto index:ordered) {
+            const auto& part=parts[index];
+            if(!part.model->binding.Draw_Part(commands,part.part,part.parameters,
+                part.model->pose.Bone_Count() ? &part.model->pose : nullptr,0,{},nullptr,&mapping)) return false;
+        }
+        if(!submission.Flush_Transparent()) return false;
         s.targets.clear();
         s.interface_kinds.clear();
         auto& ui=Graphics::Get_Renderer2D();
@@ -1372,7 +1405,7 @@ int main(int argc,char** argv) {
         Graphics::RenderTransform camera_bone;
         if(menu.backdrop.pose.Bone_Transform(menu.backdrop.pose.Bone_Index("CAMERA"),camera_bone)) {
             const Graphics::RenderTransform conversion{{0,0,-1,0,-1,0,0,0,0,1,0,0,0,0,0,1}};
-            menu.camera.Set_Transform({Multiply(camera_bone.matrix,conversion.matrix)});
+            menu.camera.Set_Transform(Graphics::Multiply_Affine(camera_bone,conversion));
         }
         menu.transition.Start(renegade::presentation::TransitionDirection::In);
         if(!result && !start_movie()) result=1;

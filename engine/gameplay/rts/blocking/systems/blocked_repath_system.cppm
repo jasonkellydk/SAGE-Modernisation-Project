@@ -8,7 +8,10 @@ export import engine.gameplay.rts.blocking.algorithms.locomotor_blocking;
 export import engine.gameplay.rts.movement.components.move_order;
 export import engine.gameplay.rts.navigation.components.navigation;
 export import engine.gameplay.rts.movement.components.move_away;
+export import engine.gameplay.rts.movement.components.attack_approach;
 export import engine.gameplay.rts.death.components.dying;
+export import engine.gameplay.rts.containment.components.transport;
+export import engine.gameplay.rts.docking.components.docking;
 
 // A ground unit's move taking in what the last tick's collisions found, then planning its route again when held up
 // (AIInternalMoveToState::update and AIUpdateInterface::requestPath / computePath, EA's Zero Hour source), before routes
@@ -32,7 +35,7 @@ inline constexpr std::uint64_t StuckIgnoreTicks = 60;    // 2 * LOGICFRAMES_PER_
 struct BlockedRepathSystem
 {
 	using Query = ecs::Query<ecs::Write<BlockedState>, ecs::Write<BlockContact>, ecs::Read<MoveOrder>, ecs::OptionalWrite<Route>, ecs::Optional<MoveAway>,
-		ecs::Optional<Dying>>;
+		ecs::Optional<Dying>, ecs::Optional<Boarding>, ecs::Optional<Docking>, ecs::Optional<AttackApproach>>;
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -42,7 +45,25 @@ struct BlockedRepathSystem
 		const auto orders = chunk.Get<MoveOrder>();
 		auto routes = chunk.Get<Route>();
 		for (std::size_t row = 0; row < states.size(); ++row)
+		{
 			TakeBlockedContact(states[row], contacts[row]);
+			states[row].stuckSeen = states[row].stuck;
+		}
+		// What its AI's state ignores: the unit it enters (AIEnterState), the dock it uses, moving through units on the way
+		// (AIDockState).
+		const auto boardings = chunk.Get<Boarding>();
+		const auto dockings = chunk.Get<Docking>();
+		const auto approaches = chunk.Get<AttackApproach>();
+		for (std::size_t row = 0; row < states.size(); ++row)
+		{
+			const bool docking = !dockings.empty() && dockings[row].dock != ecs::Entity{};
+			states[row].docking = docking ? 1u : 0u;
+			// (The game's own entering is set again after its units move: EnterObstacleSystem.)
+			states[row].ignoring = docking ? dockings[row].dock : !boardings.empty() ? boardings[row].transport : ecs::Entity{};
+			// A contact weapon's attack approach: its victim (AIAttackApproachTargetState: ignoreObstacle(victim)).
+			if (states[row].ignoring == ecs::Entity{} && !approaches.empty() && approaches[row].active != 0 && approaches[row].ignoreVictim != 0)
+				states[row].ignoring = approaches[row].victim;
+		}
 		const auto aways = chunk.Get<MoveAway>();
 		if (!aways.empty())
 		{
@@ -69,7 +90,7 @@ struct BlockedRepathSystem
 			return;
 		for (std::size_t row = 0; row < states.size(); ++row)
 		{
-			if (orders[row].mode != MoveMode::Point)
+			if (!RoutedMode(orders[row].mode))
 				continue;
 			Replan(states[row], contacts[row], routes[row], tick);
 		}

@@ -226,6 +226,31 @@ inline std::optional<std::array<float, 12>> BoneTransformOf(ModelLibrary &librar
 	return std::array<float, 12>{m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]};
 }
 
+// The same, only for a bone its model has (Drawable::getCurrentWorldBoneTransform's find): none for a missing one, or
+// while the model loads.
+inline std::optional<std::array<float, 12>> FoundBoneTransformOf(ModelLibrary &library, std::uint32_t look, float seconds, float start,
+	std::string_view bone)
+{
+	if (look >= library.entryOfLook.size() || library.entryOfLook[look] >= library.entries.size())
+		return std::nullopt;
+	const std::uint32_t entry = library.entryOfLook[look];
+	ModelEntry &model = library.entries[entry];
+	if (library.loads[entry].status != ModelStatus::Ready)
+		return std::nullopt;
+	bool failed = false;
+	const Graphics::ModelAssetPose *pose = PoseOf(model, seconds, start, failed);
+	if (pose == nullptr && model.controlled)
+		pose = &*model.controlled;
+	if (pose == nullptr)
+		return std::nullopt;
+	const std::size_t index = pose->Bone_Index(bone);
+	Graphics::RenderTransform transform;
+	if (index == 0 || index >= pose->Bone_Count() || !pose->Bone_Transform(index, transform))
+		return std::nullopt;
+	const auto &m = transform.matrix;
+	return std::array<float, 12>{m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]};
+}
+
 inline std::string ModelSummary(const ModelLibrary &library)
 {
 	std::size_t ready = 0, loading = 0, failed = 0, animated = 0;

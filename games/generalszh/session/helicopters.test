@@ -1,0 +1,389 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.commands.game_commands;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.production.algorithms.unit_queue;
+import games.generalszh.gameplay.aircraft.algorithms.airfields;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.production.components.rally_point;
+import engine.ecs.query.query;
+
+// The Comanche's flight (JetAIUpdate with NeedsRunway No: HeliAIStateMachine; PRODUCED_AT_HELIPAD) on real data:
+// GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp and
+// GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Behavior/ParkingPlaceBehavior.cpp.
+using namespace generalszh;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+std::vector<ecs::Entity> Named(session::Session &game, std::string_view name)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<engine::gameplay::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.DefinitionName(refs[row].index) == name)
+				found.push_back(entities[row]);
+	});
+	return found;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(helicopters)
+
+namespace gp = engine::gameplay;
+
+// Legacy parity (ParkingPlaceBehavior::hasAvailableSpaceFor, reserveDoorForExit, exitObjectViaDoor and getRallyPoint;
+// JetAIUpdate::getProducerLocation): an America airfield with all four spaces taken by parked Raptors still takes a
+// Comanche in its queue (PRODUCED_AT_HELIPAD: always room) but no Raptor. Made there it appears on the helipad (the
+// HeliPark01 bone, facing its turn), holds no space (the Raptors keep theirs), flies on its ComancheLocomotor at once
+// (no space reserved: air locomotion) and climbs from the pad; it goes to the airfield's rally point when there is one.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_is_made_on_its_airfields_helipad_and_flies_off)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const std::uint32_t america = match->Team(game, 0);
+	const ecs::Entity airfield = game.Place("AmericaAirfield", match->At(-300, -400), {}, america);
+	BOOST_TEST_REQUIRE(world.Has<gp::Airfield>(airfield));
+	const gp::Airfield field = *world.Get<gp::Airfield>(airfield);
+	BOOST_TEST_REQUIRE(field.hasHelipad == 1u);
+	BOOST_TEST((field.approachHeight == Fixed::FromInt(50)));
+	BOOST_TEST_REQUIRE(field.spaceCount == 4u);
+	for (std::uint32_t space = 0; space < 4; ++space)
+	{
+		const ecs::Entity raptor = game.Place("AmericaJetRaptor", match->At(-300, -400), {}, america);
+		gp::Jet &jet = *world.Get<gp::Jet>(raptor);
+		jet.airfield = airfield;
+		jet.space = space;
+		jet.state = gp::JetState::Parked;
+		world.Get<gp::Transform>(raptor)->position = field.spaces[space].parking;
+	}
+	game.Tick();
+	BOOST_TEST(!gameplay::FreeSpace(game.Game(), airfield).has_value());
+	const auto &objects = shell.game.objects;
+	BOOST_TEST((gameplay::CanQueueUnit(game.Game(), airfield, *objects.Find("AmericaJetRaptor")) == gameplay::QueueResult::ParkingFull));
+	BOOST_TEST((gameplay::CanQueueUnit(game.Game(), airfield, *objects.Find("AmericaVehicleComanche")) == gameplay::QueueResult::Queued));
+
+	const auto order = [&](commands::GameCommand command) {
+		std::vector<engine::net::CommandEnvelope> envelopes{std::visit([](const auto &c) { return commands::Encode(c); }, command)};
+		envelopes.front().player = 0;
+		game.Tick(std::span(envelopes));
+	};
+	// Queues one and waits for it: the new Comanche, the tick it came out.
+	const auto build = [&] {
+		const std::vector<ecs::Entity> before = Named(game, "AmericaVehicleComanche");
+		order(commands::QueueUnit{airfield, "AmericaVehicleComanche"});
+		std::optional<ecs::Entity> made;
+		for (int tick = 0; tick < 3000 && !made; ++tick)
+		{
+			game.Tick();
+			for (const ecs::Entity unit : Named(game, "AmericaVehicleComanche"))
+				if (std::ranges::find(before, unit) == before.end())
+					made = unit;
+		}
+		return made;
+	};
+	const std::optional<ecs::Entity> comanche = build();
+	BOOST_TEST_REQUIRE(comanche.has_value());
+	const gp::Jet &jet = *world.Get<gp::Jet>(*comanche);
+	BOOST_TEST(jet.helicopter == 1u);
+	BOOST_TEST(jet.space == gp::Jet::NoSpace);
+	BOOST_TEST((jet.airfield == airfield));
+	BOOST_TEST((jet.state == gp::JetState::Flying));
+	BOOST_TEST(!gameplay::FreeSpace(game.Game(), airfield).has_value()); // the Raptors keep theirs
+	const auto &at = *world.Get<gp::Transform>(*comanche);
+	// Over the helipad, its turn (no rally point: it goes to the pad itself).
+	BOOST_TEST((at.position.x == field.helipad.x && at.position.y == field.helipad.y));
+	BOOST_TEST((at.facing.units == field.helipadFacing.units));
+	BOOST_TEST((world.Get<gp::MoveOrder>(*comanche)->destination == field.helipad.XY()));
+	BOOST_TEST((world.Get<gp::Locomotion>(*comanche)->locomotor.maxSpeed == jet.flight.maxSpeed));
+	// It climbs off the pad.
+	const Fixed ground = game.Game().ground.At(at.position.XY());
+	Fixed last = at.position.z;
+	bool climbed = false;
+	for (int tick = 0; tick < 90; ++tick)
+	{
+		game.Tick();
+		const Fixed now = world.Get<gp::Transform>(*comanche)->position.z;
+		BOOST_TEST((now >= last));
+		climbed = climbed || now > ground + Fixed::FromInt(10);
+		last = now;
+	}
+	BOOST_TEST(climbed);
+
+	// With a rally point, the next goes there (aiMoveToPosition(getRallyPoint())).
+	const Engine::Math::FixedVector2 rally = match->At(200, -100);
+	world.Add<gp::RallyPoint>(airfield);
+	world.Get<gp::RallyPoint>(airfield)->at = rally;
+	const std::optional<ecs::Entity> second = build();
+	BOOST_TEST_REQUIRE(second.has_value());
+	BOOST_TEST((world.Get<gp::MoveOrder>(*second)->destination == rally));
+}
+
+// Legacy parity (ActionManager::canGetRepairedAt; JetAIUpdate::privateGetRepaired, doLandingCommand, update and
+// aiDoCommand; HeliAIStateMachine: JetOrHeliReturnForLandingState, HeliTakeoffOrLandingState, JetOrHeliReloadAmmoState;
+// ParkingPlaceBehavior::setHealee and update): a damaged Comanche sent to be repaired at its airfield picks a spot by it
+// (findPositionAround the airfield, out to ten times its bounding circle; on the ground) and flies there; it comes
+// straight down through 50 (ApproachHeight) over the spot onto it, each within 3; down, it is on its taxiing locomotor
+// and the airfield's healee: 2 health every 6 frames from the 6th after it lands (HealAmountPerSecond 10); whole, it lifts
+// off the next frame straight up 50 and flies on. Sent again, a move order while it stands makes it lift off at once
+// (aiDoCommand: pending, TAKING_OFF_AWAIT_CLEARANCE), and it goes there once up. A whole Comanche cannot be sent. The
+// same on 1 and 4 workers; a checkpoint taken as it touches down carries on exactly.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_damaged_comanche_lands_by_its_airfield_heals_and_lifts_off)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity airfield, comanche;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		const std::uint32_t america = match->Team(*made.game, 0);
+		made.airfield = made.game->Place("AmericaAirfield", match->At(-300, -400), {}, america);
+		made.comanche = made.game->Place("AmericaVehicleComanche", match->At(300, 100), {}, america);
+		for (int tick = 0; tick < 90; ++tick)
+			made.game->Tick();
+		return made;
+	};
+	const auto send = [&](Game &g, commands::GameCommand command) {
+		std::vector<engine::net::CommandEnvelope> envelopes{std::visit([](const auto &c) { return commands::Encode(c); }, command)};
+		envelopes.front().player = 0;
+		g.game->Tick(std::span(envelopes));
+	};
+	Game one = stage(1), four = stage(4);
+	auto &world = one.game->World();
+	const auto jetOf = [&](Game &g) -> gp::Jet & { return *g.game->World().Get<gp::Jet>(g.comanche); };
+	BOOST_TEST_REQUIRE(jetOf(one).helicopter == 1u);
+	const Fixed ground = one.game->Game().ground.At(world.Get<gp::Transform>(one.comanche)->position.XY());
+	BOOST_TEST_REQUIRE((world.Get<gp::Transform>(one.comanche)->position.z > ground + Fixed::FromInt(10))); // flying
+
+	// Whole: it cannot be sent.
+	send(one, commands::GetRepaired{{one.comanche}, one.airfield});
+	BOOST_TEST((jetOf(one).state == gp::JetState::Flying));
+	four.game->Tick();
+	for (Game *g : {&one, &four})
+	{
+		gp::Health &health = *g->game->World().Get<gp::Health>(g->comanche);
+		health.current = health.maximum - Fixed::FromInt(10);
+		send(*g, commands::GetRepaired{{g->comanche}, g->airfield});
+		BOOST_TEST((jetOf(*g).state == gp::JetState::HeliReturning));
+	}
+	const Engine::Math::FixedVector3 spot = jetOf(one).landingSpot;
+	const auto &airfieldAt = world.Get<gp::Transform>(one.airfield)->position;
+	BOOST_TEST((Engine::Math::DistanceSquared(spot.XY(), airfieldAt.XY()) > Fixed{}));
+	BOOST_TEST((spot.z == one.game->Game().ground.At(spot.XY())));
+
+	std::optional<std::uint64_t> landingFrom, down, whole, liftFrom, up;
+	std::vector<std::uint64_t> heals;
+	std::unique_ptr<session::Session> restored;
+	Fixed health = world.Get<gp::Health>(one.comanche)->current;
+	for (int tick = 0; tick < 4000 && !up; ++tick)
+	{
+		const gp::JetState was = jetOf(one).state;
+		one.game->Tick();
+		four.game->Tick();
+		if (restored)
+			restored->Tick();
+		const gp::Jet &jet = jetOf(one);
+		const auto &at = *world.Get<gp::Transform>(one.comanche);
+		const std::uint64_t now = one.game->CurrentTick();
+		if (was == gp::JetState::HeliReturning && jet.state == gp::JetState::HeliLanding)
+		{
+			landingFrom = now;
+			BOOST_TEST((jet.heliPath[0].z == spot.z + Fixed::FromInt(50)));
+			BOOST_TEST((jet.heliPath[1] == spot));
+		}
+		if (was == gp::JetState::HeliLanding && jet.state == gp::JetState::HeliReloading)
+		{
+			down = now;
+			const auto apart = at.position - spot;
+			BOOST_TEST((apart.x * apart.x + apart.y * apart.y + apart.z * apart.z <= Fixed::FromInt(9)));
+			BOOST_TEST((world.Get<gp::Locomotion>(one.comanche)->locomotor.maxSpeed == jet.taxi.maxSpeed));
+			restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+		}
+		const Fixed nowHealth = world.Get<gp::Health>(one.comanche)->current;
+		if (nowHealth != health)
+		{
+			BOOST_TEST((nowHealth == std::min(health + Fixed::FromInt(2), world.Get<gp::Health>(one.comanche)->maximum)));
+			heals.push_back(now);
+			health = nowHealth;
+			if (nowHealth == world.Get<gp::Health>(one.comanche)->maximum)
+				whole = now;
+		}
+		if (jet.state == gp::JetState::HeliTakingOff && !liftFrom)
+		{
+			liftFrom = now;
+			BOOST_TEST((jet.heliPath[1].z == jet.heliPath[0].z + Fixed::FromInt(50)));
+		}
+		if (was == gp::JetState::HeliTakingOff && jet.state == gp::JetState::Flying)
+		{
+			up = now;
+			BOOST_TEST((at.position.z >= jet.heliPath[1].z - Fixed::FromInt(3)));
+		}
+	}
+	BOOST_TEST_REQUIRE(landingFrom.has_value());
+	BOOST_TEST_REQUIRE(down.has_value());
+	BOOST_TEST_REQUIRE(heals.size() == 5u); // 10 health, 2 at a time
+	BOOST_TEST(heals[0] == *down + 6);
+	for (std::size_t index = 1; index < heals.size(); ++index)
+		BOOST_TEST(heals[index] == heals[index - 1] + 6);
+	BOOST_TEST_REQUIRE(whole.has_value());
+	BOOST_TEST_REQUIRE(liftFrom.has_value());
+	BOOST_TEST(*liftFrom == *whole + 1); // the heal lands after the tick; its next update sees it whole
+	BOOST_TEST_REQUIRE(up.has_value());
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+
+	// Down again; a move order while it stands: it lifts off at once and goes there once up.
+	for (Game *g : {&one, &four})
+	{
+		gp::Health &hurt = *g->game->World().Get<gp::Health>(g->comanche);
+		hurt.current = hurt.maximum - Fixed::FromInt(100);
+		send(*g, commands::GetRepaired{{g->comanche}, g->airfield});
+	}
+	for (int tick = 0; tick < 4000 && jetOf(one).state != gp::JetState::HeliParked; ++tick)
+	{
+		one.game->Tick();
+		four.game->Tick();
+	}
+	BOOST_TEST_REQUIRE((jetOf(one).state == gp::JetState::HeliParked));
+	const Engine::Math::FixedVector2 away = match->At(400, 300);
+	for (Game *g : {&one, &four})
+		send(*g, commands::MoveTo{{g->comanche}, away});
+	BOOST_TEST((jetOf(one).state == gp::JetState::HeliTakingOff));
+	BOOST_TEST(jetOf(one).pending == 1u);
+	for (int tick = 0; tick < 600 && jetOf(one).state != gp::JetState::Flying; ++tick)
+	{
+		one.game->Tick();
+		four.game->Tick();
+	}
+	BOOST_TEST_REQUIRE((jetOf(one).state == gp::JetState::Flying));
+	BOOST_TEST((world.Get<gp::MoveOrder>(one.comanche)->destination == away));
+	BOOST_TEST((world.Get<gp::Health>(one.comanche)->current < world.Get<gp::Health>(one.comanche)->maximum)); // not healed whole
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

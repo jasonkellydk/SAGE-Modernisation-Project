@@ -43,6 +43,8 @@ BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
 	BOOST_TEST((data.shakeIntensity[2] == Engine::Math::Fixed::FromRatio(5, 2))); // strong
 	BOOST_TEST((data.shakeIntensity[5] == Engine::Math::Fixed::FromInt(10))); // cinematic insane
 	BOOST_TEST(data.forceModelsToFollowTimeOfDay);
+	// KeyboardCameraRotateSpeed = 0.1 (InGameUI::update's keypad turn a frame); within a raw step of 1/10 (the parse rounds).
+	BOOST_TEST(std::abs(data.keyboardCameraRotateSpeed.Raw() - Engine::Math::Fixed::FromRatio(1, 10).Raw()) <= 1);
 	// InfantryLightMorningScale = 100f ... EveningScale = 200f (the 'f' read as a float suffix, as the original's atof).
 	BOOST_TEST((data.infantryLightScale[0] == Engine::Math::Fixed::FromInt(100)));
 	BOOST_TEST((data.infantryLightScale[2] == Engine::Math::Fixed::FromInt(200)));
@@ -215,6 +217,60 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_mouse_cursors_bind)
 	for (const MouseCursorDefinition &cursor : mouse.cursors)
 		for (int direction = 0; direction < cursor.directions && !cursor.texture.empty(); ++direction)
 			BOOST_TEST(files.Read(MouseCursorFile(cursor, direction)).has_value(), MouseCursorFile(cursor, direction));
+}
+
+// Legacy: Core/GameEngine/Source/GameClient/Input/Mouse.cpp (TheMouseFieldParseTable's tooltip fields: parseAsciiString,
+// parseInt, parseBool, parseRGBAColorInt, parsePercentToReal; TheMouseCursorFieldParseTable's CursorText,
+// CursorTextColor, CursorTextDropColor; Mouse::Mouse's and CursorInfo::CursorInfo's defaults) and
+// Core/GameEngine/Source/GameClient/GlobalLanguage.cpp (TooltipFontName, which Mouse::onResolutionChanged prefers).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_mouse_tooltip_binds)
+{
+	// The defaults, as the constructors leave them (TooltipWidth's 15 included: the INI's own is a percent).
+	const MouseContent none = BindMouse(engine::config::Document{});
+	BOOST_TEST(none.tooltip.fontName == "Times New Roman");
+	BOOST_TEST(none.tooltip.fontSize == 12);
+	BOOST_TEST(none.tooltip.animateBackground);
+	BOOST_TEST(none.tooltip.fillTimeMs == 50);
+	BOOST_TEST(none.tooltip.delayTimeMs == 50);
+	BOOST_TEST((none.tooltip.backgroundColor == std::array<std::uint8_t, 4>{20, 20, 0, 127}));
+	BOOST_TEST(none.tooltip.widthText.empty()); // the constructor's 15
+	BOOST_TEST(none.Cursor(MouseCursorKind::Arrow).cursorText.empty());
+
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const MouseContent mouse = BindMouse(loader.Load({"Data/INI/Mouse"}));
+	const MouseTooltipContent &tooltip = mouse.tooltip;
+	BOOST_TEST(tooltip.fontName == "Arial");
+	BOOST_TEST(tooltip.fontSize == 8);
+	BOOST_TEST(!tooltip.fontBold);
+	BOOST_TEST(!tooltip.animateBackground);
+	BOOST_TEST(tooltip.fillTimeMs == 250);
+	BOOST_TEST(tooltip.delayTimeMs == 800);
+	BOOST_TEST((tooltip.textColor == std::array<std::uint8_t, 4>{220, 220, 220, 255}));
+	BOOST_TEST((tooltip.highlightColor == std::array<std::uint8_t, 4>{255, 255, 0, 255}));
+	BOOST_TEST((tooltip.shadowColor == std::array<std::uint8_t, 4>{0, 0, 0, 255}));
+	BOOST_TEST((tooltip.borderColor == std::array<std::uint8_t, 4>{60, 60, 155, 255}));
+	BOOST_TEST((tooltip.backgroundColor == std::array<std::uint8_t, 4>{20, 20, 20, 255}));
+	BOOST_TEST(tooltip.widthText == "20"); // TooltipWidth = 20 (percent: 0.2 of the screen, TooltipWidthShare)
+	BOOST_TEST(!tooltip.useAltTextColor);
+	BOOST_TEST(tooltip.useAltBackColor);
+	BOOST_TEST(tooltip.adjustAltColor);
+	// No shipped cursor has CursorText: every cursor's text stays empty (Mouse::setCursor then clears the mouse text).
+	for (const MouseCursorDefinition &cursor : mouse.cursors)
+		BOOST_TEST(cursor.cursorText.empty());
+	// Language.ini names the tooltip font (Arial 15, not bold), which wins over Mouse.ini's.
+	const LanguageFonts fonts = ReadLanguageFonts(loader.Load({"Data/English/Language"}));
+	BOOST_TEST(fonts.tooltip.name == "Arial");
+	BOOST_TEST(fonts.tooltip.size == 15);
+	BOOST_TEST(!fonts.tooltip.bold);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

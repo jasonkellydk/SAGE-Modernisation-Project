@@ -9,9 +9,13 @@ import engine.gameplay.rts.containment.components.transport;
 export import engine.ecs.system.system;
 export import games.generalszh.presentation.interaction.components.selected;
 export import games.generalszh.presentation.interaction.resources.interaction_resources;
+export import games.generalszh.presentation.interaction.resources.unit_voice_cues;
 export import games.generalszh.presentation.interaction.algorithms.selection_rules;
+import games.generalszh.presentation.interaction.algorithms.select_keys;
+import engine.gameplay.common.identity.components.object_id;
 export import engine.gameplay.common.spatial.systems.snapshot_system;
 export import engine.gameplay.common.spatial.resources.ground_height;
+export import engine.gameplay.common.spatial.resources.deck_surfaces;
 export import engine.gameplay.common.spatial.components.targetable;
 export import engine.gameplay.common.status.components.script_status;
 export import engine.gameplay.common.spatial.components.off_map;
@@ -63,6 +67,7 @@ import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.common.physics.resources.physics_settings;
 import games.generalszh.gameplay.crates.components.pilot_seeker;
 import games.generalszh.gameplay.upgrades.components.command_set_override;
+import games.generalszh.presentation.interaction.resources.academy_client_records;
 
 // The player's pointer in the world, on real frame time (the original's
 // SelectionTranslator and CommandTranslator for the default mouse setup):
@@ -91,6 +96,19 @@ namespace interaction_detail
 inline Engine::Math::Fixed ToFixed(float value) noexcept
 {
 	return Engine::Math::Fixed::FromRaw(static_cast<std::int64_t>(std::llround(static_cast<double>(value) * static_cast<double>(Engine::Math::Fixed::One().Raw()))));
+}
+
+// pickAndPlayUnitVoiceResponse(TheInGameUI->getAllSelectedDrawables(), the message, the info): the selection's answer,
+// for the unit voice system to play this frame.
+inline void Voice(ecs::SystemContext &context, VoiceOrder order, ecs::Entity target = {}, std::uint8_t slot = UnitVoiceCue::NoSlot,
+	std::string power = {})
+{
+	UnitVoiceCue cue;
+	cue.order = order;
+	cue.target = target;
+	cue.weaponSlot = slot;
+	cue.specialPower = std::move(power);
+	context.Write<UnitVoiceCues>().pending.push_back(std::move(cue));
 }
 
 struct Candidate
@@ -800,13 +818,14 @@ struct PointerInteractionSystem
 		ecs::Read<generalszh::gameplay::RailedTransport>,
 		ecs::Read<engine::gameplay::HealLock>, ecs::Read<engine::gameplay::SpecialPowerTimers>, ecs::Read<engine::gameplay::Jet>,
 		ecs::Read<engine::gameplay::Airfield>, ecs::Read<engine::gameplay::Experience>, ecs::Read<engine::gameplay::Locomotion>,
-		ecs::Read<generalszh::gameplay::PilotSeeker>, ecs::Read<generalszh::gameplay::CommandSetOverride>>;
+		ecs::Read<generalszh::gameplay::PilotSeeker>, ecs::Read<generalszh::gameplay::CommandSetOverride>,
+		ecs::Read<engine::gameplay::ObjectId>>;
 	using Resources = ecs::Resources<ecs::Read<PointerInput>, ecs::Read<InteractionView>, ecs::Write<InteractionState>, ecs::Read<MouseSettings>,
 		ecs::Write<SelectionBox>, ecs::Read<SelectionCatalog>, ecs::Read<LocalPlayer>, ecs::Write<PlayerOrders>, ecs::Read<engine::gameplay::VisibleObjects>, ecs::Read<PointerHits>,
 		ecs::Read<engine::gameplay::Relationships>, ecs::Read<engine::gameplay::WeaponCatalog>, ecs::Read<engine::gameplay::ArmorCatalog>, ecs::Read<engine::gameplay::GroundHeight>,
 		ecs::Read<generalszh::gameplay::Deselections>, ecs::Read<engine::gameplay::ShroudMap>, ecs::Write<CursorState>, ecs::Read<BuildPlacement>, ecs::Write<GuiTargeting>,
 		ecs::Read<engine::gameplay::CargoManifest>, ecs::Read<engine::gameplay::SpecialPowerRules>, ecs::Read<engine::gameplay::SharedPowerTimers>,
-		ecs::Read<engine::gameplay::PhysicsSettings>>;
+		ecs::Read<engine::gameplay::PhysicsSettings>, ecs::Write<UnitVoiceCues>, ecs::Read<engine::gameplay::DeckSurfaces>, ecs::Write<AcademyClientRecords>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
@@ -921,6 +940,7 @@ struct PointerInteractionSystem
 		ForceAttackGround,   // MSG_DO_FORCE_ATTACK_GROUND
 		SetRallyPoint,       // MSG_SET_RALLY_POINT (handleSetRallyPointCommand)
 		Move,                // handleDefaultMoveCommand (a move only onto the ground)
+		AddWaypoint,         // MSG_ADD_WAYPOINT (handleWaypointModeCommand: waypoint mode, Alt held)
 	};
 
 private:
@@ -950,7 +970,8 @@ private:
 	}
 
 	// Drawable::isSelectable with addDrawableToList's kinds: SELECTABLE (or ALWAYS_SELECTABLE, FORCEATTACKABLE in
-	// force-attack mode), alive unless ALWAYS_SELECTABLE, not UNSELECTABLE (an enslaved drone), not carried.
+	// force-attack mode), alive unless ALWAYS_SELECTABLE, not UNSELECTABLE (an enslaved drone, a structure being sold), not
+	// carried.
 	template<typename Lookup>
 	static bool Pickable(ecs::Entity entity, const SelectionLook &look, const Lookup &lookup, bool forceAttack)
 	{
@@ -962,16 +983,67 @@ private:
 			return false;
 		if (const auto *slave = lookup.template Get<engine::gameplay::Slaved>(entity); slave != nullptr && slave->enslaved != 0)
 			return false;
+		// Being sold: OBJECT_STATUS_UNSELECTABLE (BuildAssistant::sellObject).
+		if (lookup.template Get<engine::gameplay::Sale>(entity) != nullptr && (look.kinds & select_kind::AlwaysSelectable) == 0)
+			return false;
 		if (lookup.template Get<engine::gameplay::OffMap>(entity) != nullptr)
 			return false;
 		return true;
 	}
 
 public:
-	// The ground under a pixel (W3DView::screenToTerrain): along the ray until below the ground, then halved in.
-	static std::optional<std::array<float, 3>> GroundUnder(const InteractionView &view, const engine::gameplay::GroundHeight &ground, float sx, float sy)
+	// The bridge under a pixel (TerrainLogic::pickBridge): of the bridges newest first, the first whose deck plane
+	// (Bridge::pickBridge: through fromLeft, fromRight and toLeft) the ray meets over its deck (isPointOnBridge).
+	static std::optional<std::array<float, 3>> BridgeUnder(const InteractionView &view, const engine::gameplay::DeckSurfaces &decks, const std::array<float, 3> &ray)
+	{
+		using Engine::Math::ToFloat;
+		for (std::size_t index = decks.decks.size(); index-- > 0;)
+		{
+			if (engine::gameplay::IsWallLayer(decks, static_cast<std::uint8_t>(index + 1)))
+				continue;
+			const engine::gameplay::DeckGeometry &deck = decks.decks[index];
+			const std::array<float, 3> left1{ToFloat(deck.fromLeft.x), ToFloat(deck.fromLeft.y), ToFloat(deck.fromLeft.z)};
+			const std::array<float, 3> right1{ToFloat(deck.fromRight.x), ToFloat(deck.fromRight.y), ToFloat(deck.fromRight.z)};
+			const std::array<float, 3> left2{ToFloat(deck.toLeft.x), ToFloat(deck.toLeft.y), ToFloat(deck.toLeft.z)};
+			const std::array<float, 3> u{right1[0] - left1[0], right1[1] - left1[1], right1[2] - left1[2]};
+			const std::array<float, 3> v{left2[0] - left1[0], left2[1] - left1[1], left2[2] - left1[2]};
+			std::array<float, 3> normal{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+			float offset = 0.0f;
+			if (normal[0] != 0.0f || normal[1] != 0.0f || normal[2] != 0.0f)
+			{
+				const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+				normal = {normal[0] / length, normal[1] / length, normal[2] / length};
+				offset = normal[0] * left1[0] + normal[1] * left1[1] + normal[2] * left1[2];
+			}
+			else
+				normal = {0.0f, 0.0f, 1.0f};
+			const float den = normal[0] * ray[0] + normal[1] * ray[1] + normal[2] * ray[2];
+			if (den == 0.0f)
+				continue;
+			const float t = -(normal[0] * view.eye[0] + normal[1] * view.eye[1] + normal[2] * view.eye[2] - offset) / den;
+			const std::array<float, 3> at{view.eye[0] + ray[0] * t, view.eye[1] + ray[1] * t, view.eye[2] + ray[2] * t};
+			if (engine::gameplay::PointOnDeck(deck, {interaction_detail::ToFixed(at[0]), interaction_detail::ToFixed(at[1])}))
+				return at;
+		}
+		return std::nullopt;
+	}
+
+	// The ground under a pixel (W3DView::screenToTerrain): along the ray until below the ground, then halved in; a bridge
+	// the ray meets (pickBridge) taken instead where its point is higher (with no ground hit, where it is above 0).
+	static std::optional<std::array<float, 3>> GroundUnder(const InteractionView &view, const engine::gameplay::GroundHeight &ground, float sx, float sy,
+		const engine::gameplay::DeckSurfaces *decks = nullptr)
 	{
 		const auto ray = view.Ray(sx, sy);
+		const std::optional<std::array<float, 3>> terrain = TerrainUnder(view, ground, ray);
+		if (decks != nullptr)
+			if (const auto bridge = BridgeUnder(view, *decks, ray); bridge && (*bridge)[2] > (terrain ? (*terrain)[2] : 0.0f))
+				return bridge;
+		return terrain;
+	}
+
+private:
+	static std::optional<std::array<float, 3>> TerrainUnder(const InteractionView &view, const engine::gameplay::GroundHeight &ground, const std::array<float, 3> &ray)
+	{
 		const auto height = [&](float t) {
 			const float x = view.eye[0] + ray[0] * t, y = view.eye[1] + ray[1] * t;
 			return view.eye[2] + ray[2] * t - Engine::Math::ToFloat(ground.At({interaction_detail::ToFixed(x), interaction_detail::ToFixed(y)}));
@@ -1003,6 +1075,9 @@ private:
 	static std::optional<interaction_detail::Candidate> PickAt(ecs::SystemContext &context, const Lookup &lookup, float x, float y, bool forceAttack)
 	{
 		using namespace interaction_detail;
+		// W3DView::pickDrawable: nothing under a window that is not see-through (the radar's too).
+		if (context.Read<PointerInput>().overRadar)
+			return std::nullopt;
 		const PointerHits &hits = context.Read<PointerHits>();
 		if (hits.x != x || hits.y != y)
 			return std::nullopt;
@@ -1033,14 +1108,19 @@ private:
 		return std::nullopt;
 	}
 
-	// Drawable::setSelectable(FALSE)'s cases: an enslaved drone (OBJECT_STATUS_UNSELECTABLE), one carried inside
-	// another.
+	// Drawable::setSelectable(FALSE)'s cases: an enslaved drone or a structure being sold (OBJECT_STATUS_UNSELECTABLE),
+	// one carried inside another (its drawable hidden: addOrRemoveObjFromWorld). A fire base's occupant is not hidden
+	// (its container does not enclose it): the pick ray meets it, though as one contained it is never selected itself
+	// (OBJECT_STATUS_UNSELECTABLE: PickedObject::contained), only targeted (not MASKED).
 	template<typename Lookup>
 	static bool Selectable(ecs::Entity entity, const Lookup &lookup)
 	{
 		if (const auto *slave = lookup.template Get<engine::gameplay::Slaved>(entity); slave != nullptr && slave->enslaved != 0)
 			return false;
-		return lookup.template Get<engine::gameplay::OffMap>(entity) == nullptr;
+		if (lookup.template Get<engine::gameplay::Sale>(entity) != nullptr)
+			return false;
+		const auto *away = lookup.template Get<engine::gameplay::OffMap>(entity);
+		return away == nullptr || away->reason == engine::gameplay::off_map_reason::Stationed;
 	}
 
 	// What is selected now, and which of it is the player's (by index).
@@ -1240,6 +1320,10 @@ public:
 			return {};
 		if (mine.empty())
 			return {};
+		// InGameUI::isInWaypointMode (MSG_META_BEGIN_WAYPOINTS / END_WAYPOINTS: Alt held): every other command gives way
+		// to a waypoint at the spot (handleWaypointModeCommand -> issueMoveToLocationCommand: MSG_ADD_WAYPOINT).
+		if (context.Read<PointerInput>().alt)
+			return at ? ContextCommand{Hint::AddWaypoint} : ContextCommand{};
 		if (forceAttack)
 		{
 			// canAnyForceAttack: an object, else the ground (any of mine able to shoot at it).
@@ -1369,6 +1453,14 @@ public:
 		using namespace interaction_detail;
 		using content::MouseCursorKind;
 		CursorState &cursor = context.Write<CursorState>();
+		cursor.quickPathAsked = false; // asked again below when the frame's hint is a move
+		// LookAtTranslator: the pointer's last move (hasMouseMovedRecently: within the last second).
+		if (pointer.x != cursor.lastPointer[0] || pointer.y != cursor.lastPointer[1])
+		{
+			cursor.lastMoveMs = pointer.timeMs;
+			cursor.lastPointer = {pointer.x, pointer.y};
+		}
+		const bool movedRecently = pointer.timeMs - cursor.lastMoveMs <= 1000u;
 		const MouseSettings &mouse = context.Read<MouseSettings>();
 		// InGameUI::setScrolling: SCROLL while the camera scrolls (no hints meanwhile), turned the scroll's way.
 		if (pointer.scrolling)
@@ -1383,13 +1475,13 @@ public:
 		if (context.Read<InteractionState>().dragSelecting)
 			return; // m_isSelecting: no hints
 		// A window that is not see-through under the pointer: the arrow.
-		if (pointer.overInterface)
+		if (pointer.overInterface && !pointer.overRadar)
 		{
 			cursor.cursor = MouseCursorKind::Arrow;
 			return;
 		}
 		// MOUSEMODE_GUI_COMMAND: the button's cursor over a valid target, else its invalid one.
-		if (const GuiTargeting &targeting = context.Read<GuiTargeting>(); targeting.active)
+		if (const GuiTargeting &targeting = context.Read<GuiTargeting>(); targeting.active && !pointer.playback)
 		{
 			// A context command (a special power): valid or invalid; any other needing a target (a guard): its cursor.
 			if (targeting.kind == GuiCommandKind::FireWeapon && (targeting.options & content::button_option::ContextModeCommand) != 0)
@@ -1413,15 +1505,27 @@ public:
 		const bool placing = context.Read<BuildPlacement>().active;
 		if (selection.current.empty())
 		{
-			// createMouseoverHint, nothing selected: one of mine that may be selected, else the arrow.
-			if (!placing)
+			// createMouseoverHint, nothing selected: one of mine that may be selected, else the arrow (in a replay only
+			// while the mouse moved in the last second).
+			if (!placing && (!pointer.playback || movedRecently))
 				cursor.cursor = drawSelectable && under->picked.side == PickSide::Mine ? MouseCursorKind::Select : MouseCursorKind::Arrow;
 			return;
 		}
-		const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+		// createCommandHint: no command hints in a replay (the cursor kept).
+		if (pointer.playback)
+			return;
+		const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 		Hint hint = Evaluate(context, lookup, jets, selection, under ? &under->picked : nullptr, at, forceAttack, pointer.shift, EvaluateMode::Hint,
 			AllSetRallyPoints(context, lookup, selection))
 						.hint;
+		// handleDefaultMoveCommand's quick path (DO_HINT): asked of the host for the point it would go to; where no selected
+		// unit could path there, MSG_DO_INVALID_HINT in place of the move hint.
+		const bool movedHint = hint == Hint::Move && (under || at);
+		const std::array<float, 2> movePoint = under ? std::array<float, 2>{under->x, under->y}
+			: at ? std::array<float, 2>{(*at)[0], (*at)[1]} : std::array<float, 2>{};
+		cursor.quickPathAsked = movedHint;
+		cursor.quickPathAt = movePoint;
+		const bool invalidMove = movedHint && cursor.quickPathBlocked && cursor.quickPathAnsweredAt == movePoint;
 		// createCommandHint: an attack hint on an object black to the player is a move hint.
 		if (under && (hint == Hint::AttackObject || hint == Hint::AttackAfterMoving) &&
 			context.Read<engine::gameplay::ShroudMap>().StatusAt(context.Read<LocalPlayer>().player, ToFixed(under->x), ToFixed(under->y)) ==
@@ -1429,7 +1533,9 @@ public:
 			hint = Hint::Move;
 		if (placing)
 		{
-			// MOUSEMODE_BUILD_PLACE.
+			// MOUSEMODE_BUILD_PLACE (MSG_DO_INVALID_HINT: no cursor of its own there).
+			if (invalidMove)
+				return;
 			if (hint == Hint::Move)
 				cursor.cursor = MouseCursorKind::Build;
 			else if (hint == Hint::AttackObject || hint == Hint::AttackAfterMoving)
@@ -1450,11 +1556,19 @@ public:
 		switch (hint)
 		{
 		case Hint::Invalid: return;
+		// MSG_ADD_WAYPOINT_HINT: WAYPOINT.
+		case Hint::AddWaypoint: cursor.cursor = MouseCursorKind::Waypoint; return;
 		case Hint::Move:
-			if (!drawSelectable && selection.current.size() == 1 && (kindsOf(selection.current.front().entity) & select_kind::Structure) != 0)
+			// MSG_DO_INVALID_HINT: GENERIC_INVALID.
+			if (invalidMove)
+				cursor.cursor = MouseCursorKind::GenericInvalid;
+			else if (!drawSelectable && selection.current.size() == 1 && (kindsOf(selection.current.front().entity) & select_kind::Structure) != 0)
 				cursor.cursor = MouseCursorKind::GenericInvalid;
 			else if (drawSelectable && under->picked.side == PickSide::Mine && (underLook->kinds & select_kind::Mine) == 0)
 				cursor.cursor = MouseCursorKind::Select;
+			// TheRadar->isRadarWindow(window) && !localPlayerHasRadar(): the arrow over the radar without one.
+			else if (pointer.overRadar && !pointer.hasRadar)
+				cursor.cursor = MouseCursorKind::Arrow;
 			else
 				cursor.cursor = MouseCursorKind::Move;
 			return;
@@ -1494,7 +1608,7 @@ public:
 		targeting.hovered = under && TakesRelationship(targeting.options, under->picked.side) ? under->entity : ecs::Entity{};
 		if (targeting.hovered != ecs::Entity{})
 			return targeting.validFor == targeting.hovered;
-		return GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y).has_value();
+		return GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>()).has_value();
 	}
 
 	// handleGuiCommand's validity for GUI_COMMAND_SPECIAL_POWER (canSelectedObjectsDoSpecialPower, the waiting command's
@@ -1515,7 +1629,7 @@ public:
 			return false;
 		const auto lookup = context.Lookup<Lookup>();
 		const auto *owner = lookup.Get<engine::gameplay::Owner>(targeting.source);
-		const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+		const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 		if (owner == nullptr || !at)
 			return false;
 		return generalszh::gameplay::CanDoSpecialPowerAtLocation(targeting.powerType, owner->player,
@@ -1561,7 +1675,7 @@ public:
 			});
 		}
 		if ((targeting.options & content::button_option::NeedTargetPos) != 0 &&
-			!GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y))
+			!GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>()))
 			return false;
 		return std::ranges::any_of(selection.mine, [&](ecs::Entity unit) { return slotWeapon(unit) != engine::gameplay::WeaponCatalog::None; });
 	}
@@ -1589,9 +1703,10 @@ public:
 				return;
 			Engine::Math::FixedVector2 spot;
 			if (into == ecs::Entity{})
-				if (const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y))
+				if (const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>()))
 					spot = {interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])};
 			context.Write<PlayerOrders>().pending.push_back(commands::CombatDrop{selection.mine, into, spot});
+			interaction_detail::Voice(context, VoiceOrder::CombatDrop);
 			return;
 		}
 		// FIRE_WEAPON: a context command (CONTEXTMODE_COMMAND: handleGuiCommand) only on a target its weapon may be used on
@@ -1605,6 +1720,9 @@ public:
 			if (contextCommand && !FireWeaponValid(context, pointer))
 				return;
 			context.Write<GuiTargeting>() = {};
+			// GUICommandTranslator (GUI_COMMAND_FIRE_WEAPON): the selection answers as for a shot at a spot, whatever was hit.
+			if (!contextCommand)
+				interaction_detail::Voice(context, VoiceOrder::WeaponAtLocation, {}, static_cast<std::uint8_t>(waiting.weaponSlot));
 			const auto lookup = context.Lookup<Lookup>();
 			const Selection selection = SelectedNow(context, lookup);
 			if (selection.mine.empty())
@@ -1612,7 +1730,7 @@ public:
 			commands::FireWeapon fire{selection.mine, waiting.weaponSlot, 0, waiting.maxShots, {}, {}};
 			if ((waiting.options & content::button_option::NeedTargetPos) != 0)
 			{
-				const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+				const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 				if (!at)
 					return;
 				fire.at = 1;
@@ -1625,6 +1743,9 @@ public:
 					return;
 				fire.at = 2;
 				fire.target = under->entity;
+				// issueFireWeaponCommand: MSG_DO_WEAPON_AT_OBJECT with the button's slot.
+				if (contextCommand)
+					interaction_detail::Voice(context, VoiceOrder::WeaponAtObject, under->entity, static_cast<std::uint8_t>(waiting.weaponSlot));
 			}
 			context.Write<PlayerOrders>().pending.push_back(fire);
 			return;
@@ -1636,17 +1757,20 @@ public:
 			context.Write<GuiTargeting>() = {};
 			const auto lookup = context.Lookup<Lookup>();
 			const Selection selection = SelectedNow(context, lookup);
-			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 			if (!selection.mine.empty() && at)
+			{
 				context.Write<PlayerOrders>().pending.push_back(
-					commands::AttackMoveTo{selection.mine, {interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])}});
+					commands::AttackMoveTo{selection.mine, {interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])}, interaction_detail::ToFixed((*at)[2])});
+				interaction_detail::Voice(context, VoiceOrder::AttackMove);
+			}
 			return;
 		}
 		// GUICommandTranslator's doPlaceBeacon: a beacon at the ground clicked (MSG_PLACE_BEACON); the wait ends either way.
 		if (context.Read<GuiTargeting>().kind == GuiCommandKind::PlaceBeacon)
 		{
 			context.Write<GuiTargeting>() = {};
-			if (const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y))
+			if (const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>()))
 				context.Write<PlayerOrders>().pending.push_back(commands::PlaceBeacon{{interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])}});
 			return;
 		}
@@ -1657,7 +1781,7 @@ public:
 			context.Write<GuiTargeting>() = {};
 			const auto lookup = context.Lookup<Lookup>();
 			const Selection selection = SelectedNow(context, lookup);
-			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 			if (!selection.current.empty() && at)
 				context.Write<PlayerOrders>().pending.push_back(commands::SetRallyPoint{selection.current.front().entity,
 					{interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])}});
@@ -1669,10 +1793,14 @@ public:
 		auto &orders = context.Write<PlayerOrders>().pending;
 		// MSG_DO_SPECIAL_POWER_AT_OBJECT for an object target, else MSG_DO_SPECIAL_POWER_AT_LOCATION.
 		if ((targeting.options & content::button_option::NeedObjectTarget) != 0)
+		{
 			orders.push_back(commands::UseSpecialPowerAtObject{targeting.source, targeting.power, targeting.validFor});
+			interaction_detail::Voice(context, VoiceOrder::SpecialPower, targeting.validFor, UnitVoiceCue::NoSlot, targeting.power);
+		}
 		else
 		{
-			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+			interaction_detail::Voice(context, VoiceOrder::SpecialPower, {}, UnitVoiceCue::NoSlot, targeting.power);
+			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 			orders.push_back(
 				commands::UseSpecialPower{targeting.source, targeting.power, {interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])}, true});
 		}
@@ -1703,13 +1831,14 @@ public:
 				if ((waiting.options & wanted) != 0)
 				{
 					orders.push_back(commands::GuardObject{selection.mine, under->entity, waiting.guardMode});
+					interaction_detail::Voice(context, VoiceOrder::Guard, under->entity);
 					return;
 				}
 			}
 		Engine::Math::FixedVector2 spot;
 		if ((waiting.options & content::button_option::NeedTargetPos) != 0)
 		{
-			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+			const auto at = GroundUnder(context.Read<InteractionView>(), context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 			if (!at)
 				return;
 			spot = {interaction_detail::ToFixed((*at)[0]), interaction_detail::ToFixed((*at)[1])};
@@ -1722,6 +1851,7 @@ public:
 			spot = first->position.XY();
 		}
 		orders.push_back(commands::GuardPosition{selection.mine, spot, waiting.guardMode});
+		interaction_detail::Voice(context, VoiceOrder::Guard);
 	}
 
 	static void LeftClick(Query &jets, ecs::SystemContext &context, const PointerInput &pointer, bool isPoint)
@@ -1772,7 +1902,7 @@ public:
 			picked.push_back(candidate.picked);
 			allSelected = allSelected && selected.Get(candidate.entity) != nullptr;
 		}
-		const auto underPointer = GroundUnder(view, context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y);
+		const auto underPointer = GroundUnder(view, context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>());
 		const bool allRally = AllSetRallyPoints(context, lookup, now);
 		const auto hasCommand = [&](std::size_t index) {
 			// evaluateContextCommand (EVALUATE_ONLY): a command other than a move onto an object.
@@ -1786,10 +1916,35 @@ public:
 			selected.Clear();
 			[[fallthrough]];
 		case ClickOutcome::Add:
+		{
+			// selectFriends over the drawable list (the newest first: ObjectId highest first), under MaxSelectionSize.
+			std::vector<ecs::Entity> adding;
+			std::vector<ecs::Entity> appended; // the message's objects (each selectDrawable'd, selected already or not)
 			for (const ecs::Entity entity : selection.entities)
-				if (selected.Get(entity) == nullptr)
-					selected.Emplace(entity);
+			{
+				if (std::ranges::find(appended, entity) == appended.end())
+					appended.push_back(entity);
+				if (selected.Get(entity) == nullptr && std::ranges::find(adding, entity) == adding.end())
+					adding.push_back(entity);
+			}
+			// SelectionTranslator: more than one selected at once counts for the local player's academy
+			// (recordDragSelection: newDrawablesSelected > 1, a box or not).
+			if (appended.size() > 1 && context.Find<AcademyClientRecords>() != nullptr)
+				++context.Write<AcademyClientRecords>().dragSelections;
+			const auto idOf = [&](ecs::Entity entity) {
+				const auto *id = lookup.template Get<engine::gameplay::ObjectId>(entity);
+				return id != nullptr ? id->value : 0u;
+			};
+			std::ranges::stable_sort(adding, [&](ecs::Entity a, ecs::Entity b) { return idOf(a) > idOf(b); });
+			InteractionState &memory = context.Write<InteractionState>();
+			const CapResult capped =
+				CapSelection(adding, selected.Entities().size(), context.Read<MouseSettings>().maxSelectionSize, memory.displayedMaxWarning);
+			memory.maxSelectionWarning = memory.maxSelectionWarning || capped.warn;
+			for (const ecs::Entity entity : capped.taken)
+				selected.Emplace(entity);
+			Voice(context, VoiceOrder::CreateGroup);
 			return;
+		}
 		case ClickOutcome::Deselect:
 			for (const ecs::Entity entity : selection.entities)
 				selected.Erase(entity);
@@ -1814,21 +1969,42 @@ public:
 		// handleResumeConstructionCommand (MSG_RESUME_CONSTRUCTION), handleDockAtCommand (MSG_DOCK), handleRepairObjectCommand
 		// (MSG_DO_REPAIR), handleGetRepairedAtCommand (MSG_GET_REPAIRED), handleGetHealedAtCommand (MSG_GET_HEALED): the
 		// object, for the whole selection.
-		case Hint::ResumeConstruction: orders.push_back(commands::ResumeConstruction{mine, nearest->entity}); return;
-		case Hint::Dock: orders.push_back(commands::Dock{mine, nearest->entity}); return;
-		case Hint::Repair: orders.push_back(commands::Repair{mine, nearest->entity}); return;
-		case Hint::GetRepaired: orders.push_back(commands::GetRepaired{mine, nearest->entity}); return;
-		case Hint::GetHealed: orders.push_back(commands::GetHealed{mine, nearest->entity}); return;
+		case Hint::ResumeConstruction:
+			orders.push_back(commands::ResumeConstruction{mine, nearest->entity});
+			Voice(context, VoiceOrder::Construct);
+			return;
+		case Hint::Dock:
+			orders.push_back(commands::Dock{mine, nearest->entity});
+			Voice(context, VoiceOrder::Dock);
+			return;
+		case Hint::Repair:
+			orders.push_back(commands::Repair{mine, nearest->entity});
+			Voice(context, VoiceOrder::Repair);
+			return;
+		case Hint::GetRepaired:
+			orders.push_back(commands::GetRepaired{mine, nearest->entity});
+			Voice(context, VoiceOrder::GetRepaired);
+			return;
+		case Hint::GetHealed:
+			orders.push_back(commands::GetHealed{mine, nearest->entity});
+			Voice(context, VoiceOrder::GetHealed);
+			return;
 		// handleHijackVehicleCommand, handleConvertObjectToCarBombCommand, handleSabotageBuildingCommand and
 		// handleEnterObjectCommand: an enter order (createEnterMessage: MSG_ENTER) for the whole selection.
 		case Hint::Hijack:
 		case Hint::ConvertToCarBomb:
 		case Hint::Sabotage:
-		case Hint::Enter: orders.push_back(commands::Enter{mine, nearest->entity}); return;
+		case Hint::Enter:
+			orders.push_back(commands::Enter{mine, nearest->entity});
+			Voice(context, VoiceOrder::Enter, nearest->entity);
+			return;
 		// handleSalvageCommand: MSG_DO_SALVAGE, a move (onDoMoveto) to where the crate is.
 		case Hint::Salvage:
 			if (const auto *crate = lookup.Get<engine::gameplay::Transform>(nearest->entity))
-				orders.push_back(commands::MoveTo{mine, crate->position.XY()});
+			{
+				orders.push_back(commands::MoveTo{mine, crate->position.XY(), crate->position.z});
+				Voice(context, VoiceOrder::Salvage);
+			}
 			return;
 		// issueSpecialPowerCommand with no specific source: the selection's group fires the button's power
 		// (groupDoSpecialPowerAtObject: each of them that may), at the object (MSG_DO_SPECIAL_POWER_AT_OBJECT), at the spot
@@ -1836,6 +2012,11 @@ public:
 		case Hint::SpecialPower:
 		{
 			const ContextButton &button = *command.button;
+			// issueSpecialPowerCommand: once, for the whole selection.
+			if ((button.options & content::button_option::NeedObjectTarget) != 0)
+				Voice(context, VoiceOrder::SpecialPower, nearest->entity, UnitVoiceCue::NoSlot, button.specialPower);
+			else if ((button.options & content::button_option::NeedTargetPos) == 0 || underPointer)
+				Voice(context, VoiceOrder::SpecialPower, nearest ? nearest->entity : ecs::Entity{}, UnitVoiceCue::NoSlot, button.specialPower);
 			for (const ecs::Entity unit : mine)
 			{
 				if ((button.options & content::button_option::NeedObjectTarget) != 0)
@@ -1849,17 +2030,41 @@ public:
 		}
 		case Hint::CaptureBuilding:
 		case Hint::Hack: return; // hints only
+		// issueAttackCommand (MSG_DO_ATTACK_OBJECT, its info: the target, whether it flies); a force attack
+		// (MSG_DO_FORCE_ATTACK_OBJECT) answers with no info.
 		case Hint::AttackObject:
 		case Hint::AttackAfterMoving:
-		case Hint::ForceAttackObject: orders.push_back(commands::Attack{mine, nearest->entity}); return;
+			orders.push_back(commands::Attack{mine, nearest->entity});
+			Voice(context, VoiceOrder::AttackObject, nearest->entity);
+			return;
+		case Hint::ForceAttackObject:
+			orders.push_back(commands::Attack{mine, nearest->entity});
+			Voice(context, VoiceOrder::ForceAttackObject);
+			return;
 		// MSG_DO_FORCE_ATTACK_GROUND: fire at the spot.
 		case Hint::ForceAttackGround:
 			orders.push_back(commands::AttackPosition{mine, {ToFixed((*underPointer)[0]), ToFixed((*underPointer)[1])}});
+			Voice(context, VoiceOrder::ForceAttackGround);
+			return;
+		// handleWaypointModeCommand -> issueMoveToLocationCommand: MSG_ADD_WAYPOINT at the spot (onto an object too), the
+		// selection answering as for a move in waypoint mode.
+		case Hint::AddWaypoint:
+			if (underPointer)
+			{
+				orders.push_back(commands::AddWaypoint{mine, {ToFixed((*underPointer)[0]), ToFixed((*underPointer)[1])}, ToFixed((*underPointer)[2])});
+				UnitVoiceCue cue{VoiceOrder::Move};
+				cue.target = nearest ? nearest->entity : ecs::Entity{};
+				cue.waypointMode = true;
+				context.Write<UnitVoiceCues>().pending.push_back(std::move(cue));
+			}
 			return;
 		// handleDefaultMoveCommand: a move only onto the ground (never onto an object).
 		case Hint::Move:
 			if (!nearest && underPointer)
-				orders.push_back(commands::MoveTo{mine, {ToFixed((*underPointer)[0]), ToFixed((*underPointer)[1])}});
+			{
+				orders.push_back(commands::MoveTo{mine, {ToFixed((*underPointer)[0]), ToFixed((*underPointer)[1])}, ToFixed((*underPointer)[2])});
+				Voice(context, VoiceOrder::Move);
+			}
 			return;
 		// handleSetRallyPointCommand: each selected one's rally point there.
 		case Hint::SetRallyPoint:

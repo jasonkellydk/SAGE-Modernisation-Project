@@ -19,6 +19,7 @@ struct SoundNugget
 	std::string sound;
 };
 
+// ParticleSystemFXNugget (its constructor's defaults): InitialDelay -1 -1 means the system keeps its own initial delay.
 struct ParticleNugget
 {
 	std::string system;
@@ -26,12 +27,13 @@ struct ParticleNugget
 	std::array<float, 3> offset{};
 	Range radius;
 	Range height;
-	Range delayMs;
+	Range delayMs{-1.0f, -1.0f};
 	std::array<float, 3> rotate{}; // radians about x, y, z
 	bool orientToObject{false};
 	bool attachToObject{false};
 	bool atGroundHeight{false};
 	bool useCallersRadius{false};
+	bool ricochet{false};
 };
 
 enum class ShakeType : std::uint8_t
@@ -78,6 +80,8 @@ struct TracerNugget
 	float probability{1.0f};
 };
 
+// FXListAtBonePosFXNugget: an FX list played at each of the object's bones called `bone` (OrientToBone is parsed and
+// never read by the original).
 struct NestedFxNugget
 {
 	std::string fx;
@@ -202,26 +206,43 @@ engine::config::Schema<ParticleSystemDefinition> ParticleSchema()
 			d.color[key] = {ReadRgb(n), static_cast<std::uint32_t>(At(n, 3))};
 		});
 	}
-	schema.On("ColorScale", range(&D::colorScale));
+	// ParticleSystem's constructor: the INI value / 255, added to each channel every frame.
+	schema.On("ColorScale", [](const Node &n, D &d, BindContext &) { d.colorScale = {At(n, 0) / 255.0f, At(n, 1, At(n, 0)) / 255.0f}; });
 	schema.On("BurstDelay", range(&D::burstDelay)).On("BurstCount", range(&D::burstCount)).On("InitialDelay", range(&D::initialDelay));
 	schema.On("DriftVelocity", coord(&D::drift));
 	schema.On("VelocityType", [](const Node &n, D &d, BindContext &) {
 		if (const auto v = ReadIndex<EmissionVelocity>(n, VelocityNames))
 			d.velocityType = *v;
 	});
-	schema.On("VelOrthoX", [](const Node &n, D &d, BindContext &) { d.velocityOrtho[0] = ReadRange(n); });
-	schema.On("VelOrthoY", [](const Node &n, D &d, BindContext &) { d.velocityOrtho[1] = ReadRange(n); });
+	// ParticleSystemInfo's m_emissionVelocity is a union: VelOrthoX, VelSpherical, VelHemispherical, VelCylindricalRadial
+	// and VelOutward are one value (the last read wins); VelOrthoY, VelCylindricalNormal and VelOutwardOther another.
+	const auto firstSpeed = [](const Node &n, D &d, BindContext &) {
+		d.velocityOrtho[0] = d.velocitySpherical = d.velocityHemispherical = d.velocityRadial = d.velocityOutward = ReadRange(n);
+	};
+	const auto secondSpeed = [](const Node &n, D &d, BindContext &) {
+		d.velocityOrtho[1] = d.velocityNormal = d.velocityOutwardOther = ReadRange(n);
+	};
+	schema.On("VelOrthoX", firstSpeed).On("VelSpherical", firstSpeed).On("VelHemispherical", firstSpeed);
+	schema.On("VelCylindricalRadial", firstSpeed).On("VelOutward", firstSpeed);
+	schema.On("VelOrthoY", secondSpeed).On("VelCylindricalNormal", secondSpeed).On("VelOutwardOther", secondSpeed);
 	schema.On("VelOrthoZ", [](const Node &n, D &d, BindContext &) { d.velocityOrtho[2] = ReadRange(n); });
-	schema.On("VelSpherical", range(&D::velocitySpherical)).On("VelHemispherical", range(&D::velocityHemispherical));
-	schema.On("VelCylindricalRadial", range(&D::velocityRadial)).On("VelCylindricalNormal", range(&D::velocityNormal));
-	schema.On("VelOutward", range(&D::velocityOutward)).On("VelOutwardOther", range(&D::velocityOutwardOther));
 	schema.On("VolumeType", [](const Node &n, D &d, BindContext &) {
 		if (const auto v = ReadIndex<int>(n, VolumeNames); v && *v > 0)
 			d.volumeType = static_cast<EmissionVolume>(*v - 1);
 	});
-	schema.On("VolLineStart", coord(&D::lineStart)).On("VolLineEnd", coord(&D::lineEnd)).On("VolBoxHalfSize", coord(&D::boxHalfSize));
-	schema.On("VolSphereRadius", number(&D::sphereRadius)).On("VolCylinderRadius", number(&D::cylinderRadius));
-	schema.On("VolCylinderLength", number(&D::cylinderLength));
+	// m_emissionVolume is a union too: VolLineStart, VolBoxHalfSize, VolSphereRadius / VolCylinderRadius (its first
+	// value) and VolCylinderLength (its second) share their numbers; VolLineEnd stands alone.
+	const auto firstThree = [](D &d, std::array<float, 3> v) {
+		d.lineStart = d.boxHalfSize = v;
+		d.sphereRadius = d.cylinderRadius = v[0];
+		d.cylinderLength = v[1];
+	};
+	schema.On("VolLineStart", [firstThree](const Node &n, D &d, BindContext &) { firstThree(d, ReadCoord(n)); });
+	schema.On("VolBoxHalfSize", [firstThree](const Node &n, D &d, BindContext &) { firstThree(d, ReadCoord(n)); });
+	schema.On("VolLineEnd", coord(&D::lineEnd));
+	const auto radius = [firstThree](const Node &n, D &d, BindContext &) { firstThree(d, {At(n, 0), d.lineStart[1], d.lineStart[2]}); };
+	schema.On("VolSphereRadius", radius).On("VolCylinderRadius", radius);
+	schema.On("VolCylinderLength", [firstThree](const Node &n, D &d, BindContext &) { firstThree(d, {d.lineStart[0], At(n, 0), d.lineStart[2]}); });
 	schema.On("IsHollow", flag(&D::hollow)).On("IsGroundAligned", flag(&D::groundAligned));
 	schema.On("IsEmitAboveGroundOnly", flag(&D::emitAboveGroundOnly)).On("IsParticleUpTowardsEmitter", flag(&D::upTowardsEmitter));
 	schema.On("WindMotion", [](const Node &n, D &d, BindContext &) {
@@ -229,9 +250,13 @@ engine::config::Schema<ParticleSystemDefinition> ParticleSchema()
 			d.wind = static_cast<WindMotion>(*w - 1);
 	});
 	schema.On("WindAngleChangeMin", number(&D::windAngleChangeMin)).On("WindAngleChangeMax", number(&D::windAngleChangeMax));
-	// Only the Z rotation is used (as in the original build); volume depth and ping-pong wind limits later.
-	for (const char *key : {"AngleX", "AngleY", "AngularRateX", "AngularRateY", "VolParticleDepth", "COLOR", "WindPingPongStartAngleMin",
-			 "WindPingPongStartAngleMax", "WindPingPongEndAngleMin", "WindPingPongEndAngleMax"})
+	schema.On("WindPingPongStartAngleMin", [](const Node &n, D &d, BindContext &) { d.windStartAngle.min = At(n, 0); });
+	schema.On("WindPingPongStartAngleMax", [](const Node &n, D &d, BindContext &) { d.windStartAngle.max = At(n, 0); });
+	schema.On("WindPingPongEndAngleMin", [](const Node &n, D &d, BindContext &) { d.windEndAngle.min = At(n, 0); });
+	schema.On("WindPingPongEndAngleMax", [](const Node &n, D &d, BindContext &) { d.windEndAngle.max = At(n, 0); });
+	// The original builds without PARTICLE_USE_XY_ROTATION and has no VolParticleDepth (a later fork's field) nor COLOR
+	// (commented out of its parse table): no shipped system sets any of them.
+	for (const char *key : {"AngleX", "AngleY", "AngularRateX", "AngularRateY", "VolParticleDepth", "COLOR"})
 		schema.Ignore(key);
 	return schema;
 }
@@ -274,6 +299,8 @@ void ReadNugget(const Node &node, FxList &list)
 				p.atGroundHeight = ReadYes(c);
 			else if (c.key == "UseCallersRadius")
 				p.useCallersRadius = ReadYes(c);
+			else if (c.key == "Ricochet")
+				p.ricochet = ReadYes(c);
 		}
 		list.nuggets.emplace_back(std::move(p));
 	}
@@ -385,6 +412,26 @@ void BindEffects(std::span<const engine::config::Document *const> documents, Eff
 				content.fx.Define(name) = std::move(list);
 			}
 		}
+}
+
+// A map's map.ini ParticleSystem blocks (INI::parseParticleSystemDefinition in the override load): a template the game
+// has takes the block's fields over its own (the original changed it in place for good; the host keeps it to the
+// match), a new name is a new template.
+void BindParticleOverrides(const engine::config::Document &document, EffectsContent &content, engine::config::BindContext &context)
+{
+	const auto particles = effects_detail::ParticleSchema();
+	for (const engine::config::Node &root : document.Roots())
+	{
+		if (root.key != "ParticleSystem" || root.Value().empty())
+			continue;
+		const std::string name(root.Value());
+		ParticleSystemDefinition definition;
+		if (const ParticleSystemDefinition *existing = content.particles.Find(name))
+			definition = *existing;
+		definition.name = name;
+		particles.Bind(root, definition, context);
+		content.particles.Define(name) = std::move(definition);
+	}
 }
 
 EffectsContent LoadEffectsContent(content::ContentLoader &loader)

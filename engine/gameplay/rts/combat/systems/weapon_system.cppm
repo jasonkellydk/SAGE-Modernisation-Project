@@ -3,6 +3,7 @@ import std;
 
 export import engine.gameplay.common.status.components.disabled;
 export import engine.ecs.system.system;
+export import engine.gameplay.rts.combat.components.sneaky_target;
 export import engine.gameplay.rts.combat.algorithms.attack_goal;
 export import engine.gameplay.rts.combat.algorithms.target_pitch;
 export import engine.gameplay.rts.combat.algorithms.weapon_fitness;
@@ -117,13 +118,17 @@ inline std::uint8_t ChooseSlot(const WeaponSlots &set, const WeaponCatalog &weap
 
 struct WeaponSystem
 {
+	// AIAttackAimAtTargetState::update's REL_THRESH: 0.035f radians (the binary32 0x3D0F5C29), the least aim delta.
+	static constexpr Engine::Math::TurnAngle RelThresh = Engine::Math::TurnFromRadiansBinary32Bits(0x3D0F5C29u);
+
 	using Query = ecs::Query<ecs::Write<Armament>, ecs::Write<Transform>, ecs::Write<AttackTarget>, ecs::Read<Owner>, ecs::Optional<DefinitionRef>,
 		ecs::Optional<Turret>, ecs::Optional<AltTurret>, ecs::OptionalWrite<WeaponSlots>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
 		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::OptionalWrite<FiringTracker>, ecs::Optional<BodyExtent>, ecs::Optional<Experience>, ecs::Exclude<UnderConstruction>,
 		ecs::Exclude<Sale>>; // isAbleToAttack: not unbuilt or sold
 	// What it shoots at is marked (FAERIE_FIRE) or not.
 	// (And how tall its victim stands, for a weapon's pitch limits.)
-	using Lookup = ecs::Lookup<ecs::Read<StatusFlags>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>, ecs::Read<Experience>>;
+	using Lookup = ecs::Lookup<ecs::Read<StatusFlags>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>, ecs::Read<Experience>,
+		ecs::Read<SneakyTarget>>;
 	using Resources = ecs::Resources<ecs::Read<RandomSeed>, ecs::Read<SpatialIndex>, ecs::Read<WeaponCatalog>, ecs::Read<LaunchLayouts>,
 		ecs::Write<FiredShots>, ecs::Write<TemporaryWeaponFires>, ecs::Read<GroundHeight>, ecs::Read<ArmorCatalog>, ecs::Write<Disarms>,
 		ecs::Read<DirectShots>>;
@@ -148,12 +153,13 @@ struct WeaponSystem
 			if (fire.weapon == WeaponCatalog::None)
 				continue;
 			const WeaponDefinition &weapon = weapons.At(fire.weapon);
-			const Engine::Math::Fixed distance = Engine::Math::Length(fire.aim - fire.origin);
-			const std::uint64_t travel = weapon.speed > Engine::Math::Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
+			const std::uint64_t travel = weapon.laser && !weapon.projectile ? 0 : HitDelayTicks(fire.origin, fire.aim, weapon.speed);
 			const Engine::Math::FixedVector2 toward = fire.aim.XY() - fire.origin.XY();
 			Shot shot{fire.source, {}, fire.weapon, fire.sourcePlayer, fire.origin, fire.aim, tick,
 				weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel};
 			shot.launchYaw = Engine::Math::Atan2(toward.y, toward.x);
+			// Dealt as it is fired in the original (its source there still): its affects flags hold though it lands a tick later.
+			shot.sourceHeld = travel == 0 ? 1 : 0;
 			// (createAndFireTempWeapon: fired by its source, at its veterancy.)
 			if (const Experience *experience = lookup.IsAlive(fire.source) ? lookup.Get<Experience>(fire.source) : nullptr)
 				shot.veterancy = experience->level;
@@ -190,6 +196,13 @@ struct WeaponSystem
 		const auto lookup = context.Lookup<Lookup>();
 		for (std::size_t row = 0; row < armaments.size(); ++row)
 		{
+			// The lock an attack asked for as it was given (AttackTarget::lockSlot: setWeaponLock LOCKED_TEMPORARILY).
+			if (targets[row].lockSlot != 0)
+			{
+				if (!slotSets.empty())
+					LockSlotTemporarily(slotSets[row], armaments[row], static_cast<std::uint8_t>(targets[row].lockSlot - 1));
+				targets[row].lockSlot = 0;
+			}
 			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], disabled_type::Held))
 				continue;
 			Armament &armament = armaments[row];
@@ -199,11 +212,18 @@ struct WeaponSystem
 			if (!offMap.empty() && !offMap[row].armed)
 				continue;
 			const ecs::Entity shelter = offMap.empty() ? ecs::Entity{} : offMap[row].holder;
+			const Turret *mainTurret = turrets.empty() ? nullptr : &turrets[row];
+			// Its first approach's temporary target, while the turret of its current weapon is on it (TurretAI's FIRE state,
+			// AIAttackFireWeaponState on the turret's own machine: it shoots at the turret's goal, not counted against the
+			// attack's shots): this tick's victim.
+			const bool temporaryAim = mainTurret != nullptr && mainTurret->onTemporary && targets[row].temporary != ecs::Entity{};
+			AttackTarget temporaryAttack;
+			temporaryAttack.target = targets[row].temporary;
+			const AttackTarget &attack = temporaryAim ? temporaryAttack : targets[row];
 			SpatialEntry point;
-			const SpatialEntry *target = AttackGoal(spatial, targets[row], point);
+			const SpatialEntry *target = AttackGoal(spatial, attack, point);
 			if (target == nullptr)
 				continue;
-			const Turret *mainTurret = turrets.empty() ? nullptr : &turrets[row];
 			const AltTurret *altTurret = altTurrets.empty() ? nullptr : &altTurrets[row];
 			// A weapon set: the slot to fire at this victim this tick (the AI recomputes it every frame).
 			const Turret *aimer = mainTurret;
@@ -216,7 +236,7 @@ struct WeaponSystem
 				weapon_detail::SlotChoice choice{targets[row].source, bonusRows.empty() ? 0u : bonusRows[row].Effective()};
 				std::optional<VictimFitness> fitness;
 				std::optional<PitchBody> from, body;
-				if (targets[row].atPosition == 0)
+				if (attack.atPosition == 0)
 				{
 					fitness = FitnessOf(*target, lookup, true);
 					choice.victim = &*fitness;
@@ -243,24 +263,26 @@ struct WeaponSystem
 				(trackers.empty() ? 0u : ContinuousFireConditions(trackers[row], weapons)));
 			Transform &transform = transforms[row];
 			const Engine::Math::FixedVector2 toTarget = target->position.XY() - transform.position.XY();
-			const Engine::Math::Fixed distance = Engine::Math::Length(toTarget);
 			const Engine::Math::Fixed radius = targetables.empty() ? Engine::Math::Fixed{} : targetables[row].radius;
 			// A leech range weapon that has fired or wound up in this attack reaches any distance (hasLeechRange).
 			const std::uint8_t slotBit = static_cast<std::uint8_t>(1u << slotIndex);
-			const bool leeching = (targets[row].leech & slotBit) != 0;
+			const bool leeching = (attack.leech & slotBit) != 0;
 			if (!leeching && (!WithinAttackRange(BonusAttackRange(weapon.attackRange, bonus), transform.position.XY(), radius, *target) ||
 				TooCloseToAttack(weapon.minimumRange, transform.position.XY(), radius, *target)))
 				continue;
 			if (!armament.turret)
 			{
+				// AIAttackAimAtTargetState::update: the body turns while it is more than AcceptableAimDelta off, a delta
+				// floored at REL_THRESH (0.035f rad, about 2 degrees).
+				const std::int64_t tolerance = std::max<std::int64_t>(weapon.aimDelta.units, RelThresh.units);
 				const std::int32_t off = Engine::Math::DeltaTo(transform.facing, Engine::Math::Heading(toTarget));
 				const std::int64_t magnitude = std::llabs(static_cast<std::int64_t>(off));
-				if (magnitude > static_cast<std::int64_t>(weapon.aimDelta.units))
+				if (magnitude > tolerance)
 				{
 					const auto limit = static_cast<std::int64_t>(armament.turnRate.units);
 					const std::int64_t turn = limit == 0 ? off : std::clamp<std::int64_t>(off, -limit, limit);
 					transform.facing += Engine::Math::TurnAngle{static_cast<std::uint32_t>(turn)};
-					if (magnitude - std::llabs(turn) > static_cast<std::int64_t>(weapon.aimDelta.units))
+					if (magnitude - std::llabs(turn) > tolerance)
 						continue;
 				}
 			}
@@ -272,7 +294,7 @@ struct WeaponSystem
 			// first update, which is when a shot without a wind-up goes): it fires PreAttackDelay (scaled by its
 			// PRE_ATTACK bonus) frames after that, if it keeps at it (getStatus: PRE_ATTACK until then). A wind-up comes
 			// before every shot, or only a full clip's first, or only the first at this victim (getPreAttackDelay).
-			const ecs::Entity victim = targets[row].target;
+			const ecs::Entity victim = attack.target;
 			const bool windingUp = armament.preAttackUntil != 0 && armament.preAttackSeen + 1 == tick && armament.preAttackVictim == victim;
 			if (!windingUp)
 			{
@@ -300,15 +322,17 @@ struct WeaponSystem
 			armament.lastVictim = victim;
 
 			auto random = Engine::Math::Stream(seed, {tick, entities[row].index, entities[row].generation});
-			targets[row].fired = 1;
+			if (!temporaryAim)
+				targets[row].fired = 1;
 			// Weapon::privateFireWeapon's DAMAGE_DISARM: nothing is fired; the victim is disarmed (the game carries it out),
 			// the shot counted and a round spent (an emptied clip reloading as it would), but no wait between shots is set.
 			if (weapon.damageType == weapons.disarm)
 			{
-				if (targets[row].atPosition == 0)
+				if (attack.atPosition == 0)
 					disarms.push_back({entities[row], victim, armament.weapon, owners[row].player, target->position,
 						experiences.empty() ? std::uint8_t{0} : experiences[row].level});
-				CountShot(targets[row]);
+				if (!temporaryAim)
+					CountShot(targets[row]);
 				if (weapon.clipSize > 0)
 				{
 					if (armament.clip == 0 || armament.clip > weapon.clipSize)
@@ -342,7 +366,15 @@ struct WeaponSystem
 				// projectile with any scatter flies at that spot and not after its victim (so it can miss); a shot without a
 				// projectile still hits its victim (the damage goes to the victim's position).
 				Engine::Math::FixedVector3 aim = target->position;
-				ecs::Entity shotVictim = targets[row].target;
+				ecs::Entity shotVictim = attack.target;
+				// Weapon::privateFireWeapon's getSneakyTargetingOffset: a victim its attackers miss for now is shot at a spot off
+				// it (along its facing), a position and not it.
+				if (const SneakyTarget *sneaky = shotVictim != ecs::Entity{} ? lookup.Get<SneakyTarget>(shotVictim) : nullptr; sneaky != nullptr && sneaky->Active(tick))
+				{
+					aim.x += sneaky->offset.x;
+					aim.y += sneaky->offset.y;
+					shotVictim = {};
+				}
 				// Weapon::privateFireWeapon's ScatterTarget pattern: while this clip has entries it has not aimed at, it aims at
 				// a random one of them (scaled by ScatterTargetScalar) off the victim's position, on the ground there, and at no
 				// victim; that entry is used up until the clip reloads. The pattern used up, it fires as it would without one.
@@ -363,6 +395,9 @@ struct WeaponSystem
 					aim.z = context.Read<GroundHeight>().At(aim.XY());
 					shotVictim = {};
 				}
+				// fireWeaponTemplate's victimPos (after the sneaky offset and the ScatterTarget pattern, before the scatter): what
+				// its delay is measured to.
+				const Engine::Math::FixedVector3 victimAt = aim;
 				const bool infantryVictim = shotVictim != ecs::Entity{} && (target->classes & target_class::Infantry) != 0;
 				if (weapon.scatterRadius > Engine::Math::Fixed{} || (weapon.infantryScatter > Engine::Math::Fixed{} && infantryVictim))
 				{
@@ -372,7 +407,12 @@ struct WeaponSystem
 					auto scatterRandom = Engine::Math::Stream(seed ^ 0x5CA77E4u, {tick, entities[row].index, entities[row].generation});
 					scatter = Engine::Math::UniformFixed(scatterRandom, Engine::Math::Fixed{}, scatter);
 					const Engine::Math::TurnAngle way{static_cast<std::uint32_t>(Engine::Math::UniformInt(scatterRandom, 0, 0xFFFFFFFFll))};
-					if (weapon.projectile && scatter > Engine::Math::Fixed{})
+					// A laser (no projectile) hits its victim while the scatter is within either damage radius (scaled by its
+					// RADIUS bonus); beyond both it misses for the ground at the scattered spot, with no victim.
+					const Engine::Math::Fixed radiusScale = bonus.Get(WeaponBonusField::Radius);
+					const bool laserMiss = weapon.laser && !weapon.projectile && scatter > weapon.primaryRadius * radiusScale &&
+						scatter > weapon.secondaryRadius * radiusScale;
+					if ((weapon.projectile && scatter > Engine::Math::Fixed{}) || laserMiss)
 					{
 						aim.x += scatter * Engine::Math::Cos(way);
 						aim.y += scatter * Engine::Math::Sin(way);
@@ -380,8 +420,9 @@ struct WeaponSystem
 						shotVictim = {};
 					}
 				}
-				// A lobbed shot's projectile carries it (it lands where that detonates); others land after their travel.
-				const std::uint64_t travel = weapon.speed > Engine::Math::Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
+				// A lobbed shot's projectile carries it (it lands where that detonates); others land after their travel. A
+				// laser's damage is dealt as it fires, whatever its speed (fireWeaponTemplate returns before the delay).
+				const std::uint64_t travel = weapon.laser && !weapon.projectile ? 0 : HitDelayTicks(transform.position, victimAt, weapon.speed);
 				const bool turned = armament.turret && aimer != nullptr;
 				out.push_back({entities[row], shotVictim, armament.weapon, owners[row].player, origin, aim, tick,
 					weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel, transform.facing + (turned ? aimer->angle : Engine::Math::TurnAngle{}),
@@ -398,7 +439,8 @@ struct WeaponSystem
 				if (weapon.leechRange)
 					targets[row].leech |= slotBit;
 				// A limited attack counts the shot; its last ends it.
-				CountShot(targets[row]);
+				if (!temporaryAim)
+					CountShot(targets[row]);
 				// Then move to the next.
 				armament.firedBarrel = barrel;
 				// Its ShotsPerBarrel fired, the next barrel's turn (m_numShotsForCurBarrel).

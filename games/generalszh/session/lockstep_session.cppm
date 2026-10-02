@@ -31,7 +31,17 @@ public:
 		m_session->Tick(commands);
 		if (m_recording)
 		{
-			engine::net::RecordTick(*m_recording, tick, commands);
+			// RecorderClass writes only what the logic ran as GameMessages: transient commands (chat) stay out.
+			if (std::ranges::all_of(commands, [](const engine::net::CommandEnvelope &command) { return commands::Recorded(command.type); }))
+				engine::net::RecordTick(*m_recording, tick, commands);
+			else
+			{
+				std::vector<engine::net::CommandEnvelope> kept;
+				for (const engine::net::CommandEnvelope &command : commands)
+					if (commands::Recorded(command.type))
+						kept.push_back(command);
+				engine::net::RecordTick(*m_recording, tick, kept);
+			}
 			engine::net::RecordHash(*m_recording, tick, m_session->StateHash());
 		}
 	}

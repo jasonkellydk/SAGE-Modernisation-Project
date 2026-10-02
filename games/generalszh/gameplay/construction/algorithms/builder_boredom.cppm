@@ -9,10 +9,13 @@ import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import engine.gameplay.common.spatial.resources.spatial_index;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
 
 // DozerPrimaryIdleState::update, bored: findObjectToRepair (the closest structure of its own player within BoredRange,
 // centre to centre, it may repair: canRepairObject) and aiRepair it (CMD_FROM_AI); else findMine (the closest within
 // BoredRange it may attack as a dozer, CMD_FROM_DOZER: an enemy's, not hidden from it) and aiAttackObject it for one shot.
+// DozerAIUpdate::getBoredRange: a computer player's dozer (not a WorkerAIUpdate worker) looks AIDozerBoredRadiusModifier
+// times as far, by its player as it is now.
 export namespace generalszh::gameplay
 {
 inline void ApplyBoredBuilders(GameWorld &game)
@@ -34,7 +37,14 @@ inline void ApplyBoredBuilders(GameWorld &game)
 		if (boredom == nullptr || transform == nullptr || owner == nullptr)
 			continue;
 		const Engine::Math::FixedVector2 at = transform->position.XY();
-		const Engine::Math::Fixed range = boredom->boredRange;
+		Engine::Math::Fixed range = boredom->boredRange;
+		if (owner->player < game.roster.PlayerCount() && !game.roster.PlayerAt(owner->player).human)
+			if (const auto *ref = world.Get<gp::DefinitionRef>(dozer))
+			{
+				const auto &modules = game.templates.DefinitionAt(ref->index).modules;
+				if (std::any_of(modules.begin(), modules.end(), [](const content::ModuleEntry &module) { return module.type == "DozerAIUpdate"; }))
+					range = range * game.templates.Content().aiData.aiDozerBoredRadiusModifier;
+			}
 		const gp::SpatialEntry *repair = nullptr;
 		Engine::Math::Fixed nearest;
 		spatial->ForEachWithin(at, range, [&](const gp::SpatialEntry &entry) {

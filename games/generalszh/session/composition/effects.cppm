@@ -9,6 +9,7 @@ import engine.gameplay.rts.death.systems.crash_collision_system;
 import engine.gameplay.rts.death.systems.slow_death_system;
 import engine.gameplay.rts.loadout.systems.loadout_system;
 import games.generalszh.gameplay.effects.systems.bone_fx_system;
+import games.generalszh.gameplay.effects.systems.transition_creation_system;
 import games.generalszh.gameplay.effects.systems.radius_decal_system;
 import games.generalszh.gameplay.effects.components.bone_fx;
 import games.generalszh.gameplay.effects.components.radius_decal;
@@ -23,6 +24,7 @@ inline void EmplaceEffectsResources(ecs::World &world, [[maybe_unused]] const Si
 {
 	world.EmplaceResource<generalszh::gameplay::EffectCues>();
 	world.EmplaceResource<generalszh::gameplay::BoneFxEvents>();
+	world.EmplaceResource<generalszh::gameplay::TransitionCreationEvents>();
 }
 
 inline void RegisterEffectsComponents(ecs::World &world)
@@ -39,6 +41,8 @@ inline void RegisterEffectsSystems(ecs::SystemRegistry &registry)
 	registry.Register(boneFx);
 	static generalszh::gameplay::RadiusDecalSystem radiusDecals;
 	registry.Register(radiusDecals);
+	static generalszh::gameplay::TransitionCreationSystem transitionCreations;
+	registry.Register(transitionCreations);
 }
 
 // What the effects domain's systems run after (and the few they must precede), within the tick.
@@ -49,5 +53,6 @@ inline void OrderEffectsSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<gameplay::CrashCollisionSystem, domain::RadiusDecalSystem>();
 	registry.OrderBefore<gameplay::SlowDeathSystem, domain::RadiusDecalSystem>();
 	registry.OrderBefore<gameplay::LoadoutSystem, domain::BoneFxSystem>();
+	registry.OrderBefore<gameplay::LoadoutSystem, domain::TransitionCreationSystem>();
 }
 }

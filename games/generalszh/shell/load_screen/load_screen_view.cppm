@@ -40,7 +40,28 @@ public:
 		const std::string screen = challenge ? "ChallengeLoadScreen.wnd:" : "SinglePlayerLoadScreen.wnd:";
 		bindings.BindProgress(screen + "ProgressLoad", viewModel.progress);
 		if (challenge)
+		{
+			// ChallengeLoadScreen::activatePieces' windows (the portrait movies' pictures are the host's).
+			for (const char *side : {"Left", "Right"})
+			{
+				const std::string at = side;
+				ChallengeLoadBio &bio = at == "Left" ? viewModel.left : viewModel.right;
+				for (const char *title : {"BioName", "BioBirthplace", "BioStrategy"})
+					bindings.BindVisible(screen + title + at, viewModel.titlesShown);
+				for (const char *entry : {"BigNameEntry", "BioNameEntry", "BioBirthplaceEntry", "BioStrategyEntry"})
+					bindings.BindVisible(screen + entry + at, viewModel.entriesShown);
+				bindings.BindText(screen + "BigNameEntry" + at, bio.bigName);
+				bindings.BindText(screen + "BioNameEntry" + at, bio.name);
+				bindings.BindText(screen + "BioBirthplaceEntry" + at, bio.rank);
+				bindings.BindText(screen + "BioStrategyEntry" + at, bio.strategy);
+				bindings.BindVisible(screen + "PortraitMovie" + at, viewModel.portraitMoviesShown);
+			}
+			bindings.BindVisible(screen + "CircleAlphaOuter", viewModel.outerCircleShown);
+			bindings.BindVisible(screen + "CircleAlphaInner", viewModel.innerCircleShown);
+			bindings.BindVisible(screen + "VersusBackdrop", viewModel.versusBackdropShown);
+			bindings.BindVisible(screen + "OverlayVs", viewModel.versusShown);
 			return;
+		}
 		bindings.BindText(screen + "Percent", viewModel.percentText);
 		bindings.BindVisible(screen + "Percent", viewModel.percentShown);
 		bindings.BindCellImage(screen + "ParentSinglePlayerLoadScreen", 0, m_background, resolve, size);

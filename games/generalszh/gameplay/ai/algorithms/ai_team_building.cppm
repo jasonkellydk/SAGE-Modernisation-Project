@@ -17,7 +17,7 @@ import engine.gameplay.common.status.components.disabled;
 import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.common.identity.components.team_member;
 import engine.gameplay.rts.movement.components.move_order;
-import engine.gameplay.rts.movement.components.move_path;
+import engine.gameplay.rts.movement.algorithms.move_paths;
 import engine.gameplay.rts.harvesting.components.harvester;
 import engine.gameplay.common.health.components.health;
 import engine.gameplay.rts.construction.components.builder;
@@ -145,14 +145,16 @@ inline void SetTeam(GameWorld &game, ecs::Entity unit, std::uint32_t team)
 	game.roster.Leave(member->team, unit);
 	game.roster.Join(team, unit, false);
 	*member = {team};
+	std::uint32_t from = game.roster.TeamAt(team).owner, to = from;
 	if (auto *owner = game.world.Get<gp::Owner>(unit))
 	{
-		const std::uint32_t from = owner->player;
+		from = owner->player;
 		*owner = {game.roster.TeamAt(team).owner};
+		to = owner->player;
 		// Player::becomingTeamMember's battle plan bonuses, and a Strategy Center's plan (onCapture).
 		MoveBattlePlan(game, unit, from, owner->player);
 	}
-	OnCapture(game, unit);
+	OnCaptureBetween(game, unit, from, to);
 }
 
 // Team::hasAnyUnits: anything alive that is not a structure, projectile or mine.
@@ -634,6 +636,9 @@ inline void OnAiStructureProduced(GameWorld &game, AiPlayer &ai, ecs::Entity str
 	{
 		if (slot.built != structure)
 			continue;
+		// updateObjValuesFromMapProperties: it takes its entry's name (objectName; an empty one: it stays unnamed, as it was).
+		if (!slot.name.empty())
+			game.names.Assign(slot.name, structure);
 		slot.underConstruction = false;
 		CheckForSupplyCenter(game, ai, slot, structure);
 		return;
@@ -952,18 +957,9 @@ inline void OnAiUnitProduced(GameWorld &game, AiPlayer &ai, ecs::Entity factory,
 				{
 					const FixedVector2 goal = move->mode != gp::MoveMode::Idle ? move->destination : game.world.Get<gp::Transform>(unit)->position.XY();
 					OrderMove(game, unit, goal, false, false);
-					gp::MovePath path;
-					path.count = 2;
-					path.next = 1; // the first leg is under way
-					path.points[0] = goal;
-					path.points[1] = *home;
-					if (game.world.Has<gp::MovePath>(unit))
-						*game.world.Get<gp::MovePath>(unit) = path;
-					else
-					{
-						game.world.Add<gp::MovePath>(unit);
-						*game.world.Get<gp::MovePath>(unit) = path;
-					}
+					// The first leg is under way.
+					const std::array<FixedVector2, 2> route{goal, *home};
+					gp::SetMovePath(game.world, unit, route, 1, gp::MovePathKind::ExitProduction);
 				}
 			order.factory = {};
 			if (auto *harvester = SupplyTruck(game, unit))
@@ -1101,6 +1097,17 @@ inline void UpdateStructureRepair(GameWorld &game, AiPlayer &ai)
 	}
 	OrderWork(game, ai.repairDozer, ai.toRepair.front());
 	ai.dozerIsRepairing = true;
+}
+
+// AIPlayer::aiPreTeamDestroy (Player::preTeamDestroy, from Team's destructor, for every player): a team going away
+// leaves every computer player's build and ready queues: its members were all lost before it was built or started (a
+// reinforcement's team emptied). The entries go without starting it (it is gone); a unit still in production for one
+// is then no team's when it comes out.
+inline void AiPreTeamDestroy(AiPlayers &ais, std::uint32_t team)
+{
+	for (AiPlayer &ai : ais.players)
+		for (auto *queue : {&ai.buildQueue, &ai.readyQueue})
+			std::erase_if(*queue, [team](const AiTeamInQueue &entry) { return entry.team == team; });
 }
 
 // AIPlayer::update: base building, then its teams, then its upgrades and skills, then its repairs.

@@ -11,7 +11,7 @@ export namespace generalszh::session::setup
 {
 struct ReplayBody
 {
-	static constexpr std::uint32_t Version = 2; // 2: the plan's scenery
+	static constexpr std::uint32_t Version = 3; // 2: the plan's scenery; 3: point orders carry their height
 
 	std::int32_t difficulty{1};
 	std::int32_t originalGameMode{0}; // GAME_SKIRMISH / GAME_LAN

@@ -19,6 +19,9 @@ struct MoveTo
 {
 	std::vector<ecs::Entity> units;
 	FixedVector2 destination;
+	// The spot's height as clicked (MSG_DO_MOVETO's Coord3D: W3DView::screenToTerrain, a bridge deck over the terrain
+	// taken when nearer the eye): the layer the goal is on follows from it (getLayerForDestination).
+	Fixed height{};
 };
 
 struct Attack
@@ -117,6 +120,7 @@ struct AttackMoveTo
 {
 	std::vector<ecs::Entity> units;
 	FixedVector2 position;
+	Fixed height{}; // as MoveTo's
 };
 
 // A player's EVACUATE (MSG_EVACUATE): the units let their riders out.
@@ -148,6 +152,9 @@ struct UseSpecialPower
 	bool atLocation{true};
 	// The button's command options (the message's options argument: OPTION_ONE .. THREE pick a Strategy Center's plan).
 	std::uint32_t options{0};
+	// The message's angle (in turn units): the placed structure's facing of a SPECIAL_POWER_CONSTRUCT (PlaceEventTranslator);
+	// every other order sends INVALID_ANGLE, which the creation lists take as 0.
+	std::uint32_t angle{0};
 };
 
 // A player buys a science with its general's points (the original's MSG_PURCHASE_SCIENCE, from the General's Powers
@@ -201,6 +208,13 @@ struct CancelUnit
 
 // Switch the overcharge of each unit that has one (MSG_TOGGLE_OVERCHARGE: AIGroup::groupToggleOvercharge).
 struct ToggleOvercharge
+{
+	std::vector<ecs::Entity> units;
+};
+
+// Put each unit on its MINE_CLEARING_DETAIL weapon set (MSG_SET_MINE_CLEARING_DETAIL: AIGroup::setMineClearingDetail(TRUE),
+// sent as a USES_MINE_CLEARING_WEAPONSET button is pressed).
+struct SetMineClearingDetail
 {
 	std::vector<ecs::Entity> units;
 };
@@ -286,6 +300,14 @@ struct SetBeaconText
 	std::string text;
 };
 
+// A player's in-game chat line (ConnectionManager::sendChat / NETCOMMANDTYPE_CHAT): its text (UTF-8) and the game slots
+// it is for (bit n: slot n). It changes nothing in the simulation; each machine shows it to its own player.
+struct Chat
+{
+	std::string text;
+	std::uint32_t slots{0};
+};
+
 // The local presentation's music (AudioManager): the track playing and how often it has played through since it was
 // set, reported whenever that changes so a single-player mission's MUSIC_TRACK_HAS_COMPLETED can ask it.
 struct MusicProgress
@@ -309,8 +331,63 @@ struct Exit
 	ecs::Entity container;
 };
 
+// A player's MSG_CREATE_TEAMn (SelectionTranslator's MSG_META_CREATE_TEAMn: the selected objects it controls): hotkey squad
+// `squad` (0..9) becomes those objects (Player::processCreateTeamGameMessage).
+struct CreateTeam
+{
+	std::int32_t squad{0};
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_SELECT_TEAMn (SelectionTranslator::onMetaSelectTeam when it performs the selection): the logic's copy of
+// its selection becomes the squad's live members, and a squad with any counts for its academy's control groups
+// (Player::processSelectTeamGameMessage). The local selection itself is the presentation's.
+struct SelectTeam
+{
+	std::int32_t squad{0};
+};
+
+// A player's MSG_DO_CHEER (CommandTranslator's MSG_META_ALL_CHEER in a network game): every selected object of theirs
+// cheers (GameLogic::onDoCheer -> AIGroup::groupCheer).
+struct Cheer
+{
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_ADD_WAYPOINT (a move click in waypoint mode, Alt held): the selection, as one group, adds the spot to
+// its path (GameLogic::onAddWaypoint -> AIGroup::groupMoveToPosition with addWaypoint).
+struct AddWaypoint
+{
+	std::vector<ecs::Entity> units;
+	FixedVector2 destination;
+	Fixed height{}; // as MoveTo's
+};
+
+// A player's MSG_INTERNET_HACK (the control bar's HACK_INTERNET button): each selected hacker starts hacking the
+// internet (GameLogic::onInternetHack -> AIGroup::groupHackInternet).
+struct HackInternet
+{
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_CREATE_FORMATION (CommandTranslator's MSG_META_CREATE_FORMATION, CommandMap CREATE_FORMATION: Ctrl+F):
+// the selected group makes a formation of itself, or breaks the one it is (GameLogicDispatch ->
+// AIGroup::groupCreateFormation).
+struct CreateFormation
+{
+	std::vector<ecs::Entity> units;
+};
+
+// A player's MSG_DO_SCATTER (CommandTranslator's MSG_META_SCATTER, CommandMap SCATTER: X): the selected group scatters
+// from its centre (GameLogicDispatch -> AIGroup::groupScatter).
+struct Scatter
+{
+	std::vector<ecs::Entity> units;
+};
+
 using GameCommand = std::variant<MoveTo, Attack, Stop, Dock, UseSpecialPower, SignalUi, ResearchUpgrade, CancelResearch, Sell, BuildStructure, WorkOn,
-	QueueUnit, CancelUnit, KillAllEnemies, UseSpecialPowerAtObject, PurchaseScience, ToggleOvercharge, SwitchWeapon, SelfDestruct, AttackPosition, GetRepaired, SpecialPowerDestination, Enter, EnableRetaliation, GuardPosition, GuardObject, SetRallyPoint, Evacuate, AttackMoveTo, FireWeapon, PlaceBeacon, RemoveBeacon, SetBeaconText, CombatDrop, MusicProgress, ResumeConstruction, Repair, GetHealed, ExecuteRailedTransport, Exit, CancelConstruction>;
+	QueueUnit, CancelUnit, KillAllEnemies, UseSpecialPowerAtObject, PurchaseScience, ToggleOvercharge, SwitchWeapon, SelfDestruct, AttackPosition, GetRepaired, SpecialPowerDestination, Enter, EnableRetaliation, GuardPosition, GuardObject, SetRallyPoint, Evacuate, AttackMoveTo, FireWeapon, PlaceBeacon, RemoveBeacon, SetBeaconText, CombatDrop, MusicProgress, ResumeConstruction, Repair, GetHealed, ExecuteRailedTransport, Exit, CancelConstruction, CreateTeam, Cheer, CreateFormation,
+	AddWaypoint, HackInternet, Scatter, SelectTeam, SetMineClearingDetail, Chat>;
 }
 
 export namespace engine::events
@@ -319,7 +396,7 @@ template<>
 struct MessageTraits<generalszh::commands::MoveTo>
 {
 	static constexpr std::string_view StableName = "generalszh.command.move_to";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2; // 2: its height
 	static constexpr MessageKind Kind = MessageKind::Command;
 	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
 };
@@ -496,6 +573,69 @@ struct MessageTraits<generalszh::commands::PlaceBeacon>
 };
 
 template<>
+struct MessageTraits<generalszh::commands::CreateTeam>
+{
+	static constexpr std::string_view StableName = "generalszh.command.create_team";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::SelectTeam>
+{
+	static constexpr std::string_view StableName = "generalszh.command.select_team";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::Cheer>
+{
+	static constexpr std::string_view StableName = "generalszh.command.cheer";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::AddWaypoint>
+{
+	static constexpr std::string_view StableName = "generalszh.command.add_waypoint";
+	static constexpr std::uint32_t Version = 2; // 2: its height
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::HackInternet>
+{
+	static constexpr std::string_view StableName = "generalszh.command.hack_internet";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::CreateFormation>
+{
+	static constexpr std::string_view StableName = "generalszh.command.create_formation";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::Scatter>
+{
+	static constexpr std::string_view StableName = "generalszh.command.scatter";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
 struct MessageTraits<generalszh::commands::RemoveBeacon>
 {
 	static constexpr std::string_view StableName = "generalszh.command.remove_beacon";
@@ -532,6 +672,15 @@ struct MessageTraits<generalszh::commands::MusicProgress>
 };
 
 template<>
+struct MessageTraits<generalszh::commands::Chat>
+{
+	static constexpr std::string_view StableName = "generalszh.command.chat";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Transient;
+};
+
+template<>
 struct MessageTraits<generalszh::commands::SetBeaconText>
 {
 	static constexpr std::string_view StableName = "generalszh.command.set_beacon_text";
@@ -544,6 +693,15 @@ template<>
 struct MessageTraits<generalszh::commands::SelfDestruct>
 {
 	static constexpr std::string_view StableName = "generalszh.command.self_destruct";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr MessageKind Kind = MessageKind::Command;
+	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
+};
+
+template<>
+struct MessageTraits<generalszh::commands::SetMineClearingDetail>
+{
+	static constexpr std::string_view StableName = "generalszh.command.set_mine_clearing_detail";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr MessageKind Kind = MessageKind::Command;
 	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
@@ -607,7 +765,7 @@ template<>
 struct MessageTraits<generalszh::commands::UseSpecialPower>
 {
 	static constexpr std::string_view StableName = "generalszh.command.use_special_power";
-	static constexpr std::uint32_t Version = 3;
+	static constexpr std::uint32_t Version = 4;
 	static constexpr MessageKind Kind = MessageKind::Command;
 	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
 };
@@ -634,7 +792,7 @@ template<>
 struct MessageTraits<generalszh::commands::AttackMoveTo>
 {
 	static constexpr std::string_view StableName = "generalszh.command.attack_move_to";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2; // 2: its height
 	static constexpr MessageKind Kind = MessageKind::Command;
 	static constexpr RecordPolicy Recording = RecordPolicy::Recordable;
 };
@@ -691,6 +849,21 @@ template<typename T>
 constexpr std::uint64_t TypeOf() noexcept
 {
 	return engine::events::HashMessageKey(engine::events::MessageTraits<T>::StableName);
+}
+
+// Whether a command of stable key `type` goes into a replay (RecordPolicy::Recordable). RecorderClass only writes the
+// GameMessages the logic ran; chat travels as NetChatCommandMsg (NetCommandList, never a GameMessage), so a replay has
+// none. Unknown keys are kept: playback rejects them itself.
+inline bool Recorded(std::uint64_t type) noexcept
+{
+	return [type]<std::size_t... I>(std::index_sequence<I...>) {
+		bool recorded = true;
+		((TypeOf<std::variant_alternative_t<I, GameCommand>>() == type
+				? (recorded = engine::events::MessageTraits<std::variant_alternative_t<I, GameCommand>>::Recording == engine::events::RecordPolicy::Recordable, 0)
+				: 0),
+			...);
+		return recorded;
+	}(std::make_index_sequence<std::variant_size_v<GameCommand>>{});
 }
 
 namespace detail
@@ -763,10 +936,11 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 		[&](const auto &value) {
 			using T = std::decay_t<decltype(value)>;
 			type = TypeOf<T>();
-			if constexpr (std::is_same_v<T, MoveTo>)
+			if constexpr (std::is_same_v<T, MoveTo> || std::is_same_v<T, AddWaypoint>)
 			{
 				detail::Put(writer, value.units);
 				detail::Put(writer, value.destination);
+				writer.I64(value.height.Raw());
 			}
 			else if constexpr (std::is_same_v<T, AttackPosition>)
 			{
@@ -798,7 +972,8 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				detail::Put(writer, value.units);
 				detail::Put(writer, value.position);
 			}
-			else if constexpr (std::is_same_v<T, Stop> || std::is_same_v<T, ToggleOvercharge>)
+			else if constexpr (std::is_same_v<T, Stop> || std::is_same_v<T, ToggleOvercharge> || std::is_same_v<T, Cheer> || std::is_same_v<T, CreateFormation> ||
+				std::is_same_v<T, HackInternet> || std::is_same_v<T, Scatter> || std::is_same_v<T, SetMineClearingDetail>)
 				detail::Put(writer, value.units);
 			else if constexpr (std::is_same_v<T, SwitchWeapon>)
 			{
@@ -842,6 +1017,11 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				writer.Flag(value.transferToAlly);
 			else if constexpr (std::is_same_v<T, PlaceBeacon>)
 				detail::Put(writer, value.position);
+			else if constexpr (std::is_same_v<T, Chat>)
+			{
+				writer.Text(value.text);
+				writer.U32(value.slots);
+			}
 			else if constexpr (std::is_same_v<T, CombatDrop>)
 			{
 				detail::Put(writer, value.units);
@@ -850,6 +1030,13 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 			}
 			else if constexpr (std::is_same_v<T, RemoveBeacon>)
 				detail::Put(writer, value.units);
+			else if constexpr (std::is_same_v<T, CreateTeam>)
+			{
+				writer.U32(static_cast<std::uint32_t>(value.squad));
+				detail::Put(writer, value.units);
+			}
+			else if constexpr (std::is_same_v<T, SelectTeam>)
+				writer.U32(static_cast<std::uint32_t>(value.squad));
 			else if constexpr (std::is_same_v<T, SetBeaconText>)
 			{
 				detail::Put(writer, value.units);
@@ -892,6 +1079,7 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 			{
 				detail::Put(writer, value.units);
 				detail::Put(writer, value.position);
+				writer.I64(value.height.Raw());
 			}
 			else if constexpr (std::is_same_v<T, SetRallyPoint>)
 			{
@@ -917,6 +1105,7 @@ inline engine::net::CommandEnvelope Encode(const GameCommand &command)
 				detail::Put(writer, value.target);
 				writer.Flag(value.atLocation);
 				writer.U32(value.options);
+				writer.U32(value.angle);
 			}
 		},
 		command);
@@ -932,8 +1121,9 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 	{
 		auto units = detail::GetUnits(reader);
 		const auto destination = detail::GetPoint(reader);
-		if (units && destination)
-			command = MoveTo{std::move(*units), *destination};
+		const auto height = reader.I64();
+		if (units && destination && height)
+			command = MoveTo{std::move(*units), *destination, Fixed::FromRaw(*height)};
 	}
 	else if (envelope.type == TypeOf<AttackPosition>())
 	{
@@ -996,6 +1186,34 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 		if (auto units = detail::GetUnits(reader))
 			command = Stop{std::move(*units)};
 	}
+	else if (envelope.type == TypeOf<Cheer>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = Cheer{std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<HackInternet>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = HackInternet{std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<AddWaypoint>())
+	{
+		auto units = detail::GetUnits(reader);
+		const auto destination = detail::GetPoint(reader);
+		const auto height = reader.I64();
+		if (units && destination && height)
+			command = AddWaypoint{std::move(*units), *destination, Fixed::FromRaw(*height)};
+	}
+	else if (envelope.type == TypeOf<CreateFormation>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = CreateFormation{std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<Scatter>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = Scatter{std::move(*units)};
+	}
 	else if (envelope.type == TypeOf<SwitchWeapon>())
 	{
 		auto units = detail::GetUnits(reader);
@@ -1008,6 +1226,11 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 		if (auto units = detail::GetUnits(reader))
 			command = ToggleOvercharge{std::move(*units)};
 	}
+	else if (envelope.type == TypeOf<SetMineClearingDetail>())
+	{
+		if (auto units = detail::GetUnits(reader))
+			command = SetMineClearingDetail{std::move(*units)};
+	}
 	else if (envelope.type == TypeOf<UseSpecialPower>())
 	{
 		const auto source = detail::GetEntity(reader);
@@ -1015,8 +1238,9 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 		const auto target = detail::GetPoint(reader);
 		const auto atLocation = reader.Flag();
 		const auto options = reader.U32();
-		if (source && power && target && atLocation && options)
-			command = UseSpecialPower{*source, std::move(*power), *target, *atLocation, *options};
+		const auto angle = reader.U32();
+		if (source && power && target && atLocation && options && angle)
+			command = UseSpecialPower{*source, std::move(*power), *target, *atLocation, *options, *angle};
 	}
 	else if (envelope.type == TypeOf<GuardPosition>())
 	{
@@ -1041,8 +1265,9 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 	{
 		auto units = detail::GetUnits(reader);
 		const auto position = detail::GetPoint(reader);
-		if (units && position)
-			command = AttackMoveTo{std::move(*units), *position};
+		const auto height = reader.I64();
+		if (units && position && height)
+			command = AttackMoveTo{std::move(*units), *position, Fixed::FromRaw(*height)};
 	}
 	else if (envelope.type == TypeOf<Evacuate>())
 	{
@@ -1125,6 +1350,25 @@ inline std::optional<GameCommand> Decode(const engine::net::CommandEnvelope &env
 	{
 		if (const auto position = detail::GetPoint(reader))
 			command = PlaceBeacon{*position};
+	}
+	else if (envelope.type == TypeOf<Chat>())
+	{
+		auto text = reader.Text();
+		const auto slots = reader.U32();
+		if (text && slots)
+			command = Chat{std::move(*text), *slots};
+	}
+	else if (envelope.type == TypeOf<CreateTeam>())
+	{
+		const auto squad = reader.U32();
+		auto units = detail::GetUnits(reader);
+		if (squad && units)
+			command = CreateTeam{static_cast<std::int32_t>(*squad), std::move(*units)};
+	}
+	else if (envelope.type == TypeOf<SelectTeam>())
+	{
+		if (const auto squad = reader.U32())
+			command = SelectTeam{static_cast<std::int32_t>(*squad)};
 	}
 	else if (envelope.type == TypeOf<RemoveBeacon>())
 	{

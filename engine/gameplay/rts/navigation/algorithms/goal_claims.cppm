@@ -174,7 +174,7 @@ bool CheckDestination(const NavigationGrid &grid, const GoalCells &cells, const 
 // Pathfinder::checkForAdjust (ground): (cellX, cellY) as the goal for `destination`, its point if it will do.
 template<GoalClaimRules Claims>
 std::optional<Engine::Math::FixedVector2> CheckForAdjust(NavigationGrid &grid, const GoalCells &cells, const GoalSeeker &seeker, const LogicalExtent &extent,
-	std::int32_t cellX, std::int32_t cellY, Engine::Math::FixedVector2 destination, const Claims &claims)
+	std::int32_t cellX, std::int32_t cellY, Engine::Math::FixedVector2 destination, const Claims &claims, std::optional<bool> &direct)
 {
 	if (!grid.Contains(cellX, cellY))
 		return std::nullopt;
@@ -185,11 +185,15 @@ std::optional<Engine::Math::FixedVector2> CheckForAdjust(NavigationGrid &grid, c
 	if (!CheckDestination(grid, cells, seeker, cellX, cellY, claims))
 		return std::nullopt;
 	const Engine::Math::FixedVector2 adjusted = GoalCellPoint(cellX, cellY, seeker.footprint.centered);
-	bool reachable = QuickPathExists(grid, seeker.surfaces, seeker.from, adjusted);
-	if (!QuickPathExists(grid, seeker.surfaces, seeker.from, destination) && QuickPathExists(grid, seeker.surfaces, destination, adjusted))
-		reachable = true;
-	if (!reachable)
-		return std::nullopt;
+	// Reachable from where it is, or else (no path to the destination itself) from the destination. Whether the destination
+	// is reachable is the same for every cell tried: asked once per adjustment (`direct`), when first needed.
+	if (!QuickPathExists(grid, seeker.surfaces, seeker.from, adjusted))
+	{
+		if (!direct)
+			direct = QuickPathExists(grid, seeker.surfaces, seeker.from, destination);
+		if (*direct || !QuickPathExists(grid, seeker.surfaces, destination, adjusted))
+			return std::nullopt;
+	}
 	return adjusted;
 }
 
@@ -207,7 +211,8 @@ std::optional<Engine::Math::FixedVector2> AdjustDestination(NavigationGrid &grid
 		corner = {corner.x + half, corner.y + half};
 	}
 	auto [i, j] = WorldToCell(grid, corner);
-	if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims))
+	std::optional<bool> direct; // QuickPathExists(from, destination), once asked
+	if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims, direct))
 		return found;
 	constexpr std::int32_t MaxCellsToTry = 400;
 	std::int32_t limit = MaxCellsToTry;
@@ -218,14 +223,14 @@ std::optional<Engine::Math::FixedVector2> AdjustDestination(NavigationGrid &grid
 		{
 			++i;
 			--limit;
-			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims))
+			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims, direct))
 				return found;
 		}
 		for (std::int32_t count = delta; count > 0; --count)
 		{
 			++j;
 			--limit;
-			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims))
+			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims, direct))
 				return found;
 		}
 		++delta;
@@ -233,14 +238,14 @@ std::optional<Engine::Math::FixedVector2> AdjustDestination(NavigationGrid &grid
 		{
 			--i;
 			--limit;
-			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims))
+			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims, direct))
 				return found;
 		}
 		for (std::int32_t count = delta; count > 0; --count)
 		{
 			--j;
 			--limit;
-			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims))
+			if (const auto found = CheckForAdjust(grid, cells, seeker, extent, i, j, destination, claims, direct))
 				return found;
 		}
 		++delta;

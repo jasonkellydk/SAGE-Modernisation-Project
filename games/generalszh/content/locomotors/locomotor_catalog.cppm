@@ -68,6 +68,44 @@ engine::config::Schema<LocomotorDefinition> LocomotorSchema()
 		.Fixed("WanderWidthFactor", &D::wanderWidth)
 		.Fixed("WanderLengthFactor", &D::wanderLength)
 		.Fixed("WanderAboutPointRadius", &D::wanderAboutPointRadius)
+		.Fixed("TurnPivotOffset", &D::turnPivotOffset)
+		.Fixed("CirclingRadius", &D::circlingRadius)
+		.On("SlideIntoPlaceTime", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			// INI::parseDurationReal: milliseconds to (fractional) frames.
+			if (const auto ms = engine::config::ReadFixed(node, bind))
+				out.slideIntoPlace = *ms * Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(bind.step.TicksPerSecond())) / Engine::Math::Fixed::FromInt(1000);
+		})
+		.On("AirborneTargetingHeight", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			if (const auto height = engine::config::ReadInt(node, bind))
+				out.airborneTargetingHeight = Engine::Math::Fixed::FromInt(*height);
+		})
+		.PerSecond("Extra2DFriction", &D::extraFriction) // parseFrictionPerSec: per second to per frame
+		.On("Apply2DFrictionWhenAirborne", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			if (const auto value = engine::config::ReadBool(node, bind))
+				out.airborneFriction = *value ? 1u : 0u;
+		})
+		.On("StickToGround", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			if (const auto value = engine::config::ReadBool(node, bind))
+				out.stickToGround = *value ? 1u : 0u;
+		})
+		.PerSecondSquared("Lift", &D::lift) // parseAccelerationReal
+		.On("LiftDamaged", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			// LocomotorTemplate::validate: below zero is unset (Lift).
+			if (const auto value = engine::config::ReadPerSecondSquared(node, bind); value && *value >= Engine::Math::Fixed{})
+			{
+				out.liftDamaged = *value;
+				out.damagedGiven |= 8u;
+			}
+		})
+		.PerSecond("SpeedLimitZ", &D::speedLimitZ) // parseVelocityReal
+		.On("CloseEnoughDist3D", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			if (const auto value = engine::config::ReadBool(node, bind))
+				out.closeEnough3D = *value ? 1u : 0u;
+		})
+		.On("AllowAirborneMotiveForce", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
+			if (const auto value = engine::config::ReadBool(node, bind))
+				out.airborneMotiveForce = *value ? 1u : 0u;
+		})
 		.Enum("Appearance", &D::appearance, std::span<const engine::config::EnumName<LocomotorAppearance>>(LocomotorAppearanceNames))
 		.Enum("ZAxisBehavior", &D::height, std::span<const engine::config::EnumName<HeightBehavior>>(HeightBehaviorNames))
 		.On("SpeedDamaged", [](const engine::config::Node &node, D &out, engine::config::BindContext &bind) {
@@ -91,6 +129,13 @@ engine::config::Schema<LocomotorDefinition> LocomotorSchema()
 				out.damagedGiven |= 4u;
 			}
 		})
+		// LocomotorTemplate's GroupMovementPriority (TheLocomotorPriorityNames: MOVES_BACK, MOVES_MIDDLE, MOVES_FRONT).
+		.On("GroupMovementPriority", [](const engine::config::Node &node, D &out, engine::config::BindContext &) {
+			static constexpr std::pair<std::string_view, std::uint8_t> names[] = {{"MOVES_BACK", 0}, {"MOVES_MIDDLE", 1}, {"MOVES_FRONT", 2}};
+			for (const auto &[name, priority] : names)
+				if (node.Value() == name)
+					out.groupPriority = priority;
+		})
 		.On("Surfaces", [](const engine::config::Node &node, D &out, engine::config::BindContext &) {
 			static constexpr std::pair<std::string_view, std::uint8_t> names[] = {{"GROUND", 1}, {"WATER", 2}, {"CLIFF", 4}, {"AIR", 8}, {"RUBBLE", 16}};
 			out.surfaces = 0;
@@ -100,14 +145,12 @@ engine::config::Schema<LocomotorDefinition> LocomotorSchema()
 						out.surfaces |= bit;
 		});
 	// Recognised; ported with the locomotor's physics, damage and wander.
-	for (const char *key : {"Lift", "LiftDamaged",
-			 "CirclingRadius", "Extra2DFriction", "SpeedLimitZ", "GroupMovementPriority", "AccelerationPitchLimit",
+	for (const char *key : {"AccelerationPitchLimit",
 			 "DecelerationPitchLimit", "BounceAmount", "PitchStiffness", "RollStiffness", "PitchDamping", "RollDamping", "ThrustRoll",
 			 "ThrustWobbleRate", "ThrustMinWobble", "ThrustMaxWobble", "PitchInDirectionOfZVelFactor", "ForwardVelocityPitchFactor",
 			 "LateralVelocityRollFactor", "ForwardAccelerationPitchFactor", "LateralAccelerationRollFactor", "UniformAxialDamping",
-			 "TurnPivotOffset", "Apply2DFrictionWhenAirborne", "DownhillOnly", "AllowAirborneMotiveForce", "LocomotorWorksWhenDead",
-			 "AirborneTargetingHeight", "StickToGround", "HasSuspension", "FrontWheelTurnAngle",
-			 "MaximumWheelExtension", "MaximumWheelCompression", "CloseEnoughDist3D", "SlideIntoPlaceTime",
+			 "DownhillOnly", "LocomotorWorksWhenDead", "HasSuspension", "FrontWheelTurnAngle",
+			 "MaximumWheelExtension", "MaximumWheelCompression",
 			 "RudderCorrectionDegree", "RudderCorrectionRate",
 			 "ElevatorCorrectionDegree", "ElevatorCorrectionRate"})
 		schema.Ignore(key);

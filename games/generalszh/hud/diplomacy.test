@@ -1,0 +1,169 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.diplomacy;
+
+using namespace generalszh;
+
+namespace
+{
+std::u16string Label(std::string_view label)
+{
+	return std::u16string(label.begin(), label.end());
+}
+
+hud::DiplomacySlot Slot(std::u16string name, bool human, bool ai, int team, bool alive = true, bool observer = false, bool connected = true)
+{
+	hud::DiplomacySlot slot;
+	slot.occupied = true;
+	slot.human = human;
+	slot.ai = ai;
+	slot.name = std::move(name);
+	slot.side = u"USA";
+	slot.team = team;
+	slot.alive = alive;
+	slot.observer = observer;
+	slot.connected = connected;
+	slot.color = 0xFF0000FFu;
+	return slot;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(diplomacy)
+
+// legacy_parity: Diplomacy.cpp PopulateInGameDiplomacyPopup: the occupied slots in order (an empty slot leaves no row);
+// the local human no mute button, another human still in the game mute (unmute once muted), a computer none; status
+// alive in green, dead in red, an observer in white; a human gone from a network game "GUI:PlayerGone" in dark red (an
+// observer gone in light grey); teams "Team:<n + 1>", "Team:AI" for a computer on no team; the rows after hidden.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_diplomacy_rows_show_each_slot)
+{
+	std::vector<hud::DiplomacySlot> slots(8);
+	slots[0] = Slot(u"Me", true, false, 0);
+	slots[0].local = true;
+	slots[1] = Slot(u"Friend", true, false, 0, false);
+	slots[3] = Slot(u"Hard AI", false, true, -1);
+	slots[4] = Slot(u"Watcher", true, false, -1, false, true);
+	slots[5] = Slot(u"Quitter", true, false, 1, true, false, false);
+	slots[6] = Slot(u"Lurker", true, false, -1, false, true, false);
+	std::array<bool, 8> muted{};
+	auto rows = hud::PopulateDiplomacy(slots, muted, true, Label);
+	BOOST_TEST(rows[0].slot == 0);
+	BOOST_TEST(!rows[0].muteShown);
+	BOOST_TEST(!rows[0].unmuteShown);
+	BOOST_TEST((rows[0].status == u"GUI:PlayerAlive"));
+	BOOST_TEST(rows[0].statusColor == hud::DiplomacyAlive);
+	BOOST_TEST((rows[0].team == u"Team:1"));
+	BOOST_TEST(rows[1].slot == 1);
+	BOOST_TEST(rows[1].muteShown);
+	BOOST_TEST((rows[1].status == u"GUI:PlayerDead"));
+	BOOST_TEST(rows[1].statusColor == hud::DiplomacyDead);
+	BOOST_TEST(rows[2].slot == 3);
+	BOOST_TEST(!rows[2].muteShown);
+	BOOST_TEST((rows[2].team == u"Team:AI"));
+	BOOST_TEST((rows[3].status == u"GUI:PlayerObserver"));
+	BOOST_TEST(rows[3].statusColor == hud::DiplomacyObserver);
+	BOOST_TEST((rows[3].team == u"Team:0"));
+	BOOST_TEST((rows[4].status == u"GUI:PlayerGone"));
+	BOOST_TEST(rows[4].statusColor == hud::DiplomacyGone);
+	BOOST_TEST(!rows[4].muteShown); // gone: no mute
+	BOOST_TEST((rows[5].status == u"GUI:PlayerObserverGone"));
+	BOOST_TEST(rows[5].statusColor == hud::DiplomacyObserverGone);
+	BOOST_TEST(!rows[6].shown);
+	muted[1] = true;
+	rows = hud::PopulateDiplomacy(slots, muted, true, Label);
+	BOOST_TEST(!rows[1].muteShown);
+	BOOST_TEST(rows[1].unmuteShown);
+	// A skirmish (no network): the human is in the game whatever its connection.
+	slots[0].connected = false;
+	rows = hud::PopulateDiplomacy(slots, muted, false, Label);
+	BOOST_TEST((rows[0].status == u"GUI:PlayerAlive"));
+}
+
+// legacy_parity: ShowDiplomacy (MSG_META_DIPLOMACY: ToggleDiplomacy(FALSE)) with ProcessAnimateWindowSlideFromTop: the
+// window starts the display's width (800) above its top of 100 and comes down 40 a frame until within 80, then by the
+// truncated velocity shrinking by 0.67 a frame, never below 1: -660, -620 ... 20, 46, 63, 75, 83, 88, 91, 93 ... 100,
+// settled on the 33rd frame. ButtonHide: once there, it goes back up (the velocity turned round, growing by 1.33 near
+// its rest, else the top speed) and hides as it reaches -700 on the 30th frame. Its mute buttons mute the row's slot.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_diplomacy_window_slides_down_and_back_up)
+{
+	const std::vector<int> down{-660, -620, -580, -540, -500, -460, -420, -380, -340, -300, -260, -220, -180, -140, -100, -60, -20, 20, 46, 63, 75,
+		83, 88, 91, 93, 94, 95, 96, 97, 98, 99, 100, 100};
+	hud::TopSlide slide = hud::StartTopSlide(100, 800);
+	for (std::size_t frame = 0; frame < down.size(); ++frame)
+	{
+		hud::StepTopSlide(slide);
+		BOOST_TEST(slide.currentY == down[frame]);
+	}
+	BOOST_TEST(slide.finished);
+	hud::ReverseTopSlide(slide);
+	const std::vector<int> upStart{99, 98, 97, 95, 92, 88, 83, 76, 67, 54, 37, 14};
+	int frames = 0;
+	for (std::size_t frame = 0; !slide.finished; ++frame, ++frames)
+	{
+		hud::StepTopSlideBack(slide);
+		if (frame < upStart.size())
+			BOOST_TEST(slide.currentY == upStart[frame]);
+	}
+	BOOST_TEST(frames == 30);
+	BOOST_TEST(slide.currentY == -700);
+
+	std::vector<hud::DiplomacySlot> slots(8);
+	slots[0] = Slot(u"Me", true, false, 0);
+	slots[0].local = true;
+	slots[2] = Slot(u"Other", true, false, 1);
+	hud::DiplomacyViewModel window(Label, [&]() -> std::optional<std::vector<hud::DiplomacySlot>> { return slots; });
+	window.SetLayout(100, 800);
+	const hud::DiplomacyContext multiplayer{true, false, true, true};
+	window.Toggle(false, multiplayer);
+	BOOST_TEST(window.Shown());
+	BOOST_TEST(window.inGameShown.Get());
+	BOOST_TEST(!window.soloShown.Get());
+	BOOST_TEST(window.top.Get() == -700);
+	window.hide.Execute(); // still sliding in: nothing
+	window.Update(1.0 / 30.0);
+	BOOST_TEST(window.top.Get() == -660);
+	window.Update(10.0);
+	BOOST_TEST(window.top.Get() == 100);
+	BOOST_TEST(window.Row(1).muteShown);
+	BOOST_TEST(window.muteShown[1].Get());
+	window.mute[1].Execute();
+	BOOST_TEST(window.Muted(2));
+	BOOST_TEST(window.unmuteShown[1].Get());
+	window.unmute[1].Execute();
+	BOOST_TEST(!window.Muted(2));
+	window.Toggle(false, multiplayer); // hides, sliding back up
+	BOOST_TEST(window.Shown());
+	window.Update(10.0);
+	BOOST_TEST(!window.Shown());
+	// Under the quit menu or without input it does not show.
+	window.Toggle(false, hud::DiplomacyContext{true, true, true, true});
+	BOOST_TEST(!window.Shown());
+}
+
+// legacy_parity: UpdateDiplomacyBriefingText: each military subtitle's or popup message's label joins the history once,
+// its text in the messages' two colours by turn; a clear empties it; outside a multiplayer game the solo panel shows.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_briefing_history_keeps_each_label_once)
+{
+	hud::DiplomacyViewModel window(Label, [] { return std::optional<std::vector<hud::DiplomacySlot>>{}; });
+	window.SetMessageColors(0xFFFFFF00u, 0xFF00FFFFu);
+	window.Briefing("SCRIPT:Brief1", false);
+	window.Briefing("SCRIPT:Brief2", false);
+	window.Briefing("SCRIPT:Brief1", false);
+	BOOST_TEST_REQUIRE(window.briefingLines.Get().size() == 2u);
+	BOOST_TEST((window.briefingLines.Get()[1] == u"SCRIPT:Brief2"));
+	BOOST_TEST(window.briefingColors.Get()[0] == 0xFFFFFF00u);
+	BOOST_TEST(window.briefingColors.Get()[1] == 0xFF00FFFFu);
+	window.Toggle(true, hud::DiplomacyContext{true, false, false, true});
+	BOOST_TEST(window.soloShown.Get());
+	BOOST_TEST(!window.inGameShown.Get());
+	window.Briefing("", true);
+	BOOST_TEST(window.briefingLines.Get().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

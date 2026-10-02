@@ -21,6 +21,7 @@ import games.generalszh.gameplay.abilities.systems.sticky_bomb_system;
 import games.generalszh.gameplay.abilities.components.command_button_hunt;
 import games.generalszh.gameplay.abilities.components.special_abilities;
 import games.generalszh.gameplay.abilities.components.special_object;
+import games.generalszh.gameplay.abilities.components.ability_laser;
 import games.generalszh.gameplay.abilities.components.sticky_bomb;
 
 // The abilities domain's simulation components, registered with the world (the session's composition: which data
@@ -40,6 +41,7 @@ inline void RegisterAbilitiesComponents(ecs::World &world)
 	world.RegisterComponent<generalszh::gameplay::SpecialAbilities>();
 	world.RegisterComponent<generalszh::gameplay::CommandButtonHunt>();
 	world.RegisterComponent<generalszh::gameplay::SpecialObject>();
+	world.RegisterComponent<generalszh::gameplay::AbilityLaser>();
 	world.RegisterComponent<generalszh::gameplay::StickyBomb>();
 }
 

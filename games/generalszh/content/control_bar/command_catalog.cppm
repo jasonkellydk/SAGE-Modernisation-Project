@@ -50,6 +50,11 @@ inline constexpr std::uint32_t OptionOne = 1u << 15;          // OPTION_ONE (a S
 inline constexpr std::uint32_t OptionTwo = 1u << 16;          // OPTION_TWO (hold the line)
 inline constexpr std::uint32_t OptionThree = 1u << 17;        // OPTION_THREE (search and destroy)
 inline constexpr std::uint32_t CanUseWaypoints = 1u << 18;    // CAN_USE_WAYPOINTS: a script may fire it along a waypoint path
+// USES_MINE_CLEARING_WEAPONSET: needing a target, pressing it first puts the selection on its MINE_CLEARING_DETAIL
+// weapon set (MSG_SET_MINE_CLEARING_DETAIL).
+inline constexpr std::uint32_t UsesMineClearingWeaponSet = 1u << 19;
+// SINGLE_USE_COMMAND: pressing it marks its object's single-use command used (no shipped button has it).
+inline constexpr std::uint32_t SingleUseCommand = 1u << 20;
 // COMMAND_OPTION_NEED_OBJECT_TARGET: any of the object targets.
 inline constexpr std::uint32_t NeedObjectTarget = NeedTargetEnemy | NeedTargetNeutral | NeedTargetAlly;
 }
@@ -65,7 +70,11 @@ struct CommandButtonContent
 	std::string buttonImage;
 	std::string textLabel;
 	std::string descriptLabel;
+	std::string conflictingLabel; // ConflictingLabel: the build tooltip of an upgrade the object cannot take
+	std::string purchasedLabel;   // PurchasedLabel: the build tooltip of an upgrade already had
 	std::string borderType;
+	// UnitSpecificSound: played for the local player as the button is pressed (processCommandUI); empty: none.
+	std::string unitSpecificSound;
 	// The cursor while it waits for its target, over a valid one and otherwise (CursorName / InvalidCursorName: a
 	// MouseCursor name; unknown or none: CROSS).
 	std::string cursorName;
@@ -164,6 +173,8 @@ inline CommandCatalog BindCommandCatalog(const engine::config::Document &command
 		button.invalidCursorName = text("InvalidCursorName");
 		button.textLabel = text("TextLabel");
 		button.descriptLabel = text("DescriptLabel");
+		button.conflictingLabel = text("ConflictingLabel");
+		button.purchasedLabel = text("PurchasedLabel");
 		button.borderType = text("ButtonBorderType");
 		if (const std::string slot = text("WeaponSlot"); !slot.empty())
 			button.weaponSlot = slot == "SECONDARY" ? 1 : slot == "TERTIARY" ? 2 : 0;
@@ -216,7 +227,12 @@ inline CommandCatalog BindCommandCatalog(const engine::config::Document &command
 					button.options |= button_option::OptionThree;
 				else if (Same(option, "CAN_USE_WAYPOINTS"))
 					button.options |= button_option::CanUseWaypoints;
+				else if (Same(option, "USES_MINE_CLEARING_WEAPONSET"))
+					button.options |= button_option::UsesMineClearingWeaponSet;
+				else if (Same(option, "SINGLE_USE_COMMAND"))
+					button.options |= button_option::SingleUseCommand;
 			}
+		button.unitSpecificSound = text("UnitSpecificSound");
 		catalog.buttons.insert_or_assign(button.name, std::move(button));
 	}
 	for (const engine::config::Node &root : commandSets.Roots())

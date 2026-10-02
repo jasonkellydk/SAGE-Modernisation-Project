@@ -37,11 +37,11 @@ inline void StepMessages(InGameMessages &messages, std::uint64_t tick)
 	}
 }
 
-// "%ls" (or "%s") in the text replaced by `name` (the original's swprintf of the label's format).
+// "%ls" (or "%hs", or "%s") in the text replaced by `name` (the original's swprintf of the label's format).
 inline std::u16string FormatWithName(std::u16string_view format, std::u16string_view name)
 {
 	std::u16string text(format);
-	for (const std::u16string_view marker : {std::u16string_view(u"%ls"), std::u16string_view(u"%s")})
+	for (const std::u16string_view marker : {std::u16string_view(u"%ls"), std::u16string_view(u"%hs"), std::u16string_view(u"%s")})
 		if (const auto at = text.find(marker); at != std::u16string::npos)
 		{
 			text.replace(at, marker.size(), name);

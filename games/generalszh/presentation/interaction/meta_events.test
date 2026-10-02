@@ -1,0 +1,120 @@
+#include <boost/test/unit_test.hpp>
+
+#include <string>
+#include <string_view>
+
+import games.generalszh.presentation.interaction.algorithms.meta_events;
+
+using namespace generalszh::presentation;
+using namespace generalszh::content;
+
+namespace
+{
+// Records as the shipped CommandMap.ini defines them (each prepended as it is read, so the list runs last-defined-first).
+CommandMap ShippedSubset()
+{
+	CommandMap map;
+	const auto define = [&](std::string meta, MappableKey key, MetaTransition transition, std::uint8_t modifiers, std::uint32_t usable) {
+		MetaMapRecord record{std::move(meta)};
+		record.key = key;
+		record.transition = transition;
+		record.modifiers = modifiers;
+		record.usableIn = usable;
+		map.records.insert(map.records.begin(), record);
+	};
+	define("CREATE_TEAM1", MappableKey::K1, MetaTransition::Down, meta_modifier::Ctrl, command_usable::Game);
+	define("SELECT_TEAM1", MappableKey::K1, MetaTransition::Down, meta_modifier::None, command_usable::Game);
+	define("OPTIONS", MappableKey::ESC, MetaTransition::Down, meta_modifier::None, command_usable::Game);
+	define("BEGIN_FORCEATTACK", MappableKey::NONE, MetaTransition::Down, meta_modifier::Ctrl, command_usable::Game);
+	define("END_FORCEATTACK", MappableKey::NONE, MetaTransition::Up, meta_modifier::Ctrl, command_usable::Game);
+	define("TAKE_SCREENSHOT", MappableKey::F12, MetaTransition::Down, meta_modifier::None, command_usable::Game | command_usable::Shell);
+	define("BEGIN_CAMERA_ZOOM_IN", MappableKey::KP8, MetaTransition::Down, meta_modifier::None, command_usable::Game);
+	define("END_CAMERA_ZOOM_IN", MappableKey::KP8, MetaTransition::Up, meta_modifier::None, command_usable::Game);
+	define("TOGGLE_FAST_FORWARD_REPLAY", MappableKey::F, MetaTransition::Down, meta_modifier::None, command_usable::Game);
+	return map;
+}
+
+std::string_view Raised(const MetaTranslation &translation)
+{
+	return translation.raised != nullptr ? std::string_view(translation.raised->meta) : std::string_view();
+}
+}
+
+BOOST_AUTO_TEST_SUITE(meta_events)
+
+// legacy_parity: MetaEvent.cpp MetaEventTranslator::translateGameMessage. Pressing Ctrl alone changes the modifiers:
+// the KEY_NONE record for the new ones raises BEGIN_FORCEATTACK; 1 with Ctrl held is CREATE_TEAM1 (the modifiers must
+// match exactly); its auto-repeat is eaten, raising nothing; 1 let go matches nothing (the key goes on); Ctrl let go
+// raises END_FORCEATTACK (the UP record for the modifiers before); 1 alone is SELECT_TEAM1; the keypad 8 raises the zoom
+// pair down and up. A GAME-only key waits for the game client's frame 1; in the shell only SHELL records answer.
+BOOST_AUTO_TEST_CASE(legacy_parity_keys_raise_their_meta_events)
+{
+	const CommandMap map = ShippedSubset();
+	MetaKeyState state;
+	const MetaKeyContext game{false, 5, false};
+	const auto key = [&](MappableKey which, bool down, std::uint8_t modifiers, bool repeat = false, MetaKeyContext context = {false, 5, false}) {
+		return TranslateMetaKey(map, state, MetaKeyInput{which, down, repeat, modifiers}, context);
+	};
+
+	auto result = key(MappableKey::Other, true, meta_modifier::Ctrl);
+	BOOST_TEST(Raised(result) == "BEGIN_FORCEATTACK");
+	BOOST_TEST(result.consumed);
+	result = key(MappableKey::K1, true, meta_modifier::Ctrl);
+	BOOST_TEST(Raised(result) == "CREATE_TEAM1");
+	BOOST_TEST(result.consumed);
+	result = key(MappableKey::K1, true, meta_modifier::Ctrl, true);
+	BOOST_TEST(Raised(result).empty());
+	BOOST_TEST(result.consumed);
+	result = key(MappableKey::K1, false, meta_modifier::Ctrl);
+	BOOST_TEST(Raised(result).empty());
+	BOOST_TEST(!result.consumed);
+	result = key(MappableKey::Other, false, meta_modifier::None);
+	BOOST_TEST(Raised(result) == "END_FORCEATTACK");
+	result = key(MappableKey::K1, true, meta_modifier::None);
+	BOOST_TEST(Raised(result) == "SELECT_TEAM1");
+	BOOST_TEST((state.lastKeyDown == MappableKey::K1));
+	BOOST_TEST(Raised(key(MappableKey::KP8, true, meta_modifier::None)) == "BEGIN_CAMERA_ZOOM_IN");
+	BOOST_TEST(Raised(key(MappableKey::KP8, false, meta_modifier::None)) == "END_CAMERA_ZOOM_IN");
+	// Shift with 1: no record has those modifiers; Shift's own change raises nothing either (no KEY_NONE SHIFT here).
+	result = key(MappableKey::K1, true, meta_modifier::Shift);
+	BOOST_TEST(Raised(result).empty());
+	BOOST_TEST(!result.consumed);
+	BOOST_TEST(state.lastModifiers == meta_modifier::Shift);
+	key(MappableKey::Other, false, meta_modifier::None);
+
+	// Esc: OPTIONS in a game from frame 1, nothing before it nor in the shell; F12 answers in both.
+	BOOST_TEST(Raised(key(MappableKey::ESC, true, meta_modifier::None)) == "OPTIONS");
+	BOOST_TEST(Raised(key(MappableKey::ESC, true, meta_modifier::None, false, MetaKeyContext{false, 0, false})).empty());
+	BOOST_TEST(Raised(key(MappableKey::ESC, true, meta_modifier::None, false, MetaKeyContext{true, 0, false})).empty());
+	BOOST_TEST(Raised(key(MappableKey::F12, true, meta_modifier::None, false, MetaKeyContext{true, 0, false})) == "TAKE_SCREENSHOT");
+	BOOST_TEST(Raised(key(MappableKey::F12, true, meta_modifier::None, false, game)) == "TAKE_SCREENSHOT");
+}
+
+// legacy_parity: translateGameMessage's TOGGLE_FAST_FORWARD_REPLAY: F (no modifiers) flips the replay's fast mode only in
+// a replay, raises no meta-event and keeps the key (KEEP_MESSAGE: "this key gets used a lot by non-replay hotkeys").
+BOOST_AUTO_TEST_CASE(legacy_parity_f_fast_forwards_only_a_replay)
+{
+	const CommandMap map = ShippedSubset();
+	MetaKeyState state;
+	auto result = TranslateMetaKey(map, state, MetaKeyInput{MappableKey::F, true, false, meta_modifier::None}, MetaKeyContext{false, 5, false});
+	BOOST_TEST(!result.toggleFastForward);
+	BOOST_TEST(!result.consumed);
+	BOOST_TEST((result.raised == nullptr));
+	result = TranslateMetaKey(map, state, MetaKeyInput{MappableKey::F, true, false, meta_modifier::None}, MetaKeyContext{false, 5, true});
+	BOOST_TEST(result.toggleFastForward);
+	BOOST_TEST(!result.consumed);
+}
+
+// legacy_parity: the list's order decides: the first record that fits takes the key. With Ctrl first pressed together
+// with 1 (both changed in one message), the modifiers-only record comes before CREATE_TEAM1 in the shipped order
+// (BEGIN_FORCEATTACK is defined after it, so it is tried first): BEGIN_FORCEATTACK is raised and the 1 goes no further.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_first_record_that_fits_takes_the_key)
+{
+	const CommandMap map = ShippedSubset();
+	MetaKeyState state;
+	const auto result = TranslateMetaKey(map, state, MetaKeyInput{MappableKey::K1, true, false, meta_modifier::Ctrl}, MetaKeyContext{false, 5, false});
+	BOOST_TEST(Raised(result) == "BEGIN_FORCEATTACK");
+	BOOST_TEST(result.consumed);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

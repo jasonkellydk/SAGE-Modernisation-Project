@@ -15,11 +15,11 @@ export namespace engine::gameplay
 struct Spawner
 {
 	static constexpr std::size_t MaxSpawns = 16; // an angry mob keeps ten
-	static constexpr std::size_t MaxTemplates = 4;
+	static constexpr std::size_t MaxTemplates = 8; // SpawnTemplateName in turn: an angry mob lists seven
 	static constexpr std::uint32_t NoTemplate = 0xFFFFFFFFu;
 	std::array<ecs::Entity, MaxSpawns> spawned{};
 	std::array<std::uint64_t, MaxSpawns> due{};
-	std::array<std::uint32_t, MaxTemplates> templates{NoTemplate, NoTemplate, NoTemplate, NoTemplate};
+	std::array<std::uint32_t, MaxTemplates> templates{NoTemplate, NoTemplate, NoTemplate, NoTemplate, NoTemplate, NoTemplate, NoTemplate, NoTemplate};
 	std::uint64_t replaceDelay{0};
 	std::uint64_t nextUpdate{0};
 	std::int32_t oneShotLeft{-1}; // below zero: it keeps replacing
@@ -33,7 +33,11 @@ struct Spawner
 	bool aggregateHealth{false}; // AggregateHealth: its health is its spawns', and it goes with the last of them
 	std::uint8_t number{0};     // SpawnNumber (a whole set, for the aggregate)
 	bool spawnsAreWeapons{false}; // SPAWNS_ARE_THE_WEAPONS: its spawns share its timed disables (DisableFollowSystem)
-	std::uint8_t reserved[10]{}; // no padding: checkpoints hold its bytes
+	bool freeWill{false};         // SlavesHaveFreeWill: its spawns are not sent after what its group attacks
+	// InitialBurst left (m_initialBurstCountdown): a budding spawner's next spawns leave through the door of the
+	// structure that produced it, one fewer each.
+	std::uint8_t initialBurstLeft{0};
+	std::uint8_t reserved[8]{}; // no padding: checkpoints hold its bytes
 };
 }
 
@@ -43,7 +47,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Spawner>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.spawner";
-	static constexpr std::uint32_t Version = 2;
+	static constexpr std::uint32_t Version = 3; // 3: eight templates (was four)
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Spawner &value, StateHasher &hasher) noexcept
 	{
@@ -58,7 +62,7 @@ struct ComponentTraits<engine::gameplay::Spawner>
 		hasher.AppendU64((std::uint64_t{static_cast<std::uint32_t>(value.oneShotLeft)} << 32) | (std::uint64_t{value.spawnedCount} << 24) |
 			(std::uint64_t{value.dueCount} << 16) | (std::uint64_t{value.templateCount} << 8) | value.cursor);
 		hasher.AppendU64((value.active ? 1u : 0u) | (value.requireSpawner ? 2u : 0u) | (value.budding ? 4u : 0u) | (value.aggregateHealth ? 8u : 0u) | (value.spawnsAreWeapons ? 16u : 0u) |
-			(std::uint64_t{value.number} << 8));
+			(std::uint64_t{value.number} << 8) | (std::uint64_t{value.initialBurstLeft} << 16));
 	}
 };
 }

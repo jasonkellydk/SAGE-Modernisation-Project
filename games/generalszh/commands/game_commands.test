@@ -12,6 +12,31 @@ using Engine::Math::Fixed;
 
 BOOST_AUTO_TEST_SUITE(game_commands)
 
+// GameMessage MSG_DO_MOVETO / MSG_ADD_WAYPOINT / MSG_DO_ATTACKMOVETO (CommandXlat.cpp: appendLocationArgument of the
+// Coord3D screenToTerrain gave, z included; GameLogicDispatch.cpp reads it back with getLocation): the spot's height rides
+// along unchanged, to the raw fixed-point value.
+BOOST_AUTO_TEST_CASE(legacy_parity_point_orders_carry_their_height)
+{
+	ecs::Entity tank;
+	tank.index = 7;
+	tank.generation = 2;
+	const Fixed height = Fixed::FromRaw(3'014'657); // 46.0000152...: a deck's height, not a whole number
+	const auto moved = Decode(Encode(MoveTo{{tank}, {Fixed::FromInt(10), Fixed::FromInt(20)}, height}));
+	BOOST_TEST_REQUIRE(moved.has_value());
+	BOOST_TEST(std::get<MoveTo>(*moved).height.Raw() == height.Raw());
+	BOOST_TEST((std::get<MoveTo>(*moved).destination.y == Fixed::FromInt(20)));
+	const auto waypoint = Decode(Encode(AddWaypoint{{tank}, {Fixed::FromInt(30), Fixed::FromInt(40)}, -height}));
+	BOOST_TEST_REQUIRE(waypoint.has_value());
+	BOOST_TEST(std::get<AddWaypoint>(*waypoint).height.Raw() == (-height).Raw());
+	const auto attackMoving = Decode(Encode(AttackMoveTo{{tank}, {Fixed::FromInt(3), Fixed::FromInt(4)}, height}));
+	BOOST_TEST_REQUIRE(attackMoving.has_value());
+	BOOST_TEST(std::get<AttackMoveTo>(*attackMoving).height.Raw() == height.Raw());
+	// A payload cut short of its height is no command.
+	auto cut = Encode(MoveTo{{tank}, {Fixed::FromInt(10), Fixed::FromInt(20)}, height});
+	cut.payload.resize(cut.payload.size() - 8);
+	BOOST_TEST(!Decode(cut).has_value());
+}
+
 BOOST_AUTO_TEST_CASE(commands_round_trip_through_their_wire_form)
 {
 	ecs::Entity tank;
@@ -163,6 +188,24 @@ BOOST_AUTO_TEST_CASE(toggle_overcharge_orders_round_trip)
 	padded.payload.push_back(std::byte{0});
 	BOOST_TEST(!Decode(padded).has_value());
 	BOOST_TEST((Encode(ToggleOvercharge{}).type != Encode(Stop{}).type));
+}
+
+// MSG_SET_MINE_CLEARING_DETAIL travels the bus with its units; MSG_DO_SPECIAL_POWER_AT_LOCATION's angle (a placed
+// SPECIAL_POWER_CONSTRUCT's) rides along.
+BOOST_AUTO_TEST_CASE(mine_clearing_detail_and_a_powers_angle_round_trip)
+{
+	ecs::Entity dozer;
+	dozer.index = 5;
+	dozer.generation = 2;
+	const auto detail = Decode(Encode(SetMineClearingDetail{{dozer}}));
+	BOOST_TEST_REQUIRE(detail.has_value());
+	BOOST_TEST_REQUIRE(std::holds_alternative<SetMineClearingDetail>(*detail));
+	BOOST_TEST((std::get<SetMineClearingDetail>(*detail).units == std::vector<ecs::Entity>{dozer}));
+	BOOST_TEST((Encode(SetMineClearingDetail{}).type != Encode(ToggleOvercharge{}).type));
+	const auto sneak = Decode(Encode(UseSpecialPower{dozer, "SuperweaponSneakAttack", {Fixed::FromInt(1), Fixed::FromInt(2)}, true, 8u, 0x40000000u}));
+	BOOST_TEST_REQUIRE(sneak.has_value());
+	BOOST_TEST(std::get<UseSpecialPower>(*sneak).angle == 0x40000000u);
+	BOOST_TEST(std::get<UseSpecialPower>(*sneak).options == 8u);
 }
 
 // Switching weapons (MSG_SWITCH_WEAPONS) travels the bus: the units and the slot (PRIMARY to TERTIARY), nothing else.
@@ -395,6 +438,17 @@ BOOST_AUTO_TEST_CASE(unit_production_orders_round_trip)
 	BOOST_TEST_REQUIRE(cancelled.has_value());
 	BOOST_TEST(std::get<CancelUnit>(*cancelled).productionId == 7u);
 	BOOST_TEST(!Decode(Encode(QueueUnit{factory, std::string(129, 'x')})).has_value());
+}
+
+// Recorder.cpp (RecorderClass::writeToFile, called from GameLogic for each GameMessage it runs) and ConnectionManager::
+// sendChat (chat is a NetChatCommandMsg, never a GameMessage): a replay keeps every order but no chat.
+BOOST_AUTO_TEST_CASE(legacy_parity_chat_is_never_recorded)
+{
+	BOOST_TEST(!Recorded(TypeOf<Chat>()));
+	BOOST_TEST(!Recorded(Encode(Chat{"hello", 3u}).type));
+	BOOST_TEST(Recorded(TypeOf<MoveTo>()));
+	BOOST_TEST(Recorded(TypeOf<SetMineClearingDetail>()));
+	BOOST_TEST(Recorded(TypeOf<MusicProgress>()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

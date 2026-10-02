@@ -23,6 +23,7 @@ module games.generalszh.hosts.game.front_end;
 import Engine.UI.WND;
 import Engine.UI.WND.Document;
 import Engine.UI.WND.Input;
+import Engine.UI.WND.Controls;
 import Engine.UI.WND.Bindings;
 import games.generalszh.hosts.game.shell_menu;
 import games.generalszh.hosts.game.credits_view;
@@ -32,6 +33,10 @@ import games.generalszh.shell.credits.credits_view_model;
 import games.generalszh.shell.replay.replay_menu_view;
 import games.generalszh.shell.save_load.save_load_view;
 import games.generalszh.shell.skirmish.skirmish_view;
+import games.generalszh.shell.skirmish.skirmish_tooltips;
+import games.generalszh.shell.lan.lan_tooltips;
+import games.generalszh.hud.build_tooltip;
+import games.generalszh.presentation.interaction.algorithms.mouse_tooltip;
 import games.generalszh.shell.lan.lan_view;
 import games.generalszh.shell.challenge.challenge_view;
 import games.generalszh.content.global.challenge_generals;
@@ -74,6 +79,12 @@ struct FrontEnd::State
 	bool inGame{false};
 	const engine::localization::StringTable *strings{nullptr};
 	Setup setup;
+	// The mouse's tooltip over the shell's windows (the original's one Mouse), its look, the pointer on the screen and
+	// whether a window grabbed it (GameWindowManager's m_grabWindow: a gadget pressed, until the button comes up).
+	presentation::MouseTooltip tooltip;
+	presentation::MouseTooltipSettings tooltipSettings;
+	float screenX{0.0f}, screenY{0.0f};
+	bool grabbed{false};
 	shell::ShellModel model;
 	// The main menu.
 	ShellMenu mainMenu;
@@ -512,7 +523,9 @@ void FrontEnd::Load(const engine::filesystem::VirtualFileSystem &files, const en
 	load(state.popupSaveMenu, "Window/Menus/PopupSaveLoad.wnd", "save/load popup");
 	// The score screen after a game.
 	load(state.scoreMenu, "Window/Menus/ScoreScreen.wnd", "score screen");
-	state.scoreViewModel.emplace([&strings](std::string_view label) { return Localized(strings, std::string(label).c_str()); });
+	// finishSinglePlayerInit's challenge win / loss voice: TheAudio->addAudioEvent.
+	state.scoreViewModel.emplace([&strings](std::string_view label) { return Localized(strings, std::string(label).c_str()); },
+		[&game](std::string_view sound) { game.PlayInterfaceSound(sound); });
 	state.scoreBindings.emplace(state.scoreMenu.Document());
 	{
 		const ShellMenu &scoreImages = state.scoreMenu;
@@ -537,7 +550,7 @@ void FrontEnd::Load(const engine::filesystem::VirtualFileSystem &files, const en
 	// Skirmish setup (SkirmishGameOptionsMenu.wnd, SkirmishMapSelectMenu.wnd; Skirmish.ini, SkirmishStats.ini).
 	load(state.skirmishMenu, "Window/Menus/SkirmishGameOptionsMenu.wnd", "skirmish menu");
 	load(state.mapSelectMenu, "Window/Menus/SkirmishMapSelectMenu.wnd", "skirmish map list");
-	state.setupCatalog = LoadSetupCatalog(loader, files, strings);
+	state.setupCatalog = LoadSetupCatalog(loader, files, strings, setup.userData);
 	state.skirmishPreferences = engine::config::Preferences::Parse(ReadFileText(setup.userData / "Skirmish.ini"));
 	shell::SkirmishServices skirmishServices;
 	skirmishServices.text = [&strings](std::string_view label) {
@@ -627,7 +640,11 @@ void FrontEnd::Load(const engine::filesystem::VirtualFileSystem &files, const en
 	state.lanOptionsBindings.emplace(state.lanOptionsMenu.Document());
 	state.lanMapBindings.emplace(state.lanMapMenu.Document());
 	state.lanLobbyView.emplace(*state.lanLobbyBindings, *state.lanLobbyViewModel);
-	state.gameInfoView.emplace(*state.gameInfoBindings, *state.lanLobbyViewModel);
+	{
+		const ShellMenu &gameInfoImages = state.gameInfoMenu;
+		state.gameInfoView.emplace(*state.gameInfoBindings, *state.lanLobbyViewModel,
+			[&gameInfoImages](std::string_view name) { return gameInfoImages.Image(name); });
+	}
 	shell::BindDirectConnectView(*state.directConnectBindings, *state.directConnectViewModel);
 	const ShellMenu &lanImages = state.lanOptionsMenu;
 	state.lanOptionsView.emplace(*state.lanOptionsBindings, state.lanOptionsMenu.Document(), *state.lanMapBindings, state.lanMapMenu.Document(),
@@ -806,6 +823,14 @@ void FrontEnd::Load(const engine::filesystem::VirtualFileSystem &files, const en
 void FrontEnd::Handle(const engine::platform::PlatformEvent &event)
 {
 	State &state = *m_state;
+	if (event.type == engine::platform::EventType::mouse_moved || event.type == engine::platform::EventType::mouse_button_down ||
+		event.type == engine::platform::EventType::mouse_button_up)
+	{
+		state.screenX = event.position.x;
+		state.screenY = event.position.y;
+		if (event.type == engine::platform::EventType::mouse_button_up && event.code == 1)
+			state.grabbed = false;
+	}
 	if (state.inGame && state.Active().first == nullptr)
 		return; // the game's input
 	using engine::platform::EventType;
@@ -889,7 +914,11 @@ void FrontEnd::Handle(const engine::platform::PlatformEvent &event)
 		break;
 	case EventType::mouse_button_down:
 		if (event.code == 1)
+		{
+			// GWM_LEFT_DOWN used by a window: it holds the mouse until the button comes up.
+			state.grabbed = Engine::UI::WND::Gadget_At(*layout, x, y).has_value();
 			input = state.pointer.Press(*layout, x, y);
+		}
 		state.lastPointer = {x, y};
 		break;
 	case EventType::mouse_button_up:
@@ -1236,7 +1265,11 @@ void FrontEnd::ToggleQuitMenu()
 void FrontEnd::ShowScoreScreen(const shell::ScoreScreenSetup &setup)
 {
 	State &state = *m_state;
-	state.scoreViewModel->Show(setup);
+	// The war school's advice 25) reads TheGlobalData->m_useAlternateMouse: the options' alternate mouse.
+	shell::ScoreScreenSetup shown = setup;
+	if (shown.academy)
+		shown.academy->context.useAlternateMouse = state.userOptions.alternateMouse;
+	state.scoreViewModel->Show(shown);
 	state.model.Push(shell::Screen::ScoreScreen);
 	// clearGameData: pushed with showShell(FALSE): it shows at once, no transition played out first.
 	state.shownScreen = shell::Screen::ScoreScreen;
@@ -1269,4 +1302,151 @@ void FrontEnd::LeaveGame()
 
 bool FrontEnd::InGame() const noexcept { return m_state->inGame; }
 const shell::SetupCatalog &FrontEnd::SetupCatalog() const noexcept { return m_state->setupCatalog; }
+}
+
+namespace generalszh::host
+{
+namespace
+{
+// The shell menus' tooltip callbacks (winSetTooltipFunc) by window: skirmish's faction boxes and their lists
+// (playerTemplateComboBoxTooltip / playerTemplateListBoxTooltip), its record (BattleHonorTooltip), its map preview
+// (MapSelectorTooltip) and the map list (mapListTooltipFunc); the LAN game's (LanGameOptionsMenu: the player boxes'
+// entries' playerTooltip, the faction boxes, the map preview, the accept marks' gameAcceptTooltip) and the LAN lobby's
+// players' list (playerTooltip); a layout's own TOOLTIPCALLBACK (GameWinDefaultTooltip: sets nothing).
+constexpr std::string_view SkirmishFactionBox = "SkirmishGameOptionsMenu.wnd:ComboBoxPlayerTemplate";
+constexpr std::string_view LanFactionBox = "LanGameOptionsMenu.wnd:ComboBoxPlayerTemplate";
+constexpr std::string_view LanPlayerBox = "LanGameOptionsMenu.wnd:ComboBoxPlayer";
+constexpr std::string_view LanAccept = "LanGameOptionsMenu.wnd:ButtonAccept";
+
+// The slot a window named `<prefix><n>` is for (0..7), else -1.
+int SlotOf(std::string_view name, std::string_view prefix)
+{
+	if (!name.starts_with(prefix) || name.size() != prefix.size() + 1 || name.back() < '0' || name.back() > '7')
+		return -1;
+	return name.back() - '0';
+}
+
+bool HasTooltipCallback(const Engine::UI::WND::WNDWindow &window, Engine::UI::WND::WNDTooltipPart part)
+{
+	using Engine::UI::WND::WNDTooltipPart;
+	const bool faction = SlotOf(window.name, SkirmishFactionBox) >= 0 || SlotOf(window.name, LanFactionBox) >= 0;
+	if (part == WNDTooltipPart::ComboList)
+		return faction;
+	if (part == WNDTooltipPart::ComboEntry)
+		return SlotOf(window.name, LanPlayerBox) >= 0;
+	return !window.tooltip_callback.empty() || faction || window.name == "SkirmishGameOptionsMenu.wnd:ListboxInfo" ||
+		window.name == "SkirmishGameOptionsMenu.wnd:MapWindow" || window.name == "SkirmishMapSelectMenu.wnd:ListboxMap" ||
+		window.name == "LanGameOptionsMenu.wnd:MapWindow" || SlotOf(window.name, LanAccept) >= 0 || window.name == "LanLobbyMenu.wnd:ListboxPlayers";
+}
+}
+
+GameClient::MouseTooltipFrame FrontEnd::Tooltip(const content::MouseTooltipContent &look, std::uint32_t nowMs)
+{
+	using Engine::UI::WND::WNDTooltipPart;
+	State &state = *m_state;
+	state.tooltipSettings.look = look;
+	presentation::MouseTooltip &tooltip = state.tooltip;
+	const int screenWidth = static_cast<int>(state.setup.width);
+	// Mouse::createStreamMessages: shown once still for its delay; a move starts the stillness over.
+	presentation::UpdateTooltipShowing(tooltip, look, nowMs);
+	if (state.screenX != tooltip.lastX || state.screenY != tooltip.lastY)
+		presentation::PointerMoved(tooltip, nowMs);
+	tooltip.lastX = state.screenX;
+	tooltip.lastY = state.screenY;
+	if (state.inGame)
+		return {}; // the game's mouse (MouseTooltipSystem)
+	// GameWindowManager::winProcessMouseEvent: cleared, then the window's (none while a window holds the mouse).
+	presentation::SetCursorTooltip(tooltip, look, u"", -1, std::nullopt, 1.0f, screenWidth);
+	Engine::UI::WND::WNDDocument *layout = state.Layout();
+	if (layout == nullptr || state.grabbed || state.Active().first == nullptr)
+		return {&tooltip, &state.tooltipSettings, false};
+	const ShellMenu &menu = *state.Active().first;
+	const float scaleX = static_cast<float>(state.setup.width) / static_cast<float>(menu.AuthoredWidth());
+	const float scaleY = static_cast<float>(state.setup.height) / static_cast<float>(menu.AuthoredHeight());
+	const float x = state.screenX / scaleX, y = state.screenY / scaleY;
+	const auto windows = layout->Windows();
+	const Engine::UI::WND::WNDTooltipTarget target = Engine::UI::WND::Tooltip_Target(*layout, x, y, state.messages.open.Get(),
+		[&](Engine::UI::WND::NodeIndex node, WNDTooltipPart part) { return HasTooltipCallback(windows[node], part); });
+	if (!target.Found())
+		return {&tooltip, &state.tooltipSettings, false};
+	const Engine::UI::WND::WNDWindow &window = windows[target.window];
+	const auto set = [&](const shell::TooltipCall &call) {
+		std::u16string text = call.label.empty() ? std::u16string{} : Localized(*state.strings, call.label);
+		if (call.arguments.size() == 2)
+			text = hud::FormatText(text, {call.arguments[0], call.arguments[1]});
+		presentation::SetCursorTooltip(tooltip, look, text, call.delay, std::nullopt, call.width, screenWidth);
+	};
+	// A window's rectangle in the screen's pixels (the original's windows are made at the screen's resolution).
+	const auto onScreen = [&](const Engine::UI::WND::WNDWindow &each) {
+		return Engine::UI::WND::Rect{static_cast<int>(static_cast<float>(each.screen_region.left) * scaleX),
+			static_cast<int>(static_cast<float>(each.screen_region.top) * scaleY), static_cast<int>(static_cast<float>(each.screen_region.right) * scaleX),
+			static_cast<int>(static_cast<float>(each.screen_region.bottom) * scaleY)};
+	};
+	// MapSelectorTooltip over a map preview (SUPPLY_TECH_SIZE 15 screen pixels).
+	const auto mapSelector = [&](const shell::MapPreview &preview) {
+		const Engine::UI::WND::Rect region = onScreen(window);
+		const Engine::UI::WND::Rect fit = Engine::UI::WND::Letterbox(region, preview.extentWidth, preview.extentHeight);
+		if (const auto call = shell::MapSelectorTooltip(preview, region.left, region.top, fit.left, fit.top, fit.right - fit.left, fit.bottom - fit.top, 15,
+				static_cast<int>(state.screenX), static_cast<int>(state.screenY)))
+			set(*call);
+	};
+	// playerTemplateComboBoxTooltip / playerTemplateListBoxTooltip over a faction box with `row` chosen.
+	const auto factionBox = [&](int row) {
+		if (target.part == WNDTooltipPart::ComboList)
+		{
+			if (const auto call = shell::FactionListTooltip(state.setupCatalog, Engine::UI::WND::Combo_List_Row_At(window, x, y)))
+				set(*call);
+		}
+		else
+			set(shell::FactionTooltip(state.setupCatalog, row));
+	};
+	const shell::LanGameOptionsViewModel *lan = state.lanOptionsViewModel ? &*state.lanOptionsViewModel : nullptr;
+	if (target.part != WNDTooltipPart::ComboButton && HasTooltipCallback(window, target.part))
+	{
+		if (const int slot = SlotOf(window.name, LanFactionBox); slot >= 0 && lan != nullptr)
+			factionBox(lan->faction[static_cast<std::size_t>(slot)].Get());
+		else if (const int player = SlotOf(window.name, LanPlayerBox); player >= 0 && lan != nullptr)
+		{
+			if (const auto call = shell::LanSlotPlayerTooltip(lan->SlotLoginHost(player)))
+				set(*call);
+		}
+		else if (const int accept = SlotOf(window.name, LanAccept); accept >= 0)
+		{
+			const Engine::UI::WND::Rect region = onScreen(window);
+			if (const auto call = shell::GameAcceptTooltip(static_cast<int>(state.screenX), static_cast<int>(state.screenY), region.left, region.top,
+					region.right - region.left, region.bottom - region.top))
+				set(*call);
+		}
+		else if (window.name == "LanGameOptionsMenu.wnd:MapWindow" && lan != nullptr)
+			mapSelector(lan->preview.Get());
+		else if (window.name == "LanLobbyMenu.wnd:ListboxPlayers" && state.lanLobbyViewModel)
+		{
+			const Engine::UI::WND::ListCell cell = Engine::UI::WND::List_Cell_At(window, x, y, menu.AuthoredWidth());
+			if (const auto call = shell::LanLobbyPlayerTooltip(cell.row, cell.column, state.lanLobbyViewModel->PlayerLoginHost(cell.row)))
+				set(*call);
+		}
+		const shell::SkirmishViewModel *skirmish = state.skirmishViewModel ? &*state.skirmishViewModel : nullptr;
+		if (skirmish == nullptr)
+			return {&tooltip, &state.tooltipSettings, false};
+		if (const int slot = SlotOf(window.name, SkirmishFactionBox); slot >= 0)
+			factionBox(skirmish->faction[static_cast<std::size_t>(slot)].Get());
+		else if (window.name == "SkirmishGameOptionsMenu.wnd:ListboxInfo")
+		{
+			const Engine::UI::WND::ListCell cell = Engine::UI::WND::List_Cell_At(window, x, y, menu.AuthoredWidth());
+			if (const auto call = shell::BattleHonorTooltip(skirmish->honors.Get(), cell.row, cell.column))
+				set(*call);
+		}
+		else if (window.name == "SkirmishMapSelectMenu.wnd:ListboxMap")
+		{
+			const Engine::UI::WND::ListCell cell = Engine::UI::WND::List_Cell_At(window, x, y, menu.AuthoredWidth());
+			set(shell::MapListTooltip(skirmish->mapHonorLevels, cell.row, cell.column));
+		}
+		else if (window.name == "SkirmishGameOptionsMenu.wnd:MapWindow")
+			mapSelector(skirmish->preview.Get());
+		// (GameWinDefaultTooltip: nothing.)
+	}
+	else if (!window.tooltip.empty())
+		presentation::SetCursorTooltip(tooltip, look, window.tooltip, window.tooltip_delay, std::nullopt, 1.0f, screenWidth);
+	return {&tooltip, &state.tooltipSettings, false};
+}
 }

@@ -8,6 +8,7 @@ export import engine.gameplay.common.identity.components.owner;
 export import engine.gameplay.common.identity.resources.relationships;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.spatial.components.carried;
+export import engine.gameplay.common.spatial.components.off_map;
 export import engine.gameplay.rts.construction.components.under_construction;
 export import engine.gameplay.rts.containment.components.garrison;
 export import engine.gameplay.rts.stealth.components.stealth;
@@ -35,7 +36,20 @@ inline constexpr std::uint32_t Detected = 1u << 4;
 struct VisionSystem
 {
 	using Query = ecs::Query<ecs::Write<Vision>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Optional<UnderConstruction>,
-		ecs::Optional<Carried>, ecs::Optional<Stealth>, ecs::Optional<Dying>>;
+		ecs::Optional<Carried>, ecs::Optional<Stealth>, ecs::Optional<Dying>, ecs::Optional<OffMap>>;
+
+	// What contains it (Object::getContainedBy), none: not contained. A parachute's rider is Carried by its chute; anything
+	// else contained is off the map held by its container (in it, mounted on it, or at its station); a hijacker riding
+	// hidden in its vehicle is not contained.
+	static ecs::Entity ContainedBy(const Carried *carried, const OffMap *away) noexcept
+	{
+		if (carried != nullptr)
+			return carried->carrier;
+		if (away != nullptr && (away->reason == off_map_reason::Contained || away->reason == off_map_reason::Mounted ||
+			away->reason == off_map_reason::Stationed))
+			return away->holder;
+		return {};
+	}
 	using Lookup = ecs::Lookup<ecs::Read<Garrison>>;
 	using Resources = ecs::Resources<ecs::Read<Relationships>, ecs::Write<ShroudMap>>;
 
@@ -68,8 +82,10 @@ struct VisionSystem
 			const auto carried = chunk.template Get<Carried>();
 			const auto stealth = chunk.template Get<Stealth>();
 			const auto dying = chunk.template Get<Dying>();
+			const auto away = chunk.template Get<OffMap>();
 			for (std::size_t row = 0; row < visions.size(); ++row)
 			{
+				const ecs::Entity container = ContainedBy(carried.empty() ? nullptr : &carried[row], away.empty() ? nullptr : &away[row]);
 				Vision &vision = visions[row];
 				const ecs::Entity entity = entities[row];
 				const auto position = transforms[row].position;
@@ -81,7 +97,7 @@ struct VisionSystem
 				std::uint32_t flags = 0;
 				if (!building.empty())
 					flags |= vision_key::UnderConstruction;
-				if (!carried.empty())
+				if (container != ecs::Entity{})
 					flags |= vision_key::Contained;
 				if (!dying.empty())
 					flags |= vision_key::Dead;
@@ -118,13 +134,9 @@ struct VisionSystem
 				map.Unlook(*looker, now, persist);
 				if ((flags & vision_key::Dead) != 0)
 					continue;
-				// In a tunnel or transport: no look.
-				if (!carried.empty())
-				{
-					const ecs::Entity carrier = carried[row].carrier;
-					if (!lookup.IsAlive(carrier) || lookup.Get<Garrison>(carrier) == nullptr)
-						continue;
-				}
+				// Object::look: contained by anything but a garrison (a tunnel, a transport, an Overlord, a parachute): no look.
+				if (container != ecs::Entity{} && (!lookup.IsAlive(container) || lookup.Get<Garrison>(container) == nullptr))
+					continue;
 				const bool underConstruction = (flags & vision_key::UnderConstruction) != 0;
 				const Engine::Math::Fixed range = underConstruction ? vision.footprintRange : vision.clearingRange;
 				if (range > Engine::Math::Fixed{})

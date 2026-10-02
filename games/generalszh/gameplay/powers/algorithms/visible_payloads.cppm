@@ -112,7 +112,7 @@ inline void ApplyVisibleDrops(GameWorld &game)
 				body->pitchRate = static_cast<std::int32_t>(Engine::Math::TurnFromRadians(body->centerOfMassOffset * run.exitPitchRate).units);
 		}
 		if (auto *order = world.Get<gp::MoveOrder>(bomb))
-			*order = gp::MoveToPoint(drop.moveTo);
+			*order = gp::Replanned(gp::MoveToPoint(drop.moveTo));
 	}
 }
 }

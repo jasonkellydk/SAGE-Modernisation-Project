@@ -42,7 +42,7 @@ struct RadiusCursorSystem
 		ecs::Read<engine::gameplay::WeaponBonusConditions>, ecs::Read<engine::gameplay::Aggression>>;
 	using Resources = ecs::Resources<ecs::Read<GuiTargeting>, ecs::Read<PointerInput>, ecs::Read<InteractionView>, ecs::Read<engine::gameplay::GroundHeight>,
 		ecs::Read<LocalPlayer>, ecs::Read<LookCatalog>, ecs::Read<RadiusCursorLooks>, ecs::Read<PresentationFrame>, ecs::Read<engine::gameplay::WeaponCatalog>,
-		ecs::Read<engine::gameplay::MoodRanges>, ecs::Read<engine::gameplay::TeamRoster>, ecs::Write<RadiusCursor>>;
+		ecs::Read<engine::gameplay::MoodRanges>, ecs::Read<engine::gameplay::TeamRoster>, ecs::Write<RadiusCursor>, ecs::Read<engine::gameplay::DeckSurfaces>>;
 
 	void Execute(ecs::SystemContext &context) const
 	{
@@ -56,7 +56,7 @@ struct RadiusCursorSystem
 			return;
 		const InteractionView &view = context.Read<InteractionView>();
 		if (view.valid)
-			if (const auto under = PointerInteractionSystem::GroundUnder(view, context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y))
+			if (const auto under = PointerInteractionSystem::GroundUnder(view, context.Read<engine::gameplay::GroundHeight>(), pointer.x, pointer.y, context.Find<engine::gameplay::DeckSurfaces>()))
 				cursor.at = *under;
 		const content::RadiusDecalLook &look = context.Read<RadiusCursorLooks>().looks[cursor.type];
 		const PresentationFrame &frame = context.Read<PresentationFrame>();

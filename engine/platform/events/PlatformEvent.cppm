@@ -23,7 +23,16 @@ enum class KeyCode : std::uint8_t
     keypad_0,keypad_1,keypad_2,keypad_3,keypad_4,keypad_5,keypad_6,keypad_7,keypad_8,keypad_9,
     keypad_minus,keypad_multiply,keypad_plus,keypad_period,keypad_divide,
     left_shift,right_shift,left_control,right_control,left_alt,right_alt,left_command,right_command,application,
-    count
+    count,
+    // Alternate public spellings share the existing physical-key identities.
+    // Keep count and every existing identity unchanged for keyboard-state maps.
+    digit0=digit_0,digit1=digit_1,digit2=digit_2,digit3=digit_3,digit4=digit_4,
+    digit5=digit_5,digit6=digit_6,digit7=digit_7,digit8=digit_8,digit9=digit_9,
+    keypad0=keypad_0,keypad1=keypad_1,keypad2=keypad_2,keypad3=keypad_3,keypad4=keypad_4,
+    keypad5=keypad_5,keypad6=keypad_6,keypad7=keypad_7,keypad8=keypad_8,keypad9=keypad_9,
+    // Unqualified spellings designate the left physical key. Either-side state
+    // is represented by EventModifier bits; polling preserves the physical side.
+    shift=left_shift,control=left_control,alt=left_alt
 };
 enum EventModifier : std::uint32_t { modifier_alt = 1u << 0, modifier_control = 1u << 1, modifier_shift = 1u << 2, modifier_command = 1u << 3 };
 

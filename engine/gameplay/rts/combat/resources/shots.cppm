@@ -47,13 +47,27 @@ struct Shot
 	// producer and, with NOT_SIMILAR, allies of the firer's kind.
 	ecs::Entity producer;
 	std::uint32_t kind{NoKind};
-	std::uint32_t reserved3{0};
+	// Its source still exists as it lands in the original (a death weapon: dealt as its dying firer fires it, though here
+	// it lands the next tick, its firer gone): Weapon::dealDamageInternal still tests the affects flags against it.
+	std::uint8_t sourceHeld{0};
+	std::uint8_t reserved3[3]{};
 
 	static constexpr std::uint32_t NoKind = 0xFFFFFFFFu;
 };
 
 // A shot whose projectile object carries it lands when (and where) that projectile detonates.
 inline constexpr std::uint64_t LandsWithProjectile = ~std::uint64_t{0};
+
+// WeaponTemplate::fireWeaponTemplate's wait before a hit without a projectile lands: the distance from the firer's
+// position to the victim's (3D, v.length()) over WeaponSpeed, in frames, not rounded ("we WANT a fractional-frame-delay");
+// under one frame it is dealt at once (0), else after REAL_TO_INT_CEIL of it. No speed: at once.
+inline std::uint64_t HitDelayTicks(Engine::Math::FixedVector3 from, Engine::Math::FixedVector3 to, Engine::Math::Fixed speed) noexcept
+{
+	if (speed <= Engine::Math::Fixed{})
+		return 0;
+	const Engine::Math::Fixed frames = Engine::Math::Length(to - from) / speed;
+	return frames < Engine::Math::Fixed::One() ? 0 : static_cast<std::uint64_t>(frames.Ceil());
+}
 
 struct Impact
 {
@@ -220,6 +234,7 @@ public:
 			writer.I64(shot.radiusBonus.Raw());
 			ecs::WriteEntity(writer, shot.producer);
 			writer.U32(shot.kind);
+			writer.U8(shot.sourceHeld);
 		}
 	}
 
@@ -254,6 +269,7 @@ public:
 			shot.radiusBonus = fixed();
 			shot.producer = ecs::ReadEntity(reader).value_or(ecs::Entity{});
 			shot.kind = reader.U32().value_or(Shot::NoKind);
+			shot.sourceHeld = reader.U8().value_or(0);
 			pending.push_back(shot);
 		}
 		if (!count || reader.Failed())

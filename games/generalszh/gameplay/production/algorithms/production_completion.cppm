@@ -17,6 +17,7 @@ import games.generalszh.gameplay.production.algorithms.team_building;
 import games.generalszh.gameplay.production.resources.production_notices;
 import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import games.generalszh.gameplay.score.algorithms.scoring;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // What this tick finished, after its systems: the kills scored, structures completed (their create modules, score
 // keepers, EVA and computer players told), units produced brought out (score keepers, the ready voice, computer
@@ -44,6 +45,9 @@ inline void CompleteProduction(GameWorld &game)
 		OnBuildComplete(game, done.structure); // DozerAIUpdate: the structure's create modules
 		CreateModulesBuildComplete(game, done.structure);
 		ScoreStructureComplete(game, done.structure, done.rebuild); // its score keeper: built (not a rebuild)
+		// DozerAIUpdate: its player's academy records it produced (rebuilds too).
+		if (const auto *owner = game.world.IsAlive(done.structure) ? game.world.Get<gp::Owner>(done.structure) : nullptr)
+			RecordAcademyProduction(game, owner->player, done.structure);
 	}
 	// Player::onStructureConstructionComplete: EVA hears of a superweapon put up.
 	for (const gp::ConstructionDone &done : game.world.Resource<gp::ConstructionsDone>().list)
@@ -54,12 +58,21 @@ inline void CompleteProduction(GameWorld &game)
 				OnAiStructureProduced(game, *ai, done.structure);
 	std::vector<gp::Produced> produced;
 	game.world.Resource<gp::ProductionDone>().ForEach([&](const gp::Produced &done) { produced.push_back(done); });
+	// ProductionUpdate's research done: its player's academy records the upgrade (recordUpgrade, not granted).
+	for (const gp::Produced &done : produced)
+		if (done.kind == gp::ProductionKind::Upgrade)
+			if (const auto *owner = game.world.IsAlive(done.factory) ? game.world.Get<gp::Owner>(done.factory) : nullptr)
+				RecordAcademyUpgrade(game, owner->player, done.definition, false);
 	for (const gp::Produced &done : produced)
 		if (done.kind == gp::ProductionKind::Unit) // research completes within the tick (ResearchCompletionSystem)
 		{
 			const std::vector<ecs::Entity> units = OnProduced(game, done);
 			for (const ecs::Entity unit : units)
 				ScoreUnitCreated(game, unit); // Player::onUnitCreated: its score keeper
+			// ProductionUpdate: the factory's player's academy records each one produced.
+			if (const auto *owner = game.world.IsAlive(done.factory) ? game.world.Get<gp::Owner>(done.factory) : nullptr)
+				for (const ecs::Entity unit : units)
+					RecordAcademyProduction(game, owner->player, unit);
 			// ProductionUpdate: the first of it says it is ready (VoiceCreate).
 			if (!units.empty())
 				game.world.Resource<ProductionNotices>().created.push_back(units.front());

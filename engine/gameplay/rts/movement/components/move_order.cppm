@@ -34,6 +34,14 @@ enum class MoveMode : std::uint8_t
 // Along a path that is wandered (Wander, Panic).
 inline bool Wandering(MoveMode mode) noexcept { return mode == MoveMode::Wander || mode == MoveMode::Panic; }
 
+// Moves whose goals a mover with a navigation agent is routed to (AIInternalMoveToState): a point, and each leg of a
+// waypoint path (AIFollowWaypointPathState, its wanders and panics) or of a wander in place. An exact path is not routed
+// (AIFollowWaypointPathExactState: setPathFromWaypoint).
+inline bool RoutedMode(MoveMode mode) noexcept
+{
+	return mode == MoveMode::Point || mode == MoveMode::Path || Wandering(mode) || mode == MoveMode::WanderInPlace;
+}
+
 // A path waypoint's or wander point's offset in whole cells either way (m_groupOffset: GameLogicRandomValue(-delta,
 // delta) * PATHFIND_CELL_SIZE_F on each axis).
 template<typename Uniform>
@@ -80,13 +88,41 @@ struct MoveOrder
 	// kept for after: it brakes to a stop. Whoever holds it sets this each tick.
 	std::uint8_t held{0};
 	GoalClaim claim{GoalClaim::Adjust};
-	std::uint8_t reserved[1]{}; // no padding: checkpoints hold its bytes
+	// A goal its AI set straight on its locomotor (setLocomotorGoalPositionExplicit: POSITION_EXPLICIT): moved toward with
+	// nothing left to go (onPathDistToGoal 0), never ended by the movement (its state judges arrival).
+	std::uint8_t explicitGoal{0};
+	// The layer its goal is on, when the order says (AIFollowWaypointPathState's m_goalLayer: a waypoint's goal is on the
+	// ground, or on the wall where the waypoint is on it; Pathfinder::findPath's destinationLayer); NoGoalLayer: the
+	// route finds the layer from where it stands and where it goes (RouteGoalLayer).
+	std::uint8_t goalLayer{0xFF};
+	// A new order its route must be planned for at once (the original's requestPath on every new move; the house rule
+	// "a system writing MoveOrder clears Route.planned", for writers that cannot reach the Route): the route requests plan
+	// it on their next run whatever their re-plan wait, and the movement lets it go once a route is planned for it.
+	std::uint8_t replan{0};
+	std::uint8_t reserved[6]{}; // no padding: checkpoints hold its bytes
 };
+
+// `order` as a new order whose route is planned at once (MoveOrder::replan).
+inline MoveOrder Replanned(MoveOrder order) noexcept
+{
+	order.replan = 1;
+	return order;
+}
+
+inline constexpr std::uint8_t NoGoalLayer = 0xFF;
 
 inline MoveOrder MoveToPoint(Engine::Math::FixedVector2 destination, GoalClaim claim = GoalClaim::Adjust) noexcept
 {
 	MoveOrder order{destination, 0xFFFFFFFFu, MoveMode::Point};
 	order.claim = claim;
+	return order;
+}
+
+// A move to a point whose goal is on `layer` (the ground, a deck or the wall).
+inline MoveOrder MoveToPointOn(Engine::Math::FixedVector2 destination, std::uint8_t layer, GoalClaim claim = GoalClaim::Adjust) noexcept
+{
+	MoveOrder order = MoveToPoint(destination, claim);
+	order.goalLayer = layer;
 	return order;
 }
 
@@ -108,14 +144,16 @@ template<>
 struct ComponentTraits<engine::gameplay::MoveOrder>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.move_order";
-	static constexpr std::uint32_t Version = 2;
+	static constexpr std::uint32_t Version = 3;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::MoveOrder &value, StateHasher &hasher) noexcept
 	{
 		hasher.AppendU64(static_cast<std::uint64_t>(value.destination.x.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.destination.y.Raw()));
 		hasher.AppendU64(value.waypoint);
-		hasher.AppendU64(static_cast<std::uint64_t>(value.mode) | static_cast<std::uint64_t>(value.claim) << 8);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.mode) | static_cast<std::uint64_t>(value.claim) << 8 |
+			static_cast<std::uint64_t>(value.explicitGoal) << 16 | static_cast<std::uint64_t>(value.goalLayer) << 24 |
+			static_cast<std::uint64_t>(value.replan) << 32);
 	}
 };
 }

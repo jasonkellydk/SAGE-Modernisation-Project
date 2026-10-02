@@ -8,6 +8,8 @@ import engine.gameplay.rts.combat.components.neutron_flight;
 import engine.gameplay.rts.delivery.components.delivery;
 import games.generalszh.content.combat.combat_catalog;
 import engine.gameplay.rts.combat.resources.assists;
+import engine.gameplay.common.spatial.components.targetable;
+import games.generalszh.presentation.objects.algorithms.laser_beams;
 import engine.gameplay.rts.death.resources.blast_waves;
 import engine.gameplay.rts.propaganda.resources.propaganda_scans;
 import games.generalszh.gameplay.mines.components.minefield_generator;
@@ -165,9 +167,9 @@ void QueueAssistLasers(LaserRequests &requests, WeaponLasers &lasers, session::S
 		if (!look)
 			continue;
 		if (const auto laser = LaserObject(lasers, view, look->laserFromAssisted))
-			requests.pending.push_back({*laser, assist.requester, assist.assister, {}});
+			requests.pending.push_back({*laser, assist.requester, assist.assister, {}, true});
 		if (const auto laser = LaserObject(lasers, view, look->laserToTarget))
-			requests.pending.push_back({*laser, assist.assister, assist.victim, {}});
+			requests.pending.push_back({*laser, assist.assister, assist.victim, {}, true});
 	}
 }
 
@@ -175,9 +177,16 @@ void QueueAssistLasers(LaserRequests &requests, WeaponLasers &lasers, session::S
 void QueueTickLasers(LaserRequests &requests, const WeaponLasers &lasers, const session::SessionView &view)
 {
 	using namespace tick_effects_detail;
+	const auto &world = view.World();
 	const auto queue = [&](const engine::gameplay::Shot &shot) {
-		if (lasers.Of(shot.weapon) != nullptr)
-			requests.pending.push_back({shot.weapon, shot.source, shot.target, At(shot.aim)});
+		if (lasers.Of(shot.weapon) == nullptr)
+			return;
+		// createLaser: a victim that is neither a projectile nor an airborne target is shot at 10 above its position.
+		namespace tc = engine::gameplay::target_class;
+		const auto *victim = world.IsAlive(shot.target) ? world.Get<engine::gameplay::Targetable>(shot.target) : nullptr;
+		const bool ground = victim != nullptr &&
+			(victim->classes & (tc::Projectile | tc::SmallMissile | tc::BallisticMissile | tc::AirborneVehicle | tc::AirborneInfantry)) == 0;
+		requests.pending.push_back({shot.weapon, shot.source, shot.target, WeaponLaserEnd(At(shot.aim), ground)});
 	};
 	view.Fired().ForEach(queue);
 	view.DefenseShots().ForEach(queue);

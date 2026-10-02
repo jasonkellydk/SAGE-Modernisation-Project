@@ -17,7 +17,10 @@ import engine.gameplay.common.spatial.systems.snapshot_system;
 import engine.gameplay.rts.movement.systems.route_request_system;
 import engine.gameplay.rts.docking.systems.dock_system;
 import games.generalszh.gameplay.movement.systems.destination_adjust_system;
+import engine.gameplay.rts.movement.systems.movement_system;
 import games.generalszh.gameplay.movement.systems.move_away_system;
+import games.generalszh.gameplay.movement.systems.enter_obstacle_system;
+import games.generalszh.gameplay.crates.systems.pilot_seek_system;
 import engine.gameplay.rts.blocking.resources.move_away_requests;
 import engine.gameplay.rts.movement.components.move_away;
 
@@ -52,6 +55,8 @@ inline void RegisterBlockingSystems(ecs::SystemRegistry &registry)
 	registry.Register(unitCells);
 	static generalszh::gameplay::MoveAwaySystem moveAway;
 	registry.Register(moveAway);
+	static generalszh::gameplay::EnterObstacleSystem enterObstacle;
+	registry.Register(enterObstacle);
 }
 
 // A unit's move weighs being held up before routes are planned (its AI's state update before the pathfinder's queue);
@@ -62,6 +67,10 @@ inline void OrderBlockingSystems(ecs::SystemRegistry &registry)
 	namespace gameplay = engine::gameplay;
 	namespace domain = generalszh::gameplay;
 	registry.OrderBefore<gameplay::BlockedRepathSystem, gameplay::RouteRequestSystem>();
+	// The game's entering (a pilot going for its vehicle) once the pilots have chosen and everything moved: the tick's
+	// collisions weigh it, the next tick's route too.
+	registry.OrderBefore<domain::PilotSeekSystem, domain::EnterObstacleSystem>();
+	registry.OrderBefore<gameplay::MovementSystem, domain::EnterObstacleSystem>();
 	registry.OrderBefore<domain::DestinationAdjustSystem, gameplay::BlockedRepathSystem>();
 	registry.OrderBefore<gameplay::DockSystem, gameplay::BlockedRepathSystem>();
 	// The units in the way weighed last in the tick, as everything was left.

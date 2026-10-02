@@ -16,7 +16,9 @@ export import engine.ecs.core.entity;
 //     waits a second);
 //   awayFrom, awayFromBefore: the units it last made way for (m_moveOutOfWay1, m_moveOutOfWay2);
 //   throughUnits: it paths and moves through units (m_canPathThroughUnits: making way and stuck, it no longer weighs the
-//     units it runs into, and its routes are not blocked by allies).
+//     units it runs into, and its routes are not blocked by allies);
+//   ignoring, docking: what its AI's state has it ignore (m_ignoreObstacleID: AIEnterState the unit it enters, AIDockState
+//     the dock) and whether that state has it move through units (AIDockState::update), as its move left them this tick.
 // Simulation state: checkpointed.
 export namespace engine::gameplay
 {
@@ -27,14 +29,19 @@ struct BlockedState
 {
 	std::uint32_t frames{0};
 	std::uint8_t stuck{0};
-	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	// m_isBlockedAndStuck as its AI's state saw it this tick: taken from the last tick's collisions, before its move planned
+	// again (BlockedRepathSystem), which clears `stuck` (AIAttackPursueTargetState::computePath gives up on it).
+	std::uint8_t stuckSeen{0};
+	std::uint8_t reserved[2]{}; // no padding: checkpoints hold its bytes
 	Engine::Math::Fixed bumpLimit{FastAsPossible};
 	std::uint64_t ignoreUntil{0};
 	std::uint64_t replanAt{0};
 	ecs::Entity awayFrom;
 	ecs::Entity awayFromBefore;
 	std::uint8_t throughUnits{0};
-	std::uint8_t reserved2[7]{};
+	std::uint8_t docking{0};
+	std::uint8_t reserved2[6]{};
+	ecs::Entity ignoring;
 };
 }
 
@@ -54,7 +61,8 @@ struct ComponentTraits<engine::gameplay::BlockedState>
 		hasher.AppendU64(value.replanAt);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.awayFrom.index) << 32 | value.awayFrom.generation);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.awayFromBefore.index) << 32 | value.awayFromBefore.generation);
-		hasher.AppendU64(value.throughUnits);
+		hasher.AppendU64(value.throughUnits | static_cast<std::uint64_t>(value.docking) << 8);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.ignoring.index) << 32 | value.ignoring.generation);
 	}
 };
 }

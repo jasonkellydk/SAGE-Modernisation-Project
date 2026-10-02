@@ -32,6 +32,22 @@ struct ToppleEvent
 struct ToppleEvents : ecs::ChunkOutputs<ToppleEvent>
 {
 };
+
+// Object::topple from game rules this tick, for one thing each (ToppleUpdate::applyTopplingForce): pushed `away`
+// (flat) at `speed`, with its topple options. Written before the toppling, in the order given; cleared as each tick
+// starts.
+struct TopplePush
+{
+	ecs::Entity entity;
+	Engine::Math::FixedVector2 away;
+	Engine::Math::Fixed speed;
+	std::uint32_t options{0};
+};
+
+struct TopplePushes
+{
+	std::vector<TopplePush> list;
+};
 }
 
 export namespace ecs
@@ -45,6 +61,11 @@ template<>
 struct ResourceTraits<engine::gameplay::ToppleEvents>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.topple_events";
+};
+template<>
+struct ResourceTraits<engine::gameplay::TopplePushes>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.topple_pushes";
 };
 }
 

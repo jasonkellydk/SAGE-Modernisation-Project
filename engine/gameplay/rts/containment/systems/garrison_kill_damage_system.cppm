@@ -12,13 +12,32 @@ export import engine.gameplay.common.weapons.resources.weapon_catalog;
 // before its damage: each such damage on a garrisonable structure (GarrisonContain) that is not ImmuneToClearBuildingAttacks
 // kills up to its amount (before armor, rounded down) of those inside, in the order they are held, still alive (each
 // killed by the damage's source: scoreTheKill, then kill()); the structure itself loses no health (a handled type).
+// GarrisonKillVictims: the tick's riders so killed, in order (for the game's own records of them); cleared as a tick
+// begins.
+export namespace engine::gameplay
+{
+struct GarrisonKillVictims
+{
+	std::vector<ecs::Entity> list;
+};
+}
+
+export namespace ecs
+{
+template<>
+struct ResourceTraits<engine::gameplay::GarrisonKillVictims>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.garrison_kill_victims";
+};
+}
+
 export namespace engine::gameplay
 {
 struct GarrisonKillDamageSystem
 {
 	using Query = ecs::Query<ecs::Read<Garrison>>;
 	using Lookup = ecs::Lookup<ecs::Read<Garrison>, ecs::Read<Health>>;
-	using Resources = ecs::Resources<ecs::Write<IncomingDamage>, ecs::Read<CargoManifest>, ecs::Read<WeaponCatalog>>;
+	using Resources = ecs::Resources<ecs::Write<IncomingDamage>, ecs::Read<CargoManifest>, ecs::Read<WeaponCatalog>, ecs::Write<GarrisonKillVictims>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -53,6 +72,8 @@ struct GarrisonKillDamageSystem
 		}
 		if (kills.empty())
 			return;
+		auto &victims = context.Write<GarrisonKillVictims>().list;
+		victims.insert(victims.end(), killed.begin(), killed.end());
 		for (const DamageRecord &kill : kills)
 			incoming.Add(kill);
 		incoming.Seal();

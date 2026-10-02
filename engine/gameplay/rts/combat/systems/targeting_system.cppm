@@ -31,6 +31,18 @@ export import engine.gameplay.rts.teams.resources.team_roster;
 export import engine.gameplay.rts.movement.components.move_order;
 export import engine.gameplay.rts.movement.systems.movement_system;
 export import engine.gameplay.rts.combat.components.attack_move;
+export import engine.gameplay.rts.combat.components.contained_definitions;
+export import engine.gameplay.rts.movement.components.pursuit;
+export import engine.gameplay.rts.combat.components.sight_looker;
+export import engine.gameplay.rts.combat.algorithms.attack_pursuit;
+export import engine.gameplay.rts.collision.components.collider;
+export import engine.gameplay.rts.collision.components.squishable;
+export import engine.gameplay.common.physics.resources.physics_settings;
+export import engine.gameplay.rts.slaves.components.slaved;
+export import engine.gameplay.rts.blocking.components.blocked_state;
+export import engine.gameplay.common.spatial.components.surface_layer;
+export import engine.gameplay.rts.movement.components.attack_approach;
+import engine.gameplay.rts.blocking.algorithms.blocking_rules;
 
 // Picks and keeps targets for armed entities, chunk-parallel: drops targets
 // that are gone or out of reach, scans for the closest enemy its stance
@@ -62,7 +74,7 @@ struct TargetingSystem
 {
 	using Query = ecs::Query<ecs::Write<Aggression>, ecs::Write<AttackTarget>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Read<Armament>,
 		ecs::OptionalWrite<MoveOrder>, ecs::Optional<WeaponSlots>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
-		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<AiActivity>, ecs::Optional<Health>, ecs::Optional<TeamMember>, ecs::Optional<AttackMove>, ecs::Optional<BodyExtent>, ecs::Optional<MoveEnded>, ecs::Exclude<UnderConstruction>,
+		ecs::Optional<Targetable>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<AiActivity>, ecs::Optional<Health>, ecs::Optional<TeamMember>, ecs::Optional<AttackMove>, ecs::Optional<BodyExtent>, ecs::Optional<MoveEnded>, ecs::OptionalWrite<Pursuit>, ecs::Optional<SightLooker>, ecs::Optional<SurfaceLayer>, ecs::OptionalWrite<AttackApproach>, ecs::Exclude<UnderConstruction>,
 		ecs::Exclude<Sale>>; // isAbleToAttack: not unbuilt or sold
 
 	// What a weapon set can do, for choosing and keeping targets: whatever any of its weapons may target, as far
@@ -91,8 +103,52 @@ struct TargetingSystem
 		return reach;
 	}
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Read<WeaponCatalog>, ecs::Read<ArmorCatalog>, ecs::Read<TeamRoster>,
-		ecs::Read<TriggerAreas>, ecs::Read<AttackPriorities>, ecs::Read<MoodRanges>, ecs::Read<RandomSeed>>;
-	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>>;
+		ecs::Read<TriggerAreas>, ecs::Read<AttackPriorities>, ecs::Read<MoodRanges>, ecs::Read<RandomSeed>, ecs::Read<GroundHeight>, ecs::Read<NavigationGrid>,
+		ecs::Read<PhysicsSettings>, ecs::Read<ChaseRules>>;
+	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>,
+		ecs::Read<Locomotion>, ecs::Read<Transform>, ecs::Read<Collider>, ecs::Read<Squishable>, ecs::Read<Slaved>, ecs::Read<BlockedState>, ecs::Read<SurfaceLayer>,
+		ecs::Read<ContainedDefinitions>>;
+
+	// What an attacker's view check reads of a victim: its place, top and centre (BodyExtent), and its slaver (Slaved).
+	static SightTarget SightTargetOf(const ecs::EntityLookup<Lookup> &lookup, const SpatialEntry &entry)
+	{
+		const BodyExtent *extent = lookup.IsAlive(entry.entity) ? lookup.template Get<BodyExtent>(entry.entity) : nullptr;
+		return SightTarget{entry.position, extent != nullptr ? extent->maxHeight : Engine::Math::Fixed{}, extent != nullptr ? extent->centerZ : Engine::Math::Fixed{}};
+	}
+	// isAttackViewBlockedByObstacle's layer: the victim's, or (the victim on the ground) the looker's own (in `eye`).
+	static SightEye EyeFor(const ecs::EntityLookup<Lookup> &lookup, SightEye eye, ecs::Entity victim)
+	{
+		const SurfaceLayer *layer = lookup.IsAlive(victim) ? lookup.template Get<SurfaceLayer>(victim) : nullptr;
+		if (layer != nullptr && layer->layer != 0)
+			eye.layer = layer->layer;
+		return eye;
+	}
+	static ecs::Entity SlaverOf(const ecs::EntityLookup<Lookup> &lookup, ecs::Entity entity)
+	{
+		const Slaved *slaved = lookup.IsAlive(entity) ? lookup.template Get<Slaved>(entity) : nullptr;
+		return slaved != nullptr ? slaved->master : ecs::Entity{};
+	}
+
+	// AI::CAN_SEE (PartitionFilterLineOfSight) for a looker that needs a line of sight (SightLooker): the terrain clear from
+	// its top to the victim's, and no obstacle blocking its view (isViewBlockedByObstacle) but its own, the victim's, the
+	// victim's slaver's, its container's and its slaver's (attackBlockedByObstacleCallback).
+	struct SightFilter
+	{
+		const GroundHeight &ground;
+		const NavigationGrid &grid;
+		Engine::Math::Fixed significantHeight;
+		SightEye eye;
+		ecs::Entity self;
+		ecs::Entity container;
+		ecs::Entity slaver;
+		const ecs::EntityLookup<Lookup> &lookup;
+
+		bool Clear(const SpatialEntry &entry) const
+		{
+			const ViewIgnores ignore{self, entry.entity, SlaverOf(lookup, entry.entity), container, slaver};
+			return LineOfSightClear(ground, grid, significantHeight, EyeFor(lookup, eye, entry.entity), SightTargetOf(lookup, entry), ignore);
+		}
+	};
 
 	// WeaponSet::getAbleToUseWeaponAgainstTarget for an object, past what the victim's classes already settle: with a
 	// damage weapon, a victim none of its weapons may pitch to (isAnyWithinTargetPitch), or none of the weighed ones is
@@ -169,8 +225,8 @@ struct TargetingSystem
 
 	// AI::findClosestEnemy with an attack priority set: nearest first (the distance between bounding circles), each
 	// enemy's priority (0: never attacked) less one per `distanceModifier` of that distance, at least 1; the greatest
-	// kept, a tie going to the greater priority. (The original also raised a container's priority to the greatest of
-	// what it held: not yet.)
+	// kept, a tie going to the greater priority; a container is worth the greatest of its own and what it holds
+	// (iterateContained: ContainedDefinitions).
 	struct Prioritized
 	{
 		const AttackPriorities &priorities;
@@ -189,18 +245,20 @@ struct TargetingSystem
 	static const SpatialEntry *Closest(const SpatialIndex &spatial, const Relationships &relationships, Engine::Math::FixedVector2 from, Engine::Math::FixedVector2 around, Engine::Math::Fixed range, bool anywhere,
 		ecs::Entity self, std::uint32_t team, std::uint32_t player, const WeaponDefinition &weapon, const Aggression &aggression, bool unfogged = false,
 		const TriggerArea *area = nullptr, const Prioritized *prioritized = nullptr, const Reachable *withinAttack = nullptr,
-		Engine::Math::Fixed selfRadius = {}, const AttackGate *gate = nullptr)
+		Engine::Math::Fixed selfRadius = {}, const AttackGate *gate = nullptr, bool ignoreInsignificant = false, const SightFilter *sight = nullptr)
 	{
-		// (The gate last: it may look the victim up.)
+		// (The gate last: it may look the victim up.) `ignoreInsignificant`: AI::IGNORE_INSIGNIFICANT_BUILDINGS
+		// (PartitionFilterInsignificantBuildings).
 		const auto accepted = [&](const SpatialEntry &entry) {
 			return Acceptable(relationships, entry, self, team, player, weapon, aggression, unfogged) && InArea(area, entry) &&
+				(!ignoreInsignificant || (entry.classes & target_class::Insignificant) == 0) &&
 				(withinAttack == nullptr || WithinAttackRange(withinAttack->range, from, withinAttack->radius, entry));
 		};
 		if (prioritized != nullptr && prioritized->set != 0)
 		{
 			std::vector<std::pair<Engine::Math::Fixed, const SpatialEntry *>> near;
 			const auto gather = [&](const SpatialEntry &entry) {
-				if (!accepted(entry) || (gate != nullptr && !gate->Allows(entry)))
+				if (!accepted(entry) || (gate != nullptr && !gate->Allows(entry)) || (sight != nullptr && !sight->Clear(entry)))
 					return;
 				const Engine::Math::Fixed gap = Engine::Math::Distance(from, entry.position.XY()) - entry.radius - prioritized->selfRadius;
 				near.emplace_back(std::max(gap, Engine::Math::Fixed{}), &entry);
@@ -218,9 +276,13 @@ struct TargetingSystem
 			for (const auto &[gap, entry] : near)
 			{
 				const DefinitionRef *ref = prioritized->lookup->template Get<DefinitionRef>(entry->entity);
-				const std::int64_t priority = prioritized->priorities.Priority(prioritized->set, ref != nullptr ? ref->index : 0xFFFFFFFFu);
+				std::int64_t priority = prioritized->priorities.Priority(prioritized->set, ref != nullptr ? ref->index : 0xFFFFFFFFu);
 				if (priority == 0)
 					continue;
+				// A garrison or transport is worth what the most wanted thing inside it is (iterateContained: priorityFunc).
+				if (const ContainedDefinitions *held = prioritized->lookup->template Get<ContainedDefinitions>(entry->entity))
+					for (std::size_t index = 0; index < held->count; ++index)
+						priority = (std::max)(priority, static_cast<std::int64_t>(prioritized->priorities.Priority(prioritized->set, held->definitions[index])));
 				const std::int64_t less = prioritized->priorities.distanceModifier > Engine::Math::Fixed{}
 					? (gap / prioritized->priorities.distanceModifier).Floor() : 0;
 				const std::int64_t modified = std::max<std::int64_t>(priority - less, 1);
@@ -241,7 +303,8 @@ struct TargetingSystem
 			if (!accepted(entry))
 				return;
 			const Engine::Math::Fixed gap = std::max(Engine::Math::Distance(from, entry.position.XY()) - entry.radius - selfRadius, Engine::Math::Fixed{});
-			if ((best == nullptr || gap < bestGap) && (gate == nullptr || gate->Allows(entry)))
+			// (CAN_SEE last: it walks the terrain and the grid, only for one that would be nearest.)
+			if ((best == nullptr || gap < bestGap) && (gate == nullptr || gate->Allows(entry)) && (sight == nullptr || sight->Clear(entry)))
 			{
 				best = &entry;
 				bestGap = gap;
@@ -290,6 +353,16 @@ struct TargetingSystem
 		const auto extents = chunk.Get<BodyExtent>();
 		const auto endedRows = chunk.Get<MoveEnded>();
 		const auto lookup = context.Lookup<Lookup>();
+		auto pursuits = chunk.Get<Pursuit>();
+		const auto lookers = chunk.Get<SightLooker>();
+		const auto layerRows = chunk.Get<SurfaceLayer>();
+		auto approachRows = chunk.Get<AttackApproach>();
+		const GroundHeight *groundHeight = context.Find<GroundHeight>();
+		const NavigationGrid *navigationGrid = context.Find<NavigationGrid>();
+		const PhysicsSettings *physicsSettings = context.Find<PhysicsSettings>();
+		const Engine::Math::Fixed significantHeight = (physicsSettings != nullptr ? *physicsSettings : PhysicsSettings{}).SignificantHeight();
+		const ChaseRules *chaseFound = context.Find<ChaseRules>();
+		const ChaseRules chaseRules = chaseFound != nullptr ? *chaseFound : ChaseRules{};
 		for (std::size_t row = 0; row < aggressions.size(); ++row)
 		{
 			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], disabled_type::Held))
@@ -372,20 +445,92 @@ struct TargetingSystem
 				aggression.nextScan = entered + context.Read<MoodRanges>().forceIdleTicks;
 			}
 
-			// Look for a new one on the scan tick (an undetected defector sees everyone as neutral: it looks for no one).
-			const bool defecting = !targetables.empty() && (targetables[row].classes & target_class::Undetected) != 0;
-			if (current == nullptr && tick >= aggression.nextScan && !defecting)
-			{
-				// getNextMoodTarget: the next look MoodAttackCheckRate on, the first after an idle entry or a wake-up
-				// moved by GameLogicRandomValue(-half, half).
+			// AIUpdateInterface::getNextMoodTarget's look (called by its AI), past its gates and its timer:
+			// (AI::getAdjustedVisionRangeForObject, owner type and mood) its vision times its controller's guard outer
+			// modifier; carried, its longest weapon's reach instead, and its carrier's bounding radius on top; a computer's
+			// unit by its mood (asleep: none; a passive one strikes back at its last attacker only, unless that last hit was
+			// a heal); a human's only at what its weapons reach from where it stands (WITHIN_ATTACK_RANGE) and what is clear
+			// to its player; a computer player's units take enemy buildings too (PartitionFilterRejectBuildings:
+			// m_acquireEnemies); by its attack priority set (getAttackInfo), if it has one.
+			// A looker's eye (its top; its weapon's terrain check unless IMMOBILE; 3 cells seen past first off the ground) and
+			// what its view passes over for a victim.
+			const auto lookerEye = [&]() {
+				const std::uint8_t own = layerRows.empty() ? GroundLayer : layerRows[row].layer;
+				return SightEye{transforms[row].position, extents.empty() ? Engine::Math::Fixed{} : extents[row].maxHeight,
+					lookers.empty() || lookers[row].immobile == 0, own != GroundLayer ? RaisedLookerSkipCells : 0, own};
+			};
+			const auto viewIgnores = [&](ecs::Entity victim) {
+				return ViewIgnores{entities[row], victim, SlaverOf(lookup, victim), carried ? offMap[row].holder : ecs::Entity{}, SlaverOf(lookup, entities[row])};
+			};
+			const auto moodLook = [&]() -> const SpatialEntry * {
+				const std::uint32_t player = owners[row].player;
+				const bool human = player < roster.PlayerCount() && roster.PlayerAt(player).human;
+				Aggression looking = aggression;
+				if (player < roster.PlayerCount() && !roster.PlayerAt(player).human)
+					looking.attackBuildings = true;
+				std::optional<Prioritized> prioritized;
+				if (aggression.prioritySet != 0)
+					prioritized.emplace(Prioritized{context.Read<AttackPriorities>(), aggression.prioritySet, radius, &lookup});
+				const MoodRanges &moods = context.Read<MoodRanges>();
+				Engine::Math::Fixed range;
+				if (carried)
+				{
+					range = weapon.attackRange;
+					if (const SpatialEntry *holder = spatial.Find(offMap[row].holder))
+						range += holder->radius;
+				}
+				else
+				{
+					range = aggression.vision * (human ? moods.guardOuterHuman : moods.guardOuterAi);
+					if (!human)
+						range = aggression.attitude == attitude::Sleep ? Engine::Math::Fixed{}
+							: aggression.attitude == attitude::Alert ? range * moods.alert
+							: aggression.attitude == attitude::Aggressive ? range * moods.aggressive
+							: range;
+				}
+				if (range <= Engine::Math::Fixed{})
+					return nullptr;
+				if (!human && aggression.attitude == attitude::Passive)
+				{
+					const Health *health = healthRows.empty() ? nullptr : &healthRows[row];
+					// (aiAttackObject then: its attack state takes only what it may attack.)
+					const SpatialEntry *attacker =
+						health != nullptr && health->lastDamageType != moods.healingDamageType ? spatial.Find(health->lastAttacker) : nullptr;
+					if (attacker != nullptr && Acceptable(relationships, *attacker, entities[row], selfTeam, player, weapon, looking, human, gate))
+						return attacker;
+					return nullptr;
+				}
+				const Reachable reach{weapon.attackRange, radius};
+				// AttackUsesLineOfSight: a KINDOF_ATTACK_NEEDS_LINE_OF_SIGHT looker asks for CAN_SEE too.
+				std::optional<SightFilter> sight;
+				if (!lookers.empty() && groundHeight != nullptr && navigationGrid != nullptr)
+					sight.emplace(SightFilter{*groundHeight, *navigationGrid, significantHeight, lookerEye(), entities[row],
+						carried ? offMap[row].holder : ecs::Entity{}, SlaverOf(lookup, entities[row]), lookup});
+				// Within `range` of the gap between the bounding circles; AttackIgnoreInsignificantBuildings: it asks for
+				// IGNORE_INSIGNIFICANT_BUILDINGS.
+				return Closest(spatial, relationships, self, self, range + radius, false, entities[row], selfTeam, player, weapon, looking, human, nullptr,
+					prioritized ? &*prioritized : nullptr, human ? &reach : nullptr, radius, gate, moods.ignoreInsignificantBuildings, sight ? &*sight : nullptr);
+			};
+			// getNextMoodTarget's timer (called by its AI): the next look MoodAttackCheckRate on, the first after an idle
+			// entry or a wake-up moved by GameLogicRandomValue(-half, half) (`offset`).
+			const auto nextMoodCheck = [&](bool offset) {
 				aggression.nextScan = tick + aggression.scanInterval;
-				if ((aggression.moodFlags & mood_flag::OffsetNext) != 0 && aggression.stance == Stance::Idle)
+				if ((aggression.moodFlags & mood_flag::OffsetNext) != 0 && offset)
 				{
 					const std::int64_t half = static_cast<std::int64_t>(aggression.scanInterval >> 1);
 					auto random = Engine::Math::Stream(context.Read<RandomSeed>().value, {tick, entities[row].index, entities[row].generation, 0x4D6Fu});
 					aggression.nextScan = static_cast<std::uint64_t>(static_cast<std::int64_t>(aggression.nextScan) + Engine::Math::UniformInt(random, -half, half));
 					aggression.moodFlags &= static_cast<std::uint8_t>(~mood_flag::OffsetNext);
 				}
+			};
+
+			// Look for a new one on the scan tick (an undetected defector sees everyone as neutral: it looks for no one).
+			const bool defecting = !targetables.empty() && (targetables[row].classes & target_class::Undetected) != 0;
+			if (current == nullptr && tick >= aggression.nextScan && !defecting)
+			{
+				// getNextMoodTarget: the next look MoodAttackCheckRate on, the first after an idle entry or a wake-up
+				// moved by GameLogicRandomValue(-half, half).
+				nextMoodCheck(aggression.stance == Stance::Idle);
 				const bool idle = move == nullptr || move->mode == MoveMode::Idle;
 				// Mood targeting (AIUpdateInterface::getNextMoodTarget called by the AI) of a human player's unit takes only
 				// what is clear to its player.
@@ -410,45 +555,7 @@ struct TargetingSystem
 					const bool attackMoving = !attackMovesAll.empty();
 					if (occupied || (!attackMoving && (!aggression.autoAcquire || !idle || stealthVeto)))
 						break;
-					// getNextMoodTarget (AI::getAdjustedVisionRangeForObject, owner type and mood): its vision times its
-					// controller's guard outer modifier; carried, its longest weapon's reach instead, and its carrier's
-					// bounding radius on top; a computer's unit by its mood (asleep: none; a passive one strikes back at its
-					// last attacker only, unless that last hit was a heal); a human's only at what its weapons reach from
-					// where it stands (WITHIN_ATTACK_RANGE).
-					const MoodRanges &moods = context.Read<MoodRanges>();
-					const bool human = unfogged;
-					Engine::Math::Fixed range;
-					if (carried)
-					{
-						range = weapon.attackRange;
-						if (const SpatialEntry *holder = spatial.Find(offMap[row].holder))
-							range += holder->radius;
-					}
-					else
-					{
-						range = aggression.vision * (human ? moods.guardOuterHuman : moods.guardOuterAi);
-						if (!human)
-							range = aggression.attitude == attitude::Sleep ? Engine::Math::Fixed{}
-								: aggression.attitude == attitude::Alert ? range * moods.alert
-								: aggression.attitude == attitude::Aggressive ? range * moods.aggressive
-								: range;
-					}
-					if (range <= Engine::Math::Fixed{})
-						break;
-					if (!human && aggression.attitude == attitude::Passive)
-					{
-						const Health *health = healthRows.empty() ? nullptr : &healthRows[row];
-						// (aiAttackObject then: its attack state takes only what it may attack.)
-						const SpatialEntry *attacker =
-							health != nullptr && health->lastDamageType != moods.healingDamageType ? spatial.Find(health->lastAttacker) : nullptr;
-						if (attacker != nullptr && Acceptable(relationships, *attacker, entities[row], selfTeam, player, weapon, looking, unfogged, gate))
-							current = attacker;
-						break;
-					}
-					const Reachable reach{weapon.attackRange, radius};
-					// Within `range` of the gap between the bounding circles.
-					current = Closest(spatial, relationships, self, self, range + radius, false, entities[row], selfTeam, player, weapon, looking, unfogged, nullptr, ranked,
-						human ? &reach : nullptr, radius, gate);
+					current = moodLook();
 					break;
 				}
 				case Stance::Hold:
@@ -478,37 +585,285 @@ struct TargetingSystem
 					target = {current->entity, false};
 			}
 
+			// AIAttackApproachTargetState::update and AIAttackPursueTargetState::update, each on its first approach
+			// (m_isInitialApproach) with its current weapon on a turret (getWhichTurretForCurWeapon): getNextMoodTarget(true,
+			// false) gives that turret a temporary target. None while it uses an ability, nor with NotWhileAttacking (isAttacking:
+			// it is); its team's common target at once (attitude normal or more, if it may attack it); else what its look finds,
+			// on its mood timer.
+			const auto turretTemporary = [&] {
+				if (!armaments[row].turret || aggression.notWhileAttacking || (!activityRows.empty() && activityRows[row].usingAbility != 0))
+					return;
+				const SpatialEntry *temporary = nullptr;
+				if (aggression.attitude >= attitude::Normal && !teamRows.empty() && teamRows[row].team < roster.TeamCount())
+				{
+					const Team &team = roster.TeamAt(teamRows[row].team);
+					if (team.attackCommonTarget && team.commonTarget != ecs::Entity{})
+						if (const SpatialEntry *victim = spatial.Find(team.commonTarget);
+							victim != nullptr && Acceptable(relationships, *victim, entities[row], selfTeam, owners[row].player, weapon, aggression, false, gate))
+							temporary = victim;
+				}
+				if (temporary == nullptr && tick >= aggression.nextScan)
+				{
+					nextMoodCheck(true);
+					temporary = moodLook();
+				}
+				if (temporary != nullptr)
+				{
+					target.temporary = temporary->entity;
+					target.temporaryTick = tick;
+				}
+			};
 			// Close in on targets beyond weapon range; stop once in range.
+			// (An attack-spot search asked for only while it approaches: set again below each tick it does.)
+			const bool wasApproaching = !approachRows.empty() && approachRows[row].active != 0;
+			if (!approachRows.empty())
+				approachRows[row].active = 0;
+			Pursuit *pursuit = pursuits.empty() ? nullptr : &pursuits[row];
+			const auto stopPursuit = [&] {
+				if (pursuit != nullptr)
+				{
+					// onExit: its chase's first approach is over.
+					if (pursuit->active != 0)
+						target.chased = 1;
+					pursuit->active = 0;
+					pursuit->matched = 0;
+				}
+			};
 			if (move == nullptr || aggression.stance == Stance::Hold)
+			{
+				stopPursuit();
 				continue;
+			}
+			if (current == nullptr)
+				stopPursuit();
 			if (current != nullptr)
 			{
 				// outOfWeaponRangeObject: a weapon with leech range active is never out of range (it fires on where it stands).
 				const std::uint8_t slot = sets.empty() ? std::uint8_t{0} : sets[row].current;
 				const bool leeching = (target.leech >> slot & 1u) != 0;
-				if (!leeching && !WithinAttackRange(weapon.attackRange, self, radius, *current))
+				// outOfWeaponRangeObject: on the ground with a weapon that is no contact weapon (isContactWeapon: its range less a
+				// quarter cell under a cell), a looker that needs a line of sight whose view of a victim on the ground is blocked
+				// (isAttackViewBlockedByObstacle) is out of range too.
+				bool viewBlockedInRange = false;
+				if (!leeching && !lookers.empty() && groundHeight != nullptr && navigationGrid != nullptr && target.atPosition == 0 &&
+					weapons.At(armaments[row].weapon).attackRange - Engine::Math::Fixed::FromRatio(5, 2) >= Engine::Math::Fixed::FromInt(10))
 				{
-					// Pathfinder::findAttackPath: to a spot it may attack from, on the line between them (halfway into its
-					// reach beyond the two bodies), slowing to arrive there rather than running on into the target; it
-					// stops once in reach.
-					const Engine::Math::FixedVector2 away = self - current->position.XY();
-					const Engine::Math::Fixed apart = Engine::Math::Length(away);
-					const Engine::Math::Fixed reach = weapon.attackRange / Engine::Math::Fixed::FromInt(2) + radius + current->radius;
-					Engine::Math::FixedVector2 approach = current->position.XY();
-					if (reach > Engine::Math::Fixed{} && apart > reach)
-						approach = approach + away * (reach / apart);
-					const Engine::Math::Fixed repath = Engine::Math::Fixed::FromInt(10);
-					if (move->mode != MoveMode::Point || Engine::Math::DistanceSquared(move->destination, approach) > repath * repath)
-						*move = MoveToPoint(approach, GoalClaim::Keep); // AIAttackApproachTargetState: no adjusting, its path's end claimed
+					const Locomotion *own = lookup.IsAlive(entities[row]) ? lookup.template Get<Locomotion>(entities[row]) : nullptr;
+					if (carried || own == nullptr || !IsAirborne(own->locomotor))
+					{
+						viewBlockedInRange = ViewBlocked(*groundHeight, *navigationGrid, significantHeight, EyeFor(lookup, lookerEye(), current->entity), SightTargetOf(lookup, *current),
+							viewIgnores(current->entity));
+					}
 				}
-				else if (move->mode == MoveMode::Point)
-					move->mode = MoveMode::Idle;
+				// (Weapon::isWithinAttackRange: inside its minimum range it is not in range either.)
+				const bool inRange = leeching || (!viewBlockedInRange && WithinAttackRange(weapon.attackRange, self, radius, *current) &&
+					!TooCloseToAttack(weapon.minimumRange, self, radius, *current));
+				// AttackStateMachine's CHASE_TARGET for an object (AIAttackPursueTargetState): it chases a victim that runs from it
+				// (canPursue) when out of range (outOfWeaponRangeObject) or, a computer player's crusher, to run it over
+				// (wantToSquishTarget); not a human player's unit that picked its victim itself (CMD_FROM_AI). It drives at the
+				// victim's position, working its way out again when the victim has moved more than a tenth of their distance and
+				// MIN_RECOMPUTE_TIME has passed (or it has no way), until canPursue fails; within range with a clear view it
+				// matches the victim's speed (95% of it once there), a crusher as fast as it can.
+				const bool pursuing = [&]() -> bool {
+					if (pursuit == nullptr || target.atPosition != 0)
+						return false;
+					// (Cheap refusals first: most attackers in range never chase.)
+					if (pursuit->active == 0)
+					{
+						const std::uint32_t owner = owners[row].player;
+						const bool humanOwner = owner < roster.PlayerCount() && roster.PlayerAt(owner).human;
+						if (!armaments[row].turret || (humanOwner && target.source == CommandSource::Ai && target.retaliating == 0))
+							return false;
+						if (inRange && (humanOwner || !chaseRules.aiCrushesInfantry || pursuit->autoCrush == 0))
+							return false;
+					}
+					const bool alive = lookup.IsAlive(entities[row]) && lookup.IsAlive(current->entity);
+					const Locomotion *own = alive ? lookup.template Get<Locomotion>(entities[row]) : nullptr;
+					if (own == nullptr || own->locomotor.maxSpeed <= Engine::Math::Fixed{}) // isMobile
+						return false;
+					const Locomotion *theirs = lookup.template Get<Locomotion>(current->entity);
+					const Transform *theirPlace = lookup.template Get<Transform>(current->entity);
+					const std::uint32_t player = owners[row].player;
+					const bool human = player < roster.PlayerCount() && roster.PlayerAt(player).human;
+					const Collider *crusher = lookup.template Get<Collider>(entities[row]);
+					const Collider *crushed = lookup.template Get<Collider>(current->entity);
+					const bool unmanned = !disabledRows.empty() && (disabledRows[row].mask & disabled_type::Unmanned) != 0;
+					const bool allies = relationships.Between(selfTeam, player, current->team, current->player) == Relationship::Allies;
+					const bool canCrush = crusher != nullptr &&
+						CanCrushOrSquish(crusher->crusherLevel, unmanned, allies, lookup.template Get<Squishable>(current->entity) != nullptr,
+							crushed != nullptr ? crushed->crushableLevel : 255u);
+					ChaseView view;
+					view.turret = armaments[row].turret;
+					view.computer = !human;
+					view.aiCrushes = chaseRules.aiCrushesInfantry;
+					view.canCrush = canCrush;
+					view.tooClose = TooCloseToAttack(weapon.minimumRange, self, radius, *current);
+					view.ourMaxSpeed = own->locomotor.maxSpeed;
+					view.victimPhysics = theirs != nullptr && theirPlace != nullptr;
+					view.victimSpeed = theirs != nullptr ? theirs->speed : Engine::Math::Fixed{};
+					view.toVictim = current->position.XY() - self;
+					view.victimHeading = theirPlace != nullptr ? Engine::Math::Direction(theirPlace->facing) : Engine::Math::FixedVector2{};
+					if (pursuit->active == 0)
+					{
+						const bool squish = WantToSquish(false, view.turret, view.aiCrushes, view.computer, canCrush, pursuit->autoCrush != 0);
+						if (inRange && !squish)
+							return false;
+						// onEnter: a human player's auto-acquired attack does not chase; nor without a turret weapon or a victim
+						// it can pursue.
+						if ((human && target.source == CommandSource::Ai && target.retaliating == 0) || !CanPursue(view))
+							return false;
+						pursuit->active = 1;
+						pursuit->prevVictim = {};
+						pursuit->approachTick = 0; // m_approachTimestamp = -MIN_RECOMPUTE_TIME: work its way out at once
+					}
+					// updateInternal: a victim gone into hiding (stealthed, undetected, not disguised) ends it.
+					if ((current->classes & target_class::Hidden) != 0)
+						return false;
+					// computePath: blocked and stuck (isBlockedAndStuck, as its last collisions left it before it planned again), it
+					// gives the chase up.
+					if (const BlockedState *blocked = lookup.template Get<BlockedState>(entities[row]); blocked != nullptr && blocked->stuckSeen != 0)
+						return false;
+					const bool force = move->mode == MoveMode::Idle;
+					if (force || tick >= pursuit->approachTick)
+					{
+						pursuit->approachTick = tick + PursuitRecomputeTicks;
+						if (force || !SamePosition(self, pursuit->prevVictim, current->position.XY()))
+						{
+							if (!CanPursue(view))
+								return false;
+							pursuit->prevVictim = current->position.XY();
+							*move = Replanned(MoveToPoint(pursuit->prevVictim)); // setAdjustsDestination(true)
+						}
+					}
+					// The speed it asks for.
+					bool viewBlocked = false;
+					if (!IsAirborne(own->locomotor) && !lookers.empty() && groundHeight != nullptr && navigationGrid != nullptr &&
+						current->position.z - groundHeight->At(current->position.XY()) <= significantHeight)
+					{
+						viewBlocked = AttackViewBlocked(*groundHeight, *navigationGrid, EyeFor(lookup, lookerEye(), current->entity), SightTargetOf(lookup, *current),
+							viewIgnores(current->entity));
+					}
+					pursuit->matched = 0;
+					if (!viewBlocked && view.victimPhysics && WithinAttackRange(weapon.attackRange, self, radius, *current) && !view.tooClose)
+					{
+						Engine::Math::Fixed speed = view.victimSpeed;
+						// isGoalPosWithinAttackRange: the range less a quarter of a pathfind cell.
+						const Engine::Math::Fixed goalRange = weapon.attackRange - Engine::Math::Fixed::FromRatio(5, 2);
+						if (WithinAttackRange(goalRange, self, radius, *current))
+							speed = speed * Engine::Math::Fixed::FromRatio(95, 100);
+						if (!canCrush)
+						{
+							pursuit->matched = 1;
+							pursuit->speed = speed;
+						}
+						// m_isInitialApproach = false; setTurretTargetObject(victim): its turret back on its victim.
+						target.chased = 1;
+						target.temporary = {};
+					}
+					// update: on its chase's first approach, a temporary target for its turret.
+					if (target.chased == 0)
+						turretTemporary();
+					return true;
+				}();
+				if (!pursuing)
+					stopPursuit();
+				if (pursuing)
+				{
+					// The chase has its move (CHASE_TARGET in place of APPROACH_TARGET).
+				}
+				else if (!inRange)
+				{
+					// AIAttackApproachTargetState::computePath -> requestAttackPath -> AIUpdateInterface::computeAttackPath:
+					// - flying (an airborne locomotor): straight for Weapon::computeApproachTarget's spot (0.9 of its range from the
+					//   victim, on the line to it; too close inside a minimum range over a cell, halfway between the two ranges plus
+					//   both bounding circles, away, not turning about);
+					// - a contact weapon: to the victim's position itself;
+					// - on the ground: to the victim's position, the route search stopping at the first spot it may fire from
+					//   (Pathfinder::findAttackPath: AttackApproach, planned by the route requests).
+					// It works its way out again only with no way (or stuck: isBlockedAndStuck), else MIN_RECOMPUTE_TIME (10 frames)
+					// on and with the victim moved more than a tenth of their distance (isSamePosition).
+					AttackApproach *searched = approachRows.empty() ? nullptr : &approachRows[row];
+					const Locomotion *ownMotion = lookup.IsAlive(entities[row]) ? lookup.template Get<Locomotion>(entities[row]) : nullptr;
+					const bool flying = ownMotion != nullptr && IsAirborne(ownMotion->locomotor);
+					const WeaponDefinition &held = weapons.At(armaments[row].weapon);
+					const bool contact = held.attackRange - Engine::Math::Fixed::FromRatio(5, 2) < Engine::Math::Fixed::FromInt(10); // isContactWeapon
+					const Engine::Math::FixedVector2 victimAt = current->position.XY();
+					Engine::Math::FixedVector2 approach = victimAt;
+					if (flying && !contact)
+					{
+						const Engine::Math::FixedVector2 away = self - victimAt;
+						const Engine::Math::Fixed apart = Engine::Math::Length(away);
+						const Engine::Math::Fixed cell = Engine::Math::Fixed::FromInt(10);
+						if (held.minimumRange > cell && apart < held.minimumRange)
+						{
+							Engine::Math::FixedVector2 direction = apart > Engine::Math::Fixed{} ? away / apart : Engine::Math::FixedVector2{Engine::Math::Fixed::One(), Engine::Math::Fixed{}};
+							// Airborne and too close: not a turn about (its way on the far side when it faces the victim's).
+							const std::int32_t turn = static_cast<std::int32_t>((transforms[row].facing - Engine::Math::Heading(Engine::Math::FixedVector2{} - direction)).units);
+							if (turn > -0x40000000 && turn < 0x40000000)
+								direction = Engine::Math::FixedVector2{} - direction;
+							const Engine::Math::Fixed spacing = (weapon.attackRange + held.minimumRange) / Engine::Math::Fixed::FromInt(2) + current->radius + radius;
+							approach = victimAt + direction * spacing;
+						}
+						else if (apart < Engine::Math::Fixed::FromRatio(1, 1000))
+							approach = self;
+						else
+							approach = victimAt + away * (weapon.attackRange * Engine::Math::Fixed::FromRatio(9, 10) / apart);
+					}
+					const bool searching = searched != nullptr && !flying && !contact;
+					if (searched != nullptr)
+					{
+						const BlockedState *blockedNow = lookup.template Get<BlockedState>(entities[row]);
+						const bool force = move->mode != MoveMode::Point || (blockedNow != nullptr && blockedNow->stuckSeen != 0) || !wasApproaching;
+						bool request = force;
+						if (!force && tick >= searched->approachTick)
+						{
+							searched->approachTick = tick + PursuitRecomputeTicks;
+							request = !SamePosition(self, searched->prevVictim, victimAt);
+						}
+						if (force)
+							searched->approachTick = tick + PursuitRecomputeTicks;
+						if (request)
+						{
+							searched->prevVictim = victimAt;
+							*move = Replanned(MoveToPoint(approach, GoalClaim::Keep)); // AIAttackApproachTargetState: its path's end claimed
+							// The search's view of things as they are now (m_requestedDestination: the victim where it is now).
+							const SightEye eye = EyeFor(lookup, lookerEye(), current->entity);
+							const SightTarget seen = SightTargetOf(lookup, *current);
+							const ViewIgnores ignores = viewIgnores(current->entity);
+							const AttackApproach kept = *searched;
+							*searched = AttackApproach{seen.at, seen.top, seen.centre, current->radius, radius, weapon.attackRange - Engine::Math::Fixed::FromRatio(5, 2),
+								held.minimumRange, eye.top, kept.prevVictim, kept.approachTick, target.atPosition != 0 ? ecs::Entity{} : current->entity,
+								ignores.victimSlaver, ignores.container, ignores.slaver, eye.skipCount, 1, eye.weaponTerrain ? std::uint8_t{1} : std::uint8_t{0},
+								lookers.empty() ? std::uint8_t{0} : std::uint8_t{1}, 0, eye.layer};
+							searched->victimAt = {approach.x, approach.y, seen.at.z};
+						}
+						// Only a ground route searches for its spot (flying and contact weapons go where they were sent).
+						searched->active = 1;
+						searched->search = searching ? 1 : 0;
+						// A contact weapon at an object: ignoreObstacle(victim) while it approaches.
+						searched->ignoreVictim = contact && target.atPosition == 0 ? 1 : 0;
+					}
+					else if (move->mode != MoveMode::Point || move->destination != approach)
+						*move = Replanned(MoveToPoint(approach, GoalClaim::Keep));
+					// Its first approach: a temporary target for its turret.
+					if (target.approached == 0)
+						turretTemporary();
+				}
+				else
+				{
+					// In reach: its first approach is over (onExit: m_isInitialApproach false), and its turret is back on its
+					// victim (AIAttackAimAtTargetState::onEnter: setTurretTargetObject).
+					target.approached = 1;
+					target.temporary = {};
+					if (move->mode == MoveMode::Point)
+						move->mode = MoveMode::Idle;
+				}
 			}
 			else if (aggression.stance == Stance::Guard && move->mode == MoveMode::Idle)
 			{
 				const Engine::Math::Fixed home = aggression.guardRadius / Engine::Math::Fixed::FromInt(2);
 				if (Engine::Math::DistanceSquared(self, aggression.guardCenter) > home * home)
-					*move = MoveToPoint(aggression.guardCenter);
+					*move = Replanned(MoveToPoint(aggression.guardCenter));
 			}
 		}
 	}

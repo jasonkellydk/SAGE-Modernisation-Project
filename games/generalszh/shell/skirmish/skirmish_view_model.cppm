@@ -29,11 +29,14 @@ struct SkirmishServices
 	std::function<std::u16string()> machineName;                    // the name when Skirmish.ini has none
 };
 
-// A battle honour as the record shows it (InsertBattleHonor): its image, dark until it is gained.
+// A battle honour as the record shows it (InsertBattleHonor): its image, dark until it is gained; its item data
+// (its BATTLE_HONOR_ bit) and its extra value (the streak's or the wins' count, set in the spacer row above it).
 struct BattleHonor
 {
 	std::string image;
 	bool gained{false};
+	std::uint32_t item{0};
+	std::int64_t extra{0};
 	bool operator==(const BattleHonor &) const = default;
 };
 
@@ -42,6 +45,9 @@ namespace honor
 {
 inline constexpr std::uint32_t Streak = 0x2, BattleTank = 0x80, AirWing = 0x100, CampaignUsa = 0x800, CampaignChina = 0x1000, CampaignGla = 0x2000,
 							   Blitz5 = 0x4000, Blitz10 = 0x8000, Apocalypse = 0x20000;
+inline constexpr std::uint32_t LoyaltyUsa = 0x20, LoyaltyChina = 0x40, LoyaltyGla = 0x200, Endurance = 0x400, FairPlay = 0x10000,
+							   OfficersClub = 0x40000, Domination = 0x80000, ChallengeMode = 0x100000, Ultimate = 0x200000, GlobalGeneral = 0x400000,
+							   DominationOnline = 0x800000, StreakOnline = 0x1000000, Challenge = 0x2000000, NotGained = 0x8000000;
 inline constexpr int GeneralTypes = 9; // MAX_GLOBAL_GENERAL_TYPES
 }
 
@@ -105,6 +111,18 @@ inline std::vector<std::vector<BattleHonor>> BattleHonors(const engine::config::
 	second.push_back(won >= 10000 ? BattleHonor{"Domination_10000", true} : won >= 1000 ? BattleHonor{"Domination_1000", true}
 		: won >= 500 ? BattleHonor{"Domination_500", true} : won >= 100 ? BattleHonor{"Domination_100", true} : BattleHonor{"Domination_100", false});
 	second.push_back({"Ultimate", perfect});
+	// InsertBattleHonor's item data: each its bit (BATTLE_HONOR_BLITZ5 when that is the one shown), the streak and
+	// domination their counts as extra.
+	const std::array<std::uint32_t, 6> firstItems{honor::CampaignChina, honor::CampaignGla, honor::CampaignUsa, honor::ChallengeMode, honor::AirWing,
+		honor::BattleTank};
+	const std::array<std::uint32_t, 6> secondItems{honor::Endurance, honor::Apocalypse, (honors & honor::Blitz5) != 0 ? honor::Blitz5 : honor::Blitz10,
+		honor::Streak, honor::Domination, honor::Ultimate};
+	for (std::size_t index = 0; index < first.size(); ++index)
+		first[index].item = firstItems[index];
+	for (std::size_t index = 0; index < second.size(); ++index)
+		second[index].item = secondItems[index];
+	second[3].extra = streak;
+	second[4].extra = won;
 	// A spacer row above each row of honours.
 	return {{}, first, {}, second};
 }
@@ -245,6 +263,7 @@ public:
 	engine::gui::mvvm::Observable<bool> systemMaps{true};
 	engine::gui::mvvm::Observable<std::vector<std::u16string>> mapItems;
 	engine::gui::mvvm::Observable<std::vector<std::string>> mapMedals; // each row's medal image (empty: none)
+	std::vector<int> mapHonorLevels; // each row's medal column item data (mapListTooltipFunc: 0..4; -1 not a multiplayer map)
 	engine::gui::mvvm::Observable<int> mapSelected{-1};
 	engine::gui::mvvm::Observable<MapPreview> mapListPreview;
 	engine::gui::mvvm::Observable<std::vector<MapPoint>> mapListStartSpots;
@@ -555,6 +574,7 @@ private:
 		m_mapRows = m_catalog.MapList(systemMaps.Get() ? "maps\\" : "userdata\\maps\\", true);
 		std::vector<std::u16string> names;
 		std::vector<std::string> medals;
+		mapHonorLevels.clear();
 		int chosen = 0; // always select *something*
 		for (std::size_t row = 0; row < m_mapRows.size(); ++row)
 		{
@@ -569,6 +589,10 @@ private:
 				medal = "Star-Silver";
 			else if (beaten(2) != 0)
 				medal = "Star-Bronze";
+			// The row's item data in the medal column (mapListTooltipFunc's): 4 every brutal opponent beaten, 3 brutal,
+			// 2 medium, 1 easy, 0 none; -1 not a multiplayer map (no medal column then).
+			mapHonorLevels.push_back(!map.multiplayer ? -1 : medal == "RedYell_Star" ? 4 : medal == "Star-Gold" ? 3 : medal == "Star-Silver" ? 2
+				: medal == "Star-Bronze" ? 1 : 0);
 			medals.push_back(std::move(medal));
 			names.push_back(u'\t' + m_mapRows[row]->name); // the medal column (SkirmishStats.ini) first
 			if (m_mapRows[row]->file == m_setup.map)

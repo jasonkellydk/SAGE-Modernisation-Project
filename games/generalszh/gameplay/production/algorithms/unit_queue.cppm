@@ -47,7 +47,8 @@ inline QueueResult CanQueueUnit(GameWorld &game, ecs::Entity factory, const cont
 		return QueueResult::NotBuildable;
 	if (queue->Full())
 		return QueueResult::QueueFull;
-	if (game.world.Get<gp::Airfield>(factory) != nullptr && !FreeSpace(game, factory))
+	// ParkingPlaceBehavior::hasAvailableSpaceFor: always, for one PRODUCED_AT_HELIPAD.
+	if (game.world.Get<gp::Airfield>(factory) != nullptr && !unit.Is("PRODUCED_AT_HELIPAD") && !FreeSpace(game, factory))
 		return QueueResult::ParkingFull;
 	return QueueResult::Queued;
 }
@@ -71,7 +72,8 @@ inline QueueResult QueueUnit(GameWorld &game, std::uint32_t player, ecs::Entity 
 	const content::ObjectDefinition &producer = game.templates.DefinitionAt(ref->index);
 	const auto production = content::ReadObjectProduction(producer, game.step);
 	const std::uint32_t quantity = production ? production->QuantityOf(unit->name) : 1u;
-	const std::uint64_t ticks = std::max<std::int64_t>(1, (unit->buildTimeSeconds * Engine::Math::Fixed::FromInt(game.step.TicksPerSecond())).Ceil());
+	// calcTimeToBuild at full power (the production system stretches it by the player's power each tick).
+	const std::uint64_t ticks = content::BuildFrames(unit->buildTimeSeconds, game.step.TicksPerSecond());
 	const std::uint32_t team = game.roster.DefaultTeam(player).value_or(0);
 	auto &queue = *world.Get<gp::ProductionQueue>(factory);
 	gp::ProductionEntry entry{game.templates.Definition(*unit), team, quantity, queue.nextId++, {}, ticks};

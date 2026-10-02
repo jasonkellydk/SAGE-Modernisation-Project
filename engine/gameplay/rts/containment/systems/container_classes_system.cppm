@@ -14,7 +14,8 @@ export import engine.gameplay.rts.construction.components.sale;
 // whatever estimates a weapon's damage against it, WeaponTemplate::estimateWeaponDamage's getContain() tests): Emptied
 // while it holds nobody (getContainCount() == 0), Clearable while a garrison (GarrisonContain, not
 // ImmuneToClearBuildingAttacks) holds someone; ArmedContainer while it is able to attack (Object::isAbleToAttack: built,
-// not being sold, and armed itself or letting its riders fire with someone aboard).
+// not being sold, and armed itself or letting its riders fire with someone aboard); Insignificant while a structure of
+// no faction that is no garrison or holds nobody (PartitionFilterInsignificantBuildings).
 export namespace engine::gameplay
 {
 struct ContainerClassesSystem
@@ -32,7 +33,7 @@ struct ContainerClassesSystem
 		for (std::size_t row = 0; row < transports.size(); ++row)
 		{
 			std::uint32_t &classes = targetables[row].classes;
-			classes &= ~(target_class::Emptied | target_class::Clearable | target_class::ArmedContainer);
+			classes &= ~(target_class::Emptied | target_class::Clearable | target_class::ArmedContainer | target_class::Insignificant);
 			const bool armed = !armaments.empty() && armaments[row].weapon != WeaponCatalog::None;
 			if (!unbuilt && (armed || (transports[row].definition.passengersFire && transports[row].occupied > 0)))
 				classes |= target_class::ArmedContainer;
@@ -40,6 +41,10 @@ struct ContainerClassesSystem
 				classes |= target_class::Emptied;
 			else if (!garrisons.empty() && garrisons[row].immuneToClear == 0)
 				classes |= target_class::Clearable;
+			// PartitionFilterInsignificantBuildings: a structure of no faction whose contain is no garrison
+			// (isGarrisonable) or holds nobody.
+			if ((classes & target_class::NonFactionStructure) != 0 && (garrisons.empty() || transports[row].occupied == 0))
+				classes |= target_class::Insignificant;
 		}
 	}
 };

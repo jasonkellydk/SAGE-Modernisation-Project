@@ -53,7 +53,9 @@ struct LocomotorDefinition
 	// The surfaces it moves over (locomotor_surface bits: ground 1, water 2, cliff 4, air 8, rubble 16).
 	std::uint8_t surfaces{1};
 	HeightBehavior height{HeightBehavior::NoMotiveForce};
-	std::uint8_t reserved[5]{}; // no padding: checkpoints hold its bytes
+	// Where it goes in a group's column (GroupMovementPriority: LOCO_MOVES_BACK 0, MIDDLE 1, FRONT 2).
+	std::uint8_t groupPriority{1};
+	std::uint8_t reserved[4]{}; // no padding: checkpoints hold its bytes
 	// Its full and damaged rates (Speed / SpeedDamaged, Acceleration / AccelerationDamaged, TurnRate / TurnRateDamaged;
 	// a damaged one not given is the full one): maxSpeed, acceleration and turnRate are whichever apply now.
 	Engine::Math::Fixed speedFull;
@@ -62,7 +64,7 @@ struct LocomotorDefinition
 	Engine::Math::Fixed accelerationDamaged;
 	Engine::Math::TurnAngle turnRateFull;
 	Engine::Math::TurnAngle turnRateDamaged;
-	std::uint8_t damagedGiven{0}; // bits: 1 speed, 2 acceleration, 4 turn rate (while reading)
+	std::uint8_t damagedGiven{0}; // bits: 1 speed, 2 acceleration, 4 turn rate, 8 lift (while reading)
 	// Wheels: it may back up (CanMoveBackwards), and the speed it turns at (MinTurnSpeed, per tick; at least a quarter
 	// of its speed).
 	bool canMoveBackward{false};
@@ -74,6 +76,34 @@ struct LocomotorDefinition
 	Engine::Math::Fixed wanderLength{Engine::Math::Fixed::One()};
 	// How far about its point a unit wandering in place goes (WanderAboutPointRadius).
 	Engine::Math::Fixed wanderAboutPointRadius;
+	// Where along itself it turns about (TurnPivotOffset: -1 its rear, 0 its centre, 1 its front; times its bounding
+	// circle radius: Locomotor::rotateObjAroundLocoPivot).
+	Engine::Math::Fixed turnPivotOffset;
+	// The radius it circles the place it holds at with no goal (CirclingRadius; 0: its tightest turn, minimum speed over
+	// turn rate; negative: the other way round: maintainCurrentPositionWings).
+	Engine::Math::Fixed circlingRadius;
+	// Ultra-accurate, within this many ticks of travel of its goal on both axes it slides straight in instead of turning
+	// (SlideIntoPlaceTime, in ticks: moveTowardsPositionOther's m_ultraAccurateSlideIntoPlaceFactor).
+	Engine::Math::Fixed slideIntoPlace;
+	// Higher than this over the ground under it, it is an airborne target (AirborneTargetingHeight; unset: never:
+	// AIUpdateInterface::doLocomotor, OBJECT_STATUS_AIRBORNE_TARGET).
+	Engine::Math::Fixed airborneTargetingHeight{Engine::Math::Fixed::FromInt(std::numeric_limits<std::int32_t>::max())};
+	// What it sets on its body's physics each frame (Locomotor::setPhysicsOptions): extra friction (Extra2DFriction, per
+	// tick), ground friction even in the air (Apply2DFrictionWhenAirborne), and kept on the ground (StickToGround).
+	Engine::Math::Fixed extraFriction;
+	std::uint8_t airborneFriction{0};
+	std::uint8_t stickToGround{0};
+	// Its force-driven flight (Locomotor::locoUpdate_moveTowardsPosition / handleBehaviorZ): arrival judged in 3D
+	// (CloseEnoughDist3D), and pushing on while airborne (AllowAirborneMotiveForce).
+	std::uint8_t closeEnough3D{0};
+	std::uint8_t airborneMotiveForce{0};
+	std::uint8_t reserved3[4]{}; // no padding: checkpoints hold its bytes
+	// The most it lifts against gravity a tick squared (Lift / LiftDamaged: `lift` is whichever applies now, as the rates
+	// above), and the vertical speed it tries not to exceed (SpeedLimitZ, per tick; unset 999999 a second).
+	Engine::Math::Fixed lift;
+	Engine::Math::Fixed liftFull;
+	Engine::Math::Fixed liftDamaged;
+	Engine::Math::Fixed speedLimitZ{Engine::Math::Fixed::FromRatio(999999, 30)};
 };
 
 // The rates it starts on (full), its damaged ones completed with the full ones where not given.
@@ -82,6 +112,10 @@ inline void SettleLocomotorRates(LocomotorDefinition &definition) noexcept
 	definition.speedFull = definition.maxSpeed;
 	definition.accelerationFull = definition.acceleration;
 	definition.turnRateFull = definition.turnRate;
+	// LocomotorTemplate::validate: LiftDamaged below zero (not given) is Lift.
+	definition.liftFull = definition.lift;
+	if ((definition.damagedGiven & 8u) == 0)
+		definition.liftDamaged = definition.lift;
 	if ((definition.damagedGiven & 1u) == 0)
 		definition.speedDamaged = definition.maxSpeed;
 	if ((definition.damagedGiven & 2u) == 0)

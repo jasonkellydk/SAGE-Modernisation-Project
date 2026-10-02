@@ -132,6 +132,155 @@ inline std::optional<NodeIndex> Gadget_At(const WNDDocument &document, float x, 
 	return hit;
 }
 
+// GameWindowManager::winProcessMouseEvent's tooltip, with no window holding the mouse (no captor, no grabbed window):
+// the window whose tooltip shows at (x, y) in layout units, or none (the world under the pointer may give one).
+// findWindowUnderMouse, over the top-level windows in order (ABOVE ones, then the rest, then BELOW ones; hidden ones
+// skipped; the edges inside): until one is found, the deepest window under the pointer in each one passed over
+// (winPointInAnyChild: hidden ones skipped, disabled ones not) that has a tooltip callback or text; the first enabled
+// one holds the pointer, at its deepest enabled, shown window (winPointInChild). A window there taking no input gives
+// it to its combo box (a combo box's text entry), else to none. With none found before, that window is the one (unless
+// hidden). A modal window (`modal`: the first top-level one) holds the pointer alone (no search for tooltips).
+// A combo box is its own gadgets here (GadgetComboBox: its drop-down button GadgetComboBox's 21 wide at its right, its
+// text entry the rest, taking no input unless editable; all its gadgets with the box's tooltip text, not its callback,
+// which the menus set after making them; its open list below it; a menu may give its entry or list a callback of its
+// own: `hasCallback` is asked of the box itself, its entry and its list, never of its button).
+// `hasCallback(window, part)`: whether the window (or its combo box's list) has a tooltip callback.
+enum class WNDTooltipPart : std::uint8_t
+{
+	Window,      // the window itself
+	ComboButton, // a combo box's drop-down button
+	ComboEntry,  // a combo box's text entry
+	ComboList,   // a combo box's open list
+};
+
+struct WNDTooltipTarget
+{
+	NodeIndex window = Invalid_Node;
+	WNDTooltipPart part = WNDTooltipPart::Window;
+	bool Found() const noexcept { return window != Invalid_Node; }
+};
+
+namespace wnd_tooltip_detail
+{
+inline bool Within(const Rect &rect, float x, float y) noexcept
+{
+	return x >= static_cast<float>(rect.left) && x <= static_cast<float>(rect.right) && y >= static_cast<float>(rect.top) &&
+		y <= static_cast<float>(rect.bottom);
+}
+
+inline bool Hidden(const WNDWindow &window) noexcept
+{
+	return Has_Flag(window.flags, WindowFlag::Hidden) || Has_Flag(window.flags, WindowFlag::TransitionHidden);
+}
+
+inline constexpr int ComboButtonWidth = 21; // GadgetComboBox's buttonWidth
+
+// A combo box's gadgets under (x, y): its open list, then its text entry, then its button (GadgetComboBox makes the
+// button, the entry, then the list; each added in front of the one before).
+inline std::optional<WNDTooltipPart> Combo_Part(const WNDWindow &combo, float x, float y) noexcept
+{
+	const Rect box = Combo_Box_Region(combo);
+	if (combo.list_open && Within(Combo_List_Region(combo), x, y))
+		return WNDTooltipPart::ComboList;
+	if (Within({box.left, box.top, box.right - ComboButtonWidth, box.bottom}, x, y))
+		return WNDTooltipPart::ComboEntry;
+	if (Within({box.right - ComboButtonWidth, box.top, box.right, box.bottom}, x, y))
+		return WNDTooltipPart::ComboButton;
+	return std::nullopt;
+}
+
+// GameWindow::winPointInChild / winPointInAnyChild (`any`: hidden children skipped at the first level, enabled ones
+// not asked for anywhere).
+inline WNDTooltipTarget Point_In_Child(const WNDDocument &document, NodeIndex node, float x, float y, bool ignoreEnable)
+{
+	const auto windows = document.Windows();
+	const WNDWindow &window = windows[node];
+	if (window.type == WindowType::ComboBox)
+	{
+		if (const auto part = Combo_Part(window, x, y))
+			return {node, *part}; // its gadgets are enabled and shown with it
+		return {node, WNDTooltipPart::Window};
+	}
+	for (NodeIndex child = window.first_child; child != Invalid_Node && child < windows.size(); child = windows[child].next_sibling)
+	{
+		const WNDWindow &each = windows[child];
+		if (!Within(each.type == WindowType::ComboBox ? Combo_Box_Region(each) : each.screen_region, x, y)
+			&& !(each.type == WindowType::ComboBox && each.list_open && Within(Combo_List_Region(each), x, y)))
+			continue;
+		if (!Hidden(each) && (ignoreEnable || Has_Flag(each.flags, WindowFlag::Enabled)))
+			return Point_In_Child(document, child, x, y, ignoreEnable);
+	}
+	return {node, WNDTooltipPart::Window};
+}
+}
+
+template<class HasCallback>
+inline WNDTooltipTarget Tooltip_Target(const WNDDocument &document, float x, float y, bool modal, HasCallback &&hasCallback)
+{
+	using namespace wnd_tooltip_detail;
+	const auto windows = document.Windows();
+	if (document.Size() == 0)
+		return {};
+	const auto hasTooltip = [&](const WNDTooltipTarget &target) {
+		const WNDWindow &window = windows[target.window];
+		// The box's gadgets carry its text; its button no callback, its entry and list one a menu gives them.
+		const bool callback = target.part != WNDTooltipPart::ComboButton && hasCallback(target.window, target.part);
+		return callback || !window.tooltip.empty();
+	};
+	WNDTooltipTarget tooltip;
+	WNDTooltipTarget input;
+	if (modal)
+		input = Point_In_Child(document, document.Root(), x, y, false);
+	else
+	{
+		const auto pass = [&](Layer layer) {
+			for (NodeIndex node = document.Root(); node != Invalid_Node && node < windows.size(); node = windows[node].next_sibling)
+			{
+				const WNDWindow &window = windows[node];
+				if (window.layer != layer || Hidden(window) || !Within(window.screen_region, x, y))
+					continue;
+				if (!tooltip.Found())
+				{
+					// winPointInAnyChild: from its children (itself when in none).
+					WNDTooltipTarget child{node, WNDTooltipPart::Window};
+					for (NodeIndex each = window.first_child; each != Invalid_Node && each < windows.size(); each = windows[each].next_sibling)
+					{
+						const WNDWindow &under = windows[each];
+						const bool over = Within(under.type == WindowType::ComboBox ? Combo_Box_Region(under) : under.screen_region, x, y)
+							|| (under.type == WindowType::ComboBox && under.list_open && Within(Combo_List_Region(under), x, y));
+						if (over && !Hidden(under))
+						{
+							child = Point_In_Child(document, each, x, y, true);
+							break;
+						}
+					}
+					if (hasTooltip(child))
+						tooltip = child;
+				}
+				if (Has_Flag(window.flags, WindowFlag::Enabled))
+				{
+					input = Point_In_Child(document, node, x, y, false);
+					return true;
+				}
+			}
+			return false;
+		};
+		if (!pass(Layer::Above) && !pass(Layer::Normal))
+			pass(Layer::Below);
+	}
+	if (input.Found())
+	{
+		const WNDWindow &window = windows[input.window];
+		if (input.part == WNDTooltipPart::ComboEntry && !window.editable)
+			input.part = WNDTooltipPart::Window; // the entry takes no input: its combo box does
+		else if (input.part == WNDTooltipPart::Window && Has_Flag(window.flags, WindowFlag::NoInput))
+			input = {};
+	}
+	if (!tooltip.Found() && input.Found())
+		tooltip = input;
+	return tooltip;
+}
+
 class WNDPointer
 {
 public:

@@ -122,7 +122,7 @@ inline void ApplyFlightDeckEvents(GameWorld &game, const FlightDeckEvents &event
 			if (queue == nullptr || unit == nullptr || queue->Full())
 				return;
 			const std::uint32_t team = owner != nullptr ? game.roster.DefaultTeam(owner->player).value_or(0) : 0u;
-			const std::uint64_t ticks = std::max<std::int64_t>(1, (unit->buildTimeSeconds * Engine::Math::Fixed::FromInt(game.step.TicksPerSecond())).Ceil());
+			const std::uint64_t ticks = content::BuildFrames(unit->buildTimeSeconds, game.step.TicksPerSecond());
 			queue->Push(gp::ProductionEntry{game.templates.Definition(*unit), team, 1, queue->nextId++, {}, ticks});
 			break;
 		}

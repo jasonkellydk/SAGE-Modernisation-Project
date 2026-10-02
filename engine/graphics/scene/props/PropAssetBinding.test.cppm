@@ -4,6 +4,7 @@ module;
 export module Graphics.Scene.Props.AssetBinding.Tests;
 import std;
 import Graphics.Scene.Props.AssetBinding;
+import Graphics.Scene.StaticDrawOrder;
 import Graphics.Resources.MipChain;
 import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
@@ -85,6 +86,10 @@ BOOST_AUTO_TEST_CASE(authored_screen_blending_preserves_rgb_equation_depth_and_l
     PropAssetBinding screen,alpha,opaque,always;
     load(screen,"screen.w3d");load(alpha,"alpha.w3d");load(opaque,"opaque.w3d");load(always,"screen-always.w3d");
     BOOST_TEST(screen.Part_Sort_Level(0)==1);BOOST_TEST(opaque.Part_Sort_Level(0)==0);
+    BOOST_TEST(!screen.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(alpha.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(!opaque.Part_Requires_Transparency_Sorting(0));
+    BOOST_TEST(!opaque.Part_Requires_Transparency_Sorting(opaque.Part_Count()));
     BOOST_TEST(screen.Part_Sort_Level(screen.Part_Count())==0);
     std::array<float,3> screenExpected{},alphaExpected{};
     for(unsigned channel=0;channel<3;++channel) {
@@ -105,6 +110,23 @@ BOOST_AUTO_TEST_CASE(authored_screen_blending_preserves_rgb_equation_depth_and_l
     BOOST_REQUIRE(screen.Draw_Part(commands,0,parameters));
     auto behind=parameters;behind.world[11]=0.25f;
     BOOST_REQUIRE(opaque.Draw_Part(commands,0,behind));check(source);
+    // Ordinary transparency is submitted first but drawn after the static
+    // background/effect bins. Geometry keeps its authored no-depthwrite state.
+    DirectionalShadowRenderer shadows;PropSubmission submission;
+    submission.Initialize(device,renderer,shadows);
+    BOOST_REQUIRE(commands.Clear({0,0,0,1},1));
+    auto in_front=parameters;in_front.world[11]=-0.1f;
+    BOOST_REQUIRE(alpha.Submit_Part(submission,0,in_front,PropDrawPhase::Transparent,{0,0,-1,0}));
+    const std::array<std::int32_t,3> levels{0,1,5};
+    std::vector<std::size_t> order;BOOST_REQUIRE(Build_Static_Draw_Order(levels,order));
+    const std::vector<std::size_t> expected_order{2,1};BOOST_CHECK(order==expected_order);
+    for(const auto index:order) BOOST_REQUIRE((index==2 ? opaque.Draw_Part(commands,0,behind) : screen.Draw_Part(commands,0,parameters)));
+    std::array<float,3> combined{},final{};
+    for(unsigned channel=0;channel<3;++channel) {
+        combined[channel]=source[channel]+source[channel]*(1-source[channel]);
+        final[channel]=source[channel]*(64/255.0f)+combined[channel]*(1-64/255.0f);
+    }
+    check(combined);BOOST_REQUIRE(submission.Flush_Transparent());check(final);submission.Shutdown();
     const auto invalid=assets.Request_Model("invalid-draw.w3d");assets.Wait(invalid);
     PropAssetBinding rejected;std::string error;
     BOOST_TEST(!rejected.Load(device,renderer,assets,invalid,error));
@@ -167,7 +189,7 @@ BOOST_AUTO_TEST_CASE(explicit_model_texture_quality_replaces_owned_resources_wit
     // The 2x2 mip contains one 64-red pixel. At UV .125, wrap/linear sampling
     // gives it .75*.75 coverage: 36 red. The final 1x1 mip is uniformly 16.
     for(const auto [reduction,minimum,red]:std::array<std::array<unsigned,3>,4>{{{2,1,36},{999,1,16},{999,4,255},{0,1,255}}}) {
-        BOOST_REQUIRE_MESSAGE(reduced.Load(device,renderer,assets,model,error,{},reduction,minimum),error);
+        BOOST_REQUIRE_MESSAGE(reduced.Load(device,renderer,assets,model,error,{},{},reduction,minimum),error);
         BOOST_TEST(reduced.Texture_Count()==1u);check(reduced,red);check(original,255);
         BOOST_TEST(!reduced.Load(device,renderer,assets,{},error));check(reduced,red);
     }
@@ -512,4 +534,51 @@ BOOST_AUTO_TEST_CASE(converted_section_door_opens_through_native_rig_and_surface
     std::size_t retained_coverage=0;for(std::size_t i=0;i<captured.size();i+=4)if(std::to_integer<unsigned>(captured[i])>25)++retained_coverage;
     BOOST_TEST(retained_coverage==coverage[0]);
     submission.Shutdown();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(texture_replacements_quality_mapping_and_stencil_coexist)
+{
+    const auto texture=[](bool blue) {
+        std::vector<std::byte> pixels(18+4*4*4);pixels[2]=std::byte{2};
+        pixels[12]=pixels[14]=std::byte{4};pixels[16]=std::byte{32};pixels[17]=std::byte{0x28};
+        for(unsigned i=18;i<pixels.size();i+=4) {
+            pixels[i+(blue ? 0 : 2)]=std::byte{255};pixels[i+3]=std::byte{255};
+        }
+        return pixels;
+    };
+    Assets::AssetCache assets([&](const auto& identity) {
+        return identity.type==Assets::AssetType::Texture ? texture(identity.canonical_name=="replacement.tga") : std::vector<std::byte>{std::byte{1}};
+    });
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    const auto model=assets.Request_Model("unmapped.w3d");assets.Wait(model);
+    const auto original=assets.Request_Texture("paint.tga"),replacement=assets.Request_Texture("replacement.tga");
+    assets.Wait(original);assets.Wait(replacement);
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({8,8,1,RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({8,8,1,RHITextureFormat::D24_UNorm_S8,static_cast<unsigned>(RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(target.Is_Valid());BOOST_REQUIRE(depth.Is_Valid());
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,8,8}));
+    PropParameters parameters;parameters.view_projection={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};parameters.scene_ambient={1,1,1,1};
+    PropTextureMappingContext mapping;mapping.milliseconds=3456;
+    const std::array swaps{std::pair{original,replacement}};
+    PropAssetBinding changed,overridden;std::string error;
+    BOOST_REQUIRE_MESSAGE(changed.Load(device,renderer,assets,model,error,{},swaps,2,1),error);
+    BOOST_REQUIRE_MESSAGE(overridden.Load(device,renderer,assets,model,error,original,swaps,2,1),error);
+    changed.Clamp_Texture_Addressing();overridden.Clamp_Texture_Addressing();
+    RHIStencilDescription reject;reject.enabled=true;
+    reject.front.comparison=reject.back.comparison=RHIComparison::Never;
+    const auto check=[&](PropAssetBinding& binding,const RHIStencilDescription* stencil,unsigned red,unsigned blue) {
+        BOOST_REQUIRE(commands.Clear({0,1,0,1},1));
+        BOOST_REQUIRE(binding.Draw_Part(commands,0,parameters,nullptr,0,{},stencil,&mapping));
+        std::array<std::byte,8*8*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,8*4));
+        const auto center=(4*8+4)*4;
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center]))-int(red),2);
+        BOOST_CHECK_SMALL(int(std::to_integer<unsigned>(pixels[center+2]))-int(blue),2);
+    };
+    check(changed,&reject,0,0); // Stencil must reject despite the texture override.
+    check(changed,nullptr,0,255); // Per-prototype replacement still applies with reduced mips.
+    check(overridden,nullptr,255,0); // Whole-model override takes precedence.
+    check(changed,nullptr,0,255); // The other binding cannot mutate this one.
+    changed.Clear();overridden.Clear();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
 }

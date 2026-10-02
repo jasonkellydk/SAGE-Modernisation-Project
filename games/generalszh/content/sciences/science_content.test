@@ -1,0 +1,49 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.sciences.science_content;
+import games.generalszh.content.install.install_mount;
+
+// ScienceStore (GeneralsMD/Code/GameEngine/Source/Common/RTS/Science.cpp) as shipped.
+using namespace generalszh::content;
+using namespace engine::config;
+
+BOOST_AUTO_TEST_SUITE(science_content)
+
+// ScienceInfo's field parse on Science.ini and ScienceStore::getNameAndDescription / isScienceGrantable: Paradrop 1's
+// DisplayName SCIENCE:USAParaDrop1 and Description CONTROLBAR:ToolTipUSAScienceParaDrop, grantable (IsGrantable Yes);
+// the side sciences (SCIENCE_AMERICA, SCIENCE_CHINA, SCIENCE_GLA) are not grantable; a science the store does not hold
+// has no name.
+BOOST_AUTO_TEST_CASE(legacy_parity_science_names_and_grants)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const auto sciences = BindSciences(loader.Load({"Data/INI/Default/Science", "Data/INI/Science"}));
+	const auto paradrop = ScienceNameAndDescription(sciences, "SCIENCE_Paradrop1");
+	BOOST_TEST_REQUIRE(paradrop.has_value());
+	BOOST_TEST(paradrop->first == "SCIENCE:USAParaDrop1");
+	BOOST_TEST(paradrop->second == "CONTROLBAR:ToolTipUSAScienceParaDrop");
+	BOOST_TEST(!ScienceNameAndDescription(sciences, "SCIENCE_NoSuchThing").has_value());
+	const auto grantable = [&](std::string_view name) {
+		for (const ScienceInfo &info : sciences)
+			if (info.name == name)
+				return info.grantable;
+		return true;
+	};
+	BOOST_TEST(grantable("SCIENCE_Paradrop1"));
+	BOOST_TEST(!grantable("SCIENCE_AMERICA"));
+	BOOST_TEST(!grantable("SCIENCE_CHINA"));
+	BOOST_TEST(!grantable("SCIENCE_GLA"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

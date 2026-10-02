@@ -5,6 +5,7 @@ import std;
 
 import games.generalszh.presentation.camera.algorithms.camera_shaking;
 import games.generalszh.presentation.camera.algorithms.motion_blur_steps;
+import games.generalszh.presentation.camera.algorithms.screen_filters;
 import games.generalszh.presentation.camera.algorithms.selection_focus;
 import games.generalszh.presentation.camera.algorithms.camera_slave;
 
@@ -188,6 +189,141 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_slaved_camera_is_its_bone_in_the_world)
 	const std::array<float, 2> at = SlavePosition(camera);
 	BOOST_TEST(at[0] == 100.0f);
 	BOOST_TEST(at[1] == 55.0f);
+}
+
+// legacy_parity: ScriptActions::doBlackWhiteMode and ScreenBWFilter::set (W3DShaderManager.cpp), a frame at a time: begun
+// over 4 frames the grey fades in 0.25, 0.5, 0.75, then 1 and settles; ended over 2 frames it fades out 0.5, then 0 and the
+// view's filter is none (that frame still drawn). Ending it while the view's filter is not the grey one does nothing; a
+// motion blur replaces it (the view has one filter). Drawn: the whole view through the grey shader at the fade.
+BOOST_AUTO_TEST_CASE(legacy_parity_black_and_white_fades_in_and_out_frame_by_frame)
+{
+	ViewFilter filter;
+	EndBlackWhite(filter, 3);
+	BOOST_TEST(filter.fadeDirection == 0);
+	StartBlackWhite(filter, 4);
+	const float in[5] = {0.25f, 0.5f, 0.75f, 1.0f, 1.0f};
+	for (int frame = 0; frame < 5; ++frame)
+	{
+		BOOST_TEST(StepBlackWhite(filter));
+		BOOST_TEST(filter.fadeValue == in[frame]);
+	}
+	ScreenFilterDraw draw;
+	BlackWhiteDraw(filter, filter.blackWhite, draw);
+	BOOST_TEST_REQUIRE(draw.quads.size() == 1u);
+	BOOST_TEST(draw.quads[0].blackWhite);
+	BOOST_TEST(draw.quads[0].fade == 1.0f);
+	BOOST_TEST((draw.quads[0].uv[0] == std::array<float, 2>{1.0f, 1.0f}));
+	BOOST_TEST((draw.quads[0].uv[3] == std::array<float, 2>{0.0f, 0.0f}));
+	EndBlackWhite(filter, 2);
+	BOOST_TEST(StepBlackWhite(filter));
+	BOOST_TEST(filter.fadeValue == 0.5f);
+	BOOST_TEST(StepBlackWhite(filter));
+	BOOST_TEST(filter.fadeValue == 0.0f);
+	BOOST_TEST(!filter.blackWhite);
+	BOOST_TEST(!StepBlackWhite(filter));
+	StartBlackWhite(filter, 4);
+	StartMotionBlur(filter, true, false);
+	BOOST_TEST(!filter.blackWhite);
+	BOOST_TEST(filter.motionBlur);
+}
+
+// legacy_parity: ScreenMotionBlurFilter::postRender's quads (W3DShaderManager.cpp). A zoom in-and-out (doCameraMotionBlurJump)
+// after its first logic frame (count 5): the picture drawn back opaque with its corners pulled to the centre by sqrt(1 - 5 /
+// 60 x 0.9) (0.98088 at the bottom right), then 5 copies, each pulled in by 0.99 more (the fifth's corner 0.95732 / 0.04268),
+// blended at alpha 0x15; drawn from the last frame's picture (m_skipRender: the count just moved). Saturating at its peak
+// (count 60): 30 copies added at 0x09 + (60 - 30) / 5 + 60 = 75, each 0.98 in. A pan (no scroll, pan factor 30): count 15
+// (half the pan factor at least), centred half a view up, the copies 0.006 wider across.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_motion_blur_draws_its_copies_pulled_to_the_centre)
+{
+	ViewFilter filter;
+	StartMotionBlurJump(filter, {100.0f, 200.0f, 0.0f}, false);
+	StepMotionBlur(filter, 1);
+	BOOST_TEST(filter.maxCount == 5);
+	BOOST_TEST(filter.skipRender);
+	ScreenFilterDraw draw;
+	BOOST_TEST(MotionBlurDraw(filter, {0.0f, 0.0f}, draw));
+	BOOST_TEST_REQUIRE(draw.quads.size() == 6u);
+	BOOST_TEST(draw.keepPicture);
+	BOOST_TEST(!draw.quads[0].blend);
+	BOOST_TEST(std::abs(draw.quads[0].uv[0][0] - 0.9808846f) <= 0.00001f);
+	BOOST_TEST(std::abs(draw.quads[5].uv[0][0] - 0.9573165f) <= 0.00001f);
+	BOOST_TEST(std::abs(draw.quads[5].uv[3][1] - 0.0426835f) <= 0.00001f);
+	BOOST_TEST(draw.quads[1].blend);
+	BOOST_TEST(!draw.quads[1].additive);
+	BOOST_TEST(draw.quads[1].color[3] == 21.0f / 255.0f);
+
+	ViewFilter peak;
+	StartMotionBlur(peak, true, true);
+	peak.maxCount = ViewFilter::MaxCount;
+	ScreenFilterDraw bright;
+	MotionBlurDraw(peak, {0.0f, 0.0f}, bright);
+	BOOST_TEST_REQUIRE(bright.quads.size() == 31u);
+	BOOST_TEST(bright.quads[30].additive);
+	BOOST_TEST(bright.quads[30].color[3] == 75.0f / 255.0f);
+
+	ViewFilter pan;
+	StartMotionBlurFollow(pan, 30);
+	ScreenFilterDraw panned;
+	MotionBlurDraw(pan, {0.0f, 0.0f}, panned);
+	BOOST_TEST(pan.maxCount == 15);
+	BOOST_TEST_REQUIRE(panned.quads.size() == 16u);
+	BOOST_TEST((panned.quads[0].uv[3] == std::array<float, 2>{0.0f, 0.0f}));
+	BOOST_TEST(std::abs(panned.quads[1].uv[3][0] - 0.002f) <= 0.00001f);
+	BOOST_TEST(panned.quads[1].uv[3][1] == 0.0f);
+}
+
+// legacy_parity: W3DView::draw drew the view (and ScreenBWFilter::set / ScreenMotionBlurFilter::postRender stepped) once a
+// frame at 30 frames a second; on real time: 0.07 s is 2 of those frames (the grey over 10 frames at 0.2), 0.01 s more
+// none, a 0.25 s stall 7 (0.9). A pan (CAMERA_MOTION_BLUR_FOLLOW 30) scrolling 0.1125 of the screen up a frame
+// (calcDeltaScroll): count int(0.1125 x 200 x 30 / 30) = 22, 22 copies; its end (END_FOLLOW) centred toward that scroll
+// (0.5, 0): 2 frames later the count is 20 (the first copy's top left 0.002 / 0, bottom right 0.998 / 0.99); stepping
+// on, it stops at 1, that frame is still drawn (one copy), and the effect is over. A zoom's kept picture is only the
+// first drawing after its count moved (m_skipRender cleared by the next postRender).
+BOOST_AUTO_TEST_CASE(legacy_parity_screen_filters_step_by_the_originals_drawn_frames)
+{
+	ViewFilter grey;
+	StartBlackWhite(grey, 10);
+	BOOST_TEST(StepScreenFilterFrames(grey, 0.07f) == 2);
+	BOOST_TEST(grey.fadeValue == 0.2f);
+	BOOST_TEST(StepScreenFilterFrames(grey, 0.01f) == 0);
+	BOOST_TEST(grey.fadeValue == 0.2f);
+	BOOST_TEST(StepScreenFilterFrames(grey, 0.25f) == 7);
+	BOOST_TEST(grey.fadeValue == 0.9f);
+
+	ViewFilter pan;
+	StartMotionBlurFollow(pan, 30);
+	ScreenFilterDraw panned;
+	BOOST_TEST(MotionBlurDraw(pan, {0.0f, 0.1125f}, panned));
+	BOOST_TEST(pan.maxCount == 22);
+	BOOST_TEST(panned.quads.size() == 23u);
+	EndMotionBlurFollow(pan);
+	BOOST_TEST(StepScreenFilterFrames(pan, 0.07f) == 2);
+	BOOST_TEST(pan.maxCount == 20);
+	ScreenFilterDraw ending;
+	BOOST_TEST(MotionBlurDraw(pan, {0.0f, 0.0f}, ending));
+	BOOST_TEST_REQUIRE(ending.quads.size() == 21u);
+	BOOST_TEST(std::abs(ending.quads[1].uv[3][0] - 0.002f) <= 0.00001f);
+	BOOST_TEST(std::abs(ending.quads[1].uv[3][1]) <= 0.00001f);
+	BOOST_TEST(std::abs(ending.quads[1].uv[0][0] - 0.998f) <= 0.00001f);
+	BOOST_TEST(std::abs(ending.quads[1].uv[0][1] - 0.99f) <= 0.00001f);
+	StepScreenFilterFrames(pan, 0.25f);
+	StepScreenFilterFrames(pan, 0.25f);
+	StepScreenFilterFrames(pan, 0.25f);
+	BOOST_TEST(pan.maxCount == 1);
+	ScreenFilterDraw over;
+	BOOST_TEST(!MotionBlurDraw(pan, {0.0f, 0.0f}, over));
+	BOOST_TEST(over.quads.size() == 2u);
+	BOOST_TEST(!pan.motionBlur);
+
+	ViewFilter zoom;
+	StartMotionBlurJump(zoom, {0.0f, 0.0f, 0.0f}, false);
+	StepMotionBlur(zoom, 1);
+	ScreenFilterDraw first;
+	MotionBlurDraw(zoom, {0.0f, 0.0f}, first);
+	BOOST_TEST(first.keepPicture);
+	ScreenFilterDraw second;
+	MotionBlurDraw(zoom, {0.0f, 0.0f}, second);
+	BOOST_TEST(!second.keepPicture);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

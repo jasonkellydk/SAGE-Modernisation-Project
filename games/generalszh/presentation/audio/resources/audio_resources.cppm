@@ -168,15 +168,65 @@ inline void FollowLoop(engine::audio::SoundPlayer &player, const AudioContent &c
 		handle = PlaySound(player, state, *sound, position);
 }
 
-// The levels: the settings' defaults times the scripts' shares.
-inline void ApplyLevels(engine::audio::Mixer &mixer, const AudioSettings &settings, const AudioState &state)
+// The four levels the original plays at (AudioManager m_musicVolume, m_speechVolume, m_soundVolume for 2D sounds and
+// m_sound3DVolume for world sounds).
+struct SoundLevels
+{
+	float music{1.0f};
+	float speech{1.0f};
+	float flat{1.0f};
+	float positional{1.0f};
+};
+
+// OptionPreferences::getSoundVolume / get3DSoundVolume without an Options.ini value (in parseAudioSettingsDefinition,
+// the system volumes): the default, the 2D one scaled by 1 + Relative2DVolume when that is below 0 and the 3D one by
+// 1 - Relative2DVolume when it is above 0.
+inline float PreferredSoundVolume(const AudioSettings &settings)
+{
+	return settings.relative2DVolume < 0.0f ? settings.defaultSoundVolume * (1.0f + settings.relative2DVolume) : settings.defaultSoundVolume;
+}
+inline float PreferredSound3DVolume(const AudioSettings &settings)
+{
+	return settings.relative2DVolume > 0.0f ? settings.default3DSoundVolume * (1.0f - settings.relative2DVolume) : settings.default3DSoundVolume;
+}
+
+// AudioManager::setVolume and set3DVolumeAdjustment: the player's volumes (else the settings' preferred ones) times the
+// scripts' shares; world sounds times the zoom volume too, clamped to 0..1.
+inline SoundLevels LevelsFor(const AudioSettings &settings, const AudioState &state)
 {
 	const auto level = [](float own, float fallback) { return own >= 0.0f ? own : fallback; };
-	mixer.SetBusGain(engine::audio::Bus::Music, level(state.userMusic, settings.defaultMusicVolume) * state.scriptMusic);
-	mixer.SetBusGain(engine::audio::Bus::Speech, level(state.userSpeech, settings.defaultSpeechVolume) * state.scriptSpeech);
-	mixer.SetBusGain(engine::audio::Bus::Effects, level(state.userSound3D, settings.default3DSoundVolume) * state.scriptSound * state.zoomVolume);
-	mixer.SetBusGain(engine::audio::Bus::Ambient, level(state.userSound3D, settings.default3DSoundVolume) * state.scriptSound * state.zoomVolume);
-	mixer.SetBusGain(engine::audio::Bus::Interface, level(state.userSound, settings.defaultSoundVolume) * state.scriptSound);
+	SoundLevels levels;
+	levels.music = level(state.userMusic, settings.defaultMusicVolume) * state.scriptMusic;
+	levels.speech = level(state.userSpeech, settings.defaultSpeechVolume) * state.scriptSpeech;
+	levels.flat = level(state.userSound, PreferredSoundVolume(settings)) * state.scriptSound;
+	levels.positional = std::clamp(level(state.userSound3D, PreferredSound3DVolume(settings)) * state.scriptSound * state.zoomVolume, 0.0f, 1.0f);
+	return levels;
+}
+
+// The levels, onto the mixer's buses.
+inline void ApplyLevels(engine::audio::Mixer &mixer, const AudioSettings &settings, const AudioState &state)
+{
+	const SoundLevels levels = LevelsFor(settings, state);
+	mixer.SetBusGain(engine::audio::Bus::Music, levels.music);
+	mixer.SetBusGain(engine::audio::Bus::Speech, levels.speech);
+	mixer.SetBusGain(engine::audio::Bus::Effects, levels.positional);
+	mixer.SetBusGain(engine::audio::Bus::Ambient, levels.positional);
+	mixer.SetBusGain(engine::audio::Bus::Interface, levels.flat);
+}
+
+// AudioSettings onto the player: the sample pools (SampleCount2D / SampleCount3D: MilesAudioManager::initSamplePools),
+// the muted-sound cull (MinSampleVolume) and the Global sounds' ranges (GlobalMinRange / GlobalMaxRange).
+inline void ConfigurePlayer(engine::audio::SoundPlayer &player, const AudioSettings &settings)
+{
+	player.SetSampleLimits({settings.sampleCount2D, settings.sampleCount3D});
+	player.SetCullSettings({settings.minSampleVolume, settings.globalMinRange, settings.globalMaxRange});
+}
+
+// TimeToFadeAudio as output frames: the original fades over that many logic frames (30 a second); presentation runs on
+// real time, so the same span of the mixer's output.
+inline std::uint32_t FadeMixerFrames(const AudioSettings &settings, std::uint32_t sampleRate)
+{
+	return static_cast<std::uint32_t>(settings.fadeAudioFrames * sampleRate / 30u);
 }
 
 // AudioManager::update's zoom volume: 1 less ZoomSoundVolumePercentageAmount, all of it back as the camera comes
@@ -197,15 +247,18 @@ inline float ZoomVolume(const AudioSettings &settings, const ListenerPose &pose,
 	return volume;
 }
 
-// The microphone, as the original: from the ground point the camera looks at
-// toward the camera, the configured height up but no further than the
-// configured share of the way; panned by the camera's right.
+// The microphone, as AudioManager::update: from the ground point the camera looks at toward the camera,
+// MicrophoneDesiredHeightAboveTerrain up but no further than MicrophoneMaxPercentageBetweenGroundAndCamera of the way
+// (that share alone when the camera is no higher than the desired height above the ground point, or not above it at
+// all); panned by the camera's right. EA's original compares the camera's absolute height with the desired height
+// above the terrain; this is the corrected, relative comparison (a retail quirk fixed).
 inline engine::audio::Listener MicrophoneFor(const AudioSettings &settings, const ListenerPose &pose)
 {
 	const float height = pose.eye[2] - pose.ground[2];
+	const float desired = settings.microphoneHeightAboveTerrain;
 	float share = settings.microphoneMaxBetweenGroundAndCamera;
-	if (height > 0.0f && settings.microphoneHeightAboveTerrain > 0.0f)
-		share = std::min(share, settings.microphoneHeightAboveTerrain / height);
+	if (!(pose.eye[2] <= desired + pose.ground[2] || height <= 0.0f))
+		share = std::min(share, desired / height);
 	const engine::audio::Vec3 microphone{pose.ground[0] + (pose.eye[0] - pose.ground[0]) * share,
 		pose.ground[1] + (pose.eye[1] - pose.ground[1]) * share, pose.ground[2] + (pose.eye[2] - pose.ground[2]) * share};
 	const float length = std::sqrt(pose.right[0] * pose.right[0] + pose.right[1] * pose.right[1]);

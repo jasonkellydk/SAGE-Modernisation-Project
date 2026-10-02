@@ -23,6 +23,8 @@ import engine.gameplay.common.spatial.components.bounding_volume;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.move_away;
 import engine.gameplay.rts.blocking.components.blocked_state;
+import engine.gameplay.rts.movement.components.desired_speed;
+import engine.gameplay.rts.movement.components.locomotion;
 import games.generalszh.commands.game_commands;
 import games.generalszh.gameplay.orders.algorithms.command_application;
 import engine.gameplay.common.identity.components.owner;
@@ -315,6 +317,41 @@ BOOST_AUTO_TEST_CASE(legacy_parity_idle_units_on_one_spot_step_apart)
 		match.Tick();
 	BOOST_TEST_MESSAGE("apart by " << match.Distance(first, second));
 	BOOST_TEST(match.Distance(first, second) >= 5.0f);
+	match.Agree();
+}
+
+// A Crusader its AI asks to go at half its top speed (AIUpdateInterface::setDesiredSpeed, as a team moving together does
+// with its slowest member's speed): doLocomotor caps the locomotor's maximum with it, so on a long straight move it speeds
+// up to exactly that speed and no faster; one left alone reaches its full speed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_asked_to_go_slower_keeps_to_that_speed)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	Matches match(shell);
+	const ecs::Entity slow = match.Place("AmericaTankCrusader", Offset(match.open, -120, 0), 0);
+	const ecs::Entity fast = match.Place("AmericaTankCrusader", Offset(match.open, -120, 60), 0);
+	for (int tick = 0; tick < 30; ++tick)
+		match.Tick();
+	const Fixed top = match.one.World().Get<gp::Locomotion>(slow)->locomotor.maxSpeed;
+	const Fixed half = top / Fixed::FromInt(2);
+	for (session::Session *game : {&match.one, &match.four})
+	{
+		game->World().Add<gp::DesiredSpeed>(slow);
+		game->World().Get<gp::DesiredSpeed>(slow)->speed = half;
+	}
+	match.Move(slow, Offset(match.open, 280, 0));
+	match.Move(fast, Offset(match.open, 280, 60));
+	match.Restore();
+	Fixed fastest{}, fastestFree{};
+	for (int tick = 0; tick < 90; ++tick)
+	{
+		match.Tick();
+		fastest = std::max(fastest, match.one.World().Get<gp::Locomotion>(slow)->speed);
+		fastestFree = std::max(fastestFree, match.one.World().Get<gp::Locomotion>(fast)->speed);
+	}
+	BOOST_TEST((fastest == half));
+	BOOST_TEST((fastestFree == top));
 	match.Agree();
 }
 

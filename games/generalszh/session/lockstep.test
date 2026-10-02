@@ -168,7 +168,7 @@ BOOST_AUTO_TEST_CASE(a_saved_match_resumes_on_its_tick)
 // handleCRCMessage with REPLAY_CRC_INTERVAL 100): a recorded match keeps every tick's commands and its state hash after
 // every 100th tick; played back from its start (through a file's bytes), the same ticks run with the same commands on
 // their ticks, ending where it ended with the same state, no hash differing, and this machine's own orders ignored
-// (cullBadCommands). A recording missing an order goes its own way, caught at the first hash after it (tick 99).
+// (cullBadCommands). Chat (a NetChatCommandMsg, never a GameMessage the recorder writes) is left out. A recording missing an order goes its own way, caught at the first hash after it (tick 99).
 BOOST_AUTO_TEST_CASE(legacy_parity_a_recorded_match_plays_back_exactly)
 {
 	auto &content = Content();
@@ -195,12 +195,16 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_recorded_match_plays_back_exactly)
 			BOOST_TEST_REQUIRE(view.World().Get<engine::gameplay::Transform>(launcher) != nullptr);
 			start = view.World().Get<engine::gameplay::Transform>(launcher)->position.XY();
 			match->Submit(commands::MoveTo{{launcher}, {start.x - Engine::Math::Fixed::FromInt(20), start.y + Engine::Math::Fixed::FromInt(30)}});
+			match->Submit(commands::Chat{"gg", 1u}); // a NetChatCommandMsg: never in the replay
 		}
+		if (tick == 40)
+			match->Submit(commands::Chat{"only chat", 1u});
 		BOOST_TEST_REQUIRE(match->Advance());
 	}
 	const engine::net::CommandRecording &recorded = *match->Recording();
 	BOOST_TEST(recorded.endTick == 250u);
 	BOOST_TEST_REQUIRE(recorded.ticks.size() == 1u);
+	BOOST_TEST(recorded.ticks[0].commands.size() == 1u);
 	BOOST_TEST(recorded.ticks[0].tick >= 20u);
 	BOOST_TEST_REQUIRE(recorded.hashes.size() == 2u);
 	BOOST_TEST(recorded.hashes[0].first == 99u);

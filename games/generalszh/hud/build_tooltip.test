@@ -1,0 +1,221 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.hud.build_tooltip;
+
+using namespace generalszh;
+using namespace generalszh::hud;
+
+namespace
+{
+std::u16string Wide(std::string_view text)
+{
+	return std::u16string(text.begin(), text.end());
+}
+
+// The game's texts these tests use (the rest show as their labels).
+std::u16string Label(std::string_view label)
+{
+	if (label == "TOOLTIP:Cost")
+		return u"Cost: $%d";
+	if (label == "TOOLTIP:ScienceCost")
+		return u"Cost: %d points";
+	if (label == "CONTROLBAR:Requirements")
+		return u"Requires: %s";
+	if (label == "CONTROLBAR:OrRequirement")
+		return u"or";
+	if (label == "CONTROLBAR:GeneralsPromotion")
+		return u"Promotion";
+	if (label == "CONTROLBAR:PowerDescription")
+		return u"Power %d / %d";
+	return Wide(label);
+}
+
+content::GameContent Content()
+{
+	content::GameContent game;
+	game.objects.Define("WarFactory").displayName = "OBJECT:WarFactory";
+	game.objects.Define("Airfield").displayName = "OBJECT:Airfield";
+	game.objects.Define("Barracks").displayName = "OBJECT:Barracks";
+	game.objects.Define("Tank").displayName = "OBJECT:Tank";
+	content::UpgradeContent armor;
+	armor.name = "Upgrade_Armor";
+	armor.cost = 1500;
+	game.upgrades.upgrades.push_back(armor);
+	game.upgrades.byName["Upgrade_Armor"] = 0;
+	for (const char *name : {"SCIENCE_Paradrop1", "SCIENCE_Paradrop2"})
+	{
+		content::ScienceInfo info;
+		info.name = name;
+		info.displayName = std::string("SCIENCE:") + name;
+		info.description = std::string("SCIENCE:Desc") + name;
+		info.purchaseCost = 1;
+		game.sciences.push_back(name);
+		game.scienceInfo.push_back(info);
+	}
+	return game;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(build_tooltip)
+
+// Core/GameEngine/Source/GameClient/GUI/GUICallbacks/ControlBarPopupDescription.cpp ControlBar::showBuildTooltipLayout
+// and ControlBarPopupDescriptionUpdateFunc (ControlBar::update): over a command button (TOOLTIPDELAY 1) the first frame
+// starts the wait; it shows once beginWaitTime + 1 < now (at 1002 ms, not 1001), then stays while the mouse keeps
+// asking; the first frame without that hides it. Another window while it shows hides it first, then waits for its own;
+// a delay of -1 (unsigned: one less than the start) shows on the next ask; a replay blocks it after the wait, once;
+// tooltips disabled ask nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_build_tooltip_waits_its_delay_and_hides_when_left)
+{
+	BuildTooltipState state;
+	BOOST_TEST((ShowBuildTooltip(state, "ControlBar.wnd:ButtonCommand01", 1, 1000, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST(state.window == "ControlBar.wnd:ButtonCommand01");
+	BOOST_TEST((ShowBuildTooltip(state, "ControlBar.wnd:ButtonCommand01", 1, 1001, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST(!UpdateBuildTooltip(state)); // not shown yet: nothing to hide
+	BOOST_TEST((ShowBuildTooltip(state, "ControlBar.wnd:ButtonCommand01", 1, 1002, false, false) == BuildTooltipStep::Populate));
+	BOOST_TEST(state.shown);
+	BOOST_TEST(!UpdateBuildTooltip(state));
+	BOOST_TEST((ShowBuildTooltip(state, "ControlBar.wnd:ButtonCommand01", 1, 1500, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST(!UpdateBuildTooltip(state));
+	BOOST_TEST(state.shown);
+	BOOST_TEST(UpdateBuildTooltip(state)); // the mouse left: hidden
+	BOOST_TEST(!state.shown);
+	BOOST_TEST(state.window.empty());
+
+	// Shown over one, another asks: hidden, then that one's wait.
+	BOOST_TEST((ShowBuildTooltip(state, "A", -1, 2000, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST((ShowBuildTooltip(state, "A", -1, 2000, false, false) == BuildTooltipStep::Populate)); // -1: at once
+	UpdateBuildTooltip(state);
+	BOOST_TEST((ShowBuildTooltip(state, "B", -1, 2001, false, false) == BuildTooltipStep::Hide));
+	BOOST_TEST(!state.shown);
+	BOOST_TEST((ShowBuildTooltip(state, "B", -1, 2002, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST((ShowBuildTooltip(state, "B", -1, 2002, false, false) == BuildTooltipStep::Populate));
+
+	// A replay: after the wait, nothing, and nothing again while over it.
+	BuildTooltipState replay;
+	ShowBuildTooltip(replay, "A", -1, 10, false, true);
+	BOOST_TEST((ShowBuildTooltip(replay, "A", -1, 10, false, true) == BuildTooltipStep::Nothing));
+	BOOST_TEST((ShowBuildTooltip(replay, "A", -1, 20, false, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST(!replay.shown);
+	BuildTooltipState off;
+	BOOST_TEST((ShowBuildTooltip(off, "A", -1, 10, true, false) == BuildTooltipStep::Nothing));
+	BOOST_TEST(off.window.empty());
+}
+
+// populateBuildTooltipLayout for a UNIT_BUILD button with the factory selected: its TextLabel, TOOLTIP:Cost with
+// calcCostToBuild, its DescriptLabel, canMakeUnit's reason two lines down (CANMAKE_NO_MONEY), then CONTROLBAR:Requirements
+// with each prerequisite's getRequiresList joined by ", ": a missing object, a missing pair of alternatives ("<first> or
+// <second>"), a missing science (CONTROLBAR:GeneralsPromotion); prerequisites had name nothing; a free thing no cost.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_units_tooltip_tells_its_cost_why_not_and_what_it_needs)
+{
+	const content::GameContent game = Content();
+	content::CommandButtonContent button;
+	button.command = content::ButtonCommand::UnitBuild;
+	button.object = "Tank";
+	button.textLabel = "CONTROLBAR:ConstructTank";
+	button.descriptLabel = "CONTROLBAR:ToolTipTank";
+	gameplay::BuildTooltipFacts facts;
+	facts.selected = true;
+	facts.refusal = gameplay::BuildRefusal::NoMoney;
+	facts.thingCost = 900;
+	facts.prerequisites.push_back({false, {"WarFactory"}, {0}, true});
+	facts.prerequisites.push_back({false, {"Airfield", "Barracks"}, {0, 0}, true});
+	facts.prerequisites.push_back({false, {"Barracks"}, {2}, true}); // had: nothing
+	facts.prerequisites.push_back({true, {}, {}, false});
+	BuildTooltipText text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST((text.name == u"CONTROLBAR:ConstructTank"));
+	BOOST_TEST((text.cost == u"Cost: $900"));
+	BOOST_TEST(text.costToBuild == 900);
+	BOOST_TEST((text.description ==
+		u"CONTROLBAR:ToolTipTank\n\nTOOLTIP:TooltipNotEnoughMoneyToBuild\nRequires: OBJECT:WarFactory, OBJECT:Airfield or OBJECT:Barracks, Promotion"));
+
+	// Everything had, a full queue, free: the reason only, no cost.
+	facts.prerequisites.clear();
+	facts.refusal = gameplay::BuildRefusal::QueueFull;
+	facts.thingCost = 0;
+	text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST(text.cost.empty());
+	BOOST_TEST((text.description == u"CONTROLBAR:ToolTipTank\n\nTOOLTIP:TooltipCannotPurchaseBecauseQueueFull"));
+	// Nothing selected: no reason.
+	facts.selected = false;
+	BOOST_TEST((PopulateBuildTooltip(button, facts, game, Label).description == u"CONTROLBAR:ToolTipTank"));
+}
+
+// populateBuildTooltipLayout's upgrade branch: an object upgrade the selected object cannot take (affectedByUpgrade
+// false) its ConflictingLabel (else TOOLTIP:HasConflictingUpgradeDefault); one had its PurchasedLabel (else
+// TOOLTIP:AlreadyUpgradedDefault); else its cost and, its science missing, Requires: General's promotion; the money
+// short (canAffordUpgrade) told under the description while it is not in production.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_upgrades_tooltip_tells_had_conflicting_or_its_cost)
+{
+	const content::GameContent game = Content();
+	content::CommandButtonContent button;
+	button.command = content::ButtonCommand::ObjectUpgrade;
+	button.upgrade = "Upgrade_Armor";
+	button.textLabel = "CONTROLBAR:UpgradeArmor";
+	button.descriptLabel = "CONTROLBAR:ToolTipArmor";
+	button.sciences = {"SCIENCE_Paradrop1"};
+	gameplay::BuildTooltipFacts facts;
+	facts.selected = true;
+	facts.hasButtonScience = {false};
+	facts.upgradeCost = 1500;
+	facts.canAffordUpgrade = false;
+	BuildTooltipText text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST((text.cost == u"Cost: $1500"));
+	BOOST_TEST((text.description == u"CONTROLBAR:ToolTipArmor\n\nTOOLTIP:TooltipNotEnoughMoneyToBuild\nRequires: Promotion"));
+	facts.objectAffected = false;
+	BOOST_TEST((PopulateBuildTooltip(button, facts, game, Label).description == u"TOOLTIP:HasConflictingUpgradeDefault"));
+	button.conflictingLabel = "CONTROLBAR:ArmorConflict";
+	BOOST_TEST((PopulateBuildTooltip(button, facts, game, Label).description == u"CONTROLBAR:ArmorConflict"));
+	facts.objectHasUpgrade = true;
+	text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST((text.description == u"TOOLTIP:AlreadyUpgradedDefault"));
+	BOOST_TEST(text.cost.empty());
+	// In production: no money line.
+	facts = {};
+	facts.selected = true;
+	facts.hasButtonScience = {true};
+	facts.upgradeCost = 1500;
+	facts.canAffordUpgrade = false;
+	facts.upgradeInProduction = true;
+	BOOST_TEST((PopulateBuildTooltip(button, facts, game, Label).description == u"CONTROLBAR:ToolTipArmor"));
+}
+
+// populateBuildTooltipLayout's science branch: a PURCHASE_SCIENCE button shows the first of its sciences the player
+// lacks (ScienceStore::getNameAndDescription, TOOLTIP:ScienceCost with getSciencePurchaseCost); a button that fires a
+// science (fireScienceButton) keeps its own TextLabel and DescriptLabel.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_science_buttons_tooltip_tells_the_science_to_buy)
+{
+	const content::GameContent game = Content();
+	content::CommandButtonContent button;
+	button.command = content::ButtonCommand::PurchaseScience;
+	button.textLabel = "CONTROLBAR:Paradrop";
+	button.descriptLabel = "CONTROLBAR:ToolTipParadrop";
+	button.sciences = {"SCIENCE_Paradrop1", "SCIENCE_Paradrop2"};
+	gameplay::BuildTooltipFacts facts;
+	facts.hasButtonScience = {true, false};
+	BuildTooltipText text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST((text.name == u"SCIENCE:SCIENCE_Paradrop2"));
+	BOOST_TEST((text.description == u"SCIENCE:DescSCIENCE_Paradrop2"));
+	BOOST_TEST((text.cost == u"Cost: 1 points"));
+	button.command = content::ButtonCommand::SpecialPower;
+	text = PopulateBuildTooltip(button, facts, game, Label);
+	BOOST_TEST((text.name == u"CONTROLBAR:Paradrop"));
+	BOOST_TEST((text.description == u"CONTROLBAR:ToolTipParadrop"));
+	BOOST_TEST(text.cost.empty());
+}
+
+// populateBuildTooltipLayout(nullptr, window): the power window's CONTROLBAR:PowerDescription with the viewed player's
+// production and consumption (0 and 0 without one); the money and general's experience windows their own texts; any
+// other window: none. UnicodeString::format's %d and %s in order.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_bars_windows_tell_power_money_and_experience)
+{
+	BOOST_TEST((PopulateWindowTooltip("ControlBar.wnd:PowerWindow", std::pair<std::int64_t, std::int64_t>{25, 10}, Label)->description == u"Power 25 / 10"));
+	BOOST_TEST((PopulateWindowTooltip("ControlBar.wnd:PowerWindow", std::nullopt, Label)->description == u"Power 0 / 0"));
+	BOOST_TEST((PopulateWindowTooltip("ControlBar.wnd:MoneyDisplay", std::nullopt, Label)->name == u"CONTROLBAR:Money"));
+	BOOST_TEST((PopulateWindowTooltip("ControlBar.wnd:GeneralsExp", std::nullopt, Label)->description == u"CONTROLBAR:GeneralsExpDescription"));
+	BOOST_TEST(!PopulateWindowTooltip("ControlBar.wnd:ButtonCommand01", std::nullopt, Label).has_value());
+	BOOST_TEST((FormatText(u"%d%% of %ls", {std::int64_t{50}, std::u16string(u"it")}) == u"50% of it"));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

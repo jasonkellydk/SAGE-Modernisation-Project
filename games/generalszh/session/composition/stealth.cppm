@@ -40,6 +40,7 @@ inline void EmplaceStealthResources(ecs::World &world, [[maybe_unused]] const Si
 	world.EmplaceResource<engine::gameplay::DetectorPings>();
 	world.EmplaceResource<engine::gameplay::RevealWakes>();
 	world.EmplaceResource<engine::gameplay::DetectionWakes>();
+	world.EmplaceResource<engine::gameplay::StealthDiscoveries>();
 	world.EmplaceResource<engine::gameplay::DisguiseEvents>();
 	world.EmplaceResource<engine::gameplay::GrantOffers>();
 	world.EmplaceResource<engine::gameplay::StealthGrants>();

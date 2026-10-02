@@ -397,6 +397,10 @@ public:
 public:
 	// Each tile's colour mipped to one pixel (the radar's terrain colours).
 	const std::vector<std::array<std::uint8_t, 3>> &TileColors() const noexcept { return m_textures.tileColors; }
+	// The cloud shadows' texture (CloudMapTerrainTextureClass), for what else they fall on (the bridges).
+	Graphics::RHITextureHandle CloudTexture() const noexcept { return m_cloudTexture; }
+	// The light map (LightMapTerrainTextureClass), for what else it lies on (the roads).
+	Graphics::RHITextureHandle LightMapTexture() const noexcept { return m_lightMapTexture; }
 
 private:
 	Graphics::RHITextureHandle TrackTexture(const std::string &name)

@@ -220,6 +220,11 @@ struct WeaponDefinition
 	std::uint32_t anti{weapon_anti::Ground};
 	std::uint32_t affects{weapon_affects::Allies | weapon_affects::Enemies | weapon_affects::Neutrals};
 	bool damageAtSelf{false};
+	// LaserName given (Weapon::isLaser): a shot without a projectile hits at once, whatever its speed, and one scattered
+	// beyond both its damage radii misses its victim for the ground there (WeaponTemplate::fireWeaponTemplate).
+	bool laser{false};
+	// CapableOfFollowingWaypoints (WeaponSet::findWaypointFollowingCapableWeapon): a script may fire it to fly a path.
+	bool followsWaypoints{false};
 	bool projectile{false};
 	// Its projectile flies as an object along an arc (lands when the arc ends); `projectileDefinition`
 	// is the game's definition of that object.

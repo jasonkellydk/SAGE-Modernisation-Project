@@ -7,7 +7,7 @@ import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import engine.gameplay.rts.navigation.components.ignored_obstacle;
 import std;
 import engine.gameplay.rts.production.components.rally_point;
-import engine.gameplay.rts.movement.components.move_path;
+import engine.gameplay.rts.movement.algorithms.move_paths;
 import engine.gameplay.rts.navigation.components.navigation;
 import games.generalszh.gameplay.movement.algorithms.goal_claim_rules;
 
@@ -56,14 +56,9 @@ inline void FollowOnToRallyPoint(GameWorld &game, ecs::Entity unit, ecs::Entity 
 	const auto point = AdjustDestinationFor(game.world, unit, rally->at);
 	if (!point)
 		return;
-	gp::MovePath path;
-	path.count = 2;
-	path.next = 1; // the first leg is under way
-	path.points[0] = natural;
-	path.points[1] = *point;
-	if (!game.world.Has<gp::MovePath>(unit))
-		game.world.Add<gp::MovePath>(unit);
-	*game.world.Get<gp::MovePath>(unit) = path;
+	// The first leg is under way.
+	const std::array<Engine::Math::FixedVector2, 2> route{natural, *point};
+	gp::SetMovePath(game.world, unit, route, 1, gp::MovePathKind::ExitProduction);
 	if (order != nullptr)
 		order->claim = gp::GoalClaim::None;
 }
@@ -105,6 +100,30 @@ bool PrerequisitesMet(const std::set<std::pair<std::uint32_t, std::string_view>>
 	});
 }
 
+// DefaultProductionExitUpdate::exitObjectViaDoor for `unit` out of `building`: set at its UnitCreatePoint on the ground,
+// facing its way, on to its natural rally point and its rally point if it has one. False: it has no such exit.
+inline bool ExitViaProductionDoor(GameWorld &game, ecs::Entity building, ecs::Entity unit)
+{
+	namespace gameplay = engine::gameplay;
+	auto &world = game.world;
+	const auto *ref = world.IsAlive(building) ? world.Get<gameplay::DefinitionRef>(building) : nullptr;
+	const auto *frame = ref != nullptr ? world.Get<gameplay::Transform>(building) : nullptr;
+	if (frame == nullptr || !world.IsAlive(unit))
+		return false;
+	const auto exit = content::ReadProductionExit(game.templates.DefinitionAt(ref->index));
+	if (!exit)
+		return false;
+	using namespace team_building_detail;
+	const Engine::Math::FixedVector2 at = InFrameOf(*frame, exit->createPoint);
+	if (auto *transform = world.Get<gameplay::Transform>(unit))
+		*transform = gameplay::Transform{{at.x, at.y, game.ground.At(at)}, frame->facing};
+	const Engine::Math::FixedVector2 natural = InFrameOf(*frame, exit->rallyPoint);
+	if (auto *order = world.Get<gameplay::MoveOrder>(unit))
+		*order = gameplay::Replanned(gameplay::MoveToPoint(natural));
+	FollowOnToRallyPoint(game, unit, building, natural);
+	return true;
+}
+
 // Brings produced units out of their factory; returns them (for Player::onUnitCreated: a computer player's orders).
 std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Produced &produced)
 {
@@ -129,6 +148,23 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 			OnBuildComplete(game, entity); // ProductionUpdate: the game side of its create modules
 			CreateModulesBuildComplete(game, entity);
 		}
+		// A helicopter made at an airfield (exitObjectViaDoor, PRODUCED_AT_HELIPAD: no door, no space) appears on its helipad
+		// (HeliPark01, facing its turn) flying (getProducerLocation: no space reserved, so air locomotion), and goes to the
+		// airfield's rally point if it has one (m_heliRallyPoint), else to where it is (aiMoveToPosition).
+		if (gameplay::Jet *heli = game.world.IsAlive(entity) ? game.world.Get<gameplay::Jet>(entity) : nullptr; heli != nullptr && heli->helicopter != 0)
+			if (const auto *field = game.world.Get<gameplay::Airfield>(produced.factory); field != nullptr && field->hasHelipad != 0)
+			{
+				auto &transform = *game.world.Get<gameplay::Transform>(entity);
+				transform.position = field->helipad;
+				transform.facing = field->helipadFacing;
+				heli->airfield = produced.factory;
+				if (auto *motion = game.world.Get<gameplay::Locomotion>(entity))
+					motion->locomotor = heli->flight;
+				const auto *rally = game.world.Get<gameplay::RallyPoint>(produced.factory);
+				if (auto *order = game.world.Get<gameplay::MoveOrder>(entity))
+					*order = gameplay::Replanned(gameplay::MoveToPoint(rally != nullptr ? rally->at : field->helipad.XY()));
+				continue;
+			}
 		// A jet made at an airfield starts in the hangar of a free space and taxies to it.
 		if (gameplay::Jet *jet = game.world.IsAlive(entity) ? game.world.Get<gameplay::Jet>(entity) : nullptr)
 			if (const auto *field = game.world.Get<gameplay::Airfield>(produced.factory))
@@ -144,6 +180,11 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 					jet->since = game.tick;
 					jet->leg = 1;
 					jet->goal = spot.parking.XY();
+					// TAXI_FROM_HANGAR at an airfield: to its space (then it turns to the space's turn and reloads).
+					jet->path[0] = gameplay::ParkingSpot(spot, jet->parkingOffset);
+					jet->pathCount = 1;
+					if (field->frontRow == 0)
+						jet->leg = 0;
 					// Off a flight deck's hangar (FlightDeckBehavior::exitObjectViaDoor): out by its runway's creation points,
 					// then to its prep point (aiFollowExitProductionPath: TAXI_FROM_HANGAR).
 					if (field->frontRow != 0 && spot.runway < field->runwayCount)
@@ -161,7 +202,7 @@ std::vector<ecs::Entity> OnProduced(GameWorld &game, const engine::gameplay::Pro
 		if (production && production->hasExit && game.world.IsAlive(entity))
 			if (auto *order = game.world.Get<gameplay::MoveOrder>(entity))
 			{
-				*order = gameplay::MoveToPoint(InFrameOf(frame, production->rallyPoint));
+				*order = gameplay::Replanned(gameplay::MoveToPoint(InFrameOf(frame, production->rallyPoint)));
 				FollowOnToRallyPoint(game, entity, produced.factory, InFrameOf(frame, production->rallyPoint));
 				if (!game.world.Has<gameplay::IgnoredObstacle>(entity))
 					game.world.Add<gameplay::IgnoredObstacle>(entity);
@@ -197,8 +238,18 @@ ecs::Entity SpawnFrom(GameWorld &game, const engine::gameplay::SpawnRequest &req
 	const std::uint32_t team = world.Get<gameplay::TeamMember>(request.spawner)->team;
 	auto at = production && production->hasExit ? InFrameOf(frame, production->createPoint) : frame.position.XY();
 	auto facing = frame.facing;
+	// createSpawn's m_initialBurstCountdown: while a budding spawner's initial burst lasts, a spawn leaves through the
+	// door of the structure that produced the spawner (a mob out of its barracks: exitObjectViaDoor), when that is
+	// still there with an exit; else it buds.
+	ecs::Entity barracks{};
+	if (spawner->budding && spawner->initialBurstLeft > 0)
+		if (const auto *producer = world.Get<gameplay::Producer>(request.spawner); producer != nullptr && world.IsAlive(producer->entity))
+			if (const auto *ref = world.Get<gameplay::DefinitionRef>(producer->entity); ref != nullptr)
+				if (const content::ObjectDefinition &building = game.templates.DefinitionAt(ref->index);
+					building.Is("STRUCTURE") && content::ReadProductionExit(building))
+					barracks = producer->entity;
 	// ExitByBudding (exitObjectByBudding): on the spawn nearest the spawner (none: the spawner), then off it.
-	const bool budding = spawner->budding;
+	const bool budding = spawner->budding && !world.IsAlive(barracks);
 	if (budding)
 	{
 		at = frame.position.XY();
@@ -250,15 +301,25 @@ ecs::Entity SpawnFrom(GameWorld &game, const engine::gameplay::SpawnRequest &req
 	}
 	spawner = world.Get<gameplay::Spawner>(request.spawner);
 	spawner->spawned[spawner->spawnedCount++] = entity;
-	if (budding)
+	if (world.IsAlive(barracks))
+	{
+		// DefaultProductionExitUpdate::exitObjectViaDoor: at its create point facing its way, out along its exit path
+		// (aiFollowExitProductionPath: through the barracks); the spawn still thinks the spawner made it.
+		ExitViaProductionDoor(game, barracks, entity);
+		if (!world.Has<gameplay::IgnoredObstacle>(entity))
+			world.Add<gameplay::IgnoredObstacle>(entity);
+		world.Get<gameplay::IgnoredObstacle>(entity)->obstacle = barracks;
+		--world.Get<gameplay::Spawner>(request.spawner)->initialBurstLeft;
+	}
+	else if (budding)
 	{
 		if (auto *order = world.Get<gameplay::MoveOrder>(entity))
-			*order = gameplay::MoveToPoint(at); // aiMoveToPosition: it cannot stay where another is
+			*order = gameplay::Replanned(gameplay::MoveToPoint(at)); // aiMoveToPosition: it cannot stay where another is
 	}
 	else if (production && production->hasExit && !place)
 		if (auto *order = world.Get<gameplay::MoveOrder>(entity))
 		{
-			*order = gameplay::MoveToPoint(InFrameOf(frame, production->rallyPoint));
+			*order = gameplay::Replanned(gameplay::MoveToPoint(InFrameOf(frame, production->rallyPoint)));
 			FollowOnToRallyPoint(game, entity, request.spawner, InFrameOf(frame, production->rallyPoint));
 			world.Add<gameplay::IgnoredObstacle>(entity);
 			world.Get<gameplay::IgnoredObstacle>(entity)->obstacle = request.spawner; // it walks out through its spawner

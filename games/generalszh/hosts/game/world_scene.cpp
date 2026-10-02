@@ -1,4 +1,5 @@
 module;
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -19,6 +20,9 @@ import games.generalszh.presentation.rendering.terrain_rendering;
 import games.generalszh.presentation.rendering.object_rendering;
 import games.generalszh.presentation.camera.algorithms.camera_slave;
 import games.generalszh.presentation.rendering.water_rendering;
+import games.generalszh.presentation.rendering.bridge_rendering;
+import games.generalszh.presentation.rendering.road_rendering;
+import games.generalszh.presentation.objects.algorithms.bridge_radar;
 import games.generalszh.presentation.rendering.particle_rendering;
 import games.generalszh.presentation.rendering.tracer_rendering;
 import Graphics.Scene.Lighting.Renderer;
@@ -30,7 +34,14 @@ import Engine.Core.Math.FixedPresentation;
 import engine.gameplay.common.spatial.resources.ground_height;
 import Graphics.Scene.Shroud.Image;
 import Graphics.Scene.Screen.Distortion;
+import Graphics.Scene.Screen.FilterPass;
+import Graphics.Scene.Views.CameraProjection;
 import games.generalszh.presentation.effects.heat_haze;
+import games.generalszh.presentation.camera.algorithms.screen_filters;
+import games.generalszh.presentation.rendering.sky_box_rendering;
+import Graphics.Scene.Shadows.StencilVolumes;
+import games.generalszh.content.global.game_data;
+import engine.config.binding.schema;
 
 namespace generalszh::host
 {
@@ -52,8 +63,12 @@ struct WorldScene::Renderers
 	presentation::TerrainRendering terrain;
 	presentation::ObjectRendering objects;
 	presentation::WaterRendering water;
+	presentation::BridgeRendering bridges;
+	presentation::RoadRendering roads;
 	presentation::ParticleRendering particles;
 	presentation::TracerRendering tracers;
+	presentation::SkyBoxRendering skyBox;
+	float occludedLuminanceScale{0.5f}; // GameData OccludedColorLuminanceScale
 	// The renderer's point lights showing presentation's dynamic lights (W3DDynamicLight), reused frame to frame.
 	std::vector<Graphics::LightHandle> lights;
 	// W3DShroud's image: the viewer's cells a texel each inside a one-texel border, uploaded when they change.
@@ -63,6 +78,84 @@ struct WorldScene::Renderers
 	// This frame's heat haze and the client randomness its offsets draw from (GameClientRandomValueReal).
 	presentation::HeatHaze haze;
 	std::minstd_rand hazeRandom{0x5D0Du};
+	// This frame's snow flakes (W3DSnowManager::render's), and the terrain's lowest height the visible box stops at
+	// (BaseHeightMapRenderObjClass m_minHeight).
+	presentation::SnowFlakes snow;
+	float terrainMinHeight{0.0f};
+	// The view's screen filter (W3DView's m_viewFilter: grey, motion blur) drawn over the frame, and this frame's quads.
+	Graphics::ScreenFilterPass filterPass;
+	presentation::ScreenFilterDraw filterDraw;
+	std::vector<Graphics::ScreenFilterQuadDraw> filterQuads;
+
+	// W3DView::draw: the filter's postRender over the drawn view, the frame copied to a picture (or the last one kept,
+	// m_skipRender) and drawn back as the filter's quads; a pan's blur by the view's scroll (calcDeltaScroll: the look-at
+	// point projected now less where it last moved from, both at the look-at's height; none unless both are in view).
+	void DrawScreenFilter(Graphics::Device &device, Graphics::CameraState &camera, GameClient &game)
+	{
+		presentation::ViewFilter *filter = game.ScreenFilter();
+		if (filter == nullptr)
+			return;
+		filterDraw.quads.clear();
+		filterDraw.keepPicture = false;
+		std::array<float, 2> scroll{};
+		if (filter->motionBlur && filter->mode == presentation::ViewFilterMode::PanAlpha)
+		{
+			const std::array<float, 3> at = game.LookAtPosition();
+			const std::array<float, 3> prior = game.PreviousLookAtPosition();
+			Graphics::Vector3 priorScreen;
+			Graphics::Vector3 screen;
+			if (camera.Project(priorScreen, {prior[0], prior[1], at[2]}) == Graphics::CameraProjectionResult::InsideFrustum &&
+				camera.Project(screen, {at[0], at[1], at[2]}) == Graphics::CameraProjectionResult::InsideFrustum)
+				scroll = {screen.x - priorScreen.x, screen.y - priorScreen.y};
+		}
+		presentation::BlackWhiteDraw(*filter, filter->blackWhite, filterDraw);
+		presentation::MotionBlurDraw(*filter, scroll, filterDraw);
+		if (filterDraw.quads.empty() || !filterPass.Initialize(device))
+			return;
+		filterQuads.clear();
+		for (const presentation::ScreenFilterQuad &quad : filterDraw.quads)
+		{
+			Graphics::ScreenFilterQuadDraw draw;
+			draw.vertices = Graphics::Screen_Filter_Corners(quad.uv, quad.color);
+			if (quad.blackWhite)
+			{
+				draw.parameters.operation = 1;
+				draw.parameters.fade = quad.fade;
+			}
+			else
+				draw.parameters.vertex_alpha = 1;
+			draw.style.blend = quad.blend;
+			if (quad.additive)
+				draw.style.destination = Graphics::RHIBlendFactor::One;
+			filterQuads.push_back(draw);
+		}
+		auto &swapChain = device.Get_Swap_Chain();
+		const auto target = swapChain.Backbuffer();
+		const auto depth = swapChain.Depth_Target();
+		filterPass.Render(device.Immediate_Command_List(), target.texture, depth.texture, {0, 0, target.width, target.height, 0.0f, 1.0f}, filterQuads,
+			filterDraw.keepPicture);
+	}
+
+	// The snow as the camera sees it this frame (W3DSnowManager::render: the tactical view's camera position, its
+	// frustum, the terrain's visible box).
+	const presentation::SnowFlakes *ExtractSnow(Graphics::Device &device, Graphics::CameraState &camera, GameClient &game)
+	{
+		const presentation::SnowField *field = game.Snow();
+		if (field == nullptr || !field->enabled)
+			return nullptr;
+		const auto &view = camera.Get_View_Matrix().values;
+		const auto &projection = camera.Get_Backend_Projection_Matrix().values;
+		float nearClip = 1.0f;
+		float farClip = 1000.0f;
+		camera.Get_Clip_Planes(nearClip, farClip);
+		const std::array<float, 3> eye = game.Eye();
+		const float height = static_cast<float>(device.Get_Swap_Chain().Backbuffer().height);
+		const presentation::SnowView snowView = presentation::MakeSnowView(eye, {view[0], view[1], view[2]}, {view[4], view[5], view[6]},
+			{view[8], view[9], view[10]}, projection[0] != 0.0f ? 1.0f / projection[0] : 1.0f, projection[5] != 0.0f ? 1.0f / projection[5] : 1.0f,
+			nearClip, farClip, height, terrainMinHeight);
+		presentation::ExtractSnow(*field, game.WeatherShown(), snowView, snow);
+		return snow.Size() != 0 ? &snow : nullptr;
+	}
 
 	~Renderers()
 	{
@@ -156,6 +249,19 @@ bool WorldScene::Load(const engine::filesystem::VirtualFileSystem &files, conten
 	if (!m_renderers->terrain.Load(*Graphics::Shared_Frame_Device(), files, loader, level, mesh, error))
 		return false;
 	m_renderers->water.Load(*Graphics::Shared_Frame_Device(), files, loader, level, waterError, std::string(mapName));
+	m_renderers->bridges.Load(*Graphics::Shared_Frame_Device(), files);
+	m_renderers->roads.Load(*Graphics::Shared_Frame_Device(), files, mesh);
+	// The sky box's faces (Water.ini and the map's) and GameData's SkyBoxScale / SkyBoxPositionZ.
+	{
+		const engine::config::Document &gameDataSet = loader.Load({"Data/INI/Default/GameData", "Data/INI/GameData"});
+		engine::config::BindContext context{loader.DiagnosticsFor(gameDataSet), engine::time::FixedStep{30}};
+		const content::GameData gameData = content::BindGameData(gameDataSet, context);
+		m_renderers->skyBox.Load(loader, mapName, Engine::Math::ToFloat(gameData.skyBoxScale), Engine::Math::ToFloat(gameData.skyBoxPositionZ));
+		m_renderers->occludedLuminanceScale = Engine::Math::ToFloat(gameData.occludedLuminanceScale);
+	}
+	// BaseHeightMapRenderObjClass::initHeightData: m_minHeight, the lowest sample of the height map.
+	if (!level.terrain.heights.empty())
+		m_renderers->terrainMinHeight = Engine::Math::ToFloat(*std::min_element(level.terrain.heights.begin(), level.terrain.heights.end()));
 	return true;
 }
 
@@ -172,6 +278,14 @@ engine::level::presentation::RadarTerrain WorldScene::BuildRadarTerrain(const en
 	source.ground = [ground](float x, float y) {
 		return ground != nullptr ? Engine::Math::ToFloat(ground->At({Engine::Math::Fixed::FromRaw(static_cast<std::int64_t>(std::llround(x * 65536.0f))), Engine::Math::Fixed::FromRaw(static_cast<std::int64_t>(std::llround(y * 65536.0f)))})) : 0.0f;
 	};
+	// The standing bridges in their radar colour (W3DRadar::buildTerrainTexture's workingBridge).
+	if (view != nullptr)
+		source.bridge = [view](float x, float y) -> std::optional<engine::level::presentation::RadarDeck> {
+			const auto bridge = presentation::WorkingBridgeAt(view->World(), view->Content().bridges, x, y);
+			if (!bridge)
+				return std::nullopt;
+			return engine::level::presentation::RadarDeck{bridge->color, bridge->height};
+		};
 	source.water = [ground](float x, float y) -> std::optional<float> {
 		Engine::Math::Fixed height;
 		if (ground != nullptr && ground->Water({Engine::Math::Fixed::FromRaw(static_cast<std::int64_t>(std::llround(x * 65536.0f))), Engine::Math::Fixed::FromRaw(static_cast<std::int64_t>(std::llround(y * 65536.0f)))}, height))
@@ -241,7 +355,15 @@ void WorldScene::Draw(GameClient &game, Graphics::CameraState &camera, const eng
 	const presentation::DetailSettings *detail = game.Detail();
 	m_renderers->terrain.Draw(device.Immediate_Command_List(), viewProjection, frameLights, &shroud, cloudProjection ? &*cloudProjection : nullptr,
 		detail != nullptr && detail->useLightMap);
+	// The roads (W3DTerrainGraphics::Render: drawRoads after the terrain, before the props and scorches), under the
+	// clouds and the light map as the terrain is.
+	m_renderers->roads.Draw(device.Immediate_Command_List(), viewProjection, game.Roads(), &shroud, cloudProjection ? &*cloudProjection : nullptr,
+		m_renderers->terrain.CloudTexture(), detail != nullptr && detail->useLightMap ? m_renderers->terrain.LightMapTexture() : Graphics::RHITextureHandle{});
 	m_renderers->terrain.DrawScorches(device.Immediate_Command_List(), viewProjection, game.Scorches(), &shroud);
+	// The map-drawn bridges (W3DTerrainGraphics::Render: drawBridges after the scorches, before the tracks), lit by the
+	// time of day's terrain lights, under the clouds and the shroud.
+	m_renderers->bridges.Draw(device.Immediate_Command_List(), viewProjection, game.Bridges(), game.BridgeModels(), lighting, &shroud,
+		cloudProjection ? &*cloudProjection : nullptr, m_renderers->terrain.CloudTexture());
 	m_renderers->terrain.DrawTracks(device.Immediate_Command_List(), viewProjection, game.Tracks(), &shroud);
 	// The objects' radius decals (a superweapon's target), then InGameUI's radius cursor under the pointer.
 	if (const presentation::RadiusDecalViews *decals = game.RadiusDecals())
@@ -251,12 +373,25 @@ void WorldScene::Draw(GameClient &game, Graphics::CameraState &camera, const eng
 	if (const presentation::RadiusCursor *cursor = game.CursorDecal(); cursor != nullptr && cursor->type != 0 && cursor->shown)
 		m_renderers->terrain.DrawRadiusDecal(device.Immediate_Command_List(), viewProjection,
 			{cursor->texture, cursor->additive, {cursor->at[0], cursor->at[1]}, cursor->radius, cursor->color, cursor->opacity}, &shroud);
+	// RTS3DScene's building occlusion while the options' UseBehindBuildingMarker and the scripts' occlusion mode
+	// (OPTIONS_SET_OCCLUSION_MODE) are on: the units behind buildings shown in their players' colours.
+	const bool occlusionOn = (detail == nullptr || detail->behindBuildingMarkers) && game.Settings().occlusion;
+	const presentation::OcclusionPlan occlusion =
+		occlusionOn ? presentation::PlanOcclusion(game.Objects(), m_renderers->occludedLuminanceScale) : presentation::OcclusionPlan{};
 	if (presentation::ModelLibrary *library = game.Models())
+	{
 		m_renderers->objects.Draw(device, device.Immediate_Command_List(), viewProjection, game.Eye(), lighting, game.Objects(), *library, frameLights,
-			&shroud, infantryLightScale);
+			&shroud, infantryLightScale, &occlusion);
+		// renderStenciledPlayerColor: each seen player's colour over the tactical view where its occludees lie behind.
+		for (const presentation::OcclusionPlan::Quad &quad : occlusion.quads)
+			Graphics::Draw_Player_Occlusion(Graphics::Get_Surface_Renderer(), device.Immediate_Command_List(), {-1.0f, 1.0f, 1.0f, -1.0f}, quad.color,
+				quad.reference, false, 255);
+	}
 	Graphics::Get_Render_Services().Flush(nullptr);
 	m_renderers->water.Draw(device, device.Immediate_Command_List(), camera.Get_View_Matrix().values, camera.Get_Backend_Projection_Matrix().values,
 		game.Eye(), waterSeconds, &shroud, detail == nullptr || detail->showSoftWaterEdge);
+	// WaterRenderSystem::render after the water: the sky box around the camera while the scripts draw it (DRAW_SKYBOX_BEGIN).
+	m_renderers->skyBox.Draw(device, device.Immediate_Command_List(), viewProjection, game.Eye(), game.Settings().skyBox);
 	// Tracers (W3DTracerDraw render objects in the scene).
 	if (const presentation::Tracers *tracers = game.TracerEffects(); tracers != nullptr && tracers->Size() != 0)
 		m_renderers->tracers.Draw(device.Immediate_Command_List(), viewProjection, camera.Get_View_Matrix().values, game.Eye(), *tracers);
@@ -265,9 +400,11 @@ void WorldScene::Draw(GameClient &game, Graphics::CameraState &camera, const eng
 	{
 		const std::vector<presentation::BeamSegment> lasers = game.Lasers();
 		m_renderers->particles.Draw(device, *effects, camera.Get_View_Matrix().values, camera.Get_Backend_Projection_Matrix().values, game.Eye(),
-			game.ParticleAlpha(), lasers);
+			game.ParticleAlpha(), lasers, m_renderers->ExtractSnow(device, camera, game), m_renderers->terrainMinHeight);
+		game.SetFieldParticleCount(m_renderers->particles.FieldParticles());
 		m_renderers->DrawHeatHaze(device, camera, game, *effects, detail == nullptr || detail->useHeatEffects);
 	}
+	m_renderers->DrawScreenFilter(device, camera, game);
 }
 
 std::optional<std::array<float, 12>> WorldScene::SlaveBone(GameClient &game, const SlavedCamera &slave)

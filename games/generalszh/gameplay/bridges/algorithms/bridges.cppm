@@ -5,6 +5,7 @@ export import games.generalszh.gameplay.world.resources.game_world;
 export import games.generalszh.gameplay.bridges.components.bridge;
 export import games.generalszh.gameplay.bridges.systems.bridge_damage_system;
 export import games.generalszh.gameplay.bridges.resources.bridge_cues;
+import games.generalszh.gameplay.walls.algorithms.wall_pieces;
 import games.generalszh.gameplay.objects.algorithms.object_factory;
 import games.generalszh.gameplay.world.algorithms.map_properties;
 import games.generalszh.gameplay.teams.algorithms.team_actions;
@@ -273,13 +274,18 @@ inline ecs::Entity MakeBridgeObject(GameWorld &game, const Bridge &bridge, const
 	return object;
 }
 
+// W3DBridgeBuffer::MAX_BRIDGES: the bridge buffer's room; addBridge makes no more once that many were made.
+inline constexpr std::size_t MaxMapBridges = 200;
+
 // W3DBridgeBuffer::loadBridges: each BRIDGE_POINT1 map object followed by a BRIDGE_POINT2 makes a bridge of the Roads.ini
-// Bridge it names (none found, or its pristine model missing: no bridge), its ends BRIDGE_FLOAT_AMT above the height
-// map, as wide as its model's BRIDGE_LEFT times its BridgeScale (W3DBridge::getBridgeInfo); then the damage states.
+// Bridge it names (none found, or its pristine model missing: no bridge; MaxMapBridges made already: no more), its ends
+// BRIDGE_FLOAT_AMT above the height map, as wide as its model's BRIDGE_LEFT times its BridgeScale
+// (W3DBridge::getBridgeInfo); then the damage states.
 inline void PlaceBridges(GameWorld &game)
 {
 	using namespace bridge_detail;
 	const auto &placements = game.level.placements;
+	std::size_t made = 0;
 	for (std::size_t index = 0; index < placements.size(); ++index)
 	{
 		const auto &first = placements[index];
@@ -295,6 +301,9 @@ inline void PlaceBridges(GameWorld &game)
 		const auto found = catalog.find(first.type);
 		if (found == catalog.end() || !found->second.extentY)
 			continue;
+		if (made >= MaxMapBridges)
+			continue;
+		++made;
 		const content::BridgeContent &kind = found->second;
 		Bridge bridge;
 		bridge.from = {first.position.x, first.position.y, game.ground.At(first.position.XY()) + FloatAmount()};
@@ -398,6 +407,9 @@ inline bool PlaceBridgeLike(GameWorld &game, const engine::level::Placement &pla
 	game.world.Get<gp::Transform>(object)->position.z = placement.position.z + game.ground.At(placement.position.XY());
 	if (kind->isBridge)
 		AddLandmarkBridge(game, object);
+	// Pathfinder::addWallPiece.
+	if (kind->Is("WALK_ON_TOP_OF_WALL"))
+		AddWallPiece(game, object, *kind);
 	ApplyMapProperties(game, object, placement.properties);
 	return true;
 }

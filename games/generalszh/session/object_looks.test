@@ -144,4 +144,47 @@ BOOST_AUTO_TEST_CASE(legacy_parity_world_animations_are_read_as_the_original)
 	BOOST_TEST(game.gameData.makeTrackMarks);
 }
 
+// Core/GameEngine/Source/GameClient/System/Anim2D.cpp: Anim2D::Anim2D starts an Animation2D with RandomizeStartFrame on
+// randomizeCurrentFrame's GameClientRandomValue(0, images - 1) (RandomValue.cpp GetGameClientRandomValue: the draw
+// % images), else on reset's first image; tryNextFrame then steps one image each AnimationDelay (whole logic frames,
+// rounded up), a LOOP wrapping, a PING_PONG turning at its ends (going up first). The shipped randomized ones are the
+// healing, enthusiastic and subliminal icons (drawIconUI): DefaultHeal (16 images, LOOP, 30 ms: 1 frame each) and
+// StructureHeal (10 images, PING_PONG, 60 ms: 2 frames each).
+BOOST_AUTO_TEST_CASE(legacy_parity_healing_icons_start_on_a_random_image)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	content::MountInstall(files, install);
+	engine::config::Diagnostics diagnostics;
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(diagnostics));
+	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
+	for (const char *name : {"DefaultHeal", "StructureHeal", "VehicleHeal", "Enthusiastic", "Subliminal"})
+		BOOST_TEST(game.animations2d.at(name).randomStart, name);
+	for (const char *name : {"MoneyPickUp", "LevelGainedAnimation", "Disabled", "CarBomb", "AmmoEmpty"})
+		BOOST_TEST(!game.animations2d.at(name).randomStart, name);
+	const content::Anim2DTemplate &cross = game.animations2d.at("DefaultHeal");
+	BOOST_TEST_REQUIRE(cross.images.size() == 16u);
+	BOOST_TEST(cross.framesPerImage == 1u);
+	BOOST_TEST(cross.StartImage(37) == 5u); // 37 % 16
+	BOOST_TEST(cross.StartImage(15) == 15u);
+	BOOST_TEST(cross.ImageFrom(0, 5) == 5u);
+	BOOST_TEST(cross.ImageFrom(10, 5) == 15u);
+	BOOST_TEST(cross.ImageFrom(11, 5) == 0u); // looped
+	const content::Anim2DTemplate &wrench = game.animations2d.at("StructureHeal");
+	BOOST_TEST_REQUIRE(wrench.images.size() == 10u);
+	BOOST_TEST(wrench.framesPerImage == 2u);
+	BOOST_TEST(wrench.StartImage(13) == 3u);
+	BOOST_TEST(wrench.ImageFrom(1, 3) == 3u);  // AnimationDelay not yet passed
+	BOOST_TEST(wrench.ImageFrom(2, 3) == 4u);
+	BOOST_TEST(wrench.ImageFrom(12, 3) == 9u); // the last image
+	BOOST_TEST(wrench.ImageFrom(14, 3) == 8u); // back down
+	BOOST_TEST(wrench.ImageFrom(36, 3) == 3u); // up again from 0 (3 + 18 steps: 18 in a round trip)
+	// Not randomized: always the first image (the chevrons: reset's).
+	const content::Anim2DTemplate &chevrons = game.animations2d.at("LevelGainedAnimation");
+	BOOST_TEST(chevrons.StartImage(37) == 0u);
+	BOOST_TEST(chevrons.ImageFrom(5, chevrons.StartImage(37)) == chevrons.ImageAt(5));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

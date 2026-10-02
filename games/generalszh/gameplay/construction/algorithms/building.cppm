@@ -20,6 +20,7 @@ import engine.gameplay.rts.death.components.dying;
 import engine.gameplay.common.healing.components.healing;
 import games.generalszh.gameplay.objects.algorithms.object_factory;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.movement.components.move_order;
 import games.generalszh.gameplay.construction.algorithms.build_legality;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import engine.ecs.query.query;
@@ -323,8 +324,10 @@ inline bool PlayerCanBuild(GameWorld &game, std::uint32_t player, const content:
 // `what`: its builder not disabled by a script; not past MaxSimultaneousOfType (counting, alive, what is it or shares
 // its MaxSimultaneousLinkKey); a UNIT_BUILD or DOZER_CONSTRUCT button of the builder's command set makes it; it is
 // Buildable (Ignore_Prerequisites skips what follows; Only_By_AI is not a player's); its prerequisite objects (one of
-// each group) and sciences owned; the money there.
-inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::ObjectDefinition &what)
+// each group) and sciences owned; the money there. `specialPowerConstruct`: the builder is placing `what` for its
+// SPECIAL_POWER_CONSTRUCT button (getSpecialPowerConstructionCommandButton names it): past the script check, that is
+// enough (the sneak attack's tunnel is no build button's and costs nothing that way).
+inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::ObjectDefinition &what, bool specialPowerConstruct = false)
 {
 	namespace gp = engine::gameplay;
 	using Buildable = content::ObjectDefinition::Buildable;
@@ -337,6 +340,8 @@ inline CanMake CanMakeUnit(GameWorld &game, ecs::Entity builder, const content::
 	if (const auto *off = world.Get<gp::Disabled>(builder);
 		off != nullptr && (off->mask & (gp::disabled_type::ScriptDisabled | gp::disabled_type::ScriptUnderpowered)) != 0)
 		return CanMake::BuilderDisabled;
+	if (specialPowerConstruct)
+		return CanMake::Ok;
 	if (const std::uint32_t most = building_detail::MaxSimultaneous(game, what); most > 0)
 	{
 		std::uint32_t count = 0;
@@ -425,7 +430,7 @@ inline ecs::Entity BeginConstruction(GameWorld &game, ecs::Entity dozer, const s
 	{
 		const ConstructionMoves out = MoveObjectsForConstruction(game, *what, at, facing, player);
 		for (const auto &[unit, to] : out.moves)
-			OrderMove(game, unit, to, false, false); // CMD_FROM_AI, even if sleeping
+			OrderMove(game, unit, to, false, false, gp::GoalClaim::Adjust, true); // CMD_FROM_AI, even if sleeping
 		if (!out.clear && game.roster.PlayerAt(player).human)
 			return {};
 	}
@@ -459,8 +464,7 @@ inline ecs::Entity BeginConstruction(GameWorld &game, ecs::Entity dozer, const s
 	if (auto *regen = world.Get<gp::SelfHealing>(placed); regen != nullptr && regen->WaitsWhileNotStanding())
 		regen->waiting = 1;
 	// calcTimeToBuild: BuildTime * LOGICFRAMES_PER_SECOND, as an Int.
-	world.Get<gp::UnderConstruction>(placed)->buildTicks = static_cast<std::uint64_t>(std::max<std::int64_t>(
-		(what->buildTimeSeconds * Fixed::FromInt(static_cast<std::int64_t>(game.step.TicksPerSecond()))).Floor(), 1));
+	world.Get<gp::UnderConstruction>(placed)->buildTicks = content::BuildFrames(what->buildTimeSeconds, game.step.TicksPerSecond());
 	SendToWork(game, dozer, placed, false, {});
 	return placed;
 }

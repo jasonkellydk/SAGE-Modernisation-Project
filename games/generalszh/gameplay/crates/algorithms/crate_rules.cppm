@@ -26,7 +26,11 @@ import engine.gameplay.rts.vision.resources.shroud_map;
 import engine.gameplay.common.health.resources.armor_catalog;
 import engine.gameplay.common.health.components.pending_damage;
 import engine.ecs.query.query;
+import engine.gameplay.rts.veterancy.resources.experience_awards;
+import engine.gameplay.common.physics.resources.physics_settings;
+import engine.gameplay.common.spatial.components.off_map;
 import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // Zero Hour's crates, between ticks with the session's random stream:
 //   CreateCrateDie::onDie: a dead object's CrateData makes its crate when the
@@ -267,6 +271,8 @@ void PickUpCrates(GameWorld &game, const std::vector<CrateTouch> &touches, Crate
 				if (pickup.amount > 0)
 					world.Resource<gp::PlayerMoney>().Earn(player, pickup.amount); // SalvageCrateCollide: addMoneyEarned
 			}
+			// SalvageCrateCollide::onCollide: the collector's player's academy records salvage collected.
+			RecordAcademy(game, player, AcademyCount::SalvageCollected);
 		}
 		else if (collide->kind == content::CrateKind::Money)
 		{
@@ -310,6 +316,45 @@ void PickUpCrates(GameWorld &game, const std::vector<CrateTouch> &touches, Crate
 			executed = true;
 			pickup.kind = CratePickup::Kind::Heal;
 			HealAllObjects(game, player);
+		}
+		else if (collide->kind == content::CrateKind::Veterancy && !collide->isPilot)
+		{
+			// VeterancyCrateCollide: its levels (its own with AddsOwnerVeterancy, else one) for the collector when it may take
+			// them (isValidToExecute: not significantly above the ground, trainable, below the last level), or with EffectRange
+			// for every object of the collector's player within it (FROM_CENTER_2D, the same map status: not inside something),
+			// each gaining just enough experience, scaled by its own scalar (gainExpForLevel with canScaleForBonus).
+			// A retail quirk fixed: executeCrateBehavior first asks the crate's own AI whether it is going for the collector,
+			// and a crate has no AI, so the original never gives a level-up crate. The levels come with the next tick's
+			// veterancy pass (ExperienceAwards), as a pilot's do.
+			const auto *own = world.Get<gp::Experience>(touch.crate);
+			const std::uint32_t levels = collide->addsOwnerVeterancy ? (own != nullptr ? own->level : 0u) : 1u;
+			const auto *experience = world.Get<gp::Experience>(touch.toucher);
+			const auto &from = world.Get<gp::Transform>(touch.toucher)->position;
+			const bool aloft = from.z - game.ground.At(from.XY()) > world.Resource<gp::PhysicsSettings>().SignificantHeight();
+			if (levels == 0 || experience == nullptr || !experience->trainable || experience->level >= 3 || aloft)
+				continue;
+			executed = true;
+			pickup.kind = CratePickup::Kind::Veterancy;
+			auto &awards = world.Resource<gp::ExperienceAwards>().list;
+			const auto count = static_cast<std::uint8_t>(std::min<std::uint32_t>(levels, 255u));
+			if (collide->effectRange == Fixed{})
+				awards.push_back({touch.toucher, count, true});
+			else
+			{
+				const bool inside = world.Has<gp::OffMap>(touch.toucher);
+				const Fixed reach = collide->effectRange * collide->effectRange;
+				ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::Transform>, ecs::Read<gp::Experience>, ecs::Optional<gp::OffMap>> near(world);
+				near.ForEachChunk([&](auto chunk) {
+					const auto owners = chunk.template Get<gp::Owner>();
+					const auto places = chunk.template Get<gp::Transform>();
+					const bool chunkInside = !chunk.template Get<gp::OffMap>().empty();
+					const auto entities = chunk.Entities();
+					for (std::size_t row = 0; row < owners.size(); ++row)
+						if (owners[row].player == player && chunkInside == inside &&
+							Engine::Math::DistanceSquared(places[row].position.XY(), from.XY()) <= reach)
+							awards.push_back({entities[row], count, true});
+				});
+			}
 		}
 		else if (collide->kind == content::CrateKind::Shroud)
 		{

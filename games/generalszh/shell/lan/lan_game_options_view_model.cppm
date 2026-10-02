@@ -181,6 +181,16 @@ public:
 	engine::gui::mvvm::Observable<std::vector<MapPoint>> mapListStartSpots;
 	engine::gui::mvvm::Command back, escape, start, send, selectMap, mapOk, mapBack;
 
+	// A slot's player as the player box's tooltip names it (LanGameOptionsMenu playerTooltip: LANGameSlot::getUser): a
+	// human's login and machine; none for any other slot.
+	std::optional<std::pair<std::string, std::string>> SlotLoginHost(int slot) const
+	{
+		const lan::LobbyGame *game = m_lobby != nullptr ? m_lobby->CurrentGame() : nullptr;
+		if (game == nullptr || slot < 0 || slot >= setup::MaxSlots || !game->setup.slots[static_cast<std::size_t>(slot)].Human())
+			return std::nullopt;
+		return std::pair{game->logins[static_cast<std::size_t>(slot)], game->hosts[static_cast<std::size_t>(slot)]};
+	}
+
 private:
 	std::u16string Text(std::string_view label) const
 	{

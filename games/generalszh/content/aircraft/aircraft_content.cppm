@@ -23,6 +23,7 @@ struct ParkingLayout
 		RestBone parking;
 		RestBone prep;
 		std::uint32_t runway{0};
+		Engine::Math::TurnAngle apronFacing; // the parking bone's turn (m_orientation), kept when it parks in its hangar
 	};
 	struct Runway
 	{
@@ -40,6 +41,12 @@ struct ParkingLayout
 	// A flight deck: its deck's height over the terrain, and only its front row takes off.
 	Engine::Math::Fixed deckHeight;
 	bool frontRow{false};
+	// ParkingPlaceBehavior's helipad (the HeliPark01 bone: getExitPosition, exitObjectViaDoor for PRODUCED_AT_HELIPAD)
+	// and ApproachHeight.
+	std::optional<RestBone> helipad;
+	Engine::Math::Fixed approachHeight;
+	// ParkInHangars (calcPPInfo): its jets park in their hangars (each space's parking spot its hangar bone, facing its turn).
+	bool parkInHangars{false};
 };
 
 // FlightDeckBehavior's timing and payload (FlightDeckBehaviorModuleData; durations in frames, rounded up as
@@ -133,6 +140,9 @@ inline std::optional<ParkingLayout> ReadFlightDeckLayout(const ObjectDefinition 
 		layout.frontRow = true;
 		if (const auto *deck = module.block->Find("LandingDeckHeightOffset"))
 			layout.deckHeight = engine::config::values::ParseFixed(deck->Value()).value_or(Engine::Math::Fixed{});
+		// ApproachHeight: calcPPInfo raises runwayExit and runwayApproach by it (with the deck's height).
+		if (const auto *approach = module.block->Find("ApproachHeight"))
+			layout.approachHeight = engine::config::values::ParseFixed(approach->Value()).value_or(Engine::Math::Fixed{});
 		const int runways = count("NumRunways"), rows = count("NumSpacesPerRunway");
 		std::vector<std::vector<std::string>> spaces;
 		for (int runway = 1; runway <= runways; ++runway)
@@ -197,6 +207,17 @@ std::optional<ParkingLayout> ReadParkingLayout(const ObjectDefinition &object, M
 		if (runways)
 			for (int col = 0; col < cols; ++col)
 				layout.runways.push_back({bone("RunwayStart" + std::to_string(col + 1)).position, bone("RunwayEnd" + std::to_string(col + 1)).position});
+		layout.helipad = rigs.Bone(model, "HeliPark01");
+		if (const auto *hangars = module.block->Find("ParkInHangars"))
+			layout.parkInHangars = engine::config::values::ParseBool(hangars->Value()).value_or(false);
+		for (auto &space : layout.spaces)
+		{
+			space.apronFacing = space.parking.facing;
+			if (layout.parkInHangars)
+				space.parking = space.hangar;
+		}
+		if (const auto *approach = module.block->Find("ApproachHeight"))
+			layout.approachHeight = engine::config::values::ParseFixed(approach->Value()).value_or(Engine::Math::Fixed{});
 		return layout;
 	}
 	return std::nullopt;
@@ -211,6 +232,15 @@ struct ObjectJet
 	std::uint64_t takeoffPauseTicks{0}; // TakeoffPause
 	Engine::Math::Fixed minHeight;     // MinHeight
 	Engine::Math::Fixed outOfAmmoDamage; // OutOfAmmoDamagePerSecond, a share of its maximum health a tick
+	bool needsRunway{true};              // NeedsRunway (No: a helicopter, HeliAIStateMachine)
+	Engine::Math::Fixed parkingOffset;   // ParkingOffset
+	// The Aurora's attack run: AttackLocomotorType and ReturnForAmmoLocomotorType (none: its normal set), how long the
+	// attack set and its attackers' misses persist (ms, parseDurationUnsignedInt), and SneakyOffsetWhenAttacking.
+	std::optional<engine::gameplay::LocomotorDefinition> attack;
+	std::optional<engine::gameplay::LocomotorDefinition> returning;
+	std::uint64_t attackPersistTicks{0};
+	std::uint64_t missPersistTicks{0};
+	Engine::Math::Fixed sneakyOffset;
 };
 
 std::optional<ObjectJet> ReadObjectJet(const ObjectDefinition &object, const engine::config::DefinitionTable<engine::gameplay::LocomotorDefinition> &locomotors,
@@ -238,6 +268,22 @@ std::optional<ObjectJet> ReadObjectJet(const ObjectDefinition &object, const eng
 				Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(step.TicksPerSecond()));
 		if (const auto *height = module.block->Find("MinHeight"))
 			jet.minHeight = engine::config::values::ParseFixed(height->Value()).value_or(Engine::Math::Fixed{});
+		if (const auto *set = module.block->Find("AttackLocomotorType"))
+			if (const auto *locomotor = ObjectLocomotor(object, locomotors, set->Value()))
+				jet.attack = *locomotor;
+		if (const auto *set = module.block->Find("ReturnForAmmoLocomotorType"))
+			if (const auto *locomotor = ObjectLocomotor(object, locomotors, set->Value()))
+				jet.returning = *locomotor;
+		if (const auto *persist = module.block->Find("AttackLocomotorPersistTime"))
+			jet.attackPersistTicks = engine::config::ReadDurationTicks(*persist, bind).value_or(0);
+		if (const auto *persist = module.block->Find("AttackersMissPersistTime"))
+			jet.missPersistTicks = engine::config::ReadDurationTicks(*persist, bind).value_or(0);
+		if (const auto *sneaky = module.block->Find("SneakyOffsetWhenAttacking"))
+			jet.sneakyOffset = engine::config::values::ParseFixed(sneaky->Value()).value_or(Engine::Math::Fixed{});
+		if (const auto *offset = module.block->Find("ParkingOffset"))
+			jet.parkingOffset = engine::config::values::ParseFixed(offset->Value()).value_or(Engine::Math::Fixed{});
+		if (const auto *runway = module.block->Find("NeedsRunway"))
+			jet.needsRunway = engine::config::values::ParseBool(runway->Value()).value_or(true);
 		if (const auto *pause = module.block->Find("TakeoffPause"))
 			jet.takeoffPauseTicks = engine::config::ReadDurationTicks(*pause, bind).value_or(0);
 		return jet;

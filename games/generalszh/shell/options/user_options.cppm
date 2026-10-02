@@ -3,9 +3,9 @@ import std;
 
 export import engine.config.adapters.preferences.preferences_file;
 
-// The player's options (the original's OptionPreferences over Options.ini):
-// volumes in percent, the scroll speed, gamma, mouse behaviour and the
-// display details, with the original's defaults when a key is absent.
+// The player's options (the original's OptionPreferences over Options.ini, GeneralsMD OptionsMenu.cpp): volumes in
+// percent, the scroll speed, gamma, mouse behaviour and the display details, read as its getters read them (with the
+// original's defaults when a key is absent) and written as saveOptions writes them.
 export namespace generalszh::shell
 {
 // The defaults the options fall back to (AudioSettings.ini, GameData.ini).
@@ -17,7 +17,59 @@ struct OptionDefaults
 	int speechVolume{70};   // DefaultSpeechVolume
 	int relative2DVolume{-10}; // Relative2DVolume: below 0 lowers 2D sounds, above 0 3D ones
 	int scrollFactor{50};   // GlobalData m_keyboardDefaultScrollFactor (0.5), percent
+	int maxParticleCount{2500}; // GameData.ini MaxParticleCount (getParticleCap without the key)
 };
+
+// The original's StaticGameLODNames (StaticGameLODLevel: Low, Medium, High, Custom), numbered as the presentation's
+// detail levels (presentation::detail_level: Low 0, Medium 1, High 2, Custom 4; the dynamic VeryHigh 3 is no static
+// level the player can pick).
+inline constexpr std::string_view StaticLodNames[] = {"Low", "Medium", "High", "VeryHigh", "Custom"};
+inline constexpr int CustomLod = 4;
+// OptionsMenuInit's detail box: GUI:High, GUI:Medium, GUI:Low, GUI:Custom (HIGHDETAIL 0 ... CUSTOMDETAIL 3), each item's
+// level.
+inline constexpr std::array<int, 4> DetailBoxLevels{2, 1, 0, CustomLod};
+inline constexpr int CustomDetailBox = 3;
+
+// The box item showing a level (-1: none does).
+inline int DetailBoxIndex(int level) noexcept
+{
+	for (std::size_t index = 0; index < DetailBoxLevels.size(); ++index)
+		if (DetailBoxLevels[index] == level)
+			return static_cast<int>(index);
+	return -1;
+}
+
+// saveOptions' split of the one sound-effects slider: both volumes at the slider's, the relative volume (a percent
+// read as a Real fraction, clamped to [-1, 1]) lowering the 2D one when below 0, else the 3D one; each written as
+// REAL_TO_INT of its percent (truncated, in float as the original computes it).
+inline std::pair<int, int> SplitSoundSlider(int value, int relative2DVolume) noexcept
+{
+	float sound2D = static_cast<float>(value) / 100.0f;
+	float sound3D = static_cast<float>(value) / 100.0f;
+	float relative = static_cast<float>(relative2DVolume) / 100.0f;
+	relative = (std::min)(1.0f, (std::max)(-1.0f, relative));
+	if (relative < 0.0f)
+		sound2D *= 1.0f + relative;
+	else
+		sound3D *= 1.0f - relative;
+	return {static_cast<int>(sound2D * 100.0f), static_cast<int>(sound3D * 100.0f)};
+}
+
+// saveOptions' display gamma from the gamma slider: 1 at 50; below, darker down to 0.6 (at 0 or less); above, up to 2.
+inline float DisplayGamma(int slider) noexcept
+{
+	float gamma = 1.0f;
+	if (slider < 50)
+	{
+		if (slider <= 0)
+			gamma = 0.6f;
+		else
+			gamma = 1.0f - 0.4f * static_cast<float>(50 - slider) / 50.0f;
+	}
+	else if (slider > 50)
+		gamma = 1.0f + 1.0f * static_cast<float>(slider - 50) / 50.0f;
+	return gamma;
+}
 
 struct UserOptions
 {
@@ -40,9 +92,9 @@ struct UserOptions
 	bool heatEffects{true};
 	bool trees{true};          // "show props"
 	bool buildingOcclusion{true};
-	int maxParticleCount{5000};
+	int maxParticleCount{2500};
 	int textureReduction{0};
-	// The detail level (StaticGameLOD: Low, Medium, High, VeryHigh, Custom) and the display resolution.
+	// The detail level (StaticGameLOD, numbered as StaticLodNames) and the display resolution.
 	int staticLod{2};
 	int resolutionWidth{800};
 	int resolutionHeight{600};
@@ -53,71 +105,116 @@ struct UserOptions
 	bool operator==(const UserOptions &) const = default;
 
 	// The single sound-effects slider: the louder of the 2D and 3D volumes (OptionsMenuInit).
-	int SoundSlider() const noexcept { return std::max(sound2DVolume, sound3DVolume); }
+	int SoundSlider() const noexcept { return (std::max)(sound2DVolume, sound3DVolume); }
 
-	// The slider applied (saveOptions): one of 2D and 3D lowered by the relative volume.
+	// The slider applied (saveOptions, every accept): split into 2D and 3D by the relative volume.
 	void SetSoundSlider(int value, int relative2DVolume) noexcept
 	{
-		const int relative = std::clamp(relative2DVolume, -100, 100);
-		sound2DVolume = relative < 0 ? value * (100 + relative) / 100 : value;
-		sound3DVolume = relative > 0 ? value * (100 - relative) / 100 : value;
+		std::tie(sound2DVolume, sound3DVolume) = SplitSoundSlider(value, relative2DVolume);
 	}
 };
 
-// The original's defaults for everything (DefaultMusicVolume and so on; the
-// 2D sounds lowered by the relative volume when it is negative).
+namespace user_options_detail
+{
+// atof: the leading number (0 when there is none).
+inline float LeadingReal(std::string_view text) noexcept
+{
+	while (!text.empty() && (text.front() == ' ' || text.front() == '\t'))
+		text.remove_prefix(1);
+	if (!text.empty() && text.front() == '+')
+		text.remove_prefix(1);
+	float value = 0.0f;
+	std::from_chars(text.data(), text.data() + text.size(), value);
+	return value;
+}
+
+// OptionPreferences' flags: "yes" in any case is true, anything else false; absent, the fallback.
+inline bool YesFlag(const engine::config::Preferences &preferences, std::string_view key, bool fallback)
+{
+	const auto value = preferences.Find(key);
+	if (!value)
+		return fallback;
+	return value->size() == 3 && (((*value)[0] | 0x20) == 'y') && (((*value)[1] | 0x20) == 'e') && (((*value)[2] | 0x20) == 's');
+}
+
+inline bool SameNoCase(std::string_view a, std::string_view b) noexcept
+{
+	return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) { return (x | 0x20) == (y | 0x20); });
+}
+}
+
+// The original's defaults for everything (OptionPreferences' getters without their keys: getSoundVolume's 2D volume
+// lowered by a negative relative volume, get3DSoundVolume's 3D one by a positive one, as Reals truncated to the slider).
 inline UserOptions DefaultOptions(const OptionDefaults &defaults)
 {
 	UserOptions options;
+	const float relative = static_cast<float>(defaults.relative2DVolume) / 100.0f;
+	const float sound = static_cast<float>(defaults.soundVolume) / 100.0f, sound3D = static_cast<float>(defaults.sound3DVolume) / 100.0f;
 	options.musicVolume = defaults.musicVolume;
-	options.sound2DVolume = defaults.relative2DVolume < 0 ? defaults.soundVolume * (100 + defaults.relative2DVolume) / 100 : defaults.soundVolume;
-	options.sound3DVolume = defaults.relative2DVolume > 0 ? defaults.sound3DVolume * (100 - defaults.relative2DVolume) / 100 : defaults.sound3DVolume;
+	options.sound2DVolume = static_cast<int>(relative < 0.0f ? sound * 100.0f * (1.0f + relative) : sound * 100.0f);
+	options.sound3DVolume = static_cast<int>(relative > 0.0f ? sound3D * 100.0f * (1.0f - relative) : sound3D * 100.0f);
 	options.speechVolume = defaults.speechVolume;
 	options.scrollFactor = defaults.scrollFactor;
+	options.maxParticleCount = defaults.maxParticleCount;
 	return options;
 }
 
-// The original's StaticGameLODNames, in the detail box's order.
-inline constexpr std::string_view StaticLodNames[] = {"Low", "Medium", "High", "VeryHigh", "Custom"};
-inline constexpr int CustomLod = 4;
+// setDefaults' sound slider: the louder of the two default volumes, before any relative lowering.
+inline int DefaultSoundSlider(const OptionDefaults &defaults) noexcept
+{
+	return static_cast<int>((std::max)(static_cast<float>(defaults.soundVolume) / 100.0f, static_cast<float>(defaults.sound3DVolume) / 100.0f) * 100.0f);
+}
 
 inline UserOptions ReadUserOptions(const engine::config::Preferences &preferences, const OptionDefaults &defaults)
 {
+	using namespace user_options_detail;
 	const UserOptions fallback = DefaultOptions(defaults);
 	UserOptions options = fallback;
-	const auto volume = [&](std::string_view key, int otherwise) { return static_cast<int>(std::max<std::int64_t>(preferences.Number(key, otherwise), 0)); };
+	// getMusicVolume / getSoundVolume / get3DSoundVolume / getSpeechVolume: atof, below 0 read as 0 (the slider shows
+	// REAL_TO_INT of it).
+	const auto volume = [&](std::string_view key, int otherwise) {
+		const auto value = preferences.Find(key);
+		return value ? static_cast<int>((std::max)(LeadingReal(*value), 0.0f)) : otherwise;
+	};
 	options.musicVolume = volume("MusicVolume", fallback.musicVolume);
 	options.sound2DVolume = volume("SFXVolume", fallback.sound2DVolume);
 	options.sound3DVolume = volume("SFX3DVolume", fallback.sound3DVolume);
 	options.speechVolume = volume("VoiceVolume", fallback.speechVolume);
-	options.scrollFactor = static_cast<int>(std::max<std::int64_t>(preferences.Number("ScrollFactor", fallback.scrollFactor), 1));
-	options.gamma = static_cast<int>(preferences.Number("Gamma", 50));
-	options.alternateMouse = preferences.Flag("UseAlternateMouse", false);
-	options.retaliation = preferences.Flag("Retaliation", true);
-	options.doubleClickAttackMove = preferences.Flag("UseDoubleClickAttackMove", false);
-	options.shadowVolumes = preferences.Flag("UseShadowVolumes", fallback.shadowVolumes);
-	options.shadowDecals = preferences.Flag("UseShadowDecals", fallback.shadowDecals);
-	options.cloudShadows = preferences.Flag("UseCloudMap", fallback.cloudShadows);
-	options.groundLighting = preferences.Flag("UseLightMap", fallback.groundLighting);
-	options.smoothWater = preferences.Flag("ShowSoftWaterEdge", fallback.smoothWater);
-	options.extraAnimations = preferences.Flag("ExtraAnimations", fallback.extraAnimations);
-	options.dynamicLod = preferences.Flag("DynamicLOD", fallback.dynamicLod);
-	options.heatEffects = preferences.Flag("HeatEffects", fallback.heatEffects);
-	options.trees = preferences.Flag("ShowTrees", fallback.trees);
-	options.buildingOcclusion = preferences.Flag("BuildingOcclusion", fallback.buildingOcclusion);
-	options.maxParticleCount = static_cast<int>(preferences.Number("MaxParticleCount", fallback.maxParticleCount));
-	options.textureReduction = static_cast<int>(preferences.Number("TextureReduction", fallback.textureReduction));
+	// getScrollFactor: atoi clamped to [0, 100].
+	if (preferences.Find("ScrollFactor"))
+		options.scrollFactor = static_cast<int>(std::clamp<std::int64_t>(preferences.Number("ScrollFactor", 0), 0, 100));
+	options.gamma = static_cast<int>(preferences.Number("Gamma", 50)); // getGammaValue: atoi, 50 without it
+	options.alternateMouse = YesFlag(preferences, "UseAlternateMouse", fallback.alternateMouse);
+	options.retaliation = YesFlag(preferences, "Retaliation", fallback.retaliation);
+	options.doubleClickAttackMove = YesFlag(preferences, "UseDoubleClickAttackMove", fallback.doubleClickAttackMove);
+	options.shadowVolumes = YesFlag(preferences, "UseShadowVolumes", fallback.shadowVolumes);
+	options.shadowDecals = YesFlag(preferences, "UseShadowDecals", fallback.shadowDecals);
+	options.cloudShadows = YesFlag(preferences, "UseCloudMap", fallback.cloudShadows);
+	options.groundLighting = YesFlag(preferences, "UseLightMap", fallback.groundLighting);
+	options.smoothWater = YesFlag(preferences, "ShowSoftWaterEdge", fallback.smoothWater);
+	options.extraAnimations = YesFlag(preferences, "ExtraAnimations", fallback.extraAnimations);
+	options.dynamicLod = YesFlag(preferences, "DynamicLOD", fallback.dynamicLod);
+	options.heatEffects = YesFlag(preferences, "HeatEffects", fallback.heatEffects);
+	options.trees = YesFlag(preferences, "ShowTrees", fallback.trees);
+	options.buildingOcclusion = YesFlag(preferences, "BuildingOcclusion", fallback.buildingOcclusion);
+	// getParticleCap: atoi, at least 100.
+	if (preferences.Find("MaxParticleCount"))
+		options.maxParticleCount = static_cast<int>((std::max)(preferences.Number("MaxParticleCount", 0), std::int64_t{100}));
+	// getTextureReduction: atoi, at most 2 (without the key the original asks the hardware; here none).
+	if (preferences.Find("TextureReduction"))
+		options.textureReduction = static_cast<int>((std::min)(preferences.Number("TextureReduction", 0), std::int64_t{2}));
+	// getStaticGameDetail: getStaticGameLODIndex, case blind over Low, Medium, High and Custom (an unknown name keeps
+	// the level the game has).
 	if (const auto lod = preferences.Find("StaticGameLOD"))
-		for (int index = 0; index < static_cast<int>(std::size(StaticLodNames)); ++index)
-			if (lod->size() == StaticLodNames[index].size() &&
-				std::equal(lod->begin(), lod->end(), StaticLodNames[index].begin(), [](char a, char b) { return (a | 0x20) == (b | 0x20); }))
-				options.staticLod = index; // getStaticGameLODIndex: case blind
+		for (const int level : DetailBoxLevels)
+			if (SameNoCase(*lod, StaticLodNames[level]))
+				options.staticLod = level;
 	if (const auto resolution = preferences.Find("Resolution"))
 	{
-		// "%d%d": two integers.
+		// getResolution: "%d%d", two integers.
 		int width = 0, height = 0;
 		const std::string text(*resolution);
-		if (std::sscanf(text.c_str(), "%d%d", &width, &height) == 2 && width > 0 && height > 0)
+		if (std::sscanf(text.c_str(), "%d%d", &width, &height) == 2)
 			options.resolutionWidth = width, options.resolutionHeight = height;
 	}
 	options.lanAddress = std::string(preferences.Find("IPAddress").value_or(""));
@@ -125,35 +222,49 @@ inline UserOptions ReadUserOptions(const engine::config::Preferences &preference
 	return options;
 }
 
-// Into the preferences as the original's saveOptions writes them (other keys kept).
-inline void WriteUserOptions(engine::config::Preferences &preferences, const UserOptions &options)
+// What an accept changed that saveOptions writes only on a change: the static detail level
+// (GameLODManager::setStaticLODLevel's levelChanged) and the display mode (setDisplayMode, from the running one).
+struct OptionChanges
 {
-	preferences.Set("MusicVolume", options.musicVolume);
-	preferences.Set("SFXVolume", options.sound2DVolume);
-	preferences.Set("SFX3DVolume", options.sound3DVolume);
-	preferences.Set("VoiceVolume", options.speechVolume);
-	preferences.Set("ScrollFactor", options.scrollFactor);
-	preferences.Set("Gamma", options.gamma);
-	preferences.SetBool("UseAlternateMouse", options.alternateMouse);
-	preferences.SetBool("Retaliation", options.retaliation);
-	preferences.SetBool("UseDoubleClickAttackMove", options.doubleClickAttackMove);
-	preferences.SetBool("UseShadowVolumes", options.shadowVolumes);
-	preferences.SetBool("UseShadowDecals", options.shadowDecals);
-	preferences.SetBool("UseCloudMap", options.cloudShadows);
-	preferences.SetBool("UseLightMap", options.groundLighting);
-	preferences.SetBool("ShowSoftWaterEdge", options.smoothWater);
-	preferences.SetBool("ExtraAnimations", options.extraAnimations);
-	preferences.SetBool("DynamicLOD", options.dynamicLod);
-	preferences.SetBool("HeatEffects", options.heatEffects);
-	preferences.SetBool("ShowTrees", options.trees);
-	preferences.SetBool("BuildingOcclusion", options.buildingOcclusion);
-	preferences.Set("MaxParticleCount", options.maxParticleCount);
-	preferences.Set("TextureReduction", options.textureReduction);
-	preferences.Set("StaticGameLOD", StaticLodNames[std::clamp(options.staticLod, 0, CustomLod)]);
-	preferences.Set("Resolution", std::to_string(options.resolutionWidth) + " " + std::to_string(options.resolutionHeight));
+	bool level{true};
+	bool resolution{true};
+};
+
+// Into the preferences as the original's saveOptions writes them (other keys kept): the custom detail settings only
+// while the detail is Custom, StaticGameLOD and Resolution only when changed, the rest always.
+inline void WriteUserOptions(engine::config::Preferences &preferences, const UserOptions &options, OptionChanges changed = {})
+{
+	if (options.staticLod == CustomLod)
+	{
+		preferences.Set("TextureReduction", options.textureReduction);
+		preferences.SetBool("UseShadowVolumes", options.shadowVolumes);
+		preferences.SetBool("UseShadowDecals", options.shadowDecals);
+		preferences.SetBool("UseCloudMap", options.cloudShadows);
+		preferences.SetBool("UseLightMap", options.groundLighting);
+		preferences.SetBool("ShowSoftWaterEdge", options.smoothWater);
+		preferences.SetBool("ExtraAnimations", options.extraAnimations);
+		preferences.SetBool("DynamicLOD", options.dynamicLod);
+		preferences.SetBool("HeatEffects", options.heatEffects);
+		preferences.SetBool("BuildingOcclusion", options.buildingOcclusion);
+		preferences.SetBool("ShowTrees", options.trees);
+		preferences.Set("MaxParticleCount", options.maxParticleCount);
+	}
+	if (changed.level)
+		preferences.Set("StaticGameLOD", StaticLodNames[std::clamp(options.staticLod, 0, CustomLod)]);
+	if (changed.resolution)
+		preferences.Set("Resolution", std::to_string(options.resolutionWidth) + " " + std::to_string(options.resolutionHeight));
 	if (!options.lanAddress.empty())
 		preferences.Set("IPAddress", options.lanAddress);
 	if (!options.onlineAddress.empty())
 		preferences.Set("GameSpyIPAddress", options.onlineAddress);
+	preferences.SetBool("UseAlternateMouse", options.alternateMouse);
+	preferences.SetBool("Retaliation", options.retaliation);
+	preferences.SetBool("UseDoubleClickAttackMove", options.doubleClickAttackMove);
+	preferences.Set("ScrollFactor", options.scrollFactor);
+	preferences.Set("MusicVolume", options.musicVolume);
+	preferences.Set("SFXVolume", options.sound2DVolume);
+	preferences.Set("SFX3DVolume", options.sound3DVolume);
+	preferences.Set("VoiceVolume", options.speechVolume);
+	preferences.Set("Gamma", options.gamma);
 }
 }

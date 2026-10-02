@@ -25,7 +25,8 @@ import games.generalszh.content.combat.loadout_content;
 //   drawBombed: its CARBOMB weapon set flag on and its player the viewer's, ICON_CARBOMB; else it goes;
 //   drawHealing (not NO_HEAL_ICON, not sold): not whole, past the game's first 90 logic frames and healed within the
 //   last 90 (HEALING_ICON_DISPLAY_TIME), the icon of its kind (STRUCTURE, VEHICLE, else the default); else that goes.
-// An icon's animation starts when it is made (the side table keeps the clock then). Where they are drawn is
+// An icon's animation starts when it is made (the side table keeps the clock then, and its client random draw for a
+// RandomizeStartFrame animation's first image). Where they are drawn is
 // object_icon_layout's; the host draws them with the health region.
 export namespace generalszh::presentation
 {
@@ -95,7 +96,10 @@ struct ObjectIconSystem
 				else
 				{
 					if (since < 0.0)
+					{
 						since = frame.clock;
+						next.roll[static_cast<std::size_t>(icon)] = IconRoll(entities[row], icon, frame.clock);
+					}
 					next.drawn = static_cast<std::uint8_t>(next.drawn | 1u << static_cast<std::size_t>(icon));
 				}
 			};

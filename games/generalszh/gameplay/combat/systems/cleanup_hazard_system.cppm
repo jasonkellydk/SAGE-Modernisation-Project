@@ -28,10 +28,13 @@ import Engine.Core.Math.FixedRandom;
 //   nearest CLEANUP_HAZARD (centres, 2D; on the map as it is) within ScanRange of it (sent to an area: within ScanRange
 //   plus the area's reach of the area's spot), else, sent to an area with its AI idle or busy, it goes there, or once
 //   within 25 of it the area job is over;
-// - fireWhenReady, outside an area job: within its weapon's reach of what it picked it is in range; out of reach after
-//   being in range, it drops it and looks again in 0 to 3 ticks (at once when 0: the new pick not fired at); then, its
-//   AI idle or busy, it attacks what it picked (aiAttackObject from its AI). (The weapon slot's temporary lock is not
-//   ported: its clean-up weapon is its only one.)
+// - fireWhenReady, outside an area job: within its WeaponSlot's weapon's reach (getAttackRange with no bonus; centres,
+//   2D) of what it picked it is in range; out of reach after being in range, it drops it and looks again in 0 to 3 ticks
+//   (at once when 0: the new pick not fired at); then, its AI idle or busy, it locks that slot for the attack
+//   (setWeaponLock LOCKED_TEMPORARILY, deferred to the weapon system through AttackTarget::lockSlot) and attacks what it
+//   picked (aiAttackObject from its AI).
+//   (The original takes the slot's weapon once, as it is made with its VETERAN set; here the slot's weapon as it is:
+//   the same for every shipped cleaner, whose sets never change.)
 export namespace generalszh::gameplay
 {
 struct CleanupHazardSystem
@@ -110,7 +113,11 @@ struct CleanupHazardSystem
 				const gp::Transform *target = cleaner.best != ecs::Entity{} ? lookup.Get<gp::Transform>(cleaner.best) : nullptr;
 				if (target != nullptr && cleaner.moveRange == Fixed{})
 				{
-					const Fixed reach = gp::TargetingSystem::Reach(weapons, armaments[row], sets.empty() ? nullptr : &sets[row], 0).attackRange;
+					// m_weaponTemplate->getAttackRange(cleared bonus): its WeaponSlot's weapon (without a weapon set, its one
+					// weapon is its PRIMARY).
+					const std::uint32_t weapon = sets.empty() ? (cleaner.slot == 0 ? armaments[row].weapon : gp::WeaponCatalog::None)
+															  : sets[row].slots[cleaner.slot < gp::WeaponSlotCount ? cleaner.slot : 0].weapon;
+					const Fixed reach = weapon == gp::WeaponCatalog::None ? Fixed{} : gp::BonusAttackRange(weapons.At(weapon).attackRange, gp::WeaponBonus{});
 					if (Engine::Math::DistanceSquared(target->position.XY(), at) < reach * reach)
 						cleaner.inRange = 1;
 					else if (cleaner.inRange != 0)
@@ -130,8 +137,11 @@ struct CleanupHazardSystem
 				}
 				if (target != nullptr && idleOrBusy())
 				{
-					// aiAttackObject(no limit, CMD_FROM_AI): its attack, no longer busy.
+					// setWeaponLock(WeaponSlot, LOCKED_TEMPORARILY) (none without a weapon there), then aiAttackObject(no
+					// limit, CMD_FROM_AI): its attack, no longer busy, asking for the lock as it starts (AttackTarget::lockSlot:
+					// the weapon system takes it before choosing its weapon this tick).
 					attack = gp::AttackTarget{.target = cleaner.best, .ordered = true};
+					attack.lockSlot = static_cast<std::uint8_t>(cleaner.slot + 1);
 					activity.busy = 0;
 					activity.commanded = 0;
 				}

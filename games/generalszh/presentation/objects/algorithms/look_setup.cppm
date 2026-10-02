@@ -2,8 +2,14 @@ export module games.generalszh.presentation.objects.algorithms.look_setup;
 import games.generalszh.presentation.objects.components.beacon_look;
 import engine.gameplay.rts.harvesting.components.resource_store;
 import games.generalszh.content.railroad.railroad_content;
+import games.generalszh.content.water.wave_guide_content;
+import games.generalszh.content.powers.special_ability_content;
+import games.generalszh.content.eva.eva_content;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.content.slaves.slaved_content;
 import std;
 import games.generalszh.presentation.objects.components.tree_bend;
+import games.generalszh.presentation.objects.components.bridge_look;
 import games.generalszh.presentation.objects.components.object_icons;
 import games.generalszh.presentation.objects.components.track_marks;
 import games.generalszh.presentation.objects.components.uplink_effects;
@@ -19,6 +25,7 @@ export import games.generalszh.session.session_view;
 import games.generalszh.content.objects.model_draw;
 export import games.generalszh.presentation.objects.algorithms.debris_animation;
 import games.generalszh.content.objects.model_conditions;
+import engine.config.binding.values;
 import games.generalszh.content.stealth.stealth_content;
 import games.generalszh.content.fire.fire_content;
 import games.generalszh.content.death.death_content;
@@ -47,6 +54,11 @@ void RegisterObjectPresentation(ecs::World &world)
 	world.RegisterComponent<SelectionFlash>();
 	world.RegisterComponent<ScriptFlash>();
 	world.RegisterComponent<CaptureFlash>();
+	world.RegisterComponent<PrepSoundCue>();
+	world.RegisterComponent<AbilityLaserView>();
+	world.RegisterComponent<SpectreStrafeSeen>();
+	world.RegisterComponent<GrantStealthView>();
+	world.RegisterComponent<ObjectFade>();
 	world.RegisterComponent<DefectorFlash>();
 	world.RegisterComponent<ShroudSight>();
 	world.RegisterComponent<DebrisMotion>();
@@ -63,6 +75,7 @@ void RegisterObjectPresentation(ecs::World &world)
 	world.RegisterComponent<ExhaustEmission>();
 	world.RegisterComponent<TrackMarks>();
 	world.RegisterComponent<TreeBend>();
+	world.RegisterComponent<BridgeLook>();
 	world.RegisterComponent<UplinkEffects>();
 	world.RegisterComponent<BeaconLook>();
 	world.RegisterComponent<BeaconCaption>();
@@ -82,6 +95,35 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.constructionHeight = Engine::Math::ToFloat(object.geometry.shape == content::GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height);
 	looks.animatesWhileDisabled = object.Is("PRODUCED_AT_HELIPAD");
 	looks.ignoredInGui = object.Is("IGNORED_IN_GUI");
+	looks.revealsEnemyPaths = object.Is("REVEALS_ENEMY_PATHS");
+	looks.majorRadius = Engine::Math::ToFloat(object.geometry.majorRadius);
+	looks.minorRadius = Engine::Math::ToFloat(object.geometry.minorRadius);
+	// Object::getObjectExitInterface: the first behaviour module with an exit (the rally line's).
+	for (const content::ModuleEntry &module : object.modules)
+	{
+		if (module.slot != content::ModuleSlot::Behavior)
+			continue;
+		const std::string_view type = module.type;
+		const bool production = type == "DefaultProductionExitUpdate" || type == "QueueProductionExitUpdate" || type == "SupplyCenterProductionExitUpdate";
+		if (!production && type != "SpawnPointProductionExitUpdate" && type != "ParkingPlaceBehavior" && type != "FlightDeckBehavior")
+			continue;
+		if (type == "ParkingPlaceBehavior")
+			looks.rallyExit = DefinitionLooks::RallyExit::Helipad;
+		else if (production && module.block != nullptr)
+		{
+			looks.rallyExit = DefinitionLooks::RallyExit::Production;
+			engine::config::Diagnostics diagnostics;
+			engine::config::BindContext bind{diagnostics, engine::time::FixedStep{30}};
+			const auto read = [&](std::string_view key, std::array<float, 3> &out) {
+				if (const auto *node = module.block->Find(key))
+					if (const auto point = engine::config::ReadVec3(*node, bind))
+						out = {Engine::Math::ToFloat(point->x), Engine::Math::ToFloat(point->y), Engine::Math::ToFloat(point->z)};
+			};
+			read("UnitCreatePoint", looks.exitCreatePoint);
+			read("NaturalRallyPoint", looks.exitRallyPoint);
+		}
+		break;
+	}
 	for (const content::ModuleEntry &module : object.modules)
 		if (module.block != nullptr && module.slot == content::ModuleSlot::Draw && module.type == "W3DScienceModelDraw")
 		{
@@ -126,12 +168,14 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.shrubbery = object.Is("SHRUBBERY");
 	looks.boxFootprint = object.geometry.shape == content::GeometryShape::Box;
 	looks.structure = object.Is("STRUCTURE");
+	// RTS3DScene's potential occludees: things that score (shown through buildings while building occlusion is on).
+	looks.scoring = object.Is("SCORE") || object.Is("SCORE_CREATE") || object.Is("SCORE_DESTROY") || object.Is("MP_COUNT_FOR_VICTORY");
 	looks.vehicle = object.Is("VEHICLE");
 	looks.drone = object.Is("DRONE");
 	looks.hugeVehicle = object.Is("HUGE_VEHICLE");
 	looks.noHealIcon = object.Is("NO_HEAL_ICON");
 	for (const content::ModuleEntry &module : object.modules)
-		if (module.block != nullptr && module.type == "DumbProjectileBehavior")
+		if (module.block != nullptr && (module.type == "DumbProjectileBehavior" || module.type == "MissileAIUpdate"))
 			if (const auto *fx = module.block->Find("GarrisonHitKillFX"); fx != nullptr && fx->Value() != "None")
 				looks.garrisonHitFx = std::string(fx->Value());
 	for (const content::ModuleEntry &module : object.modules)
@@ -280,9 +324,97 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.stealthOn = std::string(object.Sound("SoundStealthOn"));
 	looks.afterburnerSound = std::string(object.Sound("Afterburner"));
 	looks.lowFuelVoice = std::string(object.Sound("VoiceLowFuel"));
+	// OpenContainModuleData EnterSound / ExitSound (its contain module's: the first module whose type ends in Contain).
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && std::string_view(module.type).ends_with("Contain"))
+		{
+			if (const auto *enter = module.block->Find("EnterSound"); enter != nullptr && !enter->values.empty())
+				looks.enterSound = std::string(enter->Value());
+			if (const auto *exit = module.block->Find("ExitSound"); exit != nullptr && !exit->values.empty())
+				looks.exitSound = std::string(exit->Value());
+			break;
+		}
 	looks.rapidFireVoice = std::string(object.Sound("VoiceRapidFire"));
+	for (const content::SpecialAbilityContent &ability : content::ReadSpecialAbilities(object, step))
+		if (const auto power = view.Content().powers.Template(ability.power))
+		{
+			if (!ability.prepSoundLoop.empty())
+				looks.prepLoops.emplace_back(*power, ability.prepSoundLoop);
+			if (!ability.specialObjectAttachToBone.empty())
+				looks.laserBones.emplace_back(*power, ability.specialObjectAttachToBone);
+			if (!ability.disableFxParticleSystem.empty())
+				looks.disableFx.emplace_back(*power, ability.disableFxParticleSystem);
+		}
+	looks.laser = content::ReadLaserLook(object);
+	if (const auto welding = content::ReadSlavedWelding(object))
+	{
+		looks.weldingSystem = welding->system;
+		looks.weldingBone = welding->bone;
+	}
+	if (const auto neutron = content::ReadNeutronMissile(object, step))
+	{
+		looks.neutronJitter = Engine::Math::ToFloat(neutron->specialJitter);
+		looks.neutronSpecialTicks = neutron->flight.specialSpeedTicks;
+	}
+	looks.onRadar = object.radarPriority != "NOT_ON_RADAR";
+	if (object.radarPriority.empty() || object.radarPriority == "INVALID")
+		looks.onRadar = object.Is("CAPTURABLE") ||
+			std::any_of(object.modules.begin(), object.modules.end(), [](const content::ModuleEntry &module) { return module.type == "GarrisonContain"; });
+	looks.trapLike = object.Is("MINE") || object.Is("BOOBY_TRAP") || object.Is("DEMOTRAP");
+	for (const content::ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.type == "StealthUpdate")
+		{
+			constexpr std::array<std::string_view, 2> keys{"EnemyDetectionEvaEvent", "OwnDetectionEvaEvent"};
+			for (std::size_t side = 0; side < keys.size(); ++side)
+				if (const auto *node = module.block->Find(keys[side]); node != nullptr && !node->values.empty())
+					looks.detectionEva[side] = content::EvaMessageOf(node->Value()).value_or(DefinitionLooks::NoEva);
+			break;
+		}
+	for (const content::ModuleEntry &module : object.modules)
+	{
+		if (module.block != nullptr && module.type == "ChinookAIUpdate")
+			if (const auto *wash = module.block->Find("RotorWashParticleSystem"); wash != nullptr && !wash->values.empty())
+				looks.rotorWash = std::string(wash->Value());
+		if (module.block != nullptr && module.type == "BattlePlanUpdate")
+		{
+			constexpr std::array<std::string_view, 3> plans{"Bombardment", "HoldTheLine", "SearchAndDestroy"};
+			const auto text = [&](const std::string &key) {
+				const auto *node = module.block->Find(key);
+				return node != nullptr && !node->values.empty() ? std::string(node->Value()) : std::string{};
+			};
+			for (std::size_t plan = 0; plan < plans.size(); ++plan)
+			{
+				looks.planUnpackSounds[plan] = text(std::string(plans[plan]) + "PlanUnpackSoundName");
+				looks.planPackSounds[plan] = text(std::string(plans[plan]) + "PlanPackSoundName");
+			}
+			looks.planIdleLoop = text("SearchAndDestroyPlanIdleLoopSoundName");
+		}
+		if (module.block != nullptr && module.type == "MissileLauncherBuildingUpdate")
+			if (const auto *hiss = module.block->Find("DoorOpenIdleAudio"); hiss != nullptr && !hiss->values.empty())
+				looks.doorOpenIdleAudio = std::string(hiss->Value());
+		if (module.block != nullptr && module.type == "GrantStealthBehavior")
+			if (const auto *radius = module.block->Find("RadiusParticleSystemName"); radius != nullptr && !radius->values.empty())
+				looks.grantStealthSystem = std::string(radius->Value());
+		if (module.block != nullptr && module.type == "BunkerBusterBehavior")
+		{
+			if (const auto *crash = module.block->Find("CrashThroughBunkerFX"); crash != nullptr && !crash->values.empty() && crash->Value() != "None")
+				looks.crashThroughFx = std::string(crash->Value());
+			if (const auto *every = module.block->Find("CrashThroughBunkerFXFrequency"); every != nullptr && !every->values.empty())
+				if (const auto ms = engine::config::values::ParseFixed(every->Value()))
+					looks.crashThroughTicks = static_cast<std::uint32_t>(std::ceil(Engine::Math::ToFloat(*ms) * 30.0f / 1000.0f));
+		}
+		if (module.block != nullptr && module.type == "SpectreGunshipUpdate" && looks.gattlingStrafeFx.empty())
+			if (const auto *strafe = module.block->Find("GattlingStrafeFXParticleSystem"); strafe != nullptr && !strafe->values.empty())
+				looks.gattlingStrafeFx = std::string(strafe->Value());
+	}
 	if (const auto railroad = content::ReadRailroad(object, engine::time::FixedStep{30}); railroad && railroad->locomotive)
 		looks.trainRunningSound = railroad->runningSound;
+	if (const auto wave = content::ReadWaveGuide(object, engine::time::FixedStep{30}))
+	{
+		looks.waveLoopingSound = wave->loopingSound;
+		looks.waveSplashSound = wave->randomSplashSound;
+		looks.waveBridgeParticle = wave->bridgeParticle;
+	}
 	looks.mine = object.Is("MINE");
 	looks.ghost = object.Is("IMMOBILE") &&
 		std::none_of(object.modules.begin(), object.modules.end(), [](const content::ModuleEntry &module) { return module.type == "W3DDefaultDraw"; });
@@ -290,6 +422,7 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.promotedSounds = {std::string(object.Sound("SoundPromotedVeteran")), std::string(object.Sound("SoundPromotedElite")),
 		std::string(object.Sound("SoundPromotedHero"))};
 	looks.turretLoop = std::string(object.Sound("TurretMoveLoop"));
+	looks.constructionLoop = std::string(object.Sound("UnderConstruction"));
 	looks.damage = ReadDamageEffects(object);
 	if (const auto detector = content::ReadDetectorLook(object))
 		looks.detector = DefinitionLooks::DetectorLook{detector->ping, detector->brightPing, detector->beacon, detector->grid, detector->bone,
@@ -417,7 +550,7 @@ void KnowSupplyLooks(LookCatalog &catalog, ecs::World &world, const BonePoses &b
 void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 {
 	namespace mc = content::model_condition;
-	catalog.bits = {mc::FiringA, mc::StealthedLook, mc::DetectedLook, mc::Dying, mc::Aflame, mc::SpecialDamaged, mc::Damaged, mc::ReallyDamaged, mc::Rubble, mc::Night, mc::JetAfterburner, mc::Burned, mc::Toppled};
+	catalog.bits = {mc::FiringA, mc::StealthedLook, mc::DetectedLook, mc::Dying, mc::Aflame, mc::SpecialDamaged, mc::Damaged, mc::ReallyDamaged, mc::Rubble, mc::Night, mc::JetAfterburner, mc::Burned, mc::Toppled, mc::ActivelyBeingConstructed};
 	const std::size_t count = view.DefinitionCount();
 	if (catalog.byDefinition.size() < count)
 	{
@@ -431,6 +564,8 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 			catalog.known[definition] = 1;
 		}
 	const auto &misc = view.Content().miscAudio;
+	if (const auto found = misc.find("RepairSparks"); found != misc.end())
+		catalog.repairSparksSound = found->second;
 	if (const auto found = misc.find("CrateSalvage"); found != misc.end())
 		catalog.crateSalvageSound = found->second;
 	if (const auto found = misc.find("CrateMoney"); found != misc.end())
@@ -457,6 +592,8 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 		catalog.defectorTickSound = found->second;
 	if (const auto found = misc.find("DefectorTimerDingSound"); found != misc.end())
 		catalog.defectorDingSound = found->second;
+	if (const auto found = misc.find("AircraftWheelScreech"); found != misc.end())
+		catalog.aircraftWheelScreechSound = found->second;
 	const content::GameData &data = view.Content().gameData;
 	// W3DInGameUI::drawMoveHints: the MoveHintName model with its animation "<name>.<name>", played once.
 	if (catalog.moveHintLook == LookCatalog::NoLook && !data.moveHintName.empty())
@@ -469,6 +606,16 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 		catalog.lookModels.push_back(data.moveHintName);
 		catalog.lookAnimations.resize(catalog.looks.size() - 1);
 		catalog.lookAnimations.push_back(data.moveHintName + "." + data.moveHintName);
+	}
+	// W3DWaypointBuffer: the SCMNode model at each waypoint shown, no animation.
+	if (catalog.waypointNodeLook == LookCatalog::NoLook)
+	{
+		LookEntry entry;
+		entry.model = LookCatalog::BareModel;
+		catalog.waypointNodeLook = static_cast<std::uint32_t>(catalog.looks.size());
+		catalog.looks.push_back(entry);
+		catalog.lookModels.push_back("SCMNode");
+		catalog.lookAnimations.resize(catalog.looks.size());
 	}
 	catalog.selectionFlashHouseColor = data.selectionFlashHouseColor;
 	catalog.selectionFlashSaturation = Engine::Math::ToFloat(data.selectionFlashSaturationFactor);

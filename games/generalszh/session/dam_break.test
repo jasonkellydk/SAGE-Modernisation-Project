@@ -1,0 +1,625 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.water.wave_guide_content;
+import games.generalszh.content.objects.object_status;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.gameplay.waveguide.algorithms.wave_guides;
+import games.generalszh.gameplay.bridges.algorithms.bridges;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.ecs.query.query;
+import engine.config.binding.values;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.common.status.components.status_flags;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.resources.ground_height;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.rts.death.components.dying;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.topple.components.topple;
+import engine.gameplay.rts.topple.resources.topple_events;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import engine.gameplay.common.random.resources.random_seed;
+import engine.gameplay.common.identity.components.object_id;
+
+// The dam break (DamDie, WaveGuideUpdate, TensileFormationUpdate) on the shipped maps, and the flood wave's behaviour
+// (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/WaveGuideUpdate.cpp, Object/Die/DamDie.cpp).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+namespace ga = generalszh::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+using Engine::Math::FixedVector3;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+bool HasModule(const content::ObjectDefinition &definition, std::string_view type)
+{
+	for (const auto &module : definition.modules)
+		if (module.type == type)
+			return true;
+	return false;
+}
+
+Fixed Number(std::string_view text) { return *engine::config::values::ParseFixed(text); }
+
+// A map as a two-player skirmish (America at start 0, China at start 1), with the flood wave's path: "WaveGuide1" at
+// `from`, linked to a second waypoint at `to` (and, for `fork`, to a third beside it as well).
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+
+	session::SessionOptions Options() const
+	{
+		session::SessionOptions options{11, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+
+	void AddPath(FixedVector2 from, FixedVector2 to, bool fork = false)
+	{
+		auto &markers = skirmish.level.markers;
+		engine::level::Marker first{900001, "WaveGuide1", {from.x, from.y, {}}, {900002}, {}};
+		if (fork)
+			first.links.push_back(900003);
+		markers.push_back(first);
+		markers.push_back({900002, "WaveGuide2", {to.x, to.y, {}}, {}, {}});
+		markers.push_back({900003, "WaveGuide3", {to.x + Fixed::FromInt(50), to.y, {}}, {}, {}});
+	}
+};
+
+std::optional<Match> Prepare(Install &shell, const std::string &path)
+{
+	const auto bytes = shell.files.Read(path);
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	return match;
+}
+
+std::vector<ecs::Entity> Waves(session::Session &game)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<ga::WaveGuide>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			found.push_back(entity);
+	});
+	return found;
+}
+
+bool DisabledDefault(session::Session &game, ecs::Entity entity)
+{
+	const auto *disabled = game.World().Get<gp::Disabled>(entity);
+	return disabled != nullptr && (disabled->mask & gp::disabled_type::Default) != 0;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(dam_break)
+
+// Which shipped maps carry the dam break's pieces: objects with DamDie, WaveGuideUpdate or TensileFormationUpdate placed
+// on them (the campaign's and the challenges').
+BOOST_AUTO_TEST_CASE(the_maps_that_break_a_dam)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	int found = 0, scanned = 0;
+	for (const std::string &path : shell.files.List("maps"))
+	{
+		if (!path.ends_with(".map"))
+			continue;
+		const std::string name = path;
+		++scanned;
+		const auto bytes = shell.files.Read(path);
+		if (!bytes)
+			continue;
+		auto read = engine::level::generals_map::Read(*bytes);
+		if (!read)
+			continue;
+		for (const auto &placement : read->level.placements)
+		{
+			const content::ObjectDefinition *definition = shell.game.objects.Find(placement.type);
+			if (definition == nullptr)
+				continue;
+			for (const char *module : {"DamDie", "WaveGuideUpdate", "TensileFormationUpdate"})
+				if (HasModule(*definition, module))
+				{
+					BOOST_TEST_MESSAGE(name << ": " << placement.type << " (" << module << ")");
+					++found;
+				}
+		}
+	}
+	BOOST_TEST_MESSAGE(scanned << " maps scanned, " << found << " dam break pieces");
+	BOOST_TEST(scanned > 50);
+}
+
+
+// TensileFormationUpdate (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/TensileFormationUpdate.cpp): only
+// AvalancheChunk and AvalancheLeadChunk carry it (Enabled No, CrackSound AvalancheCrack), and nothing shipped makes
+// either: no map places one and no object creation list creates one, so the module never runs in the shipped game.
+BOOST_AUTO_TEST_CASE(legacy_parity_nothing_shipped_makes_a_tensile_formation)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	std::vector<std::string> carriers;
+	for (const auto &[name, definition] : shell.game.objects)
+		if (HasModule(definition, "TensileFormationUpdate"))
+			carriers.push_back(name);
+	std::sort(carriers.begin(), carriers.end());
+	BOOST_TEST((carriers == std::vector<std::string>{"AvalancheChunk", "AvalancheLeadChunk"}));
+	const auto carries = [&](std::string_view name) { return std::find(carriers.begin(), carriers.end(), name) != carriers.end(); };
+	std::size_t placed = 0, scanned = 0;
+	for (const std::string &path : shell.files.List("maps"))
+	{
+		if (!path.ends_with(".map"))
+			continue;
+		const auto bytes = shell.files.Read(path);
+		if (!bytes)
+			continue;
+		auto read = engine::level::generals_map::Read(*bytes);
+		if (!read)
+			continue;
+		++scanned;
+		for (const auto &placement : read->level.placements)
+			placed += carries(placement.type) ? 1u : 0u;
+	}
+	BOOST_TEST(scanned > 50u);
+	BOOST_TEST(placed == 0u);
+	std::size_t created = 0;
+	for (const auto &[name, list] : shell.game.creation)
+		for (const auto &nugget : list.nuggets)
+			for (const std::string &made : nugget.names)
+				created += carries(made) ? 1u : 0u;
+	BOOST_TEST(created == 0u);
+}
+
+// WaveGuideUpdateModuleData::buildFieldParse on the shipped System.ini: WaveDelay 750 ms is 22.5 frames
+// (parseDurationReal keeps the fraction), WaterVelocity a frame's share of its per-second value (parseVelocityReal),
+// BridgeParticleAngleFudge -95 degrees (parseAngleReal); WaveGuideGLA01 differs only in WaterVelocity (1.0) and
+// PreferredHeight (35). The Dam's DamDie (DamDie.cpp) has no DieMuxData filters: every death of it opens the waves.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_wave_guides)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const engine::time::FixedStep step{30};
+	const auto *wave = shell.game.objects.Find("WaveGuide");
+	const auto *placed = shell.game.objects.Find("WaveGuideGLA01");
+	const auto *dam = shell.game.objects.Find("Dam");
+	BOOST_TEST_REQUIRE(wave != nullptr);
+	BOOST_TEST_REQUIRE(placed != nullptr);
+	BOOST_TEST_REQUIRE(dam != nullptr);
+	const auto guide = content::ReadWaveGuide(*wave, step);
+	BOOST_TEST_REQUIRE(guide.has_value());
+	BOOST_TEST((guide->delayFrames == Fixed::FromRatio(45, 2)));
+	BOOST_TEST((guide->ySize == Fixed::FromInt(650)));
+	BOOST_TEST((guide->linearWaveSpacing == Fixed::FromInt(15)));
+	BOOST_TEST((guide->waveBendMagnitude == Fixed::FromInt(500)));
+	BOOST_TEST((guide->waterVelocity == step.PerTick(Number("2.7"))));
+	BOOST_TEST((guide->preferredHeight == Number("37.3")));
+	BOOST_TEST((guide->shorelineEffectDistance == Fixed::FromInt(5)));
+	BOOST_TEST((guide->damageRadius == Fixed::FromInt(25)));
+	BOOST_TEST((guide->damageAmount == Fixed::FromInt(99999)));
+	BOOST_TEST((guide->toppleForce == Fixed::FromRatio(1, 4)));
+	BOOST_TEST(guide->randomSplashSound == "WaveRandomSplash");
+	BOOST_TEST(guide->randomSplashSoundFrequency == 50);
+	BOOST_TEST(guide->bridgeParticle == "WaveHitBridge01");
+	BOOST_TEST((guide->bridgeParticleAngleFudge == Engine::Math::TurnFromDegrees(Fixed::FromInt(-95))));
+	BOOST_TEST(guide->loopingSound == "DamBreakWaveLoop");
+	const auto gla = content::ReadWaveGuide(*placed, step);
+	BOOST_TEST_REQUIRE(gla.has_value());
+	BOOST_TEST((gla->waterVelocity == step.PerTick(Fixed::One())));
+	BOOST_TEST((gla->preferredHeight == Fixed::FromInt(35)));
+	BOOST_TEST((gla->delayFrames == guide->delayFrames));
+	BOOST_TEST(placed->Is("WAVEGUIDE"));
+	const auto filter = content::ReadDamDie(*dam);
+	BOOST_TEST_REQUIRE(filter.has_value());
+	BOOST_TEST(filter->deathTypes == engine::gameplay::AllDeathTypes);
+	BOOST_TEST(!content::ReadDamDie(*wave).has_value());
+}
+
+// computeWaveShapePoints: Int halfY = 650 / 2; for (Int y = -325; y < 325; y += 15.0) bent back by -(y * y) / 500: 44
+// points, the first (-211.25, -325), the middle ones (-0.2, -10) and (-0.05, 5), the last (-204.8, 320) (fifths and
+// twentieths a fixed-point step off the float: 1/65536 at most). The loop's Int keeps y whole, toward zero: from -10
+// by 7.5 it goes -2, 5 and stops at 12; with no bend the front is straight.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_front_shape)
+{
+	const ga::WaveShape shape = ga::WaveShapePoints(Fixed::FromInt(650), Fixed::FromInt(15), Fixed::FromInt(500));
+	BOOST_TEST(shape.count == 44u);
+	const auto close = [](Fixed value, double expected) { return std::abs(static_cast<double>(value.Raw()) / 65536.0 - expected) <= 1.0 / 65536.0; };
+	BOOST_TEST((shape.points[0].x == Fixed::FromRatio(-845, 4)));
+	BOOST_TEST((shape.points[0].y == Fixed::FromInt(-325)));
+	BOOST_TEST(close(shape.points[21].x, -0.2));
+	BOOST_TEST((shape.points[21].y == Fixed::FromInt(-10)));
+	BOOST_TEST(close(shape.points[22].x, -0.05));
+	BOOST_TEST((shape.points[22].y == Fixed::FromInt(5)));
+	BOOST_TEST(close(shape.points[43].x, -204.8));
+	BOOST_TEST((shape.points[43].y == Fixed::FromInt(320)));
+	const ga::WaveShape coarse = ga::WaveShapePoints(Fixed::FromInt(20), Fixed::FromRatio(15, 2), Fixed{});
+	BOOST_TEST(coarse.count == 3u);
+	BOOST_TEST((coarse.points[0].y == Fixed::FromInt(-10)));
+	BOOST_TEST((coarse.points[1].y == Fixed::FromInt(-2)));
+	BOOST_TEST((coarse.points[2].y == Fixed::FromInt(5)));
+	BOOST_TEST((coarse.points[1].x == Fixed{}));
+}
+
+// doDamage's "behind" test: the cosine between the direction from a front point to the object and the point's own
+// world position (not the wave's facing) is below zero. From the point (1000, 500): (990, 495) is behind (-12500),
+// (1010, 490) is not (+5000), the point itself is not (0).
+BOOST_AUTO_TEST_CASE(legacy_parity_who_the_wave_counts_behind_it)
+{
+	const FixedVector3 point{Fixed::FromInt(1000), Fixed::FromInt(500), Fixed::FromInt(20)};
+	BOOST_TEST(ga::BehindWave({Fixed::FromInt(990), Fixed::FromInt(495)}, point));
+	BOOST_TEST(!ga::BehindWave({Fixed::FromInt(1010), Fixed::FromInt(490)}, point));
+	BOOST_TEST(!ga::BehindWave(point.XY(), point));
+}
+
+// startMoving: "WaveGuide1"'s path to its end through each only link; facing its next waypoint (toAngle), on the ground
+// at its first; a waypoint with two links, or a first one with none, is a bad path; no "WaveGuide1": the wave stays
+// (its final destination the origin). The bridge particle turns by the bridge's angle plus the fudge.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_path)
+{
+	engine::level::Heightfield terrain;
+	terrain.width = terrain.height = 2;
+	terrain.cellSize = Fixed::FromInt(1000);
+	terrain.heights.assign(4, Fixed::FromInt(12));
+	const gp::GroundHeight ground(terrain);
+	const auto describe = [](std::uint32_t id, std::string name, int x, int y, std::vector<std::uint32_t> links) {
+		return gp::WaypointDescription{id, std::move(name), {Fixed::FromInt(x), Fixed::FromInt(y), {}}, std::move(links), {}};
+	};
+	const std::vector<gp::WaypointDescription> line{describe(1, "WaveGuide1", 100, 100, {2}), describe(2, "WaveGuide2", 100, 500, {3}),
+		describe(3, "WaveGuide3", 400, 500, {})};
+	const ga::WavePath path = ga::StartAlongPath(gp::WaypointGraph(line), ground);
+	BOOST_TEST(!path.bad);
+	BOOST_TEST(path.found);
+	BOOST_TEST(path.first == 0u);
+	BOOST_TEST((path.facing == Engine::Math::TurnFromDegrees(Fixed::FromInt(90))));
+	BOOST_TEST((path.start == FixedVector3{Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(12)}));
+	BOOST_TEST((path.final.XY() == FixedVector2{Fixed::FromInt(400), Fixed::FromInt(500)}));
+	const std::vector<gp::WaypointDescription> forked{describe(1, "WaveGuide1", 100, 100, {2}), describe(2, "WaveGuide2", 100, 500, {3, 4}),
+		describe(3, "A", 400, 500, {}), describe(4, "B", 500, 500, {})};
+	BOOST_TEST(ga::StartAlongPath(gp::WaypointGraph(forked), ground).bad);
+	const std::vector<gp::WaypointDescription> alone{describe(1, "WaveGuide1", 100, 100, {})};
+	BOOST_TEST(ga::StartAlongPath(gp::WaypointGraph(alone), ground).bad);
+	const std::vector<gp::WaypointDescription> none{describe(1, "Elsewhere", 100, 100, {})};
+	const ga::WavePath stays = ga::StartAlongPath(gp::WaypointGraph(none), ground);
+	BOOST_TEST(!stays.bad);
+	BOOST_TEST(!stays.found);
+	BOOST_TEST((stays.final == FixedVector3{}));
+	BOOST_TEST((ga::BridgeParticleYaw({}, {Fixed::FromInt(10), Fixed{}}, Engine::Math::TurnFromDegrees(Fixed::FromInt(-95))) ==
+		Engine::Math::TurnFromDegrees(Fixed::FromInt(-95))));
+}
+
+// WaveGuideUpdate::update and DamDie::onDie in a game (Tournament Continent with a "WaveGuide1" path added): a placed
+// WaveGuideGLA01's first update disables it (DISABLED_DEFAULT) and it waits. The Dam killed (the tick it dies: its
+// OCL_DamDie makes a WaveGuide first, then DamDie clears DISABLED_DEFAULT from every wave): the placed wave's next
+// update is its active frame; it waits 22 more (now - active < 22.5) and starts on the 23rd, put at "WaveGuide1" on the
+// ground facing "WaveGuide2" and following the path, its first splash try on that frame and the next 16 frames later
+// (now - last > 15). The OCL's wave, not yet disabled when the dam opened the waves, disables itself on its first update
+// and stays so. Within 100 of the path's end the wave is destroyed.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_dam_break_sets_the_wave_off)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell, "Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	const gp::GroundHeight ground(match->skirmish.level.terrain);
+	const auto extent = ground.Extent()[1];
+	const FixedVector2 from{extent.x / Fixed::FromInt(2), extent.y / Fixed::FromInt(2)};
+	const FixedVector2 to{from.x + Fixed::FromInt(400), from.y};
+	match->AddPath(from, to);
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity wave = game.Place("WaveGuideGLA01", {from.x - Fixed::FromInt(300), from.y}, {}, team);
+	const ecs::Entity dam = game.Place("Dam", {from.x - Fixed::FromInt(600), from.y + Fixed::FromInt(600)}, {}, team);
+	BOOST_TEST_REQUIRE(world.IsAlive(wave));
+	BOOST_TEST_REQUIRE(world.IsAlive(dam));
+	game.Tick();
+	BOOST_TEST(DisabledDefault(game, wave));
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->needDisable == 0);
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->activeTick == 0u);
+	ga::KillNow(game.Game(), dam);
+	game.Tick();
+	const std::uint64_t died = game.CurrentTick();
+	BOOST_TEST(!DisabledDefault(game, wave));
+	const auto waves = Waves(game);
+	BOOST_TEST_REQUIRE(waves.size() == 2u);
+	const ecs::Entity made = waves[0] == wave ? waves[1] : waves[0];
+	game.Tick();
+	const std::uint64_t active = died + 1;
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->activeTick == active);
+	BOOST_TEST(DisabledDefault(game, made));
+	while (game.CurrentTick() < active + 22)
+		game.Tick();
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->initialized == 0);
+	game.Tick();
+	BOOST_TEST(game.CurrentTick() == active + 23);
+	const ga::WaveGuide &guide = *world.Get<ga::WaveGuide>(wave);
+	BOOST_TEST(guide.initialized == 1);
+	BOOST_TEST(guide.splashTick == active + 23);
+	// Its first splash roll, the first of its own sequence: a splash cue exactly when it comes up above 50.
+	BOOST_TEST(guide.splashTries == 1u);
+	{
+		const std::uint64_t seed = world.Resource<gp::RandomSeed>().value;
+		const auto *id = world.Get<gp::ObjectId>(wave);
+		const std::int64_t roll = ga::SplashRoll(seed, id != nullptr ? id->value : 0u, 0);
+		const auto &cues = world.Resource<ga::WaveGuideCues>().list;
+		const bool splashed = std::any_of(cues.begin(), cues.end(), [](const ga::WaveGuideCue &cue) { return cue.kind == ga::WaveGuideCue::Kind::Splash; });
+		BOOST_TEST(splashed == (roll > 50));
+	}
+	BOOST_TEST((guide.finalDestination.XY() == to));
+	const gp::Transform &placed = *world.Get<gp::Transform>(wave);
+	BOOST_TEST((placed.position == FixedVector3{from.x, from.y, game.Game().ground.At(from)}));
+	BOOST_TEST((placed.facing == Engine::Math::TurnAngle{}));
+	BOOST_TEST_REQUIRE(world.Get<gp::MoveOrder>(wave) != nullptr);
+	BOOST_TEST((world.Get<gp::MoveOrder>(wave)->mode == gp::MoveMode::Path));
+	while (game.CurrentTick() < active + 38)
+		game.Tick();
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->splashTick == active + 23);
+	game.Tick();
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->splashTick == active + 39);
+	BOOST_TEST(world.Get<ga::WaveGuide>(made)->initialized == 0);
+	BOOST_TEST(world.Get<ga::WaveGuide>(made)->activeTick == 0u);
+	BOOST_TEST(DisabledDefault(game, made));
+	FixedVector2 last = world.Get<gp::Transform>(wave)->position.XY();
+	for (int tick = 0; tick < 900 && world.IsAlive(wave); ++tick)
+	{
+		last = world.Get<gp::Transform>(wave)->position.XY();
+		game.Tick();
+	}
+	BOOST_TEST(!world.IsAlive(wave));
+	BOOST_TEST((Engine::Math::DistanceSquared(last, to) > Fixed::FromInt(100 * 100)));
+}
+
+// doDamage on a wave just set off (its front made at its first waypoint, facing straight away from the map's origin so
+// the original's "behind" is the side toward the origin): a Crusader 15 behind its middle (no higher than
+// PreferredHeight) is flooded on that very frame: WaveHit01 riding on the wave at the first front point within 25 of it
+// ((-0.2, -10) in the wave's frame, at the tank's height), made wet, toppled away from that point at ToppleForce 0.25
+// (NO_BOUNCE | NO_FX) and killed by 99999 DAMAGE_WATER, DEATH_FLOODED; a Crusader 15 ahead of it is untouched.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_floods_what_is_behind_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell, "Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	const gp::GroundHeight ground(match->skirmish.level.terrain);
+	const auto extent = ground.Extent()[1];
+	const Fixed low = Fixed::FromInt(30);
+	std::optional<FixedVector2> start;
+	FixedVector2 away;
+	for (int y = 400; !start && Fixed::FromInt(y) < extent.y - Fixed::FromInt(400); y += 25)
+		for (int x = 400; !start && Fixed::FromInt(x) < extent.x - Fixed::FromInt(400); x += 25)
+		{
+			const FixedVector2 at{Fixed::FromInt(x), Fixed::FromInt(y)};
+			const FixedVector2 direction = at / Engine::Math::Length(at);
+			const FixedVector2 behind = at - direction * Fixed::FromInt(15), ahead = at + direction * Fixed::FromInt(15);
+			if (ground.At(behind) <= low && ground.At(ahead) <= low)
+			{
+				start = at;
+				away = direction;
+			}
+		}
+	BOOST_TEST_REQUIRE(start.has_value());
+	match->AddPath(*start, *start + away * Fixed::FromInt(400));
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	const std::uint32_t team = match->Team(game, 0);
+	const ecs::Entity wave = game.Place("WaveGuide", *start - away * Fixed::FromInt(200), {}, team);
+	const ecs::Entity behind = game.Place("AmericaTankCrusader", *start - away * Fixed::FromInt(15), {}, team);
+	const ecs::Entity ahead = game.Place("AmericaTankCrusader", *start + away * Fixed::FromInt(15), {}, team);
+	game.Tick();
+	// DamDie's clearDisabled.
+	world.Get<gp::Disabled>(wave)->mask &= ~gp::disabled_type::Default;
+	game.Tick();
+	const std::uint64_t active = game.CurrentTick();
+	while (game.CurrentTick() < active + 23)
+		game.Tick();
+	BOOST_TEST(world.Get<ga::WaveGuide>(wave)->initialized == 1);
+	const std::uint64_t wet = std::uint64_t{1} << content::ObjectStatusBit("WET");
+	BOOST_TEST_REQUIRE(world.IsAlive(behind));
+	BOOST_TEST_REQUIRE(world.Get<gp::StatusFlags>(behind) != nullptr);
+	BOOST_TEST((world.Get<gp::StatusFlags>(behind)->bits & wet) != 0u);
+	BOOST_TEST_REQUIRE(world.Get<gp::Dying>(behind) != nullptr);
+	BOOST_TEST(world.Get<gp::Dying>(behind)->deathType == *content::DeathTypeIndex("FLOODED"));
+	const auto *untouched = world.Get<gp::StatusFlags>(ahead);
+	BOOST_TEST((untouched == nullptr || (untouched->bits & wet) == 0u));
+	BOOST_TEST((world.Get<gp::Health>(ahead)->current == world.Get<gp::Health>(ahead)->maximum));
+	const auto &pushes = world.Resource<gp::TopplePushes>().list;
+	const auto push = std::find_if(pushes.begin(), pushes.end(), [&](const gp::TopplePush &each) { return each.entity == behind; });
+	BOOST_TEST_REQUIRE((push != pushes.end()));
+	BOOST_TEST((push->speed == Fixed::FromRatio(1, 4)));
+	BOOST_TEST(push->options == (gp::topple_option::NoBounce | gp::topple_option::NoFx));
+	BOOST_TEST((push->away.x * away.x + push->away.y * away.y < Fixed{}));
+	const auto &cues = world.Resource<ga::WaveGuideCues>().list;
+	const auto hit = std::find_if(cues.begin(), cues.end(), [&](const ga::WaveGuideCue &cue) {
+		return cue.kind == ga::WaveGuideCue::Kind::Hit && cue.local.y == Fixed::FromInt(-10) && cue.local.x == Fixed::FromInt(-100) / Fixed::FromInt(500);
+	});
+	BOOST_TEST_REQUIRE((hit != cues.end()));
+	BOOST_TEST((hit->guide == wave));
+}
+
+// startMoving's checks: a "WaveGuide1" with two links is a bad path; the wave is destroyed (destroyObject) on the
+// frame it would have set off.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bad_path_destroys_the_wave)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell, "Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	const gp::GroundHeight ground(match->skirmish.level.terrain);
+	const auto extent = ground.Extent()[1];
+	const FixedVector2 from{extent.x / Fixed::FromInt(2), extent.y / Fixed::FromInt(2)};
+	match->AddPath(from, {from.x + Fixed::FromInt(400), from.y}, true);
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	const ecs::Entity wave = game.Place("WaveGuideGLA01", from, {}, match->Team(game, 0));
+	game.Tick();
+	world.Get<gp::Disabled>(wave)->mask &= ~gp::disabled_type::Default;
+	game.Tick();
+	const std::uint64_t active = game.CurrentTick();
+	while (game.CurrentTick() < active + 22)
+		game.Tick();
+	BOOST_TEST(world.IsAlive(wave));
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(wave));
+}
+
+// doDamage's bridge (the original's "temp demo hack") and TerrainLogic::deleteBridge, on Winding River's first
+// map-drawn bridge: a WaterWaveBridge where the bridge object stands, facing along the bridge (from to to), the wave's
+// BridgeParticle there turned by that angle and BridgeParticleAngleFudge (-95 degrees), and the bridge deleted (its
+// object gone).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_breaks_a_bridge)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	auto match = Prepare(shell, "Maps/Winding River/Winding River.map");
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	game.Tick();
+	std::vector<ecs::Entity> bridges;
+	ecs::Query<ecs::Read<ga::Bridge>> query(world);
+	query.ForEachChunk([&](auto chunk) {
+		for (const ecs::Entity entity : chunk.Entities())
+			bridges.push_back(entity);
+	});
+	BOOST_TEST_REQUIRE(!bridges.empty());
+	const ecs::Entity bridge = bridges.front();
+	const ga::Bridge deck = *world.Get<ga::Bridge>(bridge);
+	const FixedVector3 at = world.Get<gp::Transform>(bridge)->position;
+	BOOST_TEST_REQUIRE(ga::PointOnBridge(deck, at.XY()));
+	const ecs::Entity wave = game.Place("WaveGuide", {at.x, at.y + Fixed::FromInt(300)}, {}, match->Team(game, 0));
+	world.Resource<ga::WaveGuideEvents>().list.push_back({ga::WaveGuideEvent::Kind::BridgeHit, wave, bridge, at});
+	ga::ApplyWaveGuideEvents(game.Game());
+	BOOST_TEST(!world.IsAlive(bridge));
+	const Engine::Math::TurnAngle angle = ga::AngleOf(deck.to.XY() - deck.from.XY());
+	ecs::Entity replaced;
+	ecs::Query<ecs::Read<gp::DefinitionRef>, ecs::Read<gp::Transform>> things(world);
+	things.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<gp::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.Game().templates.DefinitionAt(refs[row].index).name == "WaterWaveBridge")
+				replaced = entities[row];
+	});
+	BOOST_TEST_REQUIRE(world.IsAlive(replaced));
+	BOOST_TEST((world.Get<gp::Transform>(replaced)->position == at));
+	BOOST_TEST((world.Get<gp::Transform>(replaced)->facing == angle));
+	const auto &cues = world.Resource<ga::WaveGuideCues>().list;
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].kind == ga::WaveGuideCue::Kind::Bridge));
+	BOOST_TEST((cues[0].at == at));
+	BOOST_TEST((cues[0].yaw == angle + Engine::Math::TurnFromDegrees(Fixed::FromInt(-95))));
+}
+
+// update's splash try: GameLogicRandomValue(1, 100) > RandomSplashSoundFrequency plays it (50: 51 plays, 50 does not;
+// 100 never; 0 always). The roll is the wave's own sequence (the match seed and its object id, the tries in order): the
+// same try always rolls the same, within 1..100.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_splash_roll_threshold)
+{
+	BOOST_TEST(ga::SplashPlays(51, 50));
+	BOOST_TEST(!ga::SplashPlays(50, 50));
+	BOOST_TEST(!ga::SplashPlays(100, 100));
+	BOOST_TEST(ga::SplashPlays(1, 0));
+	for (std::uint32_t tries = 0; tries < 200; ++tries)
+	{
+		const std::int64_t roll = ga::SplashRoll(11, 42, tries);
+		BOOST_TEST((roll >= 1 && roll <= 100));
+		BOOST_TEST(roll == ga::SplashRoll(11, 42, tries));
+	}
+}
+
+// doShoreEffects: the points 5 behind a straight front of four (y -30, -15, 0, 15 from a wave at (100, 100, 10) facing
+// east: (95, 70), (95, 85), (95, 100), (95, 115)), at the wave's height. Ground 20 up to y 100 and 50 beyond (preferred
+// 30): the rise at the fourth splashes WaveSplashRight01 at the third, (95, 100, 10). Ground 50 below y 100 and 20 from
+// it: the first point is above but never splashes; the fall at the third splashes WaveSplashLeft01 there.
+BOOST_AUTO_TEST_CASE(legacy_parity_shore_splash_points)
+{
+	const ga::WaveShape shape = ga::WaveShapePoints(Fixed::FromInt(60), Fixed::FromInt(15), Fixed{});
+	BOOST_TEST_REQUIRE(shape.count == 4u);
+	const FixedVector3 at{Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(10)};
+	const auto rising = [](FixedVector2 p) { return p.y <= Fixed::FromInt(100) ? Fixed::FromInt(20) : Fixed::FromInt(50); };
+	const auto rises = ga::ShoreSplashes(shape, at, {}, Fixed::FromInt(5), Fixed::FromInt(30), rising);
+	BOOST_TEST_REQUIRE(rises.size() == 1u);
+	BOOST_TEST(rises[0].right);
+	BOOST_TEST((rises[0].at == FixedVector3{Fixed::FromInt(95), Fixed::FromInt(100), Fixed::FromInt(10)}));
+	const auto falling = [](FixedVector2 p) { return p.y < Fixed::FromInt(100) ? Fixed::FromInt(50) : Fixed::FromInt(20); };
+	const auto falls = ga::ShoreSplashes(shape, at, {}, Fixed::FromInt(5), Fixed::FromInt(30), falling);
+	BOOST_TEST_REQUIRE(falls.size() == 1u);
+	BOOST_TEST(!falls[0].right);
+	BOOST_TEST((falls[0].at == FixedVector3{Fixed::FromInt(95), Fixed::FromInt(100), Fixed::FromInt(10)}));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

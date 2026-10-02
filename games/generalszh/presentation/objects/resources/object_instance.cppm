@@ -59,5 +59,11 @@ struct ObjectInstance
 	// The look its animation runs in (its model state's own; `look` may be a copy of it drawn with other parts shown), whose
 	// clip its animation clock reads.
 	std::uint32_t clipLook{0};
+	// Building occlusion (RTS3DScene while UseBehindBuildingMarker and the scripts' OPTIONS_SET_OCCLUSION_MODE are on):
+	// 1 a potential occluder (a structure seen whole), 2 a potential occludee (a scoring thing past its safe occlusion
+	// frame), 0 neither; an occludee's controlling player and that player's colour.
+	std::uint8_t occlusion{0};
+	std::uint32_t occludedPlayer{0};
+	std::array<float, 4> occludedColor{};
 };
 }

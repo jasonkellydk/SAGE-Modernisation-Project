@@ -11,8 +11,8 @@ export import games.generalszh.presentation.objects.resources.dynamic_lights;
 import games.generalszh.presentation.objects.algorithms.model_state_changes;
 
 // The frame's dynamic lights, after the FX have played: the light pulses age
-// by the frame's game time (in frames of 1/30 s, as the original's per-frame
-// update) and those still lit are shown; each police car shows its light
+// by the frame's real time (in frames of 1/30 s, as the original's per-render-
+// frame update) and those still lit are shown; each police car shows its light
 // bar where it is drawn, coloured by its light-bar clip's frame.
 export namespace generalszh::presentation
 {
@@ -31,7 +31,9 @@ struct DynamicLightSystem
 		auto &pulses = context.Write<LightPulses>().live;
 		auto &shown = context.Write<DynamicLights>().shown;
 		shown.clear();
-		const float frames = frame.seconds * 30.0f;
+		// W3DDynamicLight::On_Frame_Update runs once a rendered frame (the scene's update list), not once a logic frame:
+		// a pulse ages by real time (the original's 30 frames a second), on while the game is paused or slowed.
+		const float frames = frame.realSeconds * 30.0f;
 		std::erase_if(pulses, [&](LightPulse &pulse) {
 			pulse.age += frames;
 			const auto light = ShowPulse(pulse);

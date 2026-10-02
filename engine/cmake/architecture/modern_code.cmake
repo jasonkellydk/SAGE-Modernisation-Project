@@ -6,6 +6,8 @@
 #   the-naming       legacy global naming (TheGlobalData, TheThingFactory, ...)
 #   singleton        static Instance()/GetInstance() accessors
 #   genre-dependency engine/gameplay/common importing rts/fps, or rts<->fps
+#   presentation-dependency  simulation code (games/{generalszh,renegade} gameplay, session, content, commands, scripting)
+#                    importing the presentation tier (presentation, hud, shell, hosts)
 #   world-access     gameplay reaching the mutable World via GetWorld(); use
 #                    ecs::Lookup for reads and Commands() for writes
 #   native-platform game/W3D UI bypassing engine/platform through native headers,
@@ -21,7 +23,9 @@ set(modern_roots
     engine/ecs engine/jobs engine/events engine/time engine/core/math/fixed engine/core/serialization engine/net engine/audio engine/effects engine/config engine/filesystem engine/compression engine/level engine/localization engine/scripting
     engine/gameplay games/generalszh games/renegade engine/gui/w3d)
 # Presentation code may use float; everything else in scope is simulation.
-set(float_exempt "^(engine/audio|engine/effects|engine/gui/w3d|games/(generalszh|renegade)/(presentation|hosts|content/presentation)|engine/core/math/fixed/presentation|engine/level/presentation)/")
+# GZH hud and shell are presentation view models; simulation may not import
+# that tier (presentation-dependency below).
+set(float_exempt "^(engine/audio|engine/effects|engine/gui/w3d|games/(generalszh|renegade)/(presentation|hosts|content/presentation)|games/generalszh/(hud|shell)|engine/core/math/fixed/presentation|engine/level/presentation)/")
 
 if(NOT DEFINED MODERN_CODE_DEBT_FILE)
     set(MODERN_CODE_DEBT_FILE "${CMAKE_CURRENT_LIST_DIR}/modern_code_debt.cmake")
@@ -93,6 +97,12 @@ foreach(path IN LISTS sources)
     endif()
     if(path MATCHES "^(games/renegade|engine/gui/w3d)/" AND NOT path MATCHES "[.]cppm$")
         report("${path}" module-only)
+    endif()
+    # The simulation never reads the presentation tier (its floats and client state stay out of the deterministic game).
+    if(path MATCHES "^games/(generalszh|renegade)/(gameplay|session|content|commands|scripting)/"
+       AND NOT path MATCHES "^games/(generalszh|renegade)/content/presentation/"
+       AND text MATCHES "(^|[;\n])[ \t]*(export[ \t]+)?import[ \t]+games[.](generalszh|renegade)[.](presentation|hud|shell|hosts)[.]")
+        report("${path}" presentation-dependency)
     endif()
 endforeach()
 

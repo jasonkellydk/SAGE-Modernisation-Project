@@ -24,6 +24,8 @@ namespace topple_flag
 inline constexpr std::uint32_t KillWhenStarting = 1u << 0;
 inline constexpr std::uint32_t KillWhenDown = 1u << 1;
 inline constexpr std::uint32_t LeftOrRightOnly = 1u << 2;
+// ReorientToppledRubble: killed when down, it is moved to where its top now lies and stood upright (its rubble state).
+inline constexpr std::uint32_t ReorientRubble = 1u << 3;
 }
 
 // How it was toppled (the original's ToppleOptions): not bouncing (lies still on first reaching the ground), no bounce

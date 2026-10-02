@@ -10,6 +10,7 @@ import engine.gameplay.rts.mines.systems.minefield_system;
 import games.generalszh.gameplay.production.systems.drone_repair_system;
 import games.generalszh.gameplay.bridges.systems.bridge_damage_system;
 import games.generalszh.gameplay.bridges.components.bridge;
+import games.generalszh.gameplay.walls.systems.wall_piece_system;
 
 // The bridges domain's simulation components, registered with the world (the session's composition: which data
 // the world holds; the domain's systems and their order follow).
@@ -21,12 +22,14 @@ inline void EmplaceBridgesResources(ecs::World &world, [[maybe_unused]] const Si
 {
 	world.EmplaceResource<generalszh::gameplay::BridgeEvents>();
 	world.EmplaceResource<generalszh::gameplay::BridgeCues>();
+	world.EmplaceResource<generalszh::gameplay::WallEvents>();
 }
 
 inline void RegisterBridgesComponents(ecs::World &world)
 {
 	world.RegisterComponent<generalszh::gameplay::Bridge>();
 	world.RegisterComponent<generalszh::gameplay::BridgeTower>();
+	world.RegisterComponent<generalszh::gameplay::WallPiece>();
 }
 
 // The bridges domain's systems, registered with the simulation schedule (stateless: one shared instance
@@ -35,6 +38,8 @@ inline void RegisterBridgesSystems(ecs::SystemRegistry &registry)
 {
 	static generalszh::gameplay::BridgeDamageSystem bridgeDamage;
 	registry.Register(bridgeDamage);
+	static generalszh::gameplay::WallPieceSystem wallPieces;
+	registry.Register(wallPieces);
 }
 
 // What the bridges domain's systems run after (and the few they must precede), within the tick.
@@ -43,7 +48,10 @@ inline void OrderBridgesSystems(ecs::SystemRegistry &registry)
 	namespace gameplay = engine::gameplay;
 	namespace domain = generalszh::gameplay;
 	registry.OrderBefore<gameplay::HealthSystem, domain::BridgeDamageSystem>();
+	registry.OrderBefore<gameplay::HealthSystem, domain::WallPieceSystem>();
 	registry.OrderBefore<domain::DroneRepairSystem, domain::BridgeDamageSystem>();
 	registry.OrderBefore<gameplay::MinefieldSystem, domain::BridgeDamageSystem>();
+	registry.OrderBefore<domain::DroneRepairSystem, domain::WallPieceSystem>();
+	registry.OrderBefore<gameplay::MinefieldSystem, domain::WallPieceSystem>();
 }
 }

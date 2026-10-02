@@ -63,10 +63,11 @@ struct StepResult
 };
 
 // `held` (DISABLED_HELD): PhysicsBehavior::update skips forces, integration, turning and the ground
-// clamp; its acceleration still clears and landing and rest are still judged.
+// clamp; its acceleration still clears and landing and rest are still judged. `holdXY` (OBJECT_STATUS_BRAKING: its
+// locomotor places it exactly): its position is integrated in z only.
 template<typename Ground>
 StepResult StepBody(PhysicsBody &body, Transform &transform, Attitude *attitude, const PhysicsSettings &settings, Ground &&groundHeight,
-	bool held = false, bool motive = false) noexcept
+	bool held = false, bool motive = false, bool holdXY = false) noexcept
 {
 	using namespace physics_detail;
 	using Engine::Math::Fixed;
@@ -115,8 +116,11 @@ StepResult StepBody(PhysicsBody &body, Transform &transform, Attitude *attitude,
 
 	activeVelZ = velocity.z;
 	const Fixed oldZ = position.z;
-	position.x += velocity.x;
-	position.y += velocity.y;
+	if (!holdXY)
+	{
+		position.x += velocity.x;
+		position.y += velocity.y;
+	}
 	position.z += velocity.z;
 
 	transform.facing = transform.facing + Engine::Math::TurnAngle{static_cast<std::uint32_t>(Scale(body.yawRate, body.rateFactor))};

@@ -104,6 +104,7 @@ struct ObjectCombat
 	bool hasAI{false};
 	bool autoAcquire{false};
 	bool acquireStealthed{false}; // AutoAcquireEnemiesWhenIdle Stealthed
+	bool acquireNotWhileAttacking{false}; // AutoAcquireEnemiesWhenIdle NotWhileAttacking
 	bool attackBuildings{false};
 	bool turret{false};
 	// Its initial rider's model condition (RiderChangeContain: "RIDER2"), empty without one.
@@ -192,9 +193,11 @@ std::optional<std::uint32_t> DamageTypeIndex(std::string_view name)
 	return std::nullopt;
 }
 
-// DamageTypeFlags as the original parses them (parseDamageTypeFlags): ALL, NONE, then +TYPE / -TYPE in turn.
-std::uint64_t ParseDamageTypeFlags(const engine::config::Node &node, std::uint64_t flags = 0)
+// DamageTypeFlags as the original parses them (INI::parseDamageTypeFlags): from ALL each time the field is read, then
+// ALL, NONE, +TYPE and -TYPE in turn.
+std::uint64_t ParseDamageTypeFlags(const engine::config::Node &node)
 {
+	std::uint64_t flags = ~std::uint64_t{0};
 	const auto same = [](std::string_view a, std::string_view b) {
 		return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
 			return std::toupper(static_cast<unsigned char>(x)) == std::toupper(static_cast<unsigned char>(y));
@@ -266,6 +269,8 @@ struct NeutronMissileContent
 	// DeliveryDecal and DeliveryDecalRadius: laid on its target once fired at it.
 	RadiusDecalLook deliveryDecal;
 	Engine::Math::Fixed deliveryDecalRadius;
+	// SpecialJitterDistance: how far its drawing shakes as its climb begins (presentation).
+	Engine::Math::Fixed specialJitter;
 };
 
 std::optional<NeutronMissileContent> ReadNeutronMissile(const ObjectDefinition &object, const engine::time::FixedStep &step)
@@ -305,6 +310,7 @@ std::optional<NeutronMissileContent> ReadNeutronMissile(const ObjectDefinition &
 		if (const engine::config::Node *decal = module.block->Find("DeliveryDecal"))
 			out.deliveryDecal = ReadRadiusDecal(*decal, step.TicksPerSecond());
 		out.deliveryDecalRadius = real("DeliveryDecalRadius", Engine::Math::Fixed{});
+		out.specialJitter = real("SpecialJitterDistance", Engine::Math::Fixed{});
 		return out;
 	}
 	return std::nullopt;
@@ -695,7 +701,11 @@ engine::config::DefinitionTable<WeaponContent> BuildWeaponCatalog(const engine::
 		.On("ProjectileDetonationOCL", detail::AllLevels(&WeaponContent::detonationOCLs))
 		.On("FireSound", [](const Node &node, WeaponContent &out, BindContext &) { out.fireSound = std::string(node.Value()); })
 		.On("ProjectileExhaust", detail::AllLevels(&WeaponContent::exhausts))
-		.On("LaserName", [](const Node &node, WeaponContent &out, BindContext &) { out.laser = std::string(node.Value()); })
+		// Weapon::isLaser: any LaserName at all (m_laserName.isNotEmpty()), whether or not its object exists.
+		.On("LaserName", [](const Node &node, WeaponContent &out, BindContext &) {
+			out.laser = std::string(node.Value());
+			out.simulation.laser = !out.laser.empty();
+		})
 		.On("ProjectileCollidesWith", [](const Node &node, WeaponContent &out, BindContext &) {
 			static constexpr std::pair<std::string_view, std::uint32_t> names[] = {{"ALLIES", engine::gameplay::weapon_collides::Allies},
 				{"ENEMIES", engine::gameplay::weapon_collides::Enemies}, {"STRUCTURES", engine::gameplay::weapon_collides::Structures},
@@ -729,10 +739,11 @@ engine::config::DefinitionTable<WeaponContent> BuildWeaponCatalog(const engine::
 			if (!out.extraBonus)
 				out.extraBonus.emplace();
 			ReadWeaponBonus(node, *out.extraBonus, bind);
+		})
+		.On("CapableOfFollowingWaypoints", [](const Node &node, WeaponContent &out, BindContext &bind) {
+			if (const auto value = engine::config::ReadBool(node, bind))
+				out.simulation.followsWaypoints = *value;
 		});
-	// Recognised, not ported yet.
-	for (const char *key : {"CapableOfFollowingWaypoints"})
-		schema.Ignore(key);
 	engine::config::DefinitionTable<WeaponContent> weapons;
 	engine::config::BindBlocks(document, "Weapon", schema, weapons, context, engine::config::Redefinition::Replace);
 	return weapons;
@@ -781,6 +792,7 @@ ObjectCombat ReadObjectCombat(const ObjectDefinition &object, const engine::time
 				combat.autoAcquire = combat.autoAcquire || detail::SameText(flag, "Yes");
 				combat.acquireStealthed = combat.acquireStealthed || detail::SameText(flag, "Stealthed");
 				combat.attackBuildings = combat.attackBuildings || detail::SameText(flag, "ATTACK_BUILDINGS");
+				combat.acquireNotWhileAttacking = combat.acquireNotWhileAttacking || detail::SameText(flag, "NotWhileAttacking");
 			}
 		if (const auto rate = fixed(ai->block->Find("MoodAttackCheckRate")))
 			combat.scanInterval = std::max<std::uint64_t>(1, detail::Ticks(rate->Ceil(), step));
@@ -997,7 +1009,7 @@ inline std::optional<DamageReactionContent> ReadDamageReaction(const ObjectDefin
 		if (const engine::config::Node *amount = module.block->Find("DamageAmount"))
 			content.threshold = engine::config::values::ParseFixed(amount->Value()).value_or(Engine::Math::Fixed{});
 		if (const engine::config::Node *types = module.block->Find("DamageTypes"))
-			content.damageTypes = ParseDamageTypeFlags(*types, content.damageTypes);
+			content.damageTypes = ParseDamageTypeFlags(*types);
 		return content;
 	}
 	return std::nullopt;

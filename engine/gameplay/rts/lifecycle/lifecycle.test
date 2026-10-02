@@ -28,6 +28,7 @@ BOOST_AUTO_TEST_CASE(carriers_retire_with_their_riders_and_removals_are_only_des
 	world.RegisterComponent<DefinitionRef>();
 	world.RegisterComponent<TeamMember>();
 	world.RegisterComponent<Transport>();
+	world.RegisterComponent<BlockedState>();
 	world.RegisterComponent<Passenger>();
 	world.RegisterComponent<ExitIntent>();
 	world.RegisterComponent<CargoSize>();

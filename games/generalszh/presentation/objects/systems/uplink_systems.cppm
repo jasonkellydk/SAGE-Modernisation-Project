@@ -229,7 +229,7 @@ struct UplinkEffectSystem
 		const auto removeAll = [&](UplinkEffects &fx) {
 			if (particles.world != nullptr)
 				for (const std::uint64_t system : fx.systems)
-					particles.world->Destroy(system);
+					particles.world->Stop(system);
 			fx.systems.clear();
 			fx.built = 0;
 		};
@@ -309,7 +309,7 @@ struct UplinkEffectSystem
 				for (std::uint64_t &system : fx.orbitSystems)
 				{
 					if (system != 0 && particles.world != nullptr)
-						particles.world->Destroy(system);
+						particles.world->Stop(system);
 					system = 0;
 				}
 				fx.orbitAge = 0.0f;

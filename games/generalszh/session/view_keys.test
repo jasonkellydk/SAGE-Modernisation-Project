@@ -1,0 +1,197 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <variant>
+#include <string_view>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.identity.components.definition_ref;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import games.generalszh.gameplay.orders.algorithms.group_scatter;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.common.spatial.components.transform;
+import games.generalszh.gameplay.combat_drop.components.combat_drop;
+import games.generalszh.gameplay.combat_drop.resources.deferred_orders;
+import games.generalszh.content.objects.object_definition;
+
+// CommandXlat's view keys among the local player's objects, on a shipped skirmish map.
+using namespace generalszh;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(view_keys)
+
+// legacy_parity: CommandXlat.cpp viewCommandCenter (findCommandCenterOrMostExpensiveBuilding) and iNeedAHero (amIAHero)
+// over Player::iterateObjects (team by team, each team's newest member first): America's command center is the place
+// H looks at, a barracks placed after it changes nothing; no hero until one is made; of two Colonel Burtons the newer,
+// walked first, is the one Ctrl+H picks.
+BOOST_AUTO_TEST_CASE(legacy_parity_h_finds_the_command_center_and_ctrl_h_the_hero)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 3;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{11, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	game.Tick();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	const auto nameOf = [&](ecs::Entity entity) {
+		const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(entity);
+		return ref != nullptr ? std::string(game.DefinitionName(ref->index)) : std::string();
+	};
+	auto place = game.CommandCenterToView(america);
+	BOOST_TEST_REQUIRE(place.has_value());
+	BOOST_TEST(nameOf(*place) == "AmericaCommandCenter");
+	Engine::Math::FixedVector2 start{};
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	game.Place("AmericaBarracks", at(300, -350), {}, team);
+	place = game.CommandCenterToView(america);
+	BOOST_TEST_REQUIRE(place.has_value());
+	BOOST_TEST(nameOf(*place) == "AmericaCommandCenter");
+
+	BOOST_TEST(!game.HeroToSelect(america).has_value());
+	const ecs::Entity first = game.Place("AmericaInfantryColonelBurton", at(150, -350), {}, team);
+	const ecs::Entity second = game.Place("AmericaInfantryColonelBurton", at(170, -350), {}, team);
+	const auto hero = game.HeroToSelect(america);
+	BOOST_TEST_REQUIRE(hero.has_value());
+	BOOST_TEST((*hero == second));
+	BOOST_TEST((*hero != first));
+
+	// MSG_DO_SCATTER (X) on two Rangers (bounding circle 7): the centre between them; the one inserted last (the second)
+	// is sent first; each goes 28 straight away from the centre (moved 0.01 west before each).
+	const ecs::Entity left = game.Place("AmericaInfantryRanger", at(100, -500), {}, team);
+	const ecs::Entity right = game.Place("AmericaInfantryRanger", at(140, -500), {}, team);
+	const auto leftAt = game.World().Get<engine::gameplay::Transform>(left)->position.XY();
+	const auto rightAt = game.World().Get<engine::gameplay::Transform>(right)->position.XY();
+	gameplay::ApplyCommand(game.Game(), america, commands::Scatter{{left, right}});
+	const auto *leftOrder = game.World().Get<engine::gameplay::MoveOrder>(left);
+	const auto *rightOrder = game.World().Get<engine::gameplay::MoveOrder>(right);
+	BOOST_TEST_REQUIRE((leftOrder != nullptr));
+	BOOST_TEST_REQUIRE((rightOrder != nullptr));
+	BOOST_TEST((leftOrder->mode != engine::gameplay::MoveMode::Idle));
+	const Fixed reach = Fixed::FromInt(28);
+	const Fixed tolerance = Fixed::FromRatio(1, 64); // the fixed-point normalisation of an offset of 20.01
+	const auto close = [&](Fixed a, Fixed b) { return (a - b).Raw() <= tolerance.Raw() && (b - a).Raw() <= tolerance.Raw(); };
+	BOOST_TEST(close(leftOrder->destination.x, leftAt.x - reach));
+	BOOST_TEST(close(rightOrder->destination.x, rightAt.x + reach));
+
+	// A Chinook in the middle of a combat drop (ChinookAIUpdate::aiDoCommand) keeps its scatter move for afterwards: the
+	// place the whole group's centre gave it, not one worked out for it alone later.
+	const ecs::Entity chinook = game.Place("AmericaVehicleChinook", at(300, -700), {}, team);
+	const ecs::Entity runner = game.Place("AmericaInfantryRanger", at(200, -700), {}, team);
+	if (!game.World().Has<gameplay::CombatDrop>(chinook))
+		game.World().Add<gameplay::CombatDrop>(chinook);
+	game.World().Get<gameplay::CombatDrop>(chinook)->stage = gameplay::CombatDropStage::Dropping;
+	const auto chinookAt = game.World().Get<engine::gameplay::Transform>(chinook)->position.XY();
+	const auto runnerAt = game.World().Get<engine::gameplay::Transform>(runner)->position.XY();
+	gameplay::ApplyCommand(game.Game(), america, commands::Scatter{{runner, chinook}});
+	const auto *kept = game.World().FindResource<gameplay::DeferredOrders>();
+	BOOST_TEST_REQUIRE((kept != nullptr));
+	const gameplay::DeferredOrder *chinookOrder = nullptr;
+	for (const auto &order : kept->list)
+		if (order.unit == chinook)
+			chinookOrder = &order;
+	BOOST_TEST_REQUIRE((chinookOrder != nullptr));
+	const auto decoded = commands::Decode(chinookOrder->order);
+	BOOST_TEST_REQUIRE(decoded.has_value());
+	const auto *move = std::get_if<commands::MoveTo>(&*decoded);
+	BOOST_TEST_REQUIRE((move != nullptr));
+	const Fixed chinookReach = Fixed::FromInt(4) * content::BoundingCircleRadius(shell.game.objects.Find("AmericaVehicleChinook")->geometry);
+	const Fixed away = chinookAt.x > runnerAt.x ? chinookReach : Fixed{} - chinookReach;
+	BOOST_TEST(close(move->destination.x, chinookAt.x + away));
+}
+
+// legacy_parity: AIGroup.cpp groupScatter (SimpleObjectIterator: each insert at the front, a stable far-to-near merge
+// sort; the centre's x 0.01 west before each move; four bounding circle radii away). Centre (0,0): B at (0,20) (400)
+// goes first, to about (0.01,40); A at (10,0) (100) to (30,0); C on the centre (0) is sent east, to (20,0), as the
+// centre has moved west; D (5,0) and E (-5,0), tied, go E first (inserted later, so in front).
+BOOST_AUTO_TEST_CASE(legacy_parity_scatter_sends_the_farthest_first_away_from_the_centre)
+{
+	const auto entity = [](std::uint32_t id) { return ecs::Entity{id, 1}; };
+	const auto at = [](int x, int y) { return Engine::Math::FixedVector2{Fixed::FromInt(x), Fixed::FromInt(y)}; };
+	const std::vector<gameplay::ScatterMember> members{{entity(1), at(10, 0), Fixed::FromInt(5)}, {entity(2), at(0, 20), Fixed::FromInt(5)},
+		{entity(3), at(0, 0), Fixed::FromInt(5)}};
+	const auto moves = gameplay::ScatterDestinations(at(0, 0), members);
+	BOOST_TEST_REQUIRE(moves.size() == 3u);
+	const Fixed tolerance = Fixed::FromRatio(1, 64); // fixed-point square roots
+	const auto close = [&](Fixed a, Fixed b) { return (a - b).Raw() <= tolerance.Raw() && (b - a).Raw() <= tolerance.Raw(); };
+	BOOST_TEST(moves[0].first.index == 2u);
+	BOOST_TEST(close(moves[0].second.x, Fixed::FromRatio(1, 100)));
+	BOOST_TEST(close(moves[0].second.y, Fixed::FromInt(40)));
+	BOOST_TEST(moves[1].first.index == 1u);
+	BOOST_TEST(close(moves[1].second.x, Fixed::FromInt(30)));
+	BOOST_TEST(moves[2].first.index == 3u);
+	BOOST_TEST(close(moves[2].second.x, Fixed::FromInt(20)));
+	BOOST_TEST(close(moves[2].second.y, Fixed::FromInt(0)));
+
+	const std::vector<gameplay::ScatterMember> tied{{entity(4), at(5, 0), Fixed::One()}, {entity(5), at(-5, 0), Fixed::One()}};
+	const auto order = gameplay::ScatterDestinations(at(0, 0), tied);
+	BOOST_TEST_REQUIRE(order.size() == 2u);
+	BOOST_TEST(order[0].first.index == 5u);
+	BOOST_TEST(order[1].first.index == 4u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

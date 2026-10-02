@@ -3,6 +3,7 @@ import std;
 
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.components.attack_move;
+export import engine.gameplay.rts.combat.components.attack_move_resume;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.rts.movement.components.move_order;
@@ -13,12 +14,15 @@ export import engine.gameplay.rts.combat.systems.targeting_system;
 // AIAttackMoveToState::update, chunk-parallel, after targeting (which, for an attack-moving unit, takes on the mood target
 // it comes across as it moves, and closes in on it or stops for it): while it fights, that is all; the fight over, it
 // heads for its destination again (repathing). Its move over: done, unless it stopped more than ATTACK_CLOSE_ENOUGH_CELLS
-// short with retries left, when it waits three seconds (still taking on what comes) and tries again.
+// short with retries left, when it waits three seconds (still taking on what comes) and tries again. Following a path
+// (AIAttackFollowWaypointPathState: AttackMoveResume), the fight over it goes back to the move along its path it was on
+// (computeGoal, computePath); its path follower ends it, with no retries.
 export namespace engine::gameplay
 {
 struct AttackMoveSystem
 {
-	using Query = ecs::Query<ecs::Write<AttackMove>, ecs::Write<MoveOrder>, ecs::Read<AttackTarget>, ecs::Read<Transform>, ecs::OptionalWrite<Route>>;
+	using Query = ecs::Query<ecs::Write<AttackMove>, ecs::Write<MoveOrder>, ecs::Read<AttackTarget>, ecs::Read<Transform>, ecs::OptionalWrite<Route>,
+		ecs::Optional<AttackMoveResume>>;
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -27,6 +31,7 @@ struct AttackMoveSystem
 		const auto targets = chunk.Get<AttackTarget>();
 		const auto transforms = chunk.Get<Transform>();
 		auto routes = chunk.Get<Route>();
+		const auto resumes = chunk.Get<AttackMoveResume>();
 		const auto entities = chunk.Entities();
 		const std::uint64_t tick = context.Tick();
 		for (std::size_t row = 0; row < moves.size(); ++row)
@@ -47,9 +52,18 @@ struct AttackMoveSystem
 			if (move.engaged != 0)
 			{
 				move.engaged = 0;
+				if (!resumes.empty())
+				{
+					order = Replanned(resumes[row].order);
+					if (!routes.empty())
+						routes[row].planned = false;
+					continue;
+				}
 				repath();
 				continue;
 			}
+			if (!resumes.empty())
+				continue;
 			if (move.sleepUntil > tick)
 				continue;
 			if (move.sleepUntil != 0 && move.sleepUntil == tick)

@@ -6,6 +6,7 @@ export import engine.level.presentation.terrain_mesh;
 export import engine.filesystem.core.virtual_file_system;
 export import games.generalszh.content.loading.content_loader;
 export import games.generalszh.hosts.game.world_scene;
+export import games.generalszh.presentation.effects.weather_settings;
 
 // What a match plays on (the host's stage): its level, the lighting of the level's time of day, the terrain mesh made
 // from it and the world's renderers loaded for it. A new match (or the shell map again) replaces it whole: the old
@@ -27,6 +28,10 @@ struct MatchStage
 	std::unique_ptr<WorldScene> scene;
 	std::string terrainError;
 	std::string waterError;
+	// The map's weather: Weather.ini with the map's map.ini override (the game applies it to its snow).
+	presentation::WeatherSetting weather;
+	// The map's map.ini as read (the loader keeps it), for its Object overrides.
+	const engine::config::Document *mapIni{nullptr};
 
 	// The ground's height under a point of the stage's terrain.
 	std::function<float(float, float)> Height() const
@@ -49,6 +54,15 @@ inline void SetStageLevel(MatchStage &stage, engine::level::Level level)
 inline bool LoadStageScene(MatchStage &stage, const engine::filesystem::VirtualFileSystem &files, content::ContentLoader &loader, std::string_view mapPath)
 {
 	stage.scene = std::make_unique<WorldScene>();
+	stage.weather = presentation::LoadWeatherSetting(loader, mapPath);
+	// GameLogic::startNewGame: the map's map.ini (its Object overrides; none without a map).
+	stage.mapIni = nullptr;
+	if (!mapPath.empty())
+	{
+		const auto slash = mapPath.find_last_of("/\\");
+		const std::string set = (slash == std::string_view::npos ? std::string{} : std::string(mapPath.substr(0, slash + 1))) + "map";
+		stage.mapIni = &loader.Load({set});
+	}
 	return stage.scene->Load(files, loader, *stage.level, *stage.mesh, mapPath, stage.terrainError, stage.waterError);
 }
 

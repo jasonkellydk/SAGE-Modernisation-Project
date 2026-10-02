@@ -18,6 +18,7 @@ import engine.gameplay.rts.death.components.dying;
 import engine.gameplay.rts.navigation.components.navigation;
 import engine.gameplay.rts.navigation.algorithms.route_search;
 import engine.gameplay.rts.navigation.algorithms.clearance;
+import games.generalszh.gameplay.ai.resources.ai_players;
 
 // BuildAssistant::isLocationLegalToBuild, for a builder placing a structure
 // (DozerAIUpdate::construct: TERRAIN_RESTRICTIONS | NO_OBJECT_OVERLAP):
@@ -168,6 +169,80 @@ void ForEachOverlapping(GameWorld &game, const engine::gameplay::Footprint &foot
 		visit(entity, game.templates.DefinitionAt(definition));
 }
 
+// isLocationClearOfObjects' second part ("Check for overlapping exit areas"): every structure whose bounding circle is
+// within 2 x (major + minor radius) of the spot, but what construction clears. Each side's bounds are its geometry grown
+// by its FactoryExtraBibWidth (a non-box one a box of its major radius; a box his minor grown by MY extra width, as the
+// original), its exit a rectangle FactoryExitWidth deep in front of it (half that as its major radius, its geometry's
+// minor; a non-box one its major radius as minor), centred its major radius plus half the exit ahead along its facing.
+// The two bounds overlapping is in the way; for an IMMOBILE structure, so is my exit over its bounds, its exit over mine,
+// or the two exits. A skirmish AI builder keeps at least 3 cells of extra width (taken from its exit width).
+inline LegalBuild CheckFactoryExits(GameWorld &game, const content::ObjectDefinition &build, Engine::Math::FixedVector2 at,
+	Engine::Math::TurnAngle facing, ecs::Entity builder)
+{
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.world;
+	const Fixed range = Fixed::FromInt(2) * (build.geometry.majorRadius + build.geometry.minorRadius);
+	Fixed myExitWidth = build.factoryExitWidth;
+	Fixed myExtraWidth = build.factoryExtraBibWidth;
+	if (const auto *owner = world.IsAlive(builder) ? world.Get<gp::Owner>(builder) : nullptr)
+		if (const auto *ais = world.FindResource<AiPlayers>())
+			if (const AiPlayer *ai = ais->Of(owner->player); ai != nullptr && ai->skirmish)
+			{
+				const Fixed cells = Fixed::FromInt(30); // 3 * PATHFIND_CELL_SIZE_F
+				if (myExtraWidth < cells)
+				{
+					myExtraWidth = cells;
+					myExitWidth -= myExtraWidth;
+					if (myExitWidth < Fixed{})
+						myExitWidth = Fixed{};
+				}
+			}
+	const bool box = build.geometry.shape == content::GeometryShape::Box;
+	const gp::Footprint myBounds = box ? gp::Footprint{gp::FootprintShape::Box, build.geometry.majorRadius + myExtraWidth, build.geometry.minorRadius + myExtraWidth}
+		: gp::Footprint{gp::FootprintShape::Box, build.geometry.majorRadius + myExtraWidth, build.geometry.majorRadius + myExtraWidth};
+	const gp::Footprint myGeom{box ? gp::FootprintShape::Box : gp::FootprintShape::Circle, myExitWidth / Fixed::FromInt(2),
+		box ? build.geometry.minorRadius : build.geometry.majorRadius};
+	const bool checkMyExit = myExitWidth > Fixed{};
+	const Fixed myOffset = build.geometry.majorRadius + myExitWidth / Fixed::FromInt(2);
+	const Engine::Math::FixedVector2 myExitPos{at.x + Engine::Math::Cos(facing) * myOffset, at.y + Engine::Math::Sin(facing) * myOffset};
+	LegalBuild result = LegalBuild::Ok;
+	const BuildScene scene = GatherBuildScene(game, at, range);
+	scene.ForEachNear(at, range, [&](const BuildScene::Thing &thing) {
+		if (result != LegalBuild::Ok)
+			return;
+		const content::ObjectDefinition &them = game.templates.DefinitionAt(thing.definition);
+		if (!them.Is("STRUCTURE") || RemovableForConstruction(game, thing.entity, them))
+			return;
+		const Fixed hisExitWidth = them.factoryExitWidth;
+		const Fixed hisExtraWidth = them.factoryExtraBibWidth;
+		const bool hisBox = them.geometry.shape == content::GeometryShape::Box;
+		const gp::Footprint hisBounds = hisBox
+			? gp::Footprint{gp::FootprintShape::Box, them.geometry.majorRadius + hisExtraWidth, them.geometry.minorRadius + myExtraWidth}
+			: gp::Footprint{gp::FootprintShape::Box, them.geometry.majorRadius + hisExtraWidth, them.geometry.majorRadius + hisExtraWidth};
+		const gp::Footprint hisGeom{hisBox ? gp::FootprintShape::Box : gp::FootprintShape::Circle, hisExitWidth / Fixed::FromInt(2),
+			hisBox ? them.geometry.minorRadius : them.geometry.majorRadius};
+		const bool checkHisExit = hisExitWidth > Fixed{};
+		const Fixed hisOffset = them.geometry.majorRadius + hisExitWidth / Fixed::FromInt(2);
+		const Engine::Math::FixedVector2 hisExitPos{thing.position.x + Engine::Math::Cos(thing.facing) * hisOffset,
+			thing.position.y + Engine::Math::Sin(thing.facing) * hisOffset};
+		if (gp::FootprintsOverlap(hisBounds, thing.position, thing.facing, myBounds, at, facing))
+		{
+			result = LegalBuild::ObjectsInTheWay;
+			return;
+		}
+		if (!checkMyExit && !checkHisExit && hisExtraWidth == Fixed{} && myExtraWidth == Fixed{})
+			return; // neither has extra exit space
+		if (!them.Is("IMMOBILE"))
+			return;
+		if ((checkMyExit && gp::FootprintsOverlap(hisBounds, thing.position, thing.facing, myGeom, myExitPos, facing)) ||
+			(checkHisExit && gp::FootprintsOverlap(hisGeom, hisExitPos, thing.facing, myBounds, at, facing)) ||
+			(checkMyExit && checkHisExit && gp::FootprintsOverlap(hisGeom, hisExitPos, thing.facing, myGeom, myExitPos, facing)))
+			result = LegalBuild::ObjectsInTheWay;
+	});
+	return result;
+}
+
 // With only NoEnemyObjectOverlap (isLocationClearOfObjects' onlyCheckEnemies), an immobile thing that is not an enemy is
 // no matter. Near supplies is always checked; ClearPath: the builder (not immobile) can reach it.
 inline LegalBuild CheckBuildLocation(GameWorld &game, const content::ObjectDefinition &build, Engine::Math::FixedVector2 at, Engine::Math::TurnAngle facing,
@@ -206,6 +281,9 @@ inline LegalBuild CheckBuildLocation(GameWorld &game, const content::ObjectDefin
 	}, scene);
 	if (result != LegalBuild::Ok)
 		return result;
+	if (!onlyEnemies && (options & (build_check::NoObjectOverlap | build_check::NoEnemyObjectOverlap)) != 0)
+		if (const LegalBuild exits = CheckFactoryExits(game, build, at, facing, builder); exits != LegalBuild::Ok)
+			return exits;
 	const Fixed border = game.templates.Content().gameData.supplyBuildBorder;
 	if (build.Is("CANNOT_BUILD_NEAR_SUPPLIES") && border > Fixed{})
 	{

@@ -1,0 +1,325 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.commands.game_commands;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.production.algorithms.unit_queue;
+import games.generalszh.gameplay.aircraft.algorithms.airfields;
+import games.generalszh.content.production.production_content;
+import engine.gameplay.rts.containment.components.transport;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.production.components.rally_point;
+import engine.ecs.query.query;
+import engine.gameplay.rts.combat.components.sneaky_target;
+import engine.gameplay.common.weapons.components.armament;
+import games.generalszh.gameplay.orders.algorithms.command_application;
+import games.generalszh.gameplay.containment.algorithms.parachuting;
+import games.generalszh.gameplay.objects.algorithms.object_factory;
+import engine.gameplay.rts.combat.components.aggression;
+
+// Jets on real data (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp).
+using namespace generalszh;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	Engine::Math::FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	Engine::Math::FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options(std::size_t workers) const
+	{
+		session::SessionOptions options{11, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+std::vector<ecs::Entity> Named(session::Session &game, std::string_view name)
+{
+	std::vector<ecs::Entity> found;
+	ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto refs = chunk.template Get<engine::gameplay::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+			if (game.DefinitionName(refs[row].index) == name)
+				found.push_back(entities[row]);
+	});
+	return found;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(jets)
+
+namespace gp = engine::gameplay;
+
+// Legacy parity (JetAIUpdate::update, chooseLocomotorSet and getSneakyTargetingOffset; AmericaJetAurora's JetAIUpdate:
+// AttackLocomotorType SET_SUPERSONIC (AuroraJetSupersonicLocomotor, 480 a second: 16 a frame), AttackLocomotorPersistTime
+// 100 (3 frames), AttackersMissPersistTime 2000 (60 frames), SneakyOffsetWhenAttacking -20, ReturnForAmmoLocomotorType
+// SET_SLUGGISH (AuroraJetSluggishLocomotor, 150: 5 a frame)): an Aurora sent at a Scorpion goes supersonic from its first
+// frame attacking, its attackers aiming 20 behind it; the frame its attack ends (its bomb gone, out of ammo) its attack
+// locomotor holds 3 frames more, then gives way to the sluggish one as it flies home out of ammo; its attackers keep missing
+// until 60 frames after its last attacking frame. The same on 1 and 4 workers.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_aurora_goes_supersonic_and_is_missed_while_it_attacks)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity airfield, aurora, scorpion;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		auto &world = made.game->World();
+		made.airfield = made.game->Place("AmericaAirfield", match->At(-300, -400), {}, match->Team(*made.game, 0));
+		made.aurora = made.game->Place("AmericaJetAurora", match->At(0, 0), {}, match->Team(*made.game, 0));
+		made.scorpion = made.game->Place("GLATankScorpion", match->At(600, 200), {}, match->Team(*made.game, 1));
+		gp::Jet &jet = *world.Get<gp::Jet>(made.aurora);
+		jet.airfield = made.airfield;
+		jet.space = 0;
+		for (int tick = 0; tick < 60; ++tick)
+			made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &world = one.game->World();
+	const gp::Jet &jet = *world.Get<gp::Jet>(one.aurora);
+	BOOST_TEST((jet.attack.maxSpeed == Fixed::FromInt(16)));
+	BOOST_TEST((jet.returning.maxSpeed == Fixed::FromInt(5)));
+	BOOST_TEST((jet.flight.maxSpeed == Fixed::FromInt(6)));
+	BOOST_TEST(jet.attackPersistTicks == 3u);
+	BOOST_TEST(jet.missPersistTicks == 60u);
+	BOOST_TEST((jet.sneakyOffset == Fixed::FromInt(-20)));
+	BOOST_TEST_REQUIRE(world.Get<gp::SneakyTarget>(one.aurora) != nullptr);
+	BOOST_TEST((jet.state == gp::JetState::Flying));
+	for (Game *g : {&one, &four})
+	{
+		std::vector<engine::net::CommandEnvelope> envelopes{commands::Encode(commands::Attack{{g->aurora}, g->scorpion})};
+		envelopes.front().player = 0;
+		g->game->Tick(std::span(envelopes));
+	}
+	const auto attacking = [&] {
+		const auto *target = world.Get<gp::AttackTarget>(one.aurora);
+		return jet.state == gp::JetState::Flying && target != nullptr && target->target.IsValid();
+	};
+	std::optional<std::uint64_t> first, last;
+	bool supersonic = true;
+	for (int tick = 0; tick < 900 && !(last && one.game->CurrentTick() > *last + 70); ++tick)
+	{
+		const bool wasAttacking = attacking();
+		const auto facing = world.Get<gp::Transform>(one.aurora)->facing; // as the tick begins
+		one.game->Tick();
+		four.game->Tick();
+		const std::uint64_t now = one.game->CurrentTick();
+		const Fixed speed = world.Get<gp::Locomotion>(one.aurora)->locomotor.maxSpeed;
+		if (attacking())
+		{
+			if (!first)
+			{
+				first = now;
+				BOOST_TEST(jet.missUntil == now + 60);
+			}
+			supersonic = supersonic && speed == jet.attack.maxSpeed;
+			const auto &sneaky = *world.Get<gp::SneakyTarget>(one.aurora);
+			BOOST_TEST(sneaky.until == now + 60);
+			BOOST_TEST((sneaky.offset == Engine::Math::Direction(facing) * Fixed::FromInt(-20)));
+		}
+		else if (wasAttacking && first && !last)
+			last = now - 1; // its last attacking frame
+		if (last)
+		{
+			if (now < *last + 3)
+				BOOST_TEST((speed == jet.attack.maxSpeed));
+			else if (now == *last + 3)
+			{
+				BOOST_TEST(jet.returnLoco == 1u);
+				BOOST_TEST((speed == jet.returning.maxSpeed));
+			}
+			BOOST_TEST((world.Get<gp::SneakyTarget>(one.aurora)->Active(now) == (now < *last + 60)));
+		}
+	}
+	BOOST_TEST_REQUIRE(first.has_value());
+	BOOST_TEST(supersonic);
+	BOOST_TEST_REQUIRE(last.has_value());
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+}
+
+// Legacy parity (AIUpdateInterface::isAllowedToRespondToAiCommands, AmericaJetSpectreGunship's AIUpdateInterface
+// ForbidPlayerCommands Yes): its player's move order is refused (CMD_FROM_PLAYER), while a Raptor's is taken.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_takes_no_orders_from_its_player)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity spectre = game.Place("AmericaJetSpectreGunship", match->At(0, 0), {}, match->Team(game, 0));
+	const ecs::Entity raptor = game.Place("AmericaJetRaptor", match->At(100, 0), {}, match->Team(game, 0));
+	game.Tick();
+	const auto before = *world.Get<gp::MoveOrder>(spectre);
+	const std::uint32_t player = world.Get<gp::Owner>(spectre)->player;
+	const Engine::Math::FixedVector2 there = match->At(500, 500);
+	gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{{spectre, raptor}, there});
+	BOOST_TEST((world.Get<gp::MoveOrder>(spectre)->destination == before.destination));
+	BOOST_TEST((world.Get<gp::MoveOrder>(spectre)->mode == before.mode));
+	BOOST_TEST((world.Get<gp::MoveOrder>(raptor)->destination == there));
+}
+
+// Legacy parity (ParachuteContain::onRemoving, DefaultProductionExitUpdate::exitObjectViaDoor and useSpawnRallyPoint;
+// TechReinforcementPad: DefaultProductionExitUpdate UseSpawnRallyPoint Yes, its OCL's cargo plane dropping a Crusader in a
+// LargeParachute): a human player's Crusader set down by a chute from a cargo plane the pad sent goes out by the pad's
+// exit (set at its UnitCreatePoint, on the ground, facing the pad's way) and on to its natural rally point; a skirmish
+// computer player's hunts (aiHunt).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_reinforcement_pads_drop_goes_out_by_the_pad)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	game.Tick();
+	const auto exit = content::ReadProductionExit(*shell.game.objects.Find("TechReinforcementPad"));
+	BOOST_TEST_REQUIRE(exit.has_value());
+	BOOST_TEST(exit->useSpawnRallyPoint);
+	const auto drop = [&](std::size_t player, Engine::Math::FixedVector2 at) {
+		const std::uint32_t team = match->Team(game, player);
+		const ecs::Entity pad = game.Place("TechReinforcementPad", at, {}, team);
+		const ecs::Entity plane = game.Place("AmericaJetCargoPlane", at + Engine::Math::FixedVector2{Fixed::FromInt(300), Fixed{}}, {}, team);
+		const ecs::Entity tank = game.Place("AmericaTankCrusader", at + Engine::Math::FixedVector2{Fixed::FromInt(150), Fixed::FromInt(150)}, {}, team);
+		const ecs::Entity chute = game.Place("LargeParachute", at + Engine::Math::FixedVector2{Fixed::FromInt(150), Fixed::FromInt(150)}, {}, team);
+		gameplay::SetProducer(game.Game(), plane, pad);
+		gameplay::SetProducer(game.Game(), tank, plane);
+		gameplay::SetProducer(game.Game(), chute, plane);
+		BOOST_TEST_REQUIRE(gameplay::PutInParachute(game.Game(), chute, tank));
+		world.Get<gp::Transform>(chute)->position.z += Fixed::FromInt(120);
+		return std::pair{pad, tank};
+	};
+	const auto [pad, tank] = drop(0, match->At(-300, 300));
+	const auto [aiPad, aiTank] = drop(1, match->At(300, 300));
+	const auto landed = [&](ecs::Entity unit) { return !world.Has<gp::Passenger>(unit) && world.Get<gp::Transform>(unit)->position.z <= game.Game().ground.At(world.Get<gp::Transform>(unit)->position.XY()) + Fixed::FromInt(1); };
+	std::optional<std::uint64_t> down;
+	for (int tick = 0; tick < 900 && !down; ++tick)
+	{
+		game.Tick();
+		if (landed(tank) && world.Get<gp::MoveOrder>(tank)->mode != gp::MoveMode::Idle)
+			down = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(down.has_value());
+	const auto &frame = *world.Get<gp::Transform>(pad);
+	const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+	const auto inFrame = [&](const Engine::Math::FixedVector3 &local) {
+		return Engine::Math::FixedVector2{frame.position.x + local.x * c - local.y * s, frame.position.y + local.x * s + local.y * c};
+	};
+	BOOST_TEST((world.Get<gp::MoveOrder>(tank)->destination == inFrame(exit->rallyPoint)));
+	BOOST_TEST((world.Get<gp::Transform>(tank)->facing.units == frame.facing.units));
+	// (It has moved off the create point since: it was set there the tick it landed.)
+	BOOST_TEST((Engine::Math::Distance(world.Get<gp::Transform>(tank)->position.XY(), inFrame(exit->createPoint)) < Fixed::FromInt(20)));
+	for (int tick = 0; tick < 300 && !landed(aiTank); ++tick)
+		game.Tick();
+	game.Tick();
+	BOOST_TEST((world.Get<gp::Aggression>(aiTank)->stance == gp::Stance::Hunt));
+	(void)aiPad;
+}
+
+BOOST_AUTO_TEST_SUITE_END()

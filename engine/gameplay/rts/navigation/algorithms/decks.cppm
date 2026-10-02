@@ -230,8 +230,8 @@ inline void ClassifyDeck(NavigationGrid &grid, const GroundHeight &ground, std::
 	}
 }
 
-// Pathfinder::addBridge / PathfindLayer::init and allocateCells: a deck's layer, its cells its bounds (a hundredth of a
-// cell out, rounded out, padded by one), within the grid; none when the layers are all used (the original's bridges past
+// Pathfinder::addBridge / PathfindLayer::init and allocateCells: a deck's layer, its cells its bounds (rounded out with
+// no slack: the original's PATHFIND_CELL_SIZE/100 is an integer 0; padded by one), within the grid up to its last cell; none when the layers are all used (the original's bridges past
 // the last layer stay on the ground) or it covers no cell.
 inline std::optional<std::uint8_t> AddDeck(NavigationGrid &grid, const GroundHeight &ground, ecs::Entity owner, const DeckGeometry &geometry, bool destroyed = false)
 {
@@ -245,15 +245,16 @@ inline std::optional<std::uint8_t> AddDeck(NavigationGrid &grid, const GroundHei
 		lo = {std::min(lo.x, corner.x), std::min(lo.y, corner.y)};
 		hi = {std::max(hi.x, corner.x), std::max(hi.y, corner.y)};
 	}
-	const Fixed slack = CellSize() / Fixed::FromInt(100);
-	std::int32_t x0 = static_cast<std::int32_t>(((lo.x - slack) / CellSize()).Floor()) - 1;
-	std::int32_t y0 = static_cast<std::int32_t>(((lo.y - slack) / CellSize()).Floor()) - 1;
-	std::int32_t maxX = static_cast<std::int32_t>(((hi.x + slack) / CellSize()).Ceil()) + 1;
-	std::int32_t maxY = static_cast<std::int32_t>(((hi.y + slack) / CellSize()).Ceil()) + 1;
+	// PATHFIND_CELL_SIZE/100 is integer division in the original: no slack.
+	std::int32_t x0 = static_cast<std::int32_t>((lo.x / CellSize()).Floor()) - 1;
+	std::int32_t y0 = static_cast<std::int32_t>((lo.y / CellSize()).Floor()) - 1;
+	std::int32_t maxX = static_cast<std::int32_t>((hi.x / CellSize()).Ceil()) + 1;
+	std::int32_t maxY = static_cast<std::int32_t>((hi.y / CellSize()).Ceil()) + 1;
+	// Within m_extent: from its first cell up to its last (m_extent.hi, not included).
 	x0 = std::max(x0, 0);
 	y0 = std::max(y0, 0);
-	maxX = std::min(maxX, grid.Width());
-	maxY = std::min(maxY, grid.Height());
+	maxX = std::min(maxX, grid.HiX());
+	maxY = std::min(maxY, grid.HiY());
 	if (maxX <= x0 || maxY <= y0)
 		return std::nullopt;
 	DeckLayer deck;
@@ -282,4 +283,119 @@ inline bool SetDeckDestroyed(NavigationGrid &grid, const GroundHeight &ground, s
 	return true;
 }
 
+
+// PathfindLayer::classifyWallCells / classifyWallMapCell over the wall's own cells: a cell all four of whose corners lie
+// on a standing wall piece is clear, one with some of them on one bridge impassable, others impassable (no cell of the
+// wall); no cell links to the ground. Then tightened by a cell: a clear cell not on the wall's border with any cell of
+// the 3 x 3 around it not clear is a cliff (only climbers walk the wall's edge). The wall's clear cells go to its surface
+// (Pathfinder::isPointOnWall).
+inline void ClassifyWall(NavigationGrid &grid, std::uint8_t layer, WallSurface &wall)
+{
+	using namespace deck_detail;
+	DeckLayer &deck = grid.Decks()[layer - 1];
+	const Fixed cell = CellSize();
+	for (std::int32_t y = deck.y0; y < deck.y0 + deck.height; ++y)
+		for (std::int32_t x = deck.x0; x < deck.x0 + deck.width; ++x)
+		{
+			const std::size_t index = deck.Index(x, y);
+			deck.toGround[index] = 0;
+			const FixedVector2 lo{Fixed::FromInt(x) * cell, Fixed::FromInt(y) * cell};
+			const FixedVector2 hi{lo.x + cell, lo.y + cell};
+			int corners = 0;
+			for (const FixedVector2 corner : {lo, FixedVector2{lo.x, hi.y}, hi, FixedVector2{hi.x, lo.y}})
+				corners += PointOnWallPieces(wall, corner) ? 1 : 0;
+			deck.type[index] = corners == 4 ? PathfindCellType::Clear : corners != 0 ? PathfindCellType::BridgeImpassable : PathfindCellType::Impassable;
+		}
+	// Tighten up 1 cell.
+	const auto at = [&](std::int32_t i, std::int32_t j) { return static_cast<std::size_t>(j) * static_cast<std::size_t>(deck.width) + static_cast<std::size_t>(i); };
+	std::vector<std::uint8_t> pinched(deck.type.size(), 0);
+	for (std::int32_t i = 1; i < deck.width - 1; ++i)
+		for (std::int32_t j = 1; j < deck.height - 1; ++j)
+			for (std::int32_t k = i - 1; k < i + 2; ++k)
+				for (std::int32_t l = j - 1; l < j + 2; ++l)
+					if (deck.type[at(k, l)] != PathfindCellType::Clear)
+						pinched[at(i, j)] = 1;
+	for (std::size_t index = 0; index < deck.type.size(); ++index)
+		if (pinched[index] != 0 && deck.type[index] == PathfindCellType::Clear)
+			deck.type[index] = PathfindCellType::Cliff;
+	wall.x0 = deck.x0;
+	wall.y0 = deck.y0;
+	wall.columns = deck.width;
+	wall.rows = deck.height;
+	wall.clear.resize(deck.type.size());
+	for (std::size_t index = 0; index < deck.type.size(); ++index)
+		wall.clear[index] = deck.type[index] == PathfindCellType::Clear ? 1u : 0u;
+	wall.layer = layer;
+}
+
+// The wall layer's deck, its cells from x0, y0 on, width by height, classified (`wall`'s layer then this one).
+inline std::uint8_t PushWallLayer(NavigationGrid &grid, WallSurface &wall, std::int32_t x0, std::int32_t y0, std::int32_t width, std::int32_t height)
+{
+	DeckLayer deck;
+	deck.x0 = x0;
+	deck.y0 = y0;
+	deck.width = std::max(width, 0);
+	deck.height = std::max(height, 0);
+	deck.type.assign(static_cast<std::size_t>(deck.width) * static_cast<std::size_t>(deck.height), PathfindCellType::Impassable);
+	deck.toGround.assign(deck.type.size(), 0);
+	deck.wall = true;
+	grid.Decks().push_back(std::move(deck));
+	const auto layer = static_cast<std::uint8_t>(grid.Decks().size());
+	ClassifyWall(grid, layer, wall);
+	return layer;
+}
+
+// Pathfinder::newMap with wall pieces (PathfindLayer::allocateCellsForWallLayer): the wall's layer, its cells the pieces'
+// bounds (GeometryInfo::get2DBounds: a box's turned corners, `boxes` 1; a sphere or cylinder its major radius each way)
+// rounded out (no slack: the original's PATHFIND_CELL_SIZE/100 is an integer 0), padded by one, within the grid (up to
+// its last cell, not including it: m_extent.hi); none without pieces, or covering no cell. Classified at once.
+inline std::optional<std::uint8_t> AddWallLayer(NavigationGrid &grid, WallSurface &wall, std::span<const std::uint8_t> boxes)
+{
+	using namespace deck_detail;
+	if (wall.Pieces() == 0)
+		return std::nullopt;
+	FixedVector2 lo{}, hi{};
+	for (std::size_t piece = 0; piece < wall.Pieces(); ++piece)
+	{
+		const FixedVector2 centre = wall.position[piece];
+		FixedVector2 low, high;
+		if (piece < boxes.size() && boxes[piece] != 0)
+		{
+			const Fixed c = Engine::Math::Cos(wall.facing[piece]), s = Engine::Math::Sin(wall.facing[piece]);
+			const Fixed exc = wall.major[piece] * c, eyc = wall.minor[piece] * c, exs = wall.major[piece] * s, eys = wall.minor[piece] * s;
+			const FixedVector2 corners[] = {{centre.x - exc - eys, centre.y + eyc - exs}, {centre.x + exc - eys, centre.y + eyc + exs},
+				{centre.x + exc + eys, centre.y - eyc + exs}, {centre.x - exc + eys, centre.y - eyc - exs}};
+			low = high = corners[0];
+			for (const FixedVector2 &corner : corners)
+			{
+				low = {std::min(low.x, corner.x), std::min(low.y, corner.y)};
+				high = {std::max(high.x, corner.x), std::max(high.y, corner.y)};
+			}
+		}
+		else
+		{
+			low = {centre.x - wall.major[piece], centre.y - wall.major[piece]};
+			high = {centre.x + wall.major[piece], centre.y + wall.major[piece]};
+		}
+		if (piece == 0)
+		{
+			lo = low;
+			hi = high;
+			continue;
+		}
+		lo = {std::min(lo.x, low.x), std::min(lo.y, low.y)};
+		hi = {std::max(hi.x, high.x), std::max(hi.y, high.y)};
+	}
+	std::int32_t x0 = static_cast<std::int32_t>((lo.x / CellSize()).Floor()) - 1;
+	std::int32_t y0 = static_cast<std::int32_t>((lo.y / CellSize()).Floor()) - 1;
+	std::int32_t maxX = static_cast<std::int32_t>((hi.x / CellSize()).Ceil()) + 1;
+	std::int32_t maxY = static_cast<std::int32_t>((hi.y / CellSize()).Ceil()) + 1;
+	x0 = std::max(x0, 0);
+	y0 = std::max(y0, 0);
+	maxX = std::min(maxX, grid.HiX());
+	maxY = std::min(maxY, grid.HiY());
+	if (maxX <= x0 || maxY <= y0)
+		return std::nullopt;
+	return PushWallLayer(grid, wall, x0, y0, maxX - x0, maxY - y0);
+}
 }

@@ -200,6 +200,49 @@ struct ScriptFlash
 	std::array<float, 3> color{};
 };
 
+// A laser special object as drawn (LaserUpdate on an ability's special object): its start as last placed on its parent's
+// bone (kept while the parent is not drawn), its muzzle and target particle systems (made as it starts, where it starts
+// and ends, not moved after; 0: none) and how long it has shown (its texture's scroll).
+struct AbilityLaserView
+{
+	std::array<float, 3> start{};
+	float age{0.0f};
+	std::uint64_t muzzle{0};
+	std::uint64_t impact{0};
+};
+
+// Its drawable's fade (Drawable::fadeIn / fadeOut): when it began (the presentation clock), over how many frames, in or
+// out.
+struct ObjectFade
+{
+	double start{0.0};
+	float frames{0.0f};
+	std::uint8_t in{1};
+};
+
+// A stealth grantor's radius particle system (GrantStealthBehavior::createEmitters: at its first update, where it stands;
+// destroyed with it). 0: none.
+struct GrantStealthView
+{
+	std::uint64_t system{0};
+};
+
+// A Spectre gunship's gattling walks as last seen (SpectreGunship::strafedTick): each new one smokes the ground once.
+struct SpectreStrafeSeen
+{
+	std::uint64_t last{0};
+};
+
+// A special ability's PrepSoundLoop as the logic asked for it (SpecialAbilityUpdate::startPreparation adds it on the unit,
+// endPreparation / onExit remove it): wanted or not, for which power (its SpecialPower template), and the tick its
+// latest preparation began (each start plays it afresh).
+struct PrepSoundCue
+{
+	std::uint64_t started{0};
+	std::uint32_t power{0};
+	std::uint32_t want{0};
+};
+
 // A capturer's capture flash phases, by its special ability slot (SpecialAbilityUpdate's m_captureFlashPhase: kept
 // from one capture to the next, as the original's).
 struct CaptureFlash
@@ -291,6 +334,46 @@ template<>
 struct ComponentTraits<generalszh::presentation::ScriptFlash>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.script_flash";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::AbilityLaserView>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.ability_laser_view";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::ObjectFade>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.object_fade";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::GrantStealthView>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.grant_stealth_view";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::SpectreStrafeSeen>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.spectre_strafe_seen";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::PrepSoundCue>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.prep_sound_cue";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;

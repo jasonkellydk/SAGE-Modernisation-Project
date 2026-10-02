@@ -19,6 +19,8 @@ import engine.gameplay.common.weapons.components.weapon_slots;
 import games.generalszh.gameplay.orders.resources.buildable_overrides;
 import engine.gameplay.rts.powers.algorithms.special_power_timing;
 import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.sciences.resources.player_sciences;
+import games.generalszh.gameplay.upgrades.algorithms.upgrade_affects;
 
 // What the control bar offers an object (the original's ControlBar::getCommandAvailability and
 // Object::getCommandSetString): the command set it shows, and each of its buttons as hidden, restricted (shown
@@ -163,17 +165,28 @@ inline ButtonState CommandAvailability(GameWorld &game, ecs::Entity entity, cons
 		}
 		else
 		{
+			// No production update: it can never research one.
+			if (queue == nullptr)
+				return ButtonState::Restricted;
 			bool had = false;
 			if (const auto *own = world.Get<gp::Upgradable>(entity); own != nullptr && own->completed.Has(bit))
 				had = true;
-			if (queue != nullptr)
-				for (std::uint32_t index = 0; index < queue->count; ++index)
-					had = had || (queue->entries[index].kind == gp::ProductionKind::Upgrade && queue->entries[index].definition == bit);
-			if (had)
+			for (std::uint32_t index = 0; index < queue->count; ++index)
+				had = had || (queue->entries[index].kind == gp::ProductionKind::Upgrade && queue->entries[index].definition == bit);
+			// ... or one it would do nothing for (Object::affectedByUpgrade false): COMMAND_CANT_AFFORD as well.
+			if (had || !AffectedByUpgrade(game, entity, player, bit))
 				return ButtonState::Done;
 		}
 		if (world.Resource<gp::PlayerMoney>().Balance(player) < upgrade.cost)
 			return ButtonState::Restricted;
+		// Its Science list: every one owned, else restricted.
+		const auto &sciences = world.Resource<gp::PlayerSciences>();
+		for (const std::string &science : button.sciences)
+		{
+			const auto known = game.templates.Content().Science(science);
+			if (!known || !sciences.Has(player, *known))
+				return ButtonState::Restricted;
+		}
 		return ButtonState::Available;
 	}
 	case ButtonCommand::SwitchWeapon:

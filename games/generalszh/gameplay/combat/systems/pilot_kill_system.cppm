@@ -8,6 +8,7 @@ export import engine.gameplay.common.status.components.disabled;
 export import engine.gameplay.rts.death.components.dying;
 export import engine.gameplay.rts.lifecycle.resources.kill_requests;
 export import games.generalszh.gameplay.objects.resources.object_templates;
+export import games.generalszh.gameplay.combat.resources.unmanned_notices;
 import games.generalszh.content.combat.combat_catalog;
 import games.generalszh.content.combat.loadout_content;
 
@@ -40,7 +41,8 @@ struct PilotKillSystem
 	using Query = ecs::Query<ecs::Read<engine::gameplay::Health>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Disabled>, ecs::Read<engine::gameplay::Dying>,
 		ecs::Read<engine::gameplay::Health>>;
-	using Resources = ecs::Resources<ecs::Read<engine::gameplay::Hits>, ecs::Read<ObjectTemplates>, ecs::Write<engine::gameplay::KillRequests>>;
+	using Resources = ecs::Resources<ecs::Read<engine::gameplay::Hits>, ecs::Read<ObjectTemplates>, ecs::Write<engine::gameplay::KillRequests>,
+		ecs::Write<UnmannedNotices>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -52,6 +54,7 @@ struct PilotKillSystem
 		const auto lookup = context.Lookup<Lookup>();
 		auto &commands = context.Commands();
 		auto &kills = context.Write<gp::KillRequests>().entities;
+		auto &unmanned = context.Write<UnmannedNotices>().list;
 		std::vector<ecs::Entity> done;
 		context.Read<gp::Hits>().ForEach([&](const gp::Hit &hit) {
 			if (!hit.handled || hit.damageType != *killPilot || !lookup.IsAlive(hit.target) || lookup.Get<gp::Dying>(hit.target) != nullptr)
@@ -59,10 +62,14 @@ struct PilotKillSystem
 			if (const gp::Health *health = lookup.Get<gp::Health>(hit.target); health != nullptr && health->current <= Engine::Math::Fixed{})
 				return;
 			const gp::DefinitionRef *ref = lookup.Get<gp::DefinitionRef>(hit.target);
-			if (ref == nullptr || std::ranges::find(done, hit.target) != done.end())
+			if (ref == nullptr)
 				return;
 			const content::ObjectDefinition &definition = templates.DefinitionAt(ref->index);
 			if (!pilot_kill_detail::LosesPilot(definition))
+				return;
+			// Each hit's setDisabled(DISABLED_UNMANNED), its pilot's splatter (a second hit's too).
+			unmanned.push_back({hit.target, ref->index});
+			if (std::ranges::find(done, hit.target) != done.end())
 				return;
 			done.push_back(hit.target);
 			const gp::Disabled *off = lookup.Get<gp::Disabled>(hit.target);

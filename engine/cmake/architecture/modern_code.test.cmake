@@ -60,7 +60,6 @@ probe(getworld "${sim}" "void Execute(SystemContext &context) { context.GetWorld
 probe(enginecoreworld "engine/ecs/system/x.cppm" "World &GetWorld() const noexcept;" pass)
 probe(debtallowed "${sim}" "float speed;" pass "${sim}|float")
 probe(debtresolved "${sim}" "int speed;" resolved-debt "${sim}|float")
-message(STATUS "Modern code policy checker self-tests passed")
 probe(renegade_float "games/renegade/gameplay/defense/algorithms/x.cppm" "float damage;" float)
 probe(renegade_module_only "games/renegade/hosts/game/main.cpp" "int main() {}" module-only)
 probe(renegade_modules "games/renegade/session/x.cppm" "export module games.renegade.session; import std;" pass)
@@ -70,3 +69,57 @@ probe(renegade_dll "games/renegade/hosts/game/main.cppm" "__declspec(dllimport) 
 probe(w3d_platform "engine/gui/w3d/view.cppm" "#include <SDL3/SDL.h>\n" native-platform)
 probe(w3d_presentation "engine/gui/w3d/view.cppm" "export module engine.gui.w3d.view; struct Rect { float x; };" pass)
 probe(renegade_shared_platform "games/renegade/hosts/game/main.cppm" "import engine.platform.adapters.sdl3; engine::platform::sdl3::SDL3PlatformAdapter platform;" pass)
+
+# Every simulation root is kept separate from both games' presentation tiers.
+# Include exported imports, semicolon boundaries and tabs rather than relying
+# only on a single simple import spelling.
+foreach(game IN ITEMS generalszh renegade)
+    if(game STREQUAL "generalszh")
+        set(other_game renegade)
+    else()
+        set(other_game generalszh)
+    endif()
+    foreach(simulation IN ITEMS gameplay session content commands scripting)
+        foreach(tier IN ITEMS presentation hud shell hosts)
+            probe("${game}_${simulation}_imports_${tier}"
+                "games/${game}/${simulation}/probe.cppm"
+                "export module probe;\n\texport\timport games.${game}.${tier}.probe;"
+                presentation-dependency)
+        endforeach()
+        probe("${game}_${simulation}_imports_other_game_presentation"
+            "games/${game}/${simulation}/probe.cppm"
+            "export module probe; import games.${other_game}.presentation.probe;"
+            presentation-dependency)
+        probe("${game}_${simulation}_imports_common"
+            "games/${game}/${simulation}/probe.cppm"
+            "export module probe; import engine.gameplay.common.health.components.health;"
+            pass)
+    endforeach()
+    foreach(adapter IN ITEMS presentation content/presentation hosts)
+        foreach(tier IN ITEMS presentation hud shell hosts)
+            probe("${game}_${adapter}_allows_${tier}"
+                "games/${game}/${adapter}/probe.cppm"
+                "export module probe; import games.${game}.${tier}.probe; float alpha;"
+                pass)
+        endforeach()
+    endforeach()
+    foreach(tier IN ITEMS hud shell)
+        probe("${game}_${tier}_imports_presentation"
+            "games/${game}/${tier}/probe.cppm"
+            "export module probe; import games.${game}.presentation.probe;"
+            pass)
+    endforeach()
+    probe("${game}_simulation_import_comment"
+        "games/${game}/session/probe.cppm"
+        "export module probe; // import games.${game}.presentation.probe;\nstruct State {};"
+        pass)
+    probe("${game}_simulation_import_string"
+        "games/${game}/session/probe.cppm"
+        "export module probe; constexpr auto name = \"import games.${game}.presentation.probe;\";"
+        pass)
+    probe("${game}_simulation_similar_namespace"
+        "games/${game}/session/probe.cppm"
+        "export module probe; import games.${game}.presentation_schema.probe;"
+        pass)
+endforeach()
+message(STATUS "Modern code policy checker self-tests passed")

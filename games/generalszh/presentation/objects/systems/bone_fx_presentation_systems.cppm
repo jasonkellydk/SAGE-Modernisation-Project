@@ -17,12 +17,13 @@ import Engine.Core.Math.FixedPresentation;
 // numbers:
 //   BoneParticleSystem, once a tick after the simulation: when the simulation stopped its bone effects
 //   (stopAllBoneFX) or timed its damage state's slots anew (initTimes: its first update, a change of damage state),
-//   the running systems go (killRunningParticleSystems: destroyed, particles and all) and, for new timings, each used
+//   the running systems go (killRunningParticleSystems: ParticleSystem::destroy, what is out lives on) and, for new timings, each used
 //   particle slot is timed from now (a delay between its min and max, truncated); then each due slot starts its system
-//   at its bone, riding on the object (doParticleSystemAtBone; stopped at once when the object is hidden: contained),
+//   at its bone, riding on the object (doParticleSystemAtBone; switched off for good when the object is hidden: contained),
 //   unless the last damage's type is not one of its DamageParticleTypes, and is timed again (OnlyOnce: never).
 //   BoneFxRideSystem, each frame after the objects are presented: the systems follow their objects; an object no
-//   longer presented loses its systems, as other systems riding on objects do.
+//   longer presented loses its systems, as other systems riding on objects do, unless the shroud hides it (then they
+//   are kept, emitting nothing).
 export namespace generalszh::presentation
 {
 struct BoneParticleSystem
@@ -67,7 +68,7 @@ struct BoneParticleSystem
 				BoneFxEmission &emission = known != nullptr ? *known : fresh;
 				const auto kill = [&] {
 					for (const AttachedSystem &attached : emission.systems)
-						particles.world->Destroy(attached.id);
+						particles.world->Stop(attached.id);
 					emission.systems.clear();
 				};
 				if (emission.stops != fx.stops)
@@ -103,8 +104,13 @@ struct BoneParticleSystem
 						{
 							AttachedSystem attached{0, {Engine::Math::ToFloat(entry.at.x), Engine::Math::ToFloat(entry.at.y), Engine::Math::ToFloat(entry.at.z)}, 0.0f};
 							attached.id = particles.world->Create(*definition, effect_attachment_detail::Place(at, attached));
+							// doParticleSystemAtBone: on a hidden drawable (contained) it is stop()ped: kept, emitting
+							// nothing; nothing in BoneFXUpdate starts it again (only destroy() ends it).
 							if (!hidden.empty())
-								particles.world->Stop(attached.id);
+							{
+								particles.world->Hold(attached.id);
+								particles.world->Pause(attached.id);
+							}
 							emission.systems.push_back(attached);
 						}
 					emission.next[slot] = entry.onlyOnce ? BoneFxEmission::Off : now + delay(entry);
@@ -120,6 +126,7 @@ struct BoneFxRideSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Write<BoneFxEmission>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::ObjectShroud>, ecs::Read<engine::gameplay::Transform>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Write<ParticleWorldHandle>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
@@ -129,17 +136,33 @@ struct BoneFxRideSystem
 			return;
 		const std::uint32_t serial = context.Read<PresentationFrame>().frame;
 		auto &emissions = context.Side<SideTables, BoneFxEmission>();
+		const auto lookup = context.Lookup<Lookup>();
+		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
+		// doParticleSystemAtBone attaches them to the object: nothing emitted while the viewer sees it fogged or shrouded
+		// (ParticleSystem::update's isShrouded); kept meanwhile.
+		const auto shrouded = [&](ecs::Entity entity) {
+			return lookup.IsAlive(entity) && effect_attachment_detail::ShroudedFromViewer(lookup.Get<engine::gameplay::ObjectShroud>(entity), viewer);
+		};
 		context.Read<PresentedObjects>().ForEach([&](const PresentedObject &object) {
 			if (BoneFxEmission *emission = emissions.Get(object.entity))
 			{
 				emission->seenFrame = serial;
 				for (const AttachedSystem &attached : emission->systems)
 					particles.world->Move(attached.id, effect_attachment_detail::Place(object, attached));
+				effect_attachment_detail::ObscureSystems(*particles.world, emission->systems, shrouded(object.entity));
 			}
 		});
 		for (std::size_t index = 0; index < emissions.Size(); ++index)
 			if (BoneFxEmission &emission = emissions.Value(index); emission.seenFrame != serial && !emission.systems.empty())
+			{
+				if (const ecs::Entity entity = emissions.Entities()[index]; shrouded(entity))
+				{
+					// The bone's place is not scaled (doParticleSystemAtBone's setPosition): scale 1.
+					effect_attachment_detail::FollowHidden(*particles.world, emission.systems, lookup.Get<engine::gameplay::Transform>(entity), 1.0f);
+					continue;
+				}
 				effect_attachment_detail::Remove(*particles.world, emission.systems);
+			}
 	}
 };
 }

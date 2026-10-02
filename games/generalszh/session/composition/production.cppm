@@ -11,6 +11,7 @@ import games.generalszh.gameplay.containment.systems.heal_seek_system;
 import engine.gameplay.rts.production.systems.production_system;
 import games.generalszh.gameplay.production.systems.drone_repair_system;
 import games.generalszh.gameplay.production.systems.production_refund_system;
+import games.generalszh.gameplay.production.systems.production_allowance_system;
 import engine.gameplay.rts.production.components.production_doors;
 import engine.gameplay.rts.production.components.production_exit_gate;
 import engine.gameplay.rts.production.components.production_queue;
@@ -43,6 +44,8 @@ inline void RegisterProductionSystems(ecs::SystemRegistry &registry)
 {
 	static generalszh::gameplay::ProductionRefundSystem productionRefunds;
 	registry.Register(productionRefunds);
+	static generalszh::gameplay::ProductionAllowanceSystem productionAllowance;
+	registry.Register(productionAllowance);
 	static engine::gameplay::ProductionSystem production;
 	registry.Register(production);
 	static generalszh::gameplay::DroneRepairSystem droneRepairs;
@@ -55,6 +58,8 @@ inline void OrderProductionSystems(ecs::SystemRegistry &registry)
 	namespace gameplay = engine::gameplay;
 	namespace domain = generalszh::gameplay;
 	registry.OrderBefore<domain::ProductionRefundSystem, gameplay::ProductionSystem>();
+	registry.OrderBefore<domain::ProductionRefundSystem, domain::ProductionAllowanceSystem>();
+	registry.OrderBefore<domain::ProductionAllowanceSystem, gameplay::ProductionSystem>();
 	registry.OrderBefore<gameplay::SpawnerSystem, gameplay::ProductionSystem>();
 	registry.OrderBefore<gameplay::RiderRegenSystem, domain::DroneRepairSystem>();
 	registry.OrderBefore<domain::HealSeekSystem, domain::DroneRepairSystem>();

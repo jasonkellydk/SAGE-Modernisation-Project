@@ -1,4 +1,8 @@
 add_executable(renegade main.cppm)
+set(RENEGADE_HOST_OUTPUT_DIRECTORY "" CACHE PATH "Optional game output directory for an isolated development build")
+if(RENEGADE_HOST_OUTPUT_DIRECTORY)
+    set_target_properties(renegade PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${RENEGADE_HOST_OUTPUT_DIRECTORY}")
+endif()
 set_source_files_properties(main.cppm PROPERTIES LANGUAGE CXX)
 target_link_libraries(renegade PRIVATE renegade_content renegade_menu renegade_menu_assets
     engine_platform_sdl3 generals_graphics generals_video engine_gui_text engine_gui_w3d_rendering engine_audio_video engine_audio_ffmpeg engine_audio_output stb)

@@ -40,7 +40,7 @@ struct InGameUiContent
 	// The named timers (NamedTimerCountdown*): where they start (a share of the screen; from the middle right, their
 	// right edges there), the ready ones' flash (NamedTimerCountdownFlashDuration, milliseconds as frames) and its
 	// colour, their colour, and their normal and ready fonts.
-	std::array<Engine::Math::Fixed, 2> namedTimerPosition{Engine::Math::Fixed::FromRatio(7, 10), Engine::Math::Fixed::FromRatio(7, 10)};
+	std::array<Engine::Math::Fixed, 2> namedTimerPosition{Engine::Math::Fixed::FromRatio(5, 100), Engine::Math::Fixed::FromRatio(7, 10)}; // (0.05, 0.7)
 	Engine::Math::Fixed namedTimerFlashFrames{Engine::Math::Fixed::One()};
 	std::array<std::uint8_t, 4> namedTimerFlashColor{0, 255, 255, 255};
 	std::array<std::uint8_t, 4> namedTimerNormalColor{255, 255, 0, 255};
@@ -53,6 +53,23 @@ struct InGameUiContent
 	std::string militaryCaptionFont{"Courier"};
 	int militaryCaptionPointSize{12};
 	bool militaryCaptionBold{false};
+	// DrawableCaptionFont / PointSize / Bold / Color: the drawables' captions and construction percent (Language.ini's
+	// DrawableCaptionFont overrides the font).
+	std::string drawableCaptionFont{"Arial"};
+	int drawableCaptionPointSize{10};
+	bool drawableCaptionBold{false};
+	std::array<std::uint8_t, 4> drawableCaptionColor{255, 255, 255, 255};
+	// FloatingTextTimeOut (milliseconds; none: LOGICFRAMES_PER_SECOND / 3 frames), FloatingTextMoveUpSpeed and
+	// FloatingTextVanishRate (a second; none: 1 and 0.1 a frame): as written, the presentation converts them.
+	std::optional<std::uint32_t> floatingTextTimeoutMs;
+	std::optional<Engine::Math::Fixed> floatingTextMoveUpSpeed;
+	std::optional<Engine::Math::Fixed> floatingTextVanishRate;
+	// DrawRMBScrollAnchor / MoveRMBScrollAnchor: the right-button scroll's anchor drawn, and dragged along to within half
+	// the screen of the pointer.
+	bool drawRmbScrollAnchor{false};
+	bool moveRmbScrollAnchor{false};
+	// MaxSelectionSize: the most a select-all / select-matching walk takes (below 1: no cap; -1 by default).
+	int maxSelectionSize{-1};
 	// The radius cursors (the *RadiusCursor templates), by RadiusCursorType.
 	std::array<RadiusDecalLook, RadiusCursorNames.size()> radiusCursors{};
 };
@@ -100,6 +117,36 @@ inline InGameUiContent BindInGameUi(const engine::config::Document &document)
 				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.messagePointSize);
 			else if (key == "MessageBold" && !field.values.empty())
 				ui.messageBold = engine::config::values::ParseBool(field.Value()).value_or(ui.messageBold);
+			else if (key == "DrawableCaptionFont" && !field.values.empty())
+				ui.drawableCaptionFont = std::string(field.Value());
+			else if (key == "DrawableCaptionPointSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.drawableCaptionPointSize);
+			else if (key == "DrawableCaptionBold" && !field.values.empty())
+				ui.drawableCaptionBold = engine::config::values::ParseBool(field.Value()).value_or(ui.drawableCaptionBold);
+			else if (key == "FloatingTextTimeOut" && !field.values.empty())
+			{
+				std::uint32_t milliseconds = 0;
+				if (std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), milliseconds).ec == std::errc{})
+					ui.floatingTextTimeoutMs = milliseconds;
+			}
+			else if (key == "FloatingTextMoveUpSpeed" && !field.values.empty())
+			{
+				if (const auto speed = engine::config::values::ParseFixed(field.Value()))
+					ui.floatingTextMoveUpSpeed = *speed;
+			}
+			else if (key == "FloatingTextVanishRate" && !field.values.empty())
+			{
+				if (const auto rate = engine::config::values::ParseFixed(field.Value()))
+					ui.floatingTextVanishRate = *rate;
+			}
+			else if (key == "DrawRMBScrollAnchor" && !field.values.empty())
+				ui.drawRmbScrollAnchor = engine::config::values::ParseBool(field.Value()).value_or(ui.drawRmbScrollAnchor);
+			else if (key == "MoveRMBScrollAnchor" && !field.values.empty())
+				ui.moveRmbScrollAnchor = engine::config::values::ParseBool(field.Value()).value_or(ui.moveRmbScrollAnchor);
+			else if (key == "MaxSelectionSize" && !field.values.empty())
+				std::from_chars(field.Value().data(), field.Value().data() + field.Value().size(), ui.maxSelectionSize);
+			else if (key == "DrawableCaptionColor")
+				color(field, ui.drawableCaptionColor);
 			else if (key == "SuperweaponCountdownPosition")
 			{
 				// INI::parseCoord2D: X:0.90 Y:0.01.

@@ -16,6 +16,8 @@ export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.rts.death.components.dying;
 export import games.generalszh.gameplay.eva.resources.eva_notices;
 export import games.generalszh.gameplay.battleplans.resources.battle_plan_cues;
+export import engine.gameplay.rts.stealth.resources.detections;
+export import games.generalszh.presentation.objects.resources.look_catalog;
 import Engine.Core.Math.FixedPresentation;
 
 // The radar once a tick of the logic (Radar::update: events past their time go), and Object::attemptDamage's
@@ -35,7 +37,8 @@ struct RadarEventSystem
 		ecs::Read<engine::gameplay::Dying>>;
 	using Resources = ecs::Resources<ecs::Read<engine::gameplay::Hits>, ecs::Write<RadarEvents>, ecs::Read<RadarFeedback>, ecs::Read<PresentationFrame>,
 		ecs::Read<generalszh::gameplay::ObjectTemplates>, ecs::Read<engine::gameplay::Relationships>, ecs::Write<InGameMessages>, ecs::Write<AudioCommands>,
-		ecs::Write<EvaState>, ecs::Read<generalszh::gameplay::InfiltrationNotices>, ecs::Read<generalszh::gameplay::BattlePlanCues>>;
+		ecs::Write<EvaState>, ecs::Read<generalszh::gameplay::InfiltrationNotices>, ecs::Read<generalszh::gameplay::BattlePlanCues>,
+		ecs::Read<engine::gameplay::StealthDiscoveries>, ecs::Read<LookCatalog>>;
 
 	void Execute(ecs::SystemContext &context) const
 	{
@@ -64,12 +67,51 @@ struct RadarEventSystem
 			if (cue.player == viewer)
 				CreateRadarEvent(radar, {Engine::Math::ToFloat(cue.at.x), Engine::Math::ToFloat(cue.at.y), Engine::Math::ToFloat(cue.at.z)},
 					RadarEventType::BattlePlan, frame);
-			if (cue.definition < feedback.battlePlanMessages.size())
-				if (const std::u16string &text = feedback.battlePlanMessages[cue.definition][static_cast<std::size_t>(cue.plan) - 1]; !text.empty())
+			if (const auto found = feedback.battlePlanMessages.find(context.Read<generalszh::gameplay::ObjectTemplates>().DefinitionAt(cue.definition).name);
+				found != feedback.battlePlanMessages.end())
+				if (const std::u16string &text = found->second[static_cast<std::size_t>(cue.plan) - 1]; !text.empty())
 					AddMessage(context.Write<InGameMessages>(), text, frame);
 		}
 		const auto &templates = context.Read<generalszh::gameplay::ObjectTemplates>();
 		const auto lookup = context.Lookup<Lookup>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		// StealthDetectorUpdate::update: something stealthed found that was not detected before. The detector's player (not
+		// allied to it) tries a stealth discovered event there; made, hears StealthDiscoveredSound, reads StealthDiscovered and
+		// gets its EnemyDetectionEvaEvent. Its own player (the detector not allied to it) gets a stealth neutralized event
+		// (only tried for a mine, booby trap or demo trap); made, StealthNeutralizedSound, the message and its
+		// OwnDetectionEvaEvent.
+		const auto &relationships = context.Read<gp::Relationships>();
+		context.Read<gp::StealthDiscoveries>().ForEach([&](const gp::StealthDiscovery &found) {
+			const gp::Owner *detector = lookup.IsAlive(found.detector) ? lookup.Get<gp::Owner>(found.detector) : nullptr;
+			const gp::Owner *victim = lookup.IsAlive(found.target) ? lookup.Get<gp::Owner>(found.target) : nullptr;
+			const gp::DefinitionRef *ref = lookup.IsAlive(found.target) ? lookup.Get<gp::DefinitionRef>(found.target) : nullptr;
+			if (detector == nullptr || victim == nullptr || ref == nullptr)
+				return;
+			if (relationships.Between(gp::Relationships::NoTeam, detector->player, gp::Relationships::NoTeam, victim->player) == gp::Relationship::Allies)
+				return;
+			const std::array<float, 3> where{Engine::Math::ToFloat(found.position.x), Engine::Math::ToFloat(found.position.y), Engine::Math::ToFloat(found.position.z)};
+			const DefinitionLooks *looks = catalog.Of(ref->index);
+			const auto eva = looks != nullptr ? looks->detectionEva : std::array<std::uint32_t, 2>{DefinitionLooks::NoEva, DefinitionLooks::NoEva};
+			const auto tell = [&](const std::u16string &text, const std::string &sound, std::uint32_t message) {
+				if (!sound.empty())
+					context.Write<AudioCommands>().pending.push_back({AudioCommand::Kind::Interface, sound});
+				AddMessage(context.Write<InGameMessages>(), text, frame);
+				if (message != DefinitionLooks::NoEva)
+					AskEva(context.Write<EvaState>(), message);
+			};
+			if (detector->player == viewer && TryRadarEvent(radar, RadarEventType::StealthDiscovered, where, frame))
+				tell(feedback.stealthDiscovered, feedback.stealthDiscoveredSound, eva[0]);
+			if (victim->player == viewer)
+			{
+				bool made = true;
+				if (looks != nullptr && looks->trapLike)
+					made = TryRadarEvent(radar, RadarEventType::StealthNeutralized, where, frame);
+				else
+					CreateRadarEvent(radar, where, RadarEventType::StealthNeutralized, frame);
+				if (made)
+					tell(feedback.stealthNeutralized, feedback.stealthNeutralizedSound, eva[1]);
+			}
+		});
 		std::vector<gp::Hit> hits;
 		context.Read<gp::Hits>().AppendTo(hits);
 		for (const gp::Hit &hit : hits)
@@ -86,7 +128,7 @@ struct RadarEventSystem
 			const gp::Owner *source = lookup.IsAlive(hit.source) ? lookup.Get<gp::Owner>(hit.source) : nullptr;
 			if (source != nullptr && source->player == owner->player)
 				continue;
-			if (ref->index >= feedback.onRadar.size() || !feedback.onRadar[ref->index])
+			if (const DefinitionLooks *looks = catalog.Of(ref->index); looks == nullptr || !looks->onRadar)
 				continue;
 			const content::ObjectDefinition &kind = templates.DefinitionAt(ref->index);
 			if (kind.Is("NO_ATTACK_WARNING"))

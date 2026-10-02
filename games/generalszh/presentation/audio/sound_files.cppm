@@ -8,8 +8,8 @@ import engine.audio.decoders.ffmpeg.ffmpeg_decoder;
 import engine.audio.definitions.wave_length;
 
 // Zero Hour's sound files, as the original names them: a sound list entry
-// "vgenlo2a" is AudioRoot\SoundsFolder\vgenlo2a.<ext>, music and speech
-// files are under the music / streaming folder; each language's own
+// "vgenlo2a" is AudioRoot\SoundsFolder\vgenlo2a.<ext>, music files are
+// under the music folder and speech files under the streaming folder; each language's own
 // recording (…\<Language>\file) is preferred when there is one. Sounds
 // decode once and stay cached; music and speech stream.
 export namespace generalszh::presentation
@@ -38,12 +38,13 @@ public:
 		return m_cache.emplace(std::string(name), std::move(decoded)).first->second;
 	}
 
-	std::shared_ptr<engine::audio::StreamFeed> Stream(std::string_view filename) override
+	// AudioEventRTS::generateFilenamePrefix: music from MusicFolder, every other streamed file (speech) from
+	// StreamingFolder.
+	std::shared_ptr<engine::audio::StreamFeed> Stream(std::string_view filename, engine::audio::Bus bus) override
 	{
-		for (const std::string *folder : {&m_settings.musicFolder, &m_settings.streamingFolder})
-			if (auto bytes = Find(*folder, std::string(filename)))
-				if (auto decoder = engine::audio::AudioDecoder::Open(std::move(*bytes), m_rate))
-					return std::make_shared<engine::audio::DecoderFeed>(std::move(decoder), m_rate);
+		if (auto bytes = Find(StreamFolder(bus), std::string(filename)))
+			if (auto decoder = engine::audio::AudioDecoder::Open(std::move(*bytes), m_rate))
+				return std::make_shared<engine::audio::DecoderFeed>(std::move(decoder), m_rate);
 		return nullptr;
 	}
 
@@ -72,14 +73,7 @@ public:
 		if (!sound.attack.empty())
 			add(effect(sound.attack.front()));
 		if (!sound.filename.empty())
-		{
-			for (const std::string *folder : {&m_settings.musicFolder, &m_settings.streamingFolder})
-				if (auto bytes = Find(*folder, sound.filename))
-				{
-					add(std::move(bytes));
-					break;
-				}
-		}
+			add(Find(StreamFolder(sound.bus), sound.filename));
 		else if (!sound.sounds.empty())
 			add(effect(sound.sounds.front()));
 		if (!sound.decay.empty())
@@ -94,6 +88,11 @@ public:
 	}
 
 private:
+	const std::string &StreamFolder(engine::audio::Bus bus) const
+	{
+		return bus == engine::audio::Bus::Music ? m_settings.musicFolder : m_settings.streamingFolder;
+	}
+
 	std::optional<std::vector<std::byte>> Find(const std::string &folder, const std::string &file) const
 	{
 		const std::string base = m_settings.audioRoot + "\\" + folder + "\\";

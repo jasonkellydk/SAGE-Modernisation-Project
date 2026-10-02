@@ -166,6 +166,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_lan_game_through_its_screens)
 	guest.lobbyScreen->selectedGame.Set(0);
 	BOOST_TEST(guest.lobbyScreen->details.Get().shown);
 	BOOST_TEST((guest.lobbyScreen->details.Get().host == u"Host"));
+	BOOST_TEST((guest.lobbyScreen->details.Get().icons == std::vector<std::string>{"GameinfoRANDOM"})); // the host's faction: Random
 	guest.lobbyScreen->join.Execute();
 	step(600);
 	BOOST_TEST((guest.model.requestedScreen.Get() == Screen::LanGameOptions));
@@ -249,6 +250,21 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_host_sends_a_player_away)
 	step(400);
 	BOOST_TEST((guest.model.requestedScreen.Get() == Screen::NetworkLobby)); // back in the lobby
 	BOOST_TEST(host.optionsScreen->player[1].Get() == static_cast<int>(setup::SlotState::Closed));
+}
+
+// legacy_parity: GameInfoWindow.cpp RefreshGameInfoWindow: each player's icon in the selected game's list: an observer
+// (PLAYERTEMPLATE_OBSERVER) GameinfoOBSRVR, a template below 0 or past the store GameinfoRANDOM, else the template's
+// SideIconImage (getSideIconImage).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_game_info_list_shows_each_players_side_icon)
+{
+	SetupCatalog catalog;
+	catalog.playerTemplateCount = 3;
+	catalog.sideIcons = {"GameinfoOBSRVR", "GameinfoAMRCA", "GameinfoGLA"};
+	BOOST_TEST(GameInfoIcon(catalog, setup::ObserverTemplate) == "GameinfoOBSRVR");
+	BOOST_TEST(GameInfoIcon(catalog, -1) == "GameinfoRANDOM");
+	BOOST_TEST(GameInfoIcon(catalog, 3) == "GameinfoRANDOM");
+	BOOST_TEST(GameInfoIcon(catalog, 1) == "GameinfoAMRCA");
+	BOOST_TEST(GameInfoIcon(catalog, 2) == "GameinfoGLA");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -76,6 +76,8 @@ struct MoveHintSystem
 				add(move->destination);
 			else if (const auto *attackMove = std::get_if<commands::AttackMoveTo>(&order))
 				add(attackMove->position);
+			else if (const auto *waypoint = std::get_if<commands::AddWaypoint>(&order))
+				add(waypoint->destination);
 		}
 		hints.instances.clear();
 		const std::uint32_t look = context.Read<LookCatalog>().moveHintLook;

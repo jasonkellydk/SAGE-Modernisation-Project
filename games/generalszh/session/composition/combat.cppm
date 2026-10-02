@@ -42,6 +42,7 @@ import games.generalszh.gameplay.railroad.systems.railroad_system;
 import games.generalszh.gameplay.upgrades.systems.upgrade_effect_system;
 import engine.gameplay.rts.combat.systems.assist_system;
 import engine.gameplay.rts.combat.systems.attack_move_system;
+import engine.gameplay.rts.combat.systems.attack_move_resume_system;
 import engine.gameplay.rts.combat.systems.auto_fire_system;
 import engine.gameplay.rts.combat.systems.countermeasures_system;
 import engine.gameplay.rts.combat.systems.damage_reaction_system;
@@ -70,8 +71,10 @@ import games.generalszh.gameplay.combat.systems.weapon_bonus_pulse_system;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.rts.combat.components.assisted_targeting;
 import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.rts.combat.components.attack_move_resume;
 import engine.gameplay.rts.combat.components.auto_fire;
 import engine.gameplay.rts.combat.components.countermeasures;
+import engine.gameplay.rts.combat.components.sneaky_target;
 import engine.gameplay.rts.combat.components.damage_reaction;
 import engine.gameplay.rts.combat.components.deploy;
 import engine.gameplay.rts.combat.components.firing_tracker;
@@ -102,6 +105,7 @@ inline void EmplaceCombatResources(ecs::World &world, [[maybe_unused]] const Sim
 	world.EmplaceResource<engine::gameplay::HistoricDamage>(setup.content.gameData.historicDamageLimitTicks);
 	world.EmplaceResource<engine::gameplay::NeutronEffects>();
 	world.EmplaceResource<generalszh::gameplay::CooldownCreationEvents>();
+	world.EmplaceResource<generalszh::gameplay::UnmannedNotices>();
 	world.EmplaceResource<engine::gameplay::GarrisonHits>();
 	world.EmplaceResource<engine::gameplay::MissileGarrisonHits>();
 	world.EmplaceResource<engine::gameplay::GarrisonClears>();
@@ -122,6 +126,7 @@ inline void RegisterCombatComponents(ecs::World &world)
 {
 	world.RegisterComponent<generalszh::gameplay::CleanupHazard>();
 	world.RegisterComponent<engine::gameplay::Countermeasures>();
+	world.RegisterComponent<engine::gameplay::SneakyTarget>();
 	world.RegisterComponent<generalszh::gameplay::BattleBus>();
 	world.RegisterComponent<generalszh::gameplay::WeaponBonusPulse>();
 	world.RegisterComponent<generalszh::gameplay::EnemyNear>();
@@ -135,12 +140,16 @@ inline void RegisterCombatComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::MissileFlight>();
 	world.RegisterComponent<engine::gameplay::Aggression>();
 	world.RegisterComponent<engine::gameplay::AttackMove>();
+	world.RegisterComponent<engine::gameplay::AttackMoveResume>();
 	world.RegisterComponent<engine::gameplay::AssistedTargeting>();
 	world.RegisterComponent<engine::gameplay::Assisting>();
 	world.RegisterComponent<engine::gameplay::AutoFire>();
 	world.RegisterComponent<engine::gameplay::DamageReaction>();
 	world.RegisterComponent<generalszh::gameplay::CooldownCreations>();
 	world.RegisterComponent<engine::gameplay::Deploy>();
+	world.RegisterComponent<engine::gameplay::Pursuit>();
+	world.RegisterComponent<engine::gameplay::SightLooker>();
+	world.RegisterComponent<engine::gameplay::AttackApproach>();
 	world.RegisterComponent<engine::gameplay::NeutronFlight>();
 }
 
@@ -152,6 +161,8 @@ inline void RegisterCombatSystems(ecs::SystemRegistry &registry)
 	registry.Register(targeting);
 	static engine::gameplay::AttackMoveSystem attackMoves;
 	registry.Register(attackMoves);
+	static engine::gameplay::AttackMoveResumeSystem attackMoveResumes;
+	registry.Register(attackMoveResumes);
 	static engine::gameplay::TurretSystem turrets;
 	registry.Register(turrets);
 	static engine::gameplay::AltTurretSystem altTurrets;

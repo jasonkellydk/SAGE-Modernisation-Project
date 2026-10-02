@@ -15,7 +15,7 @@ struct BuildPlacementSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::Owner>>;
 	using Resources = ecs::Resources<ecs::Write<PointerInput>, ecs::Read<InteractionView>, ecs::Write<BuildPlacement>, ecs::Write<PlayerOrders>,
-		ecs::Read<engine::gameplay::GroundHeight>, ecs::Read<LocalPlayer>>;
+		ecs::Read<engine::gameplay::GroundHeight>, ecs::Read<LocalPlayer>, ecs::Write<UnitVoiceCues>, ecs::Read<engine::gameplay::DeckSurfaces>>;
 
 	void Execute(ecs::SystemContext &context) const
 	{
@@ -27,6 +27,7 @@ struct BuildPlacementSystem
 		if (!view.valid || !context.Read<LocalPlayer>().valid)
 			return;
 		const auto &ground = context.Read<engine::gameplay::GroundHeight>();
+		const auto *decks = context.Find<engine::gameplay::DeckSurfaces>(); // screenToTerrain picks bridges too
 		const bool leftPressed = (pointer.pressed & 1u) != 0 && !pointer.overInterface;
 		const bool leftReleased = (pointer.released & 1u) != 0;
 		const bool rightPressed = (pointer.pressed & 2u) != 0 && !pointer.overInterface;
@@ -44,17 +45,17 @@ struct BuildPlacementSystem
 		if (placement.anchored)
 		{
 			// The ghost stays at the anchor; dragged, it faces from the anchor towards the pointer on the ground.
-			const auto start = PointerInteractionSystem::GroundUnder(view, ground, placement.anchorScreen[0], placement.anchorScreen[1]);
+			const auto start = PointerInteractionSystem::GroundUnder(view, ground, placement.anchorScreen[0], placement.anchorScreen[1], decks);
 			if (start)
 			{
 				placement.at = *start;
 				placement.onGround = true;
 			}
 			if (pointer.x != placement.anchorScreen[0] || pointer.y != placement.anchorScreen[1])
-				if (const auto end = PointerInteractionSystem::GroundUnder(view, ground, pointer.x, pointer.y); start && end)
+				if (const auto end = PointerInteractionSystem::GroundUnder(view, ground, pointer.x, pointer.y, decks); start && end)
 					placement.facing = std::atan2((*end)[1] - (*start)[1], (*end)[0] - (*start)[0]);
 		}
-		else if (const auto under = PointerInteractionSystem::GroundUnder(view, ground, pointer.x, pointer.y))
+		else if (const auto under = PointerInteractionSystem::GroundUnder(view, ground, pointer.x, pointer.y, decks))
 		{
 			placement.at = *under;
 			placement.onGround = true;
@@ -68,8 +69,18 @@ struct BuildPlacementSystem
 				using interaction_detail::ToFixed;
 				const float turns = placement.facing / (2.0f * std::numbers::pi_v<float>);
 				const auto facing = static_cast<std::uint32_t>(static_cast<std::int64_t>(std::llround(static_cast<double>(turns) * 4294967296.0)));
-				context.Write<PlayerOrders>().pending.push_back(
-					commands::BuildStructure{placement.builder, placement.structure, {ToFixed(placement.at[0]), ToFixed(placement.at[1])}, facing});
+				// PlaceEventTranslator: placed for a SPECIAL_POWER_CONSTRUCT button, the power fires there instead
+				// (MSG_DO_SPECIAL_POWER_AT_LOCATION with the placement's angle, the button's options, the builder as its
+				// source), with no voice; else the build (MSG_DOZER_CONSTRUCT), the selection answering it.
+				if (!placement.specialPower.empty())
+					context.Write<PlayerOrders>().pending.push_back(commands::UseSpecialPower{placement.builder, placement.specialPower,
+						{ToFixed(placement.at[0]), ToFixed(placement.at[1])}, true, placement.options, facing});
+				else
+				{
+					context.Write<PlayerOrders>().pending.push_back(
+						commands::BuildStructure{placement.builder, placement.structure, {ToFixed(placement.at[0]), ToFixed(placement.at[1])}, facing});
+					interaction_detail::Voice(context, VoiceOrder::Construct);
+				}
 				placement = BuildPlacement{};
 			}
 			else

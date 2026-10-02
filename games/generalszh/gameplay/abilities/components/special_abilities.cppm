@@ -59,6 +59,8 @@ inline constexpr std::uint8_t Persistent = 1u << 0;
 inline constexpr std::uint8_t PersistWhenOwnerDies = 1u << 1;
 inline constexpr std::uint8_t UniqueTargets = 1u << 2;
 inline constexpr std::uint8_t AlwaysValidate = 1u << 3;
+// Its SpecialObject streams a laser (its template has a LaserUpdate: initLaser finds one).
+inline constexpr std::uint8_t Laser = 1u << 4;
 }
 
 // Its state's switches (m_active, m_noTargetCommand, m_facingInitiated, m_facingComplete, m_withinStartAbilityRange).
@@ -69,6 +71,8 @@ inline constexpr std::uint8_t NoTargetCommand = 1u << 1;
 inline constexpr std::uint8_t FacingInitiated = 1u << 2;
 inline constexpr std::uint8_t FacingComplete = 1u << 3;
 inline constexpr std::uint8_t WithinRange = 1u << 4;
+// m_doDisableFXParticles cleared (it starts set): a hack's disable effect skipped, as every other one on a small building.
+inline constexpr std::uint8_t NoDisableFx = 1u << 5;
 }
 
 struct AbilitySlot

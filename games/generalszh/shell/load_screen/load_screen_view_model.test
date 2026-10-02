@@ -2,6 +2,8 @@
 
 #include <string>
 #include <vector>
+#include <utility>
+#include <functional>
 
 import games.generalszh.shell.load_screen.load_screen_kind;
 import games.generalszh.shell.load_screen.shell_game_load_screen_view_model;
@@ -102,6 +104,120 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_missions_bar_climbs_with_its_movie_then_its
 	BOOST_TEST((screen.look.Get() == MissionLoadLook{}));
 	screen.EndMovie();
 	BOOST_TEST(screen.movieShown.Get());
+}
+
+// legacy_parity: LoadScreen.cpp (EA Zero Hour) audio: SinglePlayerLoadScreen::init and ChallengeLoadScreen::init end by
+// adding m_ambientLoop ("LoadScreenAmbient"; "No music in SinglePlayerLoadScreen"), removed in their destructors;
+// MultiPlayerLoadScreen::init plays the local faction's LoadScreenMusic (fading the music before; faded in its destructor);
+// ShellGameLoadScreen plays nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_which_load_screens_sound)
+{
+	BOOST_TEST(LoadScreenAmbientFor(LoadScreenKind::SinglePlayer) == "LoadScreenAmbient");
+	BOOST_TEST(LoadScreenAmbientFor(LoadScreenKind::Challenge) == "LoadScreenAmbient");
+	BOOST_TEST(LoadScreenAmbientFor(LoadScreenKind::MultiPlayer).empty());
+	BOOST_TEST(LoadScreenAmbientFor(LoadScreenKind::ShellGame).empty());
+	BOOST_TEST(LoadScreenAmbientFor(LoadScreenKind::None).empty());
+	BOOST_TEST(LoadScreenPlaysMusic(LoadScreenKind::MultiPlayer));
+	BOOST_TEST(!LoadScreenPlaysMusic(LoadScreenKind::SinglePlayer));
+	BOOST_TEST(!LoadScreenPlaysMusic(LoadScreenKind::Challenge));
+	BOOST_TEST(!LoadScreenPlaysMusic(LoadScreenKind::ShellGame));
+}
+
+// legacy_parity: LoadScreen.cpp (EA Zero Hour) ChallengeLoadScreen::init / activatePieces, per frame of the mission's movie
+// (the stream's index after frameNext): frame 20 the bio titles show; 24 the entries show, emptied; from then on every
+// even frame types one more letter of each side's BioNameString (into both its big and its small name), BioRankString
+// (the "birthplace" entry) and BioStrategyString; 35 the player's PortraitMovieLeftName and the opponent's
+// PortraitMovieRightName start in their windows, shown, and the player's NameSound plays; 63 the outer and 74 the inner
+// reticle circle, 80 the versus backdrop; 98 the "VSSmall" overlay starts and "Taunts_GCAnnouncer12" plays; 140 the
+// opponent's NameSound; after the movie the opponent's (random) taunt, once. A campaign's screen has none of it.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_challenge_load_screen_brings_the_generals_on_by_movie_frame)
+{
+	std::vector<std::pair<int, std::string>> sounds;
+	int frame = 0;
+	ChallengeLoadSetup setup;
+	setup.player = {u"Abc", u"R", u"", "NamePlayer", "PlayerLeft", "PlayerRight", ""};
+	setup.opponent = {u"Xy", u"", u"S", "NameOpponent", "OpponentLeft", "OpponentRight", "Taunt2"};
+	setup.sound = [&](std::string_view sound) { sounds.emplace_back(frame, std::string(sound)); };
+
+	MissionLoadScreenViewModel screen;
+	screen.Init(true);
+	screen.InitChallenge(setup);
+	screen.StartMovie("challenge_0", 600);
+	const auto step = [&](int to) {
+		while (frame < to)
+			screen.MovieFrame(++frame);
+	};
+	step(19);
+	BOOST_TEST(!screen.titlesShown.Get());
+	step(20);
+	BOOST_TEST(screen.titlesShown.Get());
+	BOOST_TEST(!screen.entriesShown.Get());
+	step(24);
+	BOOST_TEST(screen.entriesShown.Get());
+	BOOST_TEST((screen.left.name.Get() == u""));
+	step(25);
+	BOOST_TEST((screen.left.name.Get() == u""));
+	step(26);
+	BOOST_TEST((screen.left.name.Get() == u"A"));
+	BOOST_TEST((screen.left.bigName.Get() == u"A"));
+	BOOST_TEST((screen.left.rank.Get() == u"R"));
+	BOOST_TEST((screen.left.strategy.Get() == u""));
+	BOOST_TEST((screen.right.name.Get() == u"X"));
+	BOOST_TEST((screen.right.strategy.Get() == u"S"));
+	step(27);
+	BOOST_TEST((screen.left.name.Get() == u"A"));
+	step(28);
+	BOOST_TEST((screen.left.name.Get() == u"Ab"));
+	BOOST_TEST((screen.right.name.Get() == u"Xy"));
+	step(34);
+	BOOST_TEST((screen.left.name.Get() == u"Abc"));
+	BOOST_TEST((screen.right.bigName.Get() == u"Xy"));
+	BOOST_TEST(!screen.portraitMoviesShown.Get());
+	BOOST_TEST(screen.portraitMovieLeft.Get().empty());
+	step(35);
+	BOOST_TEST(screen.portraitMoviesShown.Get());
+	BOOST_TEST(screen.portraitMovieLeft.Get() == "PlayerLeft");
+	BOOST_TEST(screen.portraitMovieRight.Get() == "OpponentRight");
+	step(62);
+	BOOST_TEST(!screen.outerCircleShown.Get());
+	step(63);
+	BOOST_TEST(screen.outerCircleShown.Get());
+	step(73);
+	BOOST_TEST(!screen.innerCircleShown.Get());
+	step(74);
+	BOOST_TEST(screen.innerCircleShown.Get());
+	step(79);
+	BOOST_TEST(!screen.versusBackdropShown.Get());
+	step(80);
+	BOOST_TEST(screen.versusBackdropShown.Get());
+	step(97);
+	BOOST_TEST(!screen.versusShown.Get());
+	BOOST_TEST(screen.versusMovie.Get().empty());
+	step(98);
+	BOOST_TEST(screen.versusShown.Get());
+	BOOST_TEST(screen.versusMovie.Get() == "VSSmall");
+	step(200);
+	BOOST_TEST_REQUIRE(sounds.size() == 3u);
+	BOOST_TEST((sounds[0] == std::pair<int, std::string>{35, "NamePlayer"}));
+	BOOST_TEST((sounds[1] == std::pair<int, std::string>{98, "Taunts_GCAnnouncer12"}));
+	BOOST_TEST((sounds[2] == std::pair<int, std::string>{140, "NameOpponent"}));
+	screen.EndMovie();
+	screen.EndMovie();
+	BOOST_TEST_REQUIRE(sounds.size() == 4u);
+	BOOST_TEST(sounds[3].second == "Taunt2");
+	BOOST_TEST(screen.movieShown.Get()); // the movie's last frame stays
+
+	// A campaign's mission screen: no pieces, whatever it is given.
+	sounds.clear();
+	frame = 0;
+	screen.Init(false);
+	screen.InitChallenge(setup);
+	screen.StartMovie("USA", 600);
+	step(200);
+	screen.EndMovie();
+	BOOST_TEST(sounds.empty());
+	BOOST_TEST(!screen.titlesShown.Get());
+	BOOST_TEST(screen.portraitMovieLeft.Get().empty());
 }
 
 // Legacy parity (LoadScreen.cpp MultiPlayerLoadScreen::init, GameInfo.cpp GameSlot::getApparent*, SkirmishGameOptionsMenu

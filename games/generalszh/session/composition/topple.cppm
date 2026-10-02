@@ -20,6 +20,7 @@ inline void EmplaceToppleResources(ecs::World &world, [[maybe_unused]] const Sim
 {
 	world.EmplaceResource<engine::gameplay::ToppleSettings>(engine::gameplay::ToppleSettings{*content::DeathTypeIndex("TOPPLED")});
 	world.EmplaceResource<engine::gameplay::ToppleEvents>();
+	world.EmplaceResource<engine::gameplay::TopplePushes>();
 }
 
 inline void RegisterToppleComponents(ecs::World &world)

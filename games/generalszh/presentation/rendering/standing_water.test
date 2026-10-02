@@ -1,0 +1,163 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.rendering.standing_water;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::presentation;
+using generalszh::content::WaterColor;
+using generalszh::content::WaterSetDefinition;
+using generalszh::content::WaterSettings;
+using generalszh::content::WaterTransparencyDefinition;
+using Engine::Math::Fixed;
+
+namespace
+{
+Fixed Ratio(std::int64_t numerator, std::int64_t denominator) { return Fixed::FromRatio(numerator, denominator); }
+
+// The three terrain lights of a time of day: the first lights from straight half down (z -0.5) with its ambient; the
+// second points up (z +0.5), so it lights nothing; the third is unset (no diffuse).
+std::vector<engine::level::Light> TerrainLights()
+{
+	std::vector<engine::level::Light> lights(3);
+	lights[0].ambient = {Ratio(1, 4), Ratio(1, 2), Ratio(1, 8)};
+	lights[0].diffuse = {Fixed::One(), Ratio(1, 2), Ratio(1, 4)};
+	lights[0].direction = {Fixed{}, Fixed{}, Ratio(-1, 2)};
+	lights[1].ambient = {Fixed::One(), Fixed::One(), Fixed::One()}; // only the first light's ambient counts
+	lights[1].diffuse = {Ratio(1, 2), Ratio(1, 2), Ratio(1, 2)};
+	lights[1].direction = {Fixed{}, Fixed{}, Ratio(1, 2)};
+	lights[2].direction = {Fixed{}, Fixed{}, Fixed::FromInt(-1)};
+	return lights;
+}
+
+WaterSetDefinition Look(WaterColor diffuse)
+{
+	WaterSetDefinition look;
+	look.diffuse = diffuse;
+	return look;
+}
+
+bool Equal(const StandingWaterDiffuse &value, std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
+{
+	return value == StandingWaterDiffuse{r, g, b, a};
+}
+}
+
+BOOST_AUTO_TEST_SUITE(standing_water)
+
+// legacy_parity: W3DWater.cpp WaterRenderObjClass::drawTrapezoidWater (and drawRiverWater, the same code): with
+// StandingWaterColor left white (Water.ini's R:255 G:255 B:255, 1.0 after INI::parseRGBColor) the water's diffuse is
+// m_terrainAmbient[0] plus, for each of the m_numGlobalLights (3) terrain lights pointing down (-z > 0), -z times its
+// diffuse, times the time of day's DiffuseColor / 255, times 255, truncated (REAL_TO_INT); alpha the DiffuseColor alpha.
+// Here the shade is 0.25 + 0.5 x 1 = 0.75, 0.5 + 0.5 x 0.5 = 0.75 and 0.125 + 0.5 x 0.25 = 0.25 (the upward light adds
+// nothing), so Water.ini's grey 175 (morning) gives 0.75 x 175 = 131.25 -> 131 and 0.25 x 175 = 43.75 -> 43; 185
+// (afternoon) 138, 138, 46; 225 (evening) 168, 168, 56; 100 (night) 75, 75, 25. All in single precision as the original.
+BOOST_AUTO_TEST_CASE(legacy_parity_unset_standing_water_colour_is_the_terrain_lighting_times_the_diffuse)
+{
+	const auto lights = TerrainLights();
+	const WaterTransparencyDefinition transparency; // StandingWaterColor white, as Water.ini
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({175, 175, 175, 255}), lights), 131, 131, 43, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({185, 185, 185, 255}), lights), 138, 138, 46, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({225, 225, 225, 255}), lights), 168, 168, 56, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({100, 100, 100, 255}), lights), 75, 75, 25, 255));
+	// The alpha is the DiffuseColor's, whatever the lighting.
+	BOOST_TEST(PickStandingWaterDiffuse(transparency, Look({100, 100, 100, 128}), lights).a == 128);
+	// Unlit (no lights for the time of day): black.
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({175, 175, 175, 255}), {}), 0, 0, 0, 255));
+}
+
+// Fixed retail quirks (W3DWater.cpp drawTrapezoidWater): the original takes its "red" water shade from the packed
+// DiffuseColor's low (blue) byte and its "blue" from the red one, and packs a channel lit past 255 unclamped so it
+// spills into the next channel. Each channel uses its own colour here (200, 100, 50 -> 0.75 x 200 = 150,
+// 0.75 x 100 = 75, 0.25 x 50 = 12.5 -> 12) and a channel lit past full is 255 (1.5 x 225 = 337.5).
+BOOST_AUTO_TEST_CASE(standing_water_channels_match_and_clamp)
+{
+	const auto lights = TerrainLights();
+	const WaterTransparencyDefinition transparency;
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({200, 100, 50, 255}), lights), 150, 75, 12, 255));
+	std::vector<engine::level::Light> bright(1);
+	bright[0].ambient = {Ratio(1, 2), Ratio(1, 2), Ratio(1, 2)};
+	bright[0].diffuse = {Fixed::One(), Fixed::One(), Fixed::One()};
+	bright[0].direction = {Fixed{}, Fixed{}, Fixed::FromInt(-1)};
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({225, 225, 225, 255}), bright), 255, 255, 255, 255));
+}
+
+// legacy_parity: W3DWater.cpp drawTrapezoidWater: a StandingWaterColor other than white is the diffuse as it is
+// (channel / 255 x 255, exact in single precision for every byte), lights ignored; black is the special case that
+// disables lighting (full white). The alpha stays the time of day's DiffuseColor alpha.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_set_standing_water_colour_is_the_diffuse)
+{
+	const auto lights = TerrainLights();
+	WaterTransparencyDefinition transparency;
+	transparency.standingWaterColor = {85, 85, 70};
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({175, 175, 175, 255}), lights), 85, 85, 70, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({100, 100, 100, 128}), {}), 85, 85, 70, 128));
+	transparency.standingWaterColor = {0, 0, 0};
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(transparency, Look({175, 175, 175, 255}), lights), 255, 255, 255, 255));
+	// Every byte survives value / 255.0f x 255.0f.
+	for (int value = 1; value < 255; ++value)
+	{
+		transparency.standingWaterColor = {static_cast<std::uint8_t>(value), 0, 0};
+		BOOST_TEST(PickStandingWaterDiffuse(transparency, Look({175, 175, 175, 255}), lights).r == value);
+	}
+}
+
+// legacy_parity: the time of day picks the lights (GlobalData::setTimeOfDay copies the map's lighting for it).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_time_of_day_picks_the_terrain_lights)
+{
+	engine::level::Lighting lighting;
+	lighting.sets.assign(4, {});
+	lighting.sets[2].terrain = TerrainLights();
+	lighting.current = 2;
+	BOOST_TEST(CurrentTerrainLights(lighting).size() == 3u);
+	BOOST_TEST(CurrentTerrainLights(lighting).data() == lighting.sets[2].terrain.data());
+	lighting.current = 1;
+	BOOST_TEST(CurrentTerrainLights(lighting).empty());
+	lighting.current = 7;
+	BOOST_TEST(CurrentTerrainLights(lighting).empty());
+}
+
+// legacy_parity: the shipped data. Water.ini's WaterTransparency leaves StandingWaterColor white and names
+// StandingWaterTexture TWWater01.tga (W3DWater ReAcquireResources' m_riverTexture), so each time of day's water is lit by
+// the terrain times its DiffuseColor (175, 185, 225, 100, alpha 255). Bitter Winter's map.ini sets StandingWaterColor
+// R:85 G:85 B:70 (applied over Water.ini, as INI_LOAD_CREATE_OVERRIDES), which is its water's colour.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_standing_water_per_time_of_day)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	engine::config::Diagnostics grammarDiagnostics;
+	generalszh::content::ContentLoader loader(files, generalszh::content::ZeroHourIniGrammar(grammarDiagnostics));
+	WaterSettings settings;
+	{
+		const auto &document = loader.Load({"Data/INI/Default/Water", "Data/INI/Water"});
+		engine::config::BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+		generalszh::content::BindWaterSettings(document, settings, context);
+	}
+	BOOST_TEST(settings.transparency.standingWaterTexture == "TWWater01.tga");
+	BOOST_TEST((settings.transparency.standingWaterColor == engine::config::Rgb{255, 255, 255}));
+	const auto lights = TerrainLights();
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(settings.transparency, settings.For(0), lights), 131, 131, 43, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(settings.transparency, settings.For(1), lights), 138, 138, 46, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(settings.transparency, settings.For(2), lights), 168, 168, 56, 255));
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(settings.transparency, settings.For(3), lights), 75, 75, 25, 255));
+
+	{
+		const auto &document = loader.Load({"Maps/Bitter Winter/map"});
+		engine::config::BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+		generalszh::content::BindWaterSettings(document, settings, context);
+	}
+	BOOST_TEST((settings.transparency.standingWaterColor == engine::config::Rgb{85, 85, 70}));
+	BOOST_TEST(settings.transparency.standingWaterTexture == "TWWater01.tga");
+	BOOST_TEST(Equal(PickStandingWaterDiffuse(settings.transparency, settings.For(1), lights), 85, 85, 70, 255));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

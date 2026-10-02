@@ -37,14 +37,26 @@ struct ChatLine
 	bool operator==(const ChatLine &) const = default;
 };
 
-// The selected game's details (GameInfoWindow): its host, its map and who is in it.
+// The selected game's details (GameInfoWindow): its host, its map and who is in it, each player with its side's icon.
 struct GameDetails
 {
 	bool shown{false};
 	std::u16string host, map;
 	std::vector<ChatLine> players;
+	std::vector<std::string> icons; // by player: GameinfoOBSRVR, GameinfoRANDOM or its PlayerTemplate's SideIconImage
 	bool operator==(const GameDetails &) const = default;
 };
+
+// RefreshGameInfoWindow: a slot's icon in the game's player list: an observer's GameinfoOBSRVR, a template not chosen (or
+// not known) GameinfoRANDOM, else its PlayerTemplate's SideIconImage.
+inline std::string GameInfoIcon(const SetupCatalog &catalog, int playerTemplate)
+{
+	if (playerTemplate == session::setup::ObserverTemplate)
+		return "GameinfoOBSRVR";
+	if (playerTemplate < 0 || playerTemplate >= catalog.playerTemplateCount || static_cast<std::size_t>(playerTemplate) >= catalog.sideIcons.size())
+		return "GameinfoRANDOM";
+	return catalog.sideIcons[static_cast<std::size_t>(playerTemplate)];
+}
 
 inline constexpr std::uint32_t ChatSystemColor = 0xFFFFFFFF, EmoteLocalColor = 0x80FFFFFF, EmoteRemoteColor = 0xFF00FFFF, InProgressColor = 0x808080FF;
 inline constexpr std::size_t ChatHistory = 100;
@@ -230,6 +242,16 @@ public:
 	}
 	int PreferredNumber(const char *key) const { return static_cast<int>(m_preferences.Number(key, -1)); }
 
+	// The player on a row of the players' list (LanLobbyMenu playerTooltip: TheLAN->LookupPlayer of the row's address): its
+	// login and machine; none off the list.
+	std::optional<std::pair<std::string, std::string>> PlayerLoginHost(int row) const
+	{
+		if (m_lobby == nullptr || row < 0 || static_cast<std::size_t>(row) >= m_lobby->Players().size())
+			return std::nullopt;
+		const lan::LobbyPlayer &player = m_lobby->Players()[static_cast<std::size_t>(row)];
+		return std::pair{player.login, player.host};
+	}
+
 private:
 	void Leave()
 	{
@@ -337,6 +359,7 @@ private:
 					const std::uint32_t color = slot.color >= 0 && static_cast<std::size_t>(slot.color) < m_catalog.colors.size()
 						? m_catalog.colors[static_cast<std::size_t>(slot.color)].rgba : 0xFFFFFFFF;
 					shown.players.push_back({name, color});
+					shown.icons.push_back(GameInfoIcon(m_catalog, slot.playerTemplate));
 				}
 			}
 		details.Set(std::move(shown));

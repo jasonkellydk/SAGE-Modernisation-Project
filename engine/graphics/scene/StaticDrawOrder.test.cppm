@@ -26,7 +26,7 @@ BOOST_AUTO_TEST_CASE(zero_bypasses_static_order_and_invalid_input_preserves_prev
     const std::array<std::int32_t,3> ordinary{0,0,0};
     BOOST_REQUIRE(Graphics::Build_Static_Draw_Order(ordinary,result));
     BOOST_CHECK(result.empty());
-    const std::array<std::int32_t,2> sparse{1,std::numeric_limits<std::int32_t>::max()};
+    const std::array<std::int32_t,2> sparse{1,(std::numeric_limits<std::int32_t>::max)()};
     BOOST_REQUIRE(Graphics::Build_Static_Draw_Order(sparse,result));
     const std::vector<std::size_t> descending{1,0};
     BOOST_CHECK(result==descending);

@@ -43,10 +43,12 @@ public:
 					? presentation::PlaceVeterancy(static_cast<int>(image.x), static_cast<int>(image.y), image.healthBoxWidth, image.zoom, width, height)
 					: image.placement == OverlayImage::Placement::AmmoPip
 					? presentation::PlaceAmmoPip(image.region, image.pipCenterY, image.pipOffset, image.pipBounding, width, height, image.pip)
+					: image.placement == OverlayImage::Placement::ContainerPip
+					? presentation::PlaceContainerPip(image.region, image.pipCenterY, image.pipOffset, image.pipBounding, width, height, image.pip, image.pipFull)
 					: presentation::PlaceIcon(image.icon, image.region, width, height, image.iconScale);
 				const float left = static_cast<float>(rect.x), top = static_cast<float>(rect.y);
 				m_list.Add_Image(m_catalog.Resolve(image.image), {left, top, left + static_cast<float>(rect.width), top + static_cast<float>(rect.height)},
-					{1.0f, 1.0f, 1.0f, image.alpha});
+					{image.tint[0], image.tint[1], image.tint[2], image.alpha});
 				continue;
 			}
 			const float width = static_cast<float>(definition->width) * image.scale;

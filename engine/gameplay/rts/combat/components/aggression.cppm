@@ -48,7 +48,10 @@ struct Aggression
 	// The mood check's state (AIUpdateInterface): whether the targeting system last saw it idle (so it notices it entering
 	// idle, AIIdleState::onEnter) and m_randomlyOffsetMoodCheck (its next look is moved by up to half a check either way).
 	std::uint8_t moodFlags{0};
-	std::uint8_t reserved[4]{}; // no padding: checkpoints hold its bytes
+	// AutoAcquireEnemiesWhenIdle NotWhileAttacking: no mood target while attacking (getNextMoodTarget: isAttacking), so
+	// no temporary turret target on its first approach.
+	bool notWhileAttacking{false};
+	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
 };
 
 namespace mood_flag
@@ -71,7 +74,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Aggression>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.aggression";
-	static constexpr std::uint32_t Version = 7;
+	static constexpr std::uint32_t Version = 8; // 8: NotWhileAttacking
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Aggression &value, StateHasher &hasher) noexcept
 	{
@@ -85,7 +88,7 @@ struct ComponentTraits<engine::gameplay::Aggression>
 			(std::uint64_t{value.area} << 32) | (std::uint64_t{value.prioritySet} << 16));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.vision.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(static_cast<std::int64_t>(value.attitude)));
-		hasher.AppendU64(value.moodFlags);
+		hasher.AppendU64(value.moodFlags | (value.notWhileAttacking ? 0x100u : 0u));
 	}
 };
 }

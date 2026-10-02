@@ -17,6 +17,11 @@ import games.generalszh.hosts.game.match_files;
 import games.generalszh.hosts.game.shell_menu;
 import games.generalszh.shell.save_load.save_game_file;
 import Engine.Core.Math.FixedPresentation;
+import games.generalszh.content.global.challenge_generals;
+import games.generalszh.content.loading.content_loader;
+import engine.time.simulation_time;
+import games.generalszh.shell.score.score_screen_view_model;
+import games.generalszh.content.maps.map_strings;
 
 // The host's matches (GameLogic::startNewGame, GameState's saves, the quit menu): which match plays and was asked
 // for (MatchFlow, plain data), the host's parts a match is made with (HostParts, references), and what starting,
@@ -60,7 +65,17 @@ struct HostParts
 	bool &controlBarLoaded;
 	LoadScreenLayer &loadScreen;
 	const std::vector<shell::LoadScreenFaction> &factions; // PlayerTemplate.ini's, as the multiplayer load screen shows them
+	// The match's map.str (GameTextManager's map strings), which the game client's labels look in after Generals.csf.
+	engine::localization::StringTable *mapStrings{nullptr};
 };
+
+// GameLogic::startNewGame: TheGameText->initMapStringFile on the map's own map.str (none: no map strings), for the
+// match about to load from `mapPath`.
+inline void LoadMatchStrings(HostParts &host, std::string_view mapPath)
+{
+	if (host.mapStrings != nullptr)
+		*host.mapStrings = content::ReadMapStrings(host.files, mapPath);
+}
 
 // MultiPlayerLoadScreen::init's game: the setup as chosen, what the match resolved (each seat's template and start spot
 // from its player "player<slot>"), the players' names, the factions, Multiplayer.ini's colours and the map's entry.
@@ -106,6 +121,17 @@ inline shell::MultiplayerLoadScreenSetup MultiplayerLoadSetup(const HostParts &h
 	return game;
 }
 
+// The load screens' sounds through the game client's sound player (PlayHostSound), outside the worlds a load replaces.
+inline LoadScreenAudio LoadScreenAudioFor(GameClient &game)
+{
+	LoadScreenAudio audio;
+	audio.play = [&game](std::string_view event) { return game.PlayHostSound(event); };
+	audio.stop = [&game](std::uint64_t sound, bool fade) { game.StopHostSound(sound, fade); };
+	audio.fadeMusic = [&game] { game.FadeOutMusicNow(); };
+	audio.update = [&game] { game.UpdateHostSounds(); };
+	return audio;
+}
+
 // GameLogic::getLoadScreen and LoadScreen::init for the match `plan` (`saved`: a saved game goes on; `replay`: played
 // back): a mission's after its movie (SinglePlayerLoadScreen::init plays it first: its side's look stays).
 inline void ShowMatchLoadScreen(HostParts &host, const MatchPlan &plan, const PreparedMatch &match, bool saved, bool replay)
@@ -118,6 +144,7 @@ inline void ShowMatchLoadScreen(HostParts &host, const MatchPlan &plan, const Pr
 	const shell::LoadScreenKind kind = shell::LoadScreenFor(mode, plan.kind == MatchKind::Challenge, saved);
 	const Options &options = host.options;
 	const float fontScale = FontScale(options.width, options.height, Engine::Math::ToFloat(host.fonts.resolutionAdjustment));
+	host.loadScreen.SetAudio(LoadScreenAudioFor(host.game));
 	host.loadScreen.Show(kind, host.files, host.strings, options.width, options.height, fontScale, [&](LoadScreenLayer &screen) {
 		if (kind == shell::LoadScreenKind::ShellGame)
 		{
@@ -136,6 +163,63 @@ inline void ShowMatchLoadScreen(HostParts &host, const MatchPlan &plan, const Pr
 	host.loadScreen.Update(shell::load_progress::Start);
 }
 
+// The Generals' Challenge's personas (ChallengeMode.ini, with PlayerTemplate.ini's medallions): TheChallengeGenerals.
+inline content::ChallengeGenerals LoadChallengeGenerals(content::ContentLoader &loader)
+{
+	const engine::config::Document &challengeSet = loader.Load({"Data/INI/ChallengeMode"});
+	const engine::config::Document &templateSet = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	engine::config::BindContext context{loader.DiagnosticsFor(challengeSet), engine::time::FixedStep{30}};
+	return content::BindChallengeGenerals(challengeSet, &templateSet, context);
+}
+
+// ScoreScreen.cpp finishSinglePlayerInit: a challenge campaign's mission (Campaign::isChallengeCampaign) shows its
+// opponent, the persona whose BioNameString is the mission's GeneralName (none: nothing, where the original would crash).
+inline std::optional<shell::ChallengeScore> ChallengeScoreFor(HostParts &host, const MatchPlan &plan)
+{
+	const content::Campaign *campaign = plan.SinglePlayer() ? host.campaigns.Find(plan.campaign) : nullptr;
+	const content::Mission *mission = campaign != nullptr ? campaign->FindMission(plan.mission) : nullptr;
+	if (campaign == nullptr || !campaign->challenge || mission == nullptr)
+		return std::nullopt;
+	const content::ChallengeGenerals generals = LoadChallengeGenerals(host.loader);
+	const content::GeneralPersona *general = content::GeneralByGeneralName(generals, mission->generalName);
+	if (general == nullptr)
+		return std::nullopt;
+	return shell::ChallengeScore{mission->generalName, general->defeatedImage, general->victoriousImage, general->defeatedString,
+		general->victoriousString, general->winSound, general->lossSound};
+}
+
+// ChallengeLoadScreen::init's generals: the player's by the campaign's name, the opponent's by the mission's GeneralName,
+// their bios localized; the opponent's taunt picked as getRandomTauntSound (rand() % 3, a client random). None when either
+// is unknown (the original would crash).
+inline std::optional<shell::ChallengeLoadSetup> ChallengeLoadFor(HostParts &host, const MatchPlan &plan)
+{
+	const content::Campaign *campaign = plan.SinglePlayer() ? host.campaigns.Find(plan.campaign) : nullptr;
+	const content::Mission *mission = campaign != nullptr ? campaign->FindMission(plan.mission) : nullptr;
+	if (campaign == nullptr || mission == nullptr)
+		return std::nullopt;
+	const content::ChallengeGenerals generals = LoadChallengeGenerals(host.loader);
+	const content::GeneralPersona *player = content::PlayerGeneralByCampaignName(generals, campaign->name);
+	const content::GeneralPersona *opponent = content::GeneralByGeneralName(generals, mission->generalName);
+	if (player == nullptr || opponent == nullptr)
+		return std::nullopt;
+	const engine::localization::StringTable &strings = host.strings;
+	const auto general = [&strings](const content::GeneralPersona &persona) {
+		const auto fetch = [&strings](const std::string &label) { return label.empty() ? std::u16string{} : Localized(strings, label); };
+		shell::ChallengeLoadGeneral out;
+		out.name = fetch(persona.bioName), out.rank = fetch(persona.bioRank), out.strategy = fetch(persona.bioStrategy);
+		out.nameSound = persona.nameSound;
+		out.portraitMovieLeft = persona.portraitMovieLeft, out.portraitMovieRight = persona.portraitMovieRight;
+		return out;
+	};
+	shell::ChallengeLoadSetup setup;
+	setup.player = general(*player);
+	setup.opponent = general(*opponent);
+	setup.opponent.tauntSound = content::TauntSoundFor(*opponent, std::rand());
+	GameClient &game = host.game;
+	setup.sound = [&game](std::string_view sound) { game.PlayHostSound(sound); };
+	return setup;
+}
+
 // A new mission's load screen with its movie (SinglePlayerLoadScreen / ChallengeLoadScreen::init): the screen up, the
 // movie (`frames` long) in its background window; the load goes on behind the same screen once the movie is over.
 inline void ShowBriefingLoadScreen(HostParts &host, const MatchPlan &plan, int frames)
@@ -143,8 +227,12 @@ inline void ShowBriefingLoadScreen(HostParts &host, const MatchPlan &plan, int f
 	const shell::LoadScreenKind kind = shell::LoadScreenFor(shell::LoadGameMode::SinglePlayer, plan.kind == MatchKind::Challenge, false);
 	const Options &options = host.options;
 	const float fontScale = FontScale(options.width, options.height, Engine::Math::ToFloat(host.fonts.resolutionAdjustment));
+	host.loadScreen.SetAudio(LoadScreenAudioFor(host.game));
 	host.loadScreen.Show(kind, host.files, host.strings, options.width, options.height, fontScale, [&](LoadScreenLayer &screen) {
 		screen.mission.Init(kind == shell::LoadScreenKind::Challenge);
+		if (kind == shell::LoadScreenKind::Challenge)
+			if (auto challenge = ChallengeLoadFor(host, plan))
+				screen.mission.InitChallenge(std::move(*challenge));
 		screen.mission.StartMovie(plan.campaign, frames);
 	});
 }
@@ -176,6 +264,7 @@ inline bool LaunchMatch(HostParts &host, MatchStage &stage, MatchFlow &flow, con
 		return false;
 	}
 	PreparedMatch &match = *prepared;
+	LoadMatchStrings(host, match.path);
 	// A mission whose movie played loads on behind the screen its movie played in.
 	const bool briefed = host.loadScreen.Shown() && checkpoint.empty() && plan.SinglePlayer() &&
 		host.loadScreen.Kind() == shell::LoadScreenFor(shell::LoadGameMode::SinglePlayer, plan.kind == MatchKind::Challenge, false);
@@ -192,6 +281,8 @@ inline bool LaunchMatch(HostParts &host, MatchStage &stage, MatchFlow &flow, con
 		std::println(std::cerr, "terrain: {}", stage.terrainError);
 	host.loadScreen.Update(shell::load_progress::PostPathfinderNewMap);
 	const Options &options = host.options;
+	game.SetWeather(stage.weather);
+	game.UseMapObjects(stage.mapIni, &host.loader);
 	if (!game.Start(*stage.level, stage.Height(), stage.mesh->PlayableSize(), static_cast<float>(options.width) / static_cast<float>(options.height), match.seed,
 			std::move(match.seats), std::move(match.starts), match.cameraMarker, match.solo, match.challenge, checkpoint, match.network, plan.rankPoints, replay,
 			// RecorderClass::updateRecord: MSG_NEW_GAME of a skirmish or LAN game starts recording (not a loaded save).
@@ -215,6 +306,14 @@ inline bool LaunchMatch(HostParts &host, MatchStage &stage, MatchFlow &flow, con
 			FontScale(options.width, options.height, Engine::Math::ToFloat(host.fonts.resolutionAdjustment)), barError);
 		if (!host.controlBarLoaded)
 			std::println(std::cerr, "control bar: {}", barError);
+	}
+	// ControlBar::reset for the new game: the observer list's slots (team, computer) and whether it is a multiplayer game.
+	if (host.controlBarLoaded)
+	{
+		std::array<std::pair<int, bool>, 8> slots{};
+		for (std::size_t slot = 0; slot < slots.size() && slot < plan.setup.slots.size(); ++slot)
+			slots[slot] = {plan.setup.slots[slot].team, plan.setup.slots[slot].AI()};
+		host.controlBar.SetMatch(slots, plan.FromSetup(), replay != nullptr);
 	}
 	// Radar::newMap: the level's radar picture.
 	if (host.controlBarLoaded && stage.scene)
@@ -243,6 +342,7 @@ inline bool LoadShellMap(HostParts &host, MatchStage &stage)
 		screen.shellLoadedOnce = true;
 	});
 	host.loadScreen.Update(shell::load_progress::Start);
+	LoadMatchStrings(host, options.map);
 	bool loaded = false;
 	if (const auto shellBytes = host.files.Read(options.map))
 		if (auto shellMap = engine::level::generals_map::Read(*shellBytes))
@@ -251,6 +351,8 @@ inline bool LoadShellMap(HostParts &host, MatchStage &stage)
 			if (!RestageLevel(stage, std::move(shellMap->level), host.files, host.loader, options.map))
 				std::println(std::cerr, "terrain: {}", stage.terrainError);
 			host.loadScreen.Update(shell::load_progress::PostPathfinderNewMap);
+			host.game.SetWeather(stage.weather);
+			host.game.UseMapObjects(stage.mapIni, &host.loader);
 			host.game.Start(*stage.level, stage.Height(), stage.mesh->PlayableSize(), static_cast<float>(options.width) / static_cast<float>(options.height), 0x5EED);
 			host.loadScreen.Update(shell::load_progress::PostInitialNetworkBuildings);
 			host.game.Update(0.0f, 1.0f);

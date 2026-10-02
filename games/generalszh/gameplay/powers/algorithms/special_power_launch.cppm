@@ -29,6 +29,7 @@ import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.delivery.components.delivery;
 import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.navigation.components.navigation;
 import Engine.Core.Math.FixedRandom;
 import engine.config.binding.values;
 import games.generalszh.content.objects.model_conditions;
@@ -53,6 +54,7 @@ import engine.gameplay.rts.economy.resources.player_money;
 import engine.gameplay.rts.sciences.resources.player_sciences;
 import games.generalszh.gameplay.powers.resources.cash_notices;
 import games.generalszh.gameplay.eva.resources.eva_notices;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // Firing a special power (AIGroup::groupDoSpecialPowerAtLocation / AtObject -> SpecialPowerModule::doSpecialPowerAt... ->
 // triggerSpecialPower): the source's module for it must not be paused, nor the source disabled; a player's order also
@@ -104,8 +106,12 @@ std::uint32_t DoorDelayOf(const content::ObjectDefinition &transport, std::uint3
 // motive force left to its physics); loaded with its payload (each in its own container, PutInContainer); its run's dive,
 // strafing, weapon delivery and visible payload given it (deliverPayload); only the first of the formation lays the
 // target decal.
+// `owner` (CreateLocation USE_OWNER_OBJECT: create(..., createOwner false)): no transport is made; the owner itself (a
+// scripted cargo plane already in flight) is the carrier, given the run (deliverPayload) and the payload into its own
+// contain, where it is and as fast as it goes (no placing, producer, delay, starting speed or height); without a
+// DeliverPayloadAIUpdate it is given nothing and no payload is made.
 void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::FixedVector3 primary, FixedVector2 secondary, std::uint32_t team,
-	ecs::Entity creator = {})
+	ecs::Entity creator = {}, ecs::Entity owner = {})
 {
 	auto &world = game.world;
 	FixedVector2 ccw{}, cw{};
@@ -115,7 +121,18 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 		ccw = {d.x - d.y, d.y + d.x}; // turned +90 degrees, plus itself
 		cw = {d.x + d.y, d.y - d.x};  // turned -90 degrees, plus itself
 	}
-	const content::ObjectDefinition *transportKind = game.templates.Content().objects.Find(run.transport);
+	const bool ownCarrier = owner != ecs::Entity{};
+	const content::ObjectDefinition *transportKind = nullptr;
+	if (ownCarrier)
+	{
+		const auto *ref = world.IsAlive(owner) ? world.Get<gameplay::DefinitionRef>(owner) : nullptr;
+		transportKind = ref != nullptr ? &game.templates.DefinitionAt(ref->index) : nullptr;
+		if (transportKind == nullptr || std::none_of(transportKind->modules.begin(), transportKind->modules.end(),
+											[](const content::ModuleEntry &module) { return module.type == "DeliverPayloadAIUpdate"; }))
+			return;
+	}
+	else
+		transportKind = game.templates.Content().objects.Find(run.transport);
 	if (transportKind == nullptr)
 		return;
 	const std::uint32_t doorDelay = DoorDelayOf(*transportKind, game.step.TicksPerSecond());
@@ -136,20 +153,21 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 		const Engine::Math::TurnAngle orient = Engine::Math::Heading(moveTo - start);
 		if (run.deliveryDistance > Fixed{})
 			start = start - Engine::Math::Direction(orient) * (run.deliveryDistance * Fixed::FromRatio(3, 2));
-		const ecs::Entity carrier = SpawnObject(game, run.transport, start, orient, team, {});
+		const ecs::Entity carrier = ownCarrier ? owner : SpawnObject(game, run.transport, start, orient, team, {});
 		if (!world.IsAlive(carrier) || !world.Has<gameplay::Locomotion>(carrier))
 			continue;
 		// setDisabledUntil(DISABLED_DEFAULT, now + GameLogicRandomValue(0, DelayDeliveryMax)).
-		const bool delayed = run.delayDeliveryMax > 0;
+		const bool delayed = !ownCarrier && run.delayDeliveryMax > 0;
 		if (delayed)
 			gameplay::DisableNow(world, carrier, gameplay::disabled_type::Default,
 				game.tick + static_cast<std::uint64_t>(Engine::Math::UniformInt(game.random, 0, static_cast<std::int64_t>(run.delayDeliveryMax))));
-		world.Get<gameplay::Transform>(carrier)->position = {start.x, start.y, primary.z};
+		if (!ownCarrier)
+			world.Get<gameplay::Transform>(carrier)->position = {start.x, start.y, primary.z};
 		SetCreator(game, carrier, formation == 0 ? creator : ecs::Entity{});
-		if (creator != ecs::Entity{})
+		if (creator != ecs::Entity{} && !ownCarrier)
 			SetProducer(game, carrier, creator); // transport->setProducer(primaryObj)
 		auto &motion = *world.Get<gameplay::Locomotion>(carrier);
-		if (run.startAtMaxSpeed)
+		if (run.startAtMaxSpeed && !ownCarrier)
 		{
 			motion.speed = motion.locomotor.maxSpeed;
 			// applyMotiveForce(its facing x its top speed x its mass): what moves it while its AI is held back (a delayed
@@ -160,7 +178,7 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 				gameplay::ApplyMotiveForce(*body, {push.x, push.y, Fixed{}}, game.tick);
 			}
 		}
-		if (run.startAtPreferredHeight)
+		if (run.startAtPreferredHeight && !ownCarrier)
 			world.Get<gameplay::Transform>(carrier)->position.z = game.ground.At(start) + motion.locomotor.preferredHeight;
 		std::uint32_t slots = 0;
 		for (const auto &item : run.payload)
@@ -170,12 +188,25 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 		gameplay::TransportDefinition held;
 		if (const auto *own = world.Get<gameplay::Transport>(carrier))
 			held = own->definition;
-		else
+		else if (!ownCarrier)
 			world.Add<gameplay::Transport>(carrier);
-		held.slots = std::max(held.slots, slots);
 		held.exitDelay = run.dropDelay;
 		held.unloadInAir = true;
-		*world.Get<gameplay::Transport>(carrier) = {.definition = held, .cruiseHeight = motion.locomotor.preferredHeight};
+		if (ownCarrier)
+		{
+			// The owner's own contain, riders and all (isValidContainerFor: its own Slots); none: the payload is made
+			// but left where it is.
+			if (auto *own = world.Get<gameplay::Transport>(carrier))
+			{
+				own->definition = held;
+				own->cruiseHeight = motion.locomotor.preferredHeight;
+			}
+		}
+		else
+		{
+			held.slots = std::max(held.slots, slots);
+			*world.Get<gameplay::Transport>(carrier) = {.definition = held, .cruiseHeight = motion.locomotor.preferredHeight};
+		}
 		// deliverPayload: the run's data; the state machine starts in its approach (a move to where it heads).
 		gameplay::Delivery delivery;
 		delivery.target = target;
@@ -210,7 +241,9 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 		// Its velocity so far: at its top speed along its heading (StartAtMaxSpeed), else none.
 		{
 			const auto &placed = world.Get<gameplay::Transform>(carrier)->position;
-			const FixedVector2 moving = run.startAtMaxSpeed ? Engine::Math::Direction(orient) * motion.locomotor.maxSpeed : FixedVector2{};
+			FixedVector2 moving = run.startAtMaxSpeed ? Engine::Math::Direction(orient) * motion.locomotor.maxSpeed : FixedVector2{};
+			if (ownCarrier) // the owner as it flies
+				moving = Engine::Math::Direction(world.Get<gameplay::Transform>(carrier)->facing) * motion.speed;
 			delivery.lastPosition = {placed.x - moving.x, placed.y - moving.y, placed.z};
 		}
 		world.Add<gameplay::Delivery>(carrier);
@@ -220,6 +253,8 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 		if (formation == 0)
 			LayRadiusDecal(game, carrier, run.deliveryDecal, run.deliveryDecalRadius, {target.x, target.y, game.ground.At(target)}, RadiusDecalUntil::HeadsOffMap);
 		*world.Get<gameplay::MoveOrder>(carrier) = gameplay::MoveToPoint(moveTo);
+		if (auto *route = world.Get<gameplay::Route>(carrier)) // the owner may be on its way somewhere
+			route->planned = false;
 		const FixedVector2 heading = Engine::Math::Direction(orient);
 		for (const auto &item : run.payload)
 			for (std::uint32_t index = 0; index < item.count; ++index)
@@ -248,6 +283,9 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 						passenger = chute;
 					}
 				}
+				if (ownCarrier)
+					if (const auto *own = world.Get<gameplay::Transport>(carrier); own == nullptr || own->occupied >= own->definition.slots)
+						continue; // not valid for its contain: made, but left where it is
 				world.Add<gameplay::Passenger>(passenger);
 				*world.Get<gameplay::Passenger>(passenger) = {carrier, 1};
 				world.Add<gameplay::OffMap>(passenger);
@@ -259,9 +297,11 @@ void Deliver(GameWorld &game, const content::DeliveryNugget &run, Engine::Math::
 }
 
 // `atLocation`: fired at the spot (doSpecialPowerAtLocation), else with no target (doSpecialPower: a command button
-// needing none; most powers then use where their source stands). `options`: the button's command options.
+// needing none; most powers then use where their source stands). `options`: the button's command options. `angle`: the
+// message's angle (doSpecialPowerAtLocation's: a placed SPECIAL_POWER_CONSTRUCT's facing; INVALID_ANGLE otherwise, which
+// GenericObjectCreationNugget::create takes as 0): what an OCLSpecialPower's list makes faces it.
 void FireSpecialPower(GameWorld &game, ecs::Entity source, const std::string &power, FixedVector2 target, bool fromScript = false, bool atLocation = true,
-	std::uint32_t options = 0)
+	std::uint32_t options = 0, Engine::Math::TurnAngle angle = {})
 {
 	auto &world = game.world;
 	gameplay::SpecialPowerTimer *timer = PowerModuleFor(game, source, power, fromScript);
@@ -269,6 +309,30 @@ void FireSpecialPower(GameWorld &game, ecs::Entity source, const std::string &po
 		return;
 	const content::GameContent &content = game.templates.Content();
 	const content::ObjectDefinition &kind = game.templates.DefinitionAt(world.Get<gameplay::DefinitionRef>(source)->index);
+	// Object::getSpecialPowerModule: the power's first module takes the order. CashHackSpecialPower and
+	// DefectorSpecialPower::doSpecialPowerAtLocation: only allowed at objects (nothing at all, not even the academy count).
+	// CashBountyPower keeps SpecialPowerModule::doSpecialPowerAtLocation / doSpecialPower: the intent (the academy count),
+	// then triggerSpecialPower unless UpdateModuleStartsAttack (its recharge starts over).
+	std::string firstType;
+	bool updateStartsAttack = false;
+	for (const content::PowerModule &module : content::PowerModulesOf(kind))
+		if (module.power == power)
+		{
+			firstType = module.type;
+			updateStartsAttack = module.updateModuleStartsAttack;
+			break;
+		}
+	if (atLocation && (firstType == "CashHackSpecialPower" || firstType == "DefectorSpecialPower"))
+		return;
+	// SpecialPowerModule::initiateIntentToDoSpecialPower: its player's academy counts a superpower used.
+	RecordAcademyPowerUsed(game, OwnerPlayer(game, source), timer->power);
+	if (firstType == "CashBountyPower")
+	{
+		if (!updateStartsAttack)
+			TriggerSpecialPower(game, source, timer->power,
+				atLocation ? std::optional<Engine::Math::FixedVector3>{Engine::Math::FixedVector3{target.x, target.y, game.ground.At(target)}} : std::nullopt);
+		return;
+	}
 	// SpectreGunshipDeploymentUpdate::initiateIntentToDoSpecialPower: a gunship called in at the spot, by the first module for
 	// the power whose RequiredScience its player has (SpecialPowerModule::initiateIntentToDoSpecialPower,
 	// doesSpecialPowerUpdatePassScienceTest).
@@ -363,6 +427,8 @@ void FireSpecialPower(GameWorld &game, ecs::Entity source, const std::string &po
 			// BattlePlanUpdate::initiateIntentToDoSpecialPower: a Strategy Center's plan chosen (its update starts it).
 			if (ChooseBattlePlan(game, source, index, options))
 			{
+				// BattlePlanUpdate::initiateIntentToDoSpecialPower: its player's academy records a plan chosen.
+				RecordAcademy(game, OwnerPlayer(game, source), AcademyCount::BattlePlanSelected);
 				if (!module.updateModuleStartsAttack)
 					TriggerSpecialPower(game, source, index, std::nullopt);
 				return;
@@ -446,15 +512,18 @@ void FireSpecialPower(GameWorld &game, ecs::Entity source, const std::string &po
 	}
 	if (runs == content.powers.deliveries.end())
 	{
-		// ObjectCreationList::create(ocl, source, primary, target): its other nuggets (a superweapon's FireWeapon or
-		// Attack).
+		// ObjectCreationList::create(ocl, source, primary, target, angle): its other nuggets (a superweapon's FireWeapon or
+		// Attack); made by position, not by an object's transform, what it makes faces the angle (LIKE_EXISTING). (The
+		// original does not turn a nugget's Offset then; the only list made at an angle, the sneak attack's, has none.)
 		const auto *member = world.Get<gameplay::TeamMember>(source);
-		RunCreationList(game, ocl->creationList, {primary, world.Get<gameplay::Transform>(source)->facing, member != nullptr ? member->team : team, source, 0u, 0u,
+		RunCreationList(game, ocl->creationList, {primary, angle, member != nullptr ? member->team : team, source, 0u, 0u,
 			Engine::Math::FixedVector3{target.x, target.y, game.ground.At(target)}});
 		return;
 	}
+	// USE_OWNER_OBJECT: create(ocl, source, target, target, angle, createOwner false): the source carries it itself.
+	const ecs::Entity owner = ocl->location == content::CreateLocation::UseOwnerObject ? source : ecs::Entity{};
 	for (const content::DeliveryNugget &run : runs->second)
-		detail::Deliver(game, run, primary, target, team, source);
+		detail::Deliver(game, run, primary, target, team, source, owner);
 }
 
 // isObjectShroudedForAction: a human player's order (not a script's) at something fogged or shrouded to that player
@@ -689,6 +758,8 @@ void FireSpecialPowerUsingWaypoints(GameWorld &game, ecs::Entity source, const s
 	gameplay::SpecialPowerTimer *timer = PowerModuleFor(game, source, power, true);
 	if (timer == nullptr || IsDisabled(game, source) || timer->pausedCount > 0 || waypoint >= game.waypoints.Size())
 		return;
+	// SpecialPowerModule::initiateIntentToDoSpecialPower: its player's academy counts a superpower used.
+	RecordAcademyPowerUsed(game, OwnerPlayer(game, source), timer->power);
 	const std::uint32_t definition = world.Get<gameplay::DefinitionRef>(source)->index;
 	if (auto *cannon = world.Get<ParticleCannon>(source))
 		if (const ParticleCannonConfig *config = game.templates.ParticleCannonOf(definition); config != nullptr && config->power == timer->power)
@@ -718,6 +789,10 @@ void FireSpecialPowerAtObject(GameWorld &game, ecs::Entity source, const std::st
 		return;
 	if (!fromScript && !CanTargetWithPower(game, source, timer->power, target))
 		return;
+	// SpecialPowerModule::doSpecialPowerAtObject (not while disabled or paused) -> initiateIntentToDoSpecialPower: its
+	// player's academy counts a superpower used.
+	if (!IsDisabled(game, source) && timer->pausedCount == 0)
+		RecordAcademyPowerUsed(game, OwnerPlayer(game, source), timer->power);
 	const content::ObjectDefinition &kind = game.templates.DefinitionAt(world.Get<gameplay::DefinitionRef>(source)->index);
 	if (content::FindCashHack(kind, power))
 		CashHack(game, source, *timer, target);

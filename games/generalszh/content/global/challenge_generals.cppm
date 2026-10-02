@@ -115,4 +115,43 @@ inline ChallengeGenerals BindChallengeGenerals(const engine::config::Document &c
 		}
 	return generals;
 }
+
+namespace detail
+{
+inline bool SameIgnoringCase(std::string_view a, std::string_view b) noexcept
+{
+	const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; };
+	return a.size() == b.size() && std::ranges::equal(a, b, [&](char x, char y) { return lower(x) == lower(y); });
+}
+}
+
+// ChallengeGenerals::getGeneralByGeneralName: the first persona whose BioNameString is `name` (a mission's GeneralName),
+// ignoring case; none: null.
+inline const GeneralPersona *GeneralByGeneralName(const ChallengeGenerals &generals, std::string_view name) noexcept
+{
+	for (const GeneralPersona &persona : generals)
+		if (detail::SameIgnoringCase(persona.bioName, name))
+			return &persona;
+	return nullptr;
+}
+
+// ChallengeGenerals::getPlayerGeneralByCampaignName: the first persona whose Campaign is `name`, ignoring case; none: null.
+inline const GeneralPersona *PlayerGeneralByCampaignName(const ChallengeGenerals &generals, std::string_view name) noexcept
+{
+	for (const GeneralPersona &persona : generals)
+		if (detail::SameIgnoringCase(persona.campaign, name))
+			return &persona;
+	return nullptr;
+}
+
+// GeneralPersona::getRandomTauntSound: rand() % 3 picks TauntSound1 (0), TauntSound2 (1), else TauntSound3.
+inline const std::string &TauntSoundFor(const GeneralPersona &persona, int random) noexcept
+{
+	switch (random % 3)
+	{
+	case 0: return persona.tauntSounds[0];
+	case 1: return persona.tauntSounds[1];
+	}
+	return persona.tauntSounds[2];
+}
 }

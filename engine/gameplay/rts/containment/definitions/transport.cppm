@@ -63,7 +63,8 @@ struct TransportDefinition
 	bool keepVelocityOnExit{false};
 	// DelayExitInAir (TransportContain::isExitBusy): no one gets out while it is above the ground.
 	bool delayExitInAir{false};
-	std::uint8_t reserved4[1]{};
+	// GarrisonContain IsEnclosingContainer (default Yes): its riders are hidden inside; out, they come from its centre.
+	std::uint8_t enclosesRiders{1};
 	// How long its door stands open after each one gets out (OpenContain DoorOpenTime, default a frame; 0: it leaves
 	// its doors alone).
 	std::uint64_t doorOpenTicks{1};
@@ -72,6 +73,12 @@ struct TransportDefinition
 	Engine::Math::Fixed exitPitchRate;
 	Engine::Math::FixedVector3 exitBone;
 	std::uint32_t hasExitBone{0};
-	std::uint32_t reserved5{0};
+	// OpenContain NumberOfExitPaths (default 1): a leaving rider is put at an ExitStart bone of its default model (one
+	// path: ExitStart; more: ExitStart01, ExitStart02, ... in turn) and walks to the matching ExitEnd; a bone the model
+	// lacks: the carrier's position (getSingleLogicalBonePosition). 0: it is left where it is.
+	static constexpr std::uint32_t MaxExitPaths = 8;
+	std::uint32_t exitPaths{0};
+	std::array<Engine::Math::FixedVector3, MaxExitPaths> exitStarts{};
+	std::array<Engine::Math::FixedVector3, MaxExitPaths> exitEnds{};
 };
 }

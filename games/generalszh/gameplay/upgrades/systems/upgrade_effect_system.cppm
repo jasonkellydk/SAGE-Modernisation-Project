@@ -32,6 +32,7 @@ export import engine.gameplay.rts.powers.algorithms.special_power_timing;
 export import engine.gameplay.rts.powers.systems.special_power_pause_system;
 export import engine.gameplay.rts.radar.components.radar_provider;
 export import engine.gameplay.common.appearance.components.part_overrides;
+export import engine.gameplay.rts.slaves.components.spawner;
 
 // Carries out the tick's upgrade triggers (each module's upgradeImplementation),
 // through the command buffer, in the order they went:
@@ -61,7 +62,8 @@ struct UpgradeEffectSystem
 		ecs::Read<engine::gameplay::Experience>, ecs::Read<engine::gameplay::EnergySource>, ecs::Read<engine::gameplay::Loadout>,
 		ecs::Read<RadarDish>, ecs::Read<SpyVision>, ecs::Read<engine::gameplay::Countermeasures>, ecs::Read<ControlRods>, ecs::Read<CommandSetOverride>, ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Upgradable>,
 		ecs::Read<engine::gameplay::SpecialPowerTimers>, ecs::Read<engine::gameplay::RadarProvider>, ecs::Read<engine::gameplay::Appearance>, ecs::Read<engine::gameplay::Locomotion>,
-		ecs::Read<engine::gameplay::PartOverrides>, ecs::Read<engine::gameplay::SelfHealing>, ecs::Read<engine::gameplay::AreaHealing>>;
+		ecs::Read<engine::gameplay::PartOverrides>, ecs::Read<engine::gameplay::SelfHealing>, ecs::Read<engine::gameplay::AreaHealing>,
+		ecs::Read<engine::gameplay::Spawner>>;
 	using Resources = ecs::Resources<ecs::Read<engine::gameplay::UpgradeReactions>, ecs::Read<UpgradeEffects>,
 		ecs::Read<engine::gameplay::WeaponCatalog>, ecs::Read<engine::gameplay::CargoManifest>, ecs::Write<UpgradeCreations>,
 		ecs::Read<engine::gameplay::PlayerUpgrades>>;
@@ -133,6 +135,16 @@ struct UpgradeEffectSystem
 					changed.Set(gp::stealth_flag::CanStealth, true);
 					commands.Set<gp::Stealth>(entity, changed);
 				}
+				// SpawnBehavior::giveSlavesStealthUpgrade(TRUE): a spawner whose spawns are its weapons
+				// (KINDOF_SPAWNS_ARE_THE_WEAPONS) gives each spawn it has now OBJECT_STATUS_CAN_STEALTH too.
+				if (const gp::Spawner *spawner = lookup.Get<gp::Spawner>(entity); spawner != nullptr && spawner->spawnsAreWeapons)
+					for (std::size_t index = 0; index < spawner->spawnedCount; ++index)
+						if (const gp::Stealth *stealth = lookup.Get<gp::Stealth>(spawner->spawned[index]))
+						{
+							gp::Stealth changed = *stealth;
+							changed.Set(gp::stealth_flag::CanStealth, true);
+							commands.Set<gp::Stealth>(spawner->spawned[index], changed);
+						}
 				break;
 			case content::UpgradeEffectKind::PassengersFire:
 				if (const gp::Transport *transport = lookup.Get<gp::Transport>(entity))

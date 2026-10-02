@@ -7,6 +7,7 @@
 #include <vector>
 
 import engine.gameplay.common.health.components.subdual;
+import engine.gameplay.common.health.algorithms.max_health;
 import engine.gameplay.common.healing.systems.healing_system;
 import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.identity.components.owner;
@@ -278,6 +279,32 @@ BOOST_AUTO_TEST_CASE(healing_is_the_same_on_any_number_of_workers_and_after_a_ch
 		BOOST_TEST_REQUIRE(loaded.world.StateHash() == one.world.StateHash());
 	}
 	BOOST_TEST(four.world.StateHash() == one.world.StateHash());
+}
+
+// ActiveBody::setMaxHealth (ActiveBody.cpp), its own examples: PRESERVE_RATIO 400/500 + 100 becomes 480/600 and 200/500 - 100
+// 160/400; ADD_CURRENT_HEALTH_TOO 400/500 + 100 becomes 500/600 and 200/500 - 100 100/400; FULLY_HEAL 600/600 and 400/400;
+// SAME_CURRENTHEALTH keeps it, clipped down to a lower maximum (450/500 - 100: 400/400), and nothing goes below zero.
+BOOST_AUTO_TEST_CASE(legacy_parity_max_health_changes_as_active_body_set_max_health)
+{
+	using engine::gameplay::MaxHealthChange;
+	using Engine::Math::Fixed;
+	const auto set = [](int current, int maximum, int to, MaxHealthChange change) {
+		engine::gameplay::Health health;
+		health.current = Fixed::FromInt(current);
+		health.maximum = Fixed::FromInt(maximum);
+		engine::gameplay::SetMaxHealth(health, Fixed::FromInt(to), change);
+		BOOST_TEST((health.maximum == Fixed::FromInt(to)));
+		return health.current;
+	};
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::PreserveRatio) == Fixed::FromInt(480)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::PreserveRatio) == Fixed::FromInt(160)));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::AddCurrentToo) == Fixed::FromInt(500)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::AddCurrentToo) == Fixed::FromInt(100)));
+	BOOST_TEST((set(50, 500, 400, MaxHealthChange::AddCurrentToo) == Fixed{}));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::FullyHeal) == Fixed::FromInt(600)));
+	BOOST_TEST((set(200, 500, 400, MaxHealthChange::FullyHeal) == Fixed::FromInt(400)));
+	BOOST_TEST((set(400, 500, 600, MaxHealthChange::SameCurrent) == Fixed::FromInt(400)));
+	BOOST_TEST((set(450, 500, 400, MaxHealthChange::SameCurrent) == Fixed::FromInt(400)));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

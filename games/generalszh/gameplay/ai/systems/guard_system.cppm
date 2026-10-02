@@ -241,6 +241,8 @@ struct GuardSystem
 			// AIAttackState with ExitConditions on the nemesis.
 			const auto startAttack = [&](FixedVector2 center, Fixed radius, std::uint8_t flags, std::uint64_t giveUp) {
 				attack = gp::AttackTarget{guard.nemesis, true};
+				// AI_GUARD_RETALIATE: its attacks chase as a retaliating unit's do.
+				attack.retaliating = retaliate ? 1 : 0;
 				guard.exitCenter = center;
 				guard.exitRadius = radius;
 				guard.exitFlags = flags;

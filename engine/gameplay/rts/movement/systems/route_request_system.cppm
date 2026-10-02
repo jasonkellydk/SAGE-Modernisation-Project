@@ -18,6 +18,8 @@ export import engine.gameplay.common.identity.components.team_member;
 export import engine.gameplay.common.status.components.disabled;
 export import engine.gameplay.rts.collision.components.collider;
 export import engine.gameplay.rts.blocking.components.blocked_state;
+export import engine.gameplay.rts.movement.components.attack_approach;
+export import engine.gameplay.rts.navigation.algorithms.attack_view;
 
 // Plans routes: a ground mover going to a point without a route (or, at least
 // RouteReplanTicks after its route was planned, at the end of a partial one or
@@ -56,6 +58,8 @@ struct RouteScratchPool
 		RouteUnits units;
 		bool weighsUnits{false};
 		Route planned;
+		std::optional<AttackApproach> attack; // an attack's route to a spot it may fire from
+		std::uint8_t goalLayer{NoGoalLayer};  // its order's goal layer (MoveOrder::goalLayer)
 	};
 	std::vector<Request> requests;
 };
@@ -74,15 +78,80 @@ struct ResourceTraits<engine::gameplay::RouteScratchPool>
 export namespace engine::gameplay
 {
 
+// Whether a mover's route is planned (again) this run: none yet or none planned (a writer cleared Route::planned), a new
+// order asking for its route at once (MoveOrder::replan), or RouteReplanTicks on from its last with the destination moved
+// over two cells or a partial route walked to its end.
+inline bool RouteStale(const Route *current, const MoveOrder &order, std::uint64_t tick) noexcept
+{
+	return current == nullptr || !current->planned || order.replan != 0 ||
+		(tick >= current->plannedTick + RouteReplanTicks &&
+			(Engine::Math::DistanceSquared(current->destination, order.destination) > Engine::Math::Fixed::FromInt(20 * 20) ||
+				(!current->complete && current->next >= current->count)));
+}
+
+// Pathfinder::findAttackPath's search: no more than this many cells taken in.
+inline constexpr std::uint32_t AttackRouteBudget = 2500;
+
+// findAttackPath's goal test for cell (x, y), its point the cell's centre on the ground there (adjustCoordToCell): half a
+// cell or more from where the mover stands, its weapon reaching the victim from there (isGoalPosWithinAttackRange:
+// FROM_BOUNDINGSPHERE_2D, the gap between the bounding circles within its range less a quarter cell) and its view from
+// there clear (isAttackViewBlockedByObstacle).
+// Weapon::isGoalPosWithinAttackRange from `point`: the gap between the bounding circles within the range less a quarter
+// cell, and not under the minimum range plus a quarter cell.
+inline bool AttackGoalInRange(const AttackApproach &attack, Engine::Math::FixedVector2 point) noexcept
+{
+	using Engine::Math::Fixed;
+	const Fixed cell = Fixed::FromInt(PathfindCellSize);
+	Fixed gap = Engine::Math::Distance(point, attack.victimAt.XY()) - attack.ownRadius - attack.victimRadius;
+	if (gap < Fixed{})
+		gap = Fixed{};
+	const Fixed closest = attack.minimumRange + cell / Fixed::FromInt(4);
+	return gap <= attack.goalRange && gap >= closest;
+}
+
+inline bool AttackSpot(const NavigationGrid &grid, const GroundHeight &ground, const AttackApproach &attack, ecs::Entity self,
+	Engine::Math::FixedVector2 from, std::int32_t x, std::int32_t y)
+{
+	using Engine::Math::Fixed;
+	const Fixed cell = Fixed::FromInt(PathfindCellSize);
+	const Engine::Math::FixedVector2 point{Fixed::FromInt(x) * cell + cell / Fixed::FromInt(2), Fixed::FromInt(y) * cell + cell / Fixed::FromInt(2)};
+	const Fixed half = cell / Fixed::FromInt(2);
+	if (Engine::Math::DistanceSquared(point, from) < half * half)
+		return false;
+	if (!AttackGoalInRange(attack, point))
+		return false;
+	if (attack.sight == 0)
+		return true;
+	// (The skip and the layer as the mover stands now: findAttackPath asks with the object itself.)
+	const SightEye eye{{point.x, point.y, ground.At(point)}, attack.eyeTop, attack.weaponTerrain != 0, attack.skipCount, attack.viewLayer};
+	const SightTarget victim{attack.victimAt, attack.victimTop, attack.victimCentre};
+	return !AttackViewBlocked(ground, grid, eye, victim, ViewIgnores{self, attack.victim, attack.victimSlaver, attack.container, attack.slaver});
+}
+
 // A route for `destination`, from `from`, into `route` (its first RoutePoints points; the rest when those are walked),
 // ending at `goal` (none: the destination itself). `ignored`: an obstacle whose cells are open to it (IgnoredObstacle).
 inline void PlanRoute(Route &route, const NavigationGrid &grid, const ClearancePlane &plane, const NavigationAgent &agent,
 	Engine::Math::FixedVector2 from, Engine::Math::FixedVector2 destination, RouteScratch &scratch, std::uint64_t tick, ecs::Entity ignored = {},
-	std::uint8_t fromLayer = GroundLayer, std::optional<Engine::Math::FixedVector2> goal = std::nullopt, const RouteUnits *units = nullptr)
+	std::uint8_t fromLayer = GroundLayer, std::optional<Engine::Math::FixedVector2> goal = std::nullopt, const RouteUnits *units = nullptr,
+	const AttackApproach *attack = nullptr, const GroundHeight *ground = nullptr, ecs::Entity self = {}, std::uint8_t goalLayer = NoGoalLayer)
 {
 	const Engine::Math::FixedVector2 to = goal.value_or(destination);
-	const std::uint8_t toLayer = RouteGoalLayer(grid, plane, agent.radius, fromLayer, to);
-	auto planned = FindRoute(grid, plane, RouteMover{agent.radius, 5000, ignored}, from, to, scratch, fromLayer, toLayer, units);
+	// Pathfinder::findPath's destinationLayer: the order's own when it gives one (a ground mover sent onto the wall finds
+	// no way up: the route ends at the reached cell nearest the goal, as findClosestPath), else found from the move.
+	const std::uint8_t toLayer = goalLayer != NoGoalLayer && goalLayer <= grid.Decks().size() ? goalLayer : RouteGoalLayer(grid, plane, agent.radius, fromLayer, to);
+	auto planned = attack != nullptr && ground != nullptr
+		? SearchRoute(grid, plane, RouteMover{agent.radius, AttackRouteBudget, ignored}, from, to, scratch, fromLayer, toLayer, units, true,
+			  [&](std::int32_t x, std::int32_t y) { return AttackSpot(grid, *ground, *attack, self, from, x, y); })
+		: FindRoute(grid, plane, RouteMover{agent.radius, 5000, ignored}, from, to, scratch, fromLayer, toLayer, units);
+	// computeAttackPath: the search found no spot it may fire from (its route's end out of reach) and the move would be under
+	// three cells: it takes a closest path to where it stands instead (to unstack it from a unit it is on top of).
+	if (attack != nullptr && ground != nullptr && !planned.points.empty())
+	{
+		const Engine::Math::FixedVector2 end = planned.points.back();
+		const Engine::Math::Fixed shortMove = Engine::Math::Fixed::FromInt(PathfindCellSize * 3);
+		if (!AttackGoalInRange(*attack, end) && Engine::Math::DistanceSquared(end, from) < shortMove * shortMove)
+			planned = FindRoute(grid, plane, RouteMover{agent.radius, 5000, ignored}, from, from, scratch, fromLayer, fromLayer, units);
+	}
 	// Wedged in where its size does not fit: it moves out as a smaller mover would.
 	for (std::uint8_t radius = agent.radius; !planned.reachedGoal && !planned.exhausted && planned.points.size() <= 1 && radius > 0;)
 		planned = FindRoute(grid, plane, RouteMover{--radius, 5000, ignored}, from, to, scratch, fromLayer, toLayer, units);
@@ -108,13 +177,14 @@ struct RouteRequestSystem
 {
 	using Query = ecs::Query<ecs::Read<Transform>, ecs::Read<MoveOrder>, ecs::Read<NavigationAgent>, ecs::OptionalWrite<Route>, ecs::Optional<IgnoredObstacle>,
 		ecs::Optional<SurfaceLayer>, ecs::Optional<MoveGoal>, ecs::Optional<Owner>, ecs::Optional<TeamMember>, ecs::Optional<Collider>, ecs::Optional<Disabled>,
-		ecs::Optional<BlockedState>, ecs::Exclude<OffMap>>;
+		ecs::Optional<BlockedState>, ecs::Optional<AttackApproach>, ecs::Exclude<OffMap>>;
 	using Resources = ecs::Resources<ecs::Read<NavigationGrid>, ecs::Write<RouteScratchPool>, ecs::Read<ecs::JobPool>, ecs::Read<UnitCells>,
-		ecs::Read<GoalCells>, ecs::Read<Relationships>>;
+		ecs::Read<GoalCells>, ecs::Read<Relationships>, ecs::Read<GroundHeight>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
 		const NavigationGrid &grid = context.Read<NavigationGrid>();
+		const GroundHeight *ground = context.Find<GroundHeight>();
 		RouteScratchPool &pool = context.Write<RouteScratchPool>();
 		const std::uint64_t tick = context.Tick();
 		auto &requests = pool.requests;
@@ -140,18 +210,15 @@ struct RouteRequestSystem
 			for (std::size_t row = 0; row < orders.size(); ++row)
 			{
 				const MoveOrder &order = orders[row];
-				if (order.mode != MoveMode::Point)
+				// A point, or a waypoint path's leg (each leg routed: AIInternalMoveToState).
+				if (!RoutedMode(order.mode))
 					continue;
 				const ClearancePlane *plane = grid.ClearanceFor(agents[row].surfaces);
 				if (plane == nullptr)
 					continue;
 				Route *current = routes.empty() ? nullptr : &routes[row];
 				// Planned again at most every RouteReplanTicks: for a destination that moved, or past a partial route's end.
-				const bool stale = current == nullptr || !current->planned ||
-					(tick >= current->plannedTick + RouteReplanTicks &&
-						(Engine::Math::DistanceSquared(current->destination, order.destination) > Engine::Math::Fixed::FromInt(20 * 20) ||
-							(!current->complete && current->next >= current->count)));
-				if (!stale)
+				if (!RouteStale(current, order, tick))
 					continue;
 				const bool adjusted = !goals.empty() && goals[row].ordered == order.destination;
 				RouteUnits units;
@@ -165,10 +232,17 @@ struct RouteRequestSystem
 				units.crusherLevel = colliders.empty() ? 0u : colliders[row].crusherLevel;
 				units.unmanned = !disabledRows.empty() && (disabledRows[row].mask & disabled_type::Unmanned) != 0;
 				units.centered = agents[row].centered != 0;
-				units.throughUnits = !blockedRows.empty() && blockedRows[row].throughUnits != 0;
+				units.throughUnits = !blockedRows.empty() && (blockedRows[row].throughUnits | blockedRows[row].docking) != 0;
+				if (!blockedRows.empty() && blockedRows[row].ignoring != ecs::Entity{})
+					units.ignored = blockedRows[row].ignoring;
 				requests.push_back({entities[row], current, plane, agents[row], transforms[row].position.XY(), order.destination,
 					adjusted ? goals[row].goal : order.destination, units.ignored, layerRows.empty() ? GroundLayer : layerRows[row].layer, units, weighs,
-					Route{}});
+					Route{}, std::nullopt});
+				requests.back().goalLayer = order.goalLayer;
+				// An attack approaching a spot to fire from (requestAttackPath): its order is for the victim's position.
+				if (const auto attacks = chunk.template Get<AttackApproach>(); !attacks.empty() && attacks[row].active != 0 && attacks[row].search != 0 &&
+					attacks[row].victimAt.XY() == order.destination)
+					requests.back().attack = attacks[row];
 			}
 		});
 		// Each request planned on its own, shared out over as many jobs as threads (every one taking every n-th request,
@@ -182,7 +256,8 @@ struct RouteRequestSystem
 			{
 				RouteScratchPool::Request &request = requests[index];
 				PlanRoute(request.planned, grid, *request.plane, request.agent, request.from, request.destination, pool.Slot(group), tick, request.ignored,
-					request.layer, request.goal, request.weighsUnits ? &request.units : nullptr);
+					request.layer, request.goal, request.weighsUnits ? &request.units : nullptr, request.attack ? &*request.attack : nullptr, ground,
+					request.entity, request.goalLayer);
 			}
 		});
 		for (const RouteScratchPool::Request &request : requests)

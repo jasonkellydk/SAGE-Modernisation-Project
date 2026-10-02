@@ -104,6 +104,8 @@ inline void KnowContain(SelectionLook &look, const content::ObjectDefinition &ob
 				look.alliesInside = yes("AllowAlliesInside");
 				look.enemiesInside = yes("AllowEnemiesInside");
 				look.neutralInside = yes("AllowNeutralInside");
+				if (kind == ContainKind::Helix)
+					look.drawsPips = yes("ShouldDrawPips");
 				return;
 			}
 }

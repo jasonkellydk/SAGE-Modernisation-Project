@@ -13,6 +13,10 @@ import engine.ecs.core.component_registry;
 // (or idle too long), landing along the runway, taxiing to its space and
 // reloading there. It moves on its taxiing locomotor on the ground and its
 // flight locomotor in the air.
+// A helicopter (NeedsRunway No: the original's HeliAIStateMachine, its PRODUCED_AT_HELIPAD use) holds no parking space:
+// it flies from where it is made, and comes down only when sent to its airfield (doLandingCommand: to a landing spot
+// by it), straight down from ApproachHeight over the spot and, on the ground, healed by its airfield; whole again (or
+// given an order) it lifts straight up to ApproachHeight and flies on (HeliTakeoffOrLandingState).
 export namespace engine::gameplay
 {
 enum class JetState : std::uint32_t
@@ -31,6 +35,12 @@ enum class JetState : std::uint32_t
 	PauseBeforeTakeoff, // lined up at the runway's start (JetPauseBeforeTakeoffState)
 	ReturnToDeadAirfield, // out of ammo, its airfield gone: back to where it was (JetOrHeliReturningToDeadAirfieldState)
 	CirclingDeadAirfield, // circling there, hurting, until an airfield takes it in (JetOrHeliCirclingDeadAirfieldState)
+	HeliReturning,  // a helicopter flying to its landing spot (JetOrHeliReturnForLandingState)
+	HeliLanding,    // coming down over it (HeliTakeoffOrLandingState, landing)
+	HeliReloading,  // down, refilling its clips (JetOrHeliReloadAmmoState)
+	HeliParked,     // down, idle (healed by its airfield)
+	HeliTakingOff,  // lifting off (HeliTakeoffOrLandingState, taking off)
+	OrientForParking, // in its space, turning to its parking turn (JetOrHeliParkOrientState)
 };
 
 struct Jet
@@ -67,7 +77,50 @@ struct Jet
 	std::uint32_t outOfAmmoDamageType{0};
 	Engine::Math::Fixed outOfAmmoDamage;
 	std::uint32_t outOfAmmoDeathType{0};
-	std::uint32_t reserved3{0};
+	std::uint32_t clipSize{0}; // its weapon's ClipSize (0: none): how empty its clip is, for its reload
+	// A helicopter (NeedsRunway No): `space` is NoSpace; its landing spot by its airfield (m_landingPosForHelipadStuff),
+	// the two points it comes down or lifts off through (HeliTakeoffOrLandingState::m_path; `leg` the one it makes for),
+	// and an order given while it took off, landed or stood (HAS_PENDING_COMMAND: `pending`, its move's destination):
+	// carried out once flying.
+	static constexpr std::uint32_t NoSpace = 0xFFFFFFFFu;
+	std::uint32_t helicopter{0};
+	std::uint32_t pending{0};
+	Engine::Math::FixedVector3 landingSpot;
+	std::array<Engine::Math::FixedVector3, 2> heliPath{};
+	Engine::Math::FixedVector2 pendingGoal;
+	// An airfield jet's runway (ParkingPlaceBehavior's RunwayInfo, kept by the jets: `runwayHold` 1 it is m_inUseBy, 2
+	// m_nextInLineForTakeoff; `wasInLine`: it took the runway from the line, so it starts its roll at its prep point), the
+	// way it taxies, rolls or lands (AIFollowPathState's path: `path`, `pathCount`, `leg` the point it makes for), and its
+	// pause before takeoff (JetPauseBeforeTakeoffState: `takeoffAt`, `transferAt`, `waitedFor`; `paused` 1 once timed).
+	static constexpr std::uint32_t MaxPath = 5;
+	std::array<Engine::Math::FixedVector3, MaxPath> path{};
+	std::uint32_t pathCount{0};
+	std::uint8_t runwayHold{0};
+	std::uint8_t wasInLine{0};
+	std::uint8_t paused{0};
+	std::uint8_t reserved4{0};
+	std::uint64_t transferAt{0};
+	ecs::Entity waitedFor;
+	Engine::Math::Fixed parkingOffset; // ParkingOffset: its parking spot moved this far along its space's apron turn
+	// Its attack run (the Aurora's): the locomotor it flies on while attacking and AttackLocomotorPersistTime after
+	// (AttackLocomotorType: m_attackLocoExpireFrame, `attackLocoUntil`), and home out of ammo (ReturnForAmmoLocomotorType:
+	// USE_SPECIAL_RETURN_LOCO, `returnLoco`); its attackers miss it, aiming SneakyOffsetWhenAttacking along its facing, while
+	// attacking and AttackersMissPersistTime after (m_attackersMissExpireFrame, `missUntil`). `locoSet`: the set it flies on
+	// (0 normal, 1 attacking, 2 returning).
+	LocomotorDefinition attack;
+	LocomotorDefinition returning;
+	std::uint64_t attackPersistTicks{0};
+	std::uint64_t missPersistTicks{0};
+	std::uint64_t attackLocoUntil{0};
+	std::uint64_t missUntil{0};
+	Engine::Math::Fixed sneakyOffset;
+	std::uint8_t returnLoco{0};
+	std::uint8_t locoSet{0};
+	// The appearance bit shown while its engines leave their exhaust (the game's JETEXHAUST: its contrails; NoExhaust: not
+	// shown).
+	static constexpr std::uint8_t NoExhaust = 0xFF;
+	std::uint8_t exhaustBit{NoExhaust};
+	std::uint8_t reserved5[5]{};
 };
 }
 
@@ -77,11 +130,11 @@ template<>
 struct ComponentTraits<engine::gameplay::Jet>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.jet";
-	static constexpr std::uint32_t Version = 3;
+	static constexpr std::uint32_t Version = 5; // 5: exhaustBit
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Jet &value, StateHasher &hasher) noexcept
 	{
-		for (const auto *locomotor : {&value.flight, &value.taxi})
+		for (const auto *locomotor : {&value.flight, &value.taxi, &value.attack, &value.returning})
 		{
 			for (const auto fixed : {locomotor->maxSpeed, locomotor->minSpeed, locomotor->acceleration, locomotor->braking, locomotor->preferredHeight,
 					 locomotor->preferredHeightDamping, locomotor->closeEnough})
@@ -113,6 +166,27 @@ struct ComponentTraits<engine::gameplay::Jet>
 		hasher.AppendU64(value.outOfAmmoDamageType);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.outOfAmmoDamage.Raw()));
 		hasher.AppendU64(value.outOfAmmoDeathType);
+		hasher.AppendU64((static_cast<std::uint64_t>(value.helicopter) << 32) | value.pending);
+		hasher.AppendU64(value.clipSize);
+		for (std::uint32_t point = 0; point < value.pathCount && point < engine::gameplay::Jet::MaxPath; ++point)
+			for (const auto fixed : {value.path[point].x, value.path[point].y, value.path[point].z})
+				hasher.AppendU64(static_cast<std::uint64_t>(fixed.Raw()));
+		hasher.AppendU64((static_cast<std::uint64_t>(value.pathCount) << 32) | (static_cast<std::uint64_t>(value.runwayHold) << 16) |
+			(static_cast<std::uint64_t>(value.wasInLine) << 8) | value.paused);
+		hasher.AppendU64(value.transferAt);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.parkingOffset.Raw()));
+		hasher.AppendU64(value.attackPersistTicks);
+		hasher.AppendU64(value.missPersistTicks);
+		hasher.AppendU64(value.attackLocoUntil);
+		hasher.AppendU64(value.missUntil);
+		hasher.AppendU64(static_cast<std::uint64_t>(value.sneakyOffset.Raw()));
+		hasher.AppendU64((static_cast<std::uint64_t>(value.exhaustBit) << 16) | (static_cast<std::uint64_t>(value.returnLoco) << 8) | value.locoSet);
+		hasher.AppendU64((static_cast<std::uint64_t>(value.waitedFor.index) << 32) | value.waitedFor.generation);
+		for (const auto &point : {value.landingSpot, value.heliPath[0], value.heliPath[1]})
+			for (const auto fixed : {point.x, point.y, point.z})
+				hasher.AppendU64(static_cast<std::uint64_t>(fixed.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.pendingGoal.x.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.pendingGoal.y.Raw()));
 	}
 };
 }

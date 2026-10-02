@@ -219,13 +219,53 @@ BOOST_AUTO_TEST_CASE(short_power_slows_production_as_the_original)
 			doneAt[produced.factory.index] = plant.tick;
 	BOOST_TEST(doneAt[full.index] == 30u);
 	BOOST_TEST(doneAt[half.index] == 60u);
-	BOOST_TEST(doneAt[most.index] == 38u); // 30 / 0.8
+	BOOST_TEST(doneAt[most.index] == 37u); // calcTimeToBuild: Int 30 / 0.8, truncated (37.5 -> 37)
 	BOOST_TEST(doneAt[none.index] == 60u);
 	// A dead power plant produces nothing.
 	const PlayerEnergy &energy = plant.world.Resource<PlayerEnergy>();
 	BOOST_TEST(energy.Production(1) == 5);
 	BOOST_TEST(energy.Consumption(1) == 10);
 	BOOST_TEST(!energy.Sufficient(1));
+}
+
+// ProductionUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/ProductionUpdate.cpp) with
+// ThingTemplate::calcTimeToBuild: each update counts m_framesUnderConstruction and the unit is done once that count is
+// at least its build time as the player's power stands at that update. A 30-frame unit at half power (60 frames) whose
+// player gets its power back after 40 updates is done on the 41st (41 >= 30), not 10 updates later; one at full power
+// whose player loses half its power after 20 updates waits for its 60th.
+BOOST_AUTO_TEST_CASE(legacy_parity_power_coming_back_finishes_a_slowed_unit_at_once)
+{
+	Plant plant(2);
+	const ecs::Entity slowed = plant.PoweredFactory(0, 5, 10);
+	const ecs::Entity full = plant.PoweredFactory(1, 10, 10);
+	for (const ecs::Entity factory : {slowed, full})
+		plant.world.Get<ProductionQueue>(factory)->Push({1, 0, 1, 0, {}, 30});
+	const auto source = [&](std::uint32_t player, std::int32_t amount) {
+		const ecs::Entity building = plant.world.Create();
+		plant.world.Add<Owner>(building);
+		plant.world.Add<EnergySource>(building);
+		*plant.world.Get<Owner>(building) = {player};
+		*plant.world.Get<EnergySource>(building) = {amount, 0};
+	};
+	std::map<std::uint32_t, std::uint64_t> doneAt;
+	for (int step = 0; step < 100; ++step)
+	{
+		if (plant.tick == 20)
+			source(1, -10); // player 1 now 10 of 20: half power
+		if (plant.tick == 40)
+			source(0, 5); // player 0 now 10 of 10: full power
+		for (const Produced &produced : plant.Step())
+			doneAt[produced.factory.index] = plant.tick;
+		if (plant.tick == 30)
+		{
+			// Its percent as its last update had it: 30 of 60 frames.
+			const ProductionEntry &front = plant.world.Get<ProductionQueue>(slowed)->entries[0];
+			BOOST_TEST(front.frames == 30u);
+			BOOST_TEST(front.ticksNow == 60u);
+		}
+	}
+	BOOST_TEST(doneAt[slowed.index] == 41u);
+	BOOST_TEST(doneAt[full.index] == 60u);
 }
 
 // ProductionUpdate with a PRODUCTION_UPGRADE entry: UpgradeTemplate::calcTimeToBuild is BuildTime seconds of

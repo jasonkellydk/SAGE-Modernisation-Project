@@ -35,6 +35,17 @@ struct PointerInput
 	// in pixels (InGameUI::getScrollAmount).
 	bool scrolling{false};
 	float scrollX{0}, scrollY{0};
+	// The tooltip the window under the pointer gives (GameWindowManager::winProcessMouseEvent: its TOOLTIPTEXT and
+	// TOOLTIPDELAY; none: no window's).
+	std::optional<std::pair<std::u16string, int>> windowTooltip;
+	// Over the radar (the control bar's LeftHUD, LeftHUDInput): the world's hints go on as if no window were there, with
+	// nothing picked (the radar is not see-through) at the ground behind it (InGameUI::createCommandHint's underWindow
+	// loop); and whether the local player has a radar (rts::localPlayerHasRadar: a move hint there shows the arrow
+	// without).
+	bool overRadar{false};
+	bool hasRadar{false};
+	// A replay playing back (RecorderClass::getMode() == RECORDERMODETYPE_PLAYBACK): no command hints.
+	bool playback{false};
 };
 
 // What lies under the pointer this frame (W3DView::pickDrawable's cast into the scene): every drawn object the pick
@@ -103,6 +114,10 @@ struct InteractionState
 	float rightAnchorX{0}, rightAnchorY{0};
 	std::uint32_t rightDownTimeMs{0};
 	std::array<float, 3> rightDownCamera{};
+	// SelectionTranslator::m_displayedMaxWarning (said once a game), and the GUI:MaxSelectionSize message for the host
+	// to show (the selection's count cap reached this frame).
+	bool displayedMaxWarning{false};
+	bool maxSelectionWarning{false};
 };
 
 // Mouse.ini: DragTolerance (pixels), DragTolerance3D (world units the camera may move), DragToleranceMS.
@@ -113,6 +128,8 @@ struct MouseSettings
 	std::uint32_t dragToleranceMs{250};
 	// Each cursor's Directions (Mouse.ini's MouseCursor blocks, by content::MouseCursorKind).
 	std::array<int, static_cast<std::size_t>(content::MouseCursorKind::Count)> cursorDirections{};
+	// InGameUI.ini MaxSelectionSize: the most a selection takes (below 1: no cap).
+	int maxSelectionSize{-1};
 };
 
 // The mouse cursor the world asks for (InGameUI::setMouseCursor) and
@@ -121,6 +138,17 @@ struct CursorState
 {
 	content::MouseCursorKind cursor{content::MouseCursorKind::Arrow}; // W3DMouse::init
 	std::uint8_t direction{0};
+	// The move hint's quick path (CommandTranslator::handleDefaultMoveCommand, DO_HINT): whether the frame's hint was a
+	// move and asked, the point it would go to (the object's place under the pointer, else the ground's), and the host's
+	// answer for the point it last asked about (rule_queries QueryQuickPath): true where no selected unit could path there
+	// at a glance and the local player's view of it is clear (MSG_DO_INVALID_HINT).
+	bool quickPathAsked{false};
+	std::array<float, 2> quickPathAt{};
+	std::array<float, 2> quickPathAnsweredAt{};
+	bool quickPathBlocked{false};
+	// LookAtTranslator's m_lastMouseMoveTimeMsec: when the pointer last moved (ms), and where it was.
+	std::uint32_t lastMoveMs{0};
+	std::array<float, 2> lastPointer{};
 };
 
 // InGameUI's MOUSEMODE_GUI_COMMAND (setGUICommand): a command button waiting for its target: whose it is (the object
@@ -302,6 +330,8 @@ struct SelectionLook
 	bool hasAi{false};
 	std::uint32_t transportSlots{0};
 	ContainKind contain{ContainKind::None};
+	// HelixContain ShouldDrawPips (default Yes): No hides its container pips (getContainerPipsToShow).
+	bool drawsPips{true};
 	bool anyInside{true};
 	content::KindOfMask allowInside{};
 	content::KindOfMask forbidInside{};

@@ -43,6 +43,9 @@ struct EmitterTransform
 struct ParticleWorldSettings
 {
 	std::size_t maxParticles{6000};
+	// GlobalData m_maxFieldParticleCount: ground-aligned AREA_EFFECT particles on screen beyond which such systems make
+	// no more (once they have some).
+	std::size_t maxFieldParticles{30};
 	// Particles per parallel job.
 	std::size_t chunk{1024};
 	std::uint64_t seed{0xFA57};
@@ -90,14 +93,12 @@ public:
 		return true;
 	}
 
-	// Stops emitting; what is out lives on, and the system goes once it is all gone.
+	// Stops emitting; what is out lives on, and the system goes once it is all gone (ParticleSystem::destroy, its slave
+	// with it).
 	void Stop(ParticleSystemId id)
 	{
 		if (const auto index = Get(id))
-		{
-			m_emitters.stopped[*index] = 1;
-			m_emitters.held[*index] = 0;
-		}
+			StopIndex(*index);
 	}
 
 	// A system its owner switches on and off (ParticleSystem::start / stop): held, it stays while stopped;
@@ -133,18 +134,33 @@ public:
 		}
 	}
 
-	// Stops and removes its particles at once.
+	// Stops and removes its particles at once (its slave stops as with Stop).
 	void Destroy(ParticleSystemId id)
 	{
 		if (const auto index = Get(id))
 		{
-			m_emitters.stopped[*index] = 1;
-			m_emitters.held[*index] = 0;
+			StopIndex(*index);
 			m_emitters.killParticles[*index] = 1;
 		}
 	}
 
 	bool Alive(ParticleSystemId id) const { return Get(id).has_value(); }
+
+	// Where it is placed now (none once it has gone).
+	std::optional<EmitterTransform> TransformOf(ParticleSystemId id) const
+	{
+		if (const auto index = Get(id))
+			return m_emitters.transform[*index];
+		return std::nullopt;
+	}
+
+	// The angle its wind blows at this frame (radians; none once it has gone).
+	std::optional<float> WindAngle(ParticleSystemId id) const
+	{
+		if (const auto index = Get(id))
+			return m_emitters.windAngle[*index];
+		return std::nullopt;
+	}
 
 	// ParticleSystem::setSystemLifetime: the frames it has left (a system that runs forever keeps running);
 	// setInitialDelay: the frames before it starts, in place of its own.
@@ -152,6 +168,12 @@ public:
 	{
 		if (const auto index = Get(id))
 			m_emitters.lifetimeLeft[*index] = frames;
+	}
+	// ParticleSystem::setLifetimeRange(frames, frames): each particle it makes from now on lives `frames` (0: its own).
+	void SetParticleLifetime(ParticleSystemId id, float frames)
+	{
+		if (const auto index = Get(id))
+			m_emitters.particleLifetime[*index] = frames;
 	}
 	void SetInitialDelay(ParticleSystemId id, std::uint32_t frames)
 	{
@@ -182,14 +204,41 @@ public:
 	// The particle cap (GlobalData m_maxParticleCount, the detail level's MaxParticleCount).
 	void SetMaxParticles(std::size_t count) noexcept { m_settings.maxParticles = count; }
 	std::size_t MaxParticles() const noexcept { return m_settings.maxParticles; }
+	void SetMaxFieldParticles(std::size_t count) noexcept { m_settings.maxFieldParticles = count; }
+	// W3DParticleSystemManager::doParticles' m_fieldParticleCount: the ground-aligned AREA_EFFECT particles the last
+	// frame drew on screen, as the renderer counted them.
+	void SetFieldParticleCount(std::size_t count) noexcept { m_fieldParticles = count; }
 
+	// ParticleSystem::update's isShrouded: a system riding an object the viewer sees fogged or shrouded emits nothing
+	// (its burst delay waits too; its lifetime runs on and its particles live on).
+	void SetObscured(ParticleSystemId id, bool obscured)
+	{
+		if (const auto index = Get(id))
+			m_emitters.obscured[*index] = obscured ? 1 : 0;
+	}
+
+	// ParticleSystemManager::update in the original's order: each system emits then its particles move (here: every
+	// free system emits, then all particles move in parallel); a system riding a particle (PerParticleAttachedSystem)
+	// starts from where its particle has just moved to and its new particles move this frame too; slave particles a
+	// master asked for are made after the slave's own update (as the slave sits before its master in the original's
+	// list): not moved this frame, and none once the slave has run out (its lifetime spent, nothing left out).
 	void Step(jobs::JobSystem *jobs = nullptr)
 	{
 		++m_frame;
+		m_slaveRequests.clear();
 		for (std::size_t index = 0; index < m_emitters.size(); ++index)
-			UpdateSystem(index);
+			if (m_emitters.controlParticle[index] == 0xFFFFFFFFu)
+				UpdateSystem(index);
 		UpdateParticles(jobs);
+		for (std::size_t index = 0; index < m_emitters.size(); ++index)
+			if (m_emitters.live[index] != 0 && m_emitters.controlParticle[index] != 0xFFFFFFFFu)
+			{
+				const std::size_t first = m_px.size();
+				UpdateSystem(index);
+				UpdateRange(first, m_px.size());
+			}
 		Compact();
+		MakeSlaveParticles();
 		RetireSystems();
 	}
 
@@ -232,8 +281,14 @@ private:
 		std::vector<float> sizeBonus;
 		std::vector<std::uint32_t> particles;
 		std::vector<float> radius; // emission radius override (0: the definition's)
+		std::vector<float> particleLifetime; // its particles' lifetime override in frames (0: the definition's)
 		std::vector<std::array<float, 3>> velocityScale;
 		std::vector<float> countScale, sizeScale;
+		// Wind (ParticleSystem::updateWindMotion): the angle it blows at, how fast it turns, its swing's ends, and which
+		// way it is swinging.
+		std::vector<float> windAngle, windChange, windStart, windEnd;
+		std::vector<std::uint8_t> windToEnd;
+		std::vector<std::uint8_t> obscured; // its object hidden from the viewer by the shroud: no emission
 
 		std::size_t size() const noexcept { return definition.size(); }
 		// A fresh row (a new slot, or `index` reset keeping its generation).
@@ -261,9 +316,16 @@ private:
 				sizeBonus.push_back(0.0f);
 				particles.push_back(0);
 				radius.push_back(0.0f);
+				particleLifetime.push_back(0.0f);
 				velocityScale.push_back({1.0f, 1.0f, 1.0f});
 				countScale.push_back(1.0f);
 				sizeScale.push_back(1.0f);
+				windAngle.push_back(0.0f);
+				windChange.push_back(0.0f);
+				windStart.push_back(0.0f);
+				windEnd.push_back(0.0f);
+				windToEnd.push_back(1);
+				obscured.push_back(0);
 				return;
 			}
 			definition[index] = nullptr;
@@ -279,15 +341,20 @@ private:
 			sizeBonus[index] = 0.0f;
 			particles[index] = 0;
 			radius[index] = 0.0f;
+			particleLifetime[index] = 0.0f;
 			velocityScale[index] = {1.0f, 1.0f, 1.0f};
 			countScale[index] = sizeScale[index] = 1.0f;
+			windAngle[index] = windChange[index] = windStart[index] = windEnd[index] = 0.0f;
+			windToEnd[index] = 1;
+			obscured[index] = 0;
 		}
 	};
 
+	// GameClientRandomValueReal: `high` itself when low >= high (a range written backwards picks its second value).
 	float Uniform(float low, float high)
 	{
-		if (high <= low)
-			return low;
+		if (low >= high)
+			return high;
 		m_random ^= m_random << 13;
 		m_random ^= m_random >> 7;
 		m_random ^= m_random << 17;
@@ -295,12 +362,24 @@ private:
 	}
 	float Pick(const Range &range) { return Uniform(range.min, range.max); }
 
+	static std::array<float, 3> Normalized(std::array<float, 3> v)
+	{
+		const float length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+		if (length > 0.0f)
+			for (float &c : v)
+				c /= length;
+		return v;
+	}
+
+	// ParticleSystem::computePointOnUnitSphere: a random point of the [-1, 1] cube (not the origin) pushed out to the
+	// sphere (so not evenly spread).
 	std::array<float, 3> UnitSphere()
 	{
-		const float z = Uniform(-1.0f, 1.0f);
-		const float angle = Uniform(0.0f, 6.2831853f);
-		const float r = std::sqrt(std::max(0.0f, 1.0f - z * z));
-		return {r * std::cos(angle), r * std::sin(angle), z};
+		std::array<float, 3> p{};
+		do
+			p = {Uniform(-1.0f, 1.0f), Uniform(-1.0f, 1.0f), Uniform(-1.0f, 1.0f)};
+		while (p[0] == 0.0f && p[1] == 0.0f && p[2] == 0.0f);
+		return Normalized(p);
 	}
 
 	// The live system's row, if it is still the one `id` names.
@@ -333,6 +412,13 @@ private:
 		e.lifetimeLeft[index] = definition.systemLifetime;
 		e.forever[index] = definition.systemLifetime == 0 ? 1 : 0;
 		e.slave[index] = slave ? 1 : 0;
+		// ParticleSystem's constructor: its swing's ends, then where in it the wind starts; it turns at the default
+		// rate (0.15) until a PingPong swing ends.
+		e.windStart[index] = Pick(definition.windStartAngle);
+		e.windEnd[index] = Pick(definition.windEndAngle);
+		e.windAngle[index] = Uniform(e.windStart[index], e.windEnd[index]);
+		e.windChange[index] = 0.15f;
+		e.windToEnd[index] = 1;
 		++m_liveSystems;
 		if (!definition.slaveSystem.empty())
 			if (const ParticleSystemDefinition *slaveDefinition = m_find ? m_find(definition.slaveSystem) : nullptr)
@@ -355,12 +441,23 @@ private:
 			--e.delayLeft[index];
 			return;
 		}
-		// An attached system rides its particle.
+		if (e.definition[index]->wind != WindMotion::None)
+			UpdateWind(static_cast<std::uint32_t>(index));
+		// An attached system rides its particle; when the particle has gone (~Particle) it is destroyed (stops, and
+		// goes once its own particles have).
 		if (const std::uint32_t control = e.controlParticle[index]; control != 0xFFFFFFFFu)
 		{
-			e.transform[index].m[3] = m_px[control];
-			e.transform[index].m[7] = m_py[control];
-			e.transform[index].m[11] = m_pz[control];
+			if (m_dead[control] != 0)
+			{
+				e.controlParticle[index] = 0xFFFFFFFFu;
+				StopIndex(static_cast<std::uint32_t>(index));
+			}
+			else
+			{
+				e.transform[index].m[3] = m_px[control];
+				e.transform[index].m[7] = m_py[control];
+				e.transform[index].m[11] = m_pz[control];
+			}
 		}
 		const std::array<float, 3> position = e.transform[index].Position();
 		if (e.hasLast[index] == 0)
@@ -369,7 +466,7 @@ private:
 			e.hasLast[index] = 1;
 		}
 		const ParticleSystemDefinition &definition = *e.definition[index];
-		if (e.stopped[index] == 0 && e.slave[index] == 0 && (e.forever[index] != 0 || e.lifetimeLeft[index] > 0))
+		if (e.stopped[index] == 0 && e.slave[index] == 0 && e.obscured[index] == 0 && (e.forever[index] != 0 || e.lifetimeLeft[index] > 0))
 		{
 			if (e.burstDelayLeft[index] == 0)
 			{
@@ -448,10 +545,14 @@ private:
 		}
 		case EmissionVelocity::Hemispherical:
 		{
-			// (The original reads the spherical speed here.)
-			const float speed = Pick(d.velocitySpherical);
-			auto v = UnitSphere();
-			v[2] = std::fabs(v[2]);
+			// (The original reads spherical.speed here, the same union member as VelHemispherical.) A random point of the
+			// upper half cube pushed out to the sphere.
+			const float speed = Pick(d.velocityHemispherical);
+			std::array<float, 3> v{};
+			do
+				v = {Uniform(-1.0f, 1.0f), Uniform(-1.0f, 1.0f), Uniform(0.0f, 1.0f)};
+			while (v[0] == 0.0f && v[1] == 0.0f && v[2] == 0.0f);
+			v = Normalized(v);
 			return {v[0] * speed, v[1] * speed, v[2] * speed};
 		}
 		case EmissionVelocity::Outward:
@@ -519,46 +620,193 @@ private:
 		return m_settings.maxParticles != 0;
 	}
 
-	void Emit(std::uint32_t systemIndex, int number, int count)
+	// ParticleSystem::generateParticleInfo: everything a new particle starts with, in the original's order of picks.
+	struct ParticleInit
 	{
-		if (!MakeRoom(m_emitters.definition[systemIndex]->priority))
-			return;
+		std::array<float, 3> position{};
+		std::array<float, 3> velocity{};
+		float velocityDamping{1.0f};
+		float angularDamping{1.0f};
+		float angle{0.0f};
+		float angularRate{0.0f};
+		std::uint32_t lifetime{0};
+		float size{0.0f};
+		float sizeRate{0.0f};
+		float sizeDamping{1.0f};
+		std::array<float, KeyframeCount> alphas{};
+		float colorScale{0.0f};
+		std::array<float, 2> emitter{}; // the system's position (IsParticleUpTowardsEmitter)
+		bool upTowardsEmitter{false};
+		float windRandomness{1.0f};
+	};
+
+	// The `number`th of `count` this frame: from the volume with its velocity (both scaled by the system's multipliers),
+	// placed by the system's transform and set back along its path since last frame by (1 - number / count) of it;
+	// then its damping, spin, lifetime (the system's override when set), size (plus the running StartSizeRate bonus,
+	// capped at MAX_SIZE_BONUS 50 once it is not 0), alpha keys, colour scale and wind randomness (0.7 .. 1.3).
+	ParticleInit Generate(std::uint32_t systemIndex, int number, int count)
+	{
 		const ParticleSystemDefinition &d = *m_emitters.definition[systemIndex];
-		std::array<float, 3> local = EmissionPosition(d, m_emitters.radius[systemIndex]);
+		ParticleInit info;
+		const std::array<float, 3> local = EmissionPosition(d, m_emitters.radius[systemIndex]);
 		std::array<float, 3> velocity = EmissionVelocityAt(d, local);
 		for (int axis = 0; axis < 3; ++axis)
 			velocity[axis] *= m_emitters.velocityScale[systemIndex][axis];
 		const EmitterTransform transform = m_emitters.transform[systemIndex];
-		std::array<float, 3> position = transform.Point(local);
-		velocity = transform.Vector(velocity);
-		// Spread a burst along the emitter's path since last frame.
+		info.position = transform.Point(local);
+		info.velocity = transform.Vector(velocity);
 		const std::array<float, 3> now = transform.Position();
 		const float back = 1.0f - static_cast<float>(number) / static_cast<float>(count);
 		for (int axis = 0; axis < 3; ++axis)
-			position[axis] -= back * (now[axis] - m_emitters.lastPosition[systemIndex][axis]);
-		if (d.emitAboveGroundOnly && m_ground && position[2] < m_ground(position[0], position[1]))
+			info.position[axis] -= back * (now[axis] - m_emitters.lastPosition[systemIndex][axis]);
+		info.velocityDamping = Pick(d.velocityDamping);
+		info.angularDamping = Pick(d.angularDamping);
+		info.angle = Pick(d.angleZ);
+		info.angularRate = Pick(d.angularRateZ);
+		const float lifetime = m_emitters.particleLifetime[systemIndex] > 0.0f ? m_emitters.particleLifetime[systemIndex] : Pick(d.lifetime);
+		info.lifetime = static_cast<std::uint32_t>(lifetime);
+		const float scale = m_emitters.sizeScale[systemIndex];
+		info.size = Pick(d.size) * scale + m_emitters.sizeBonus[systemIndex];
+		info.sizeRate = Pick(d.sizeRate) * scale;
+		info.sizeDamping = Pick(d.sizeRateDamping);
+		float &bonus = m_emitters.sizeBonus[systemIndex];
+		bonus += Pick(d.startSizeRate);
+		if (bonus != 0.0f)
+			bonus = std::min(bonus, 50.0f);
+		for (std::size_t key = 0; key < KeyframeCount; ++key)
+			info.alphas[key] = Pick(d.alpha[key].value);
+		info.colorScale = Pick(d.colorScale);
+		info.emitter = {now[0], now[1]};
+		info.upTowardsEmitter = d.upTowardsEmitter;
+		info.windRandomness = Uniform(0.7f, 1.3f);
+		return info;
+	}
+
+	// ParticleSystem::update's burst: a particle the ground does not hide (IsEmitAboveGroundOnly), room made for it
+	// (createParticle), the system on it (PerParticleAttachedSystem), and its slave's particle asked for.
+	void Emit(std::uint32_t systemIndex, int number, int count)
+	{
+		const ParticleInit info = Generate(systemIndex, number, count);
+		const ParticleSystemDefinition &d = *m_emitters.definition[systemIndex];
+		if (d.emitAboveGroundOnly && m_ground && info.position[2] < m_ground(info.position[0], info.position[1]))
 			return;
-		const float size = Pick(d.size) * m_emitters.sizeScale[systemIndex] + m_emitters.sizeBonus[systemIndex];
-		m_emitters.sizeBonus[systemIndex] = std::min(m_emitters.sizeBonus[systemIndex] + Pick(d.startSizeRate), 50.0f);
-		const std::uint32_t particle = Add(systemIndex, position, velocity, size, now);
-		if (const std::uint32_t slave = m_emitters.slaveSystem[systemIndex]; slave != 0xFFFFFFFFu && m_emitters.live[slave] != 0)
-		{
-			const auto &offset = d.slaveOffset;
-			Add(slave, {position[0] + offset[0], position[1] + offset[1], position[2] + offset[2]}, velocity, Pick(m_emitters.definition[slave]->size), now);
-		}
+		// createParticle: a ground-aligned AREA_EFFECT system that already has particles makes no more while more than
+		// MaxFieldParticleCount such particles were on screen.
+		if (m_emitters.particles[systemIndex] > 0 && d.priority == ParticlePriority::AreaEffect && d.groundAligned &&
+			m_fieldParticles > m_settings.maxFieldParticles)
+			return;
+		if (!MakeRoom(d.priority))
+			return;
+		const std::uint32_t particle = Add(systemIndex, info);
 		if (!d.attachedSystem.empty())
 			if (const ParticleSystemDefinition *attached = m_find ? m_find(d.attachedSystem) : nullptr)
 			{
-				const auto id = Start(*attached, EmitterTransform::At(position[0], position[1], position[2]), false);
+				const auto id = Start(*attached, EmitterTransform::At(info.position[0], info.position[1], info.position[2]), false);
 				m_emitters.controlParticle[static_cast<std::uint32_t>(id & 0xFFFFFFFFu)] = particle;
 			}
+		if (const std::uint32_t slave = m_emitters.slaveSystem[systemIndex]; slave != 0xFFFFFFFFu && m_emitters.live[slave] != 0)
+			m_slaveRequests.push_back(systemIndex);
 	}
 
-	std::uint32_t Add(std::uint32_t systemIndex, const std::array<float, 3> &p, const std::array<float, 3> &v, float size,
-		const std::array<float, 3> &emitter)
+	// ParticleSystem::mergeRelatedParticleSystems(master, slave, false) then the slave's createParticle with the
+	// master's priority, for each particle a master made this frame, once the slave has had its update: a fresh
+	// particle of the master (its place, velocity, velocity damping, emitter and wind randomness) with the slave's
+	// lifetime, spin, alpha and colour keys and colour scale, its size, growth and growth damping the master's times the
+	// slave's, placed SlavePosOffset from the master's. A slave that ran out this frame (its lifetime spent or stopped,
+	// nothing left out) is gone first and gets none.
+	void MakeSlaveParticles()
+	{
+		for (const std::uint32_t master : m_slaveRequests)
+		{
+			const std::uint32_t slave = m_emitters.slaveSystem[master];
+			if (slave == 0xFFFFFFFFu || m_emitters.live[slave] == 0)
+				continue;
+			if (Done(slave))
+			{
+				Retire(slave);
+				continue;
+			}
+			ParticleInit merged = Generate(master, 1, 1);
+			const ParticleInit own = Generate(slave, 1, 1);
+			merged.lifetime = own.lifetime;
+			merged.size *= own.size;
+			merged.sizeRate *= own.sizeRate;
+			merged.sizeDamping *= own.sizeDamping;
+			merged.angle = own.angle;
+			merged.angularRate = own.angularRate;
+			merged.angularDamping = own.angularDamping;
+			merged.alphas = own.alphas;
+			merged.colorScale = own.colorScale;
+			const auto &offset = m_emitters.definition[slave]->slaveOffset;
+			for (int axis = 0; axis < 3; ++axis)
+				merged.position[axis] += offset[axis];
+			const ParticlePriority priority = m_emitters.definition[master]->priority;
+			if (m_emitters.particles[slave] > 0 && priority == ParticlePriority::AreaEffect && m_emitters.definition[slave]->groundAligned &&
+				m_fieldParticles > m_settings.maxFieldParticles)
+				continue;
+			if (MakeRoom(priority))
+				Add(slave, merged);
+		}
+		if (m_capRemoved > 0)
+			Compact();
+	}
+
+	// ParticleSystem::updateWindMotion. PingPong: the wind swings between its start and end angles, turning by its
+	// rate times how near the middle of the swing it is (at least 0.005 a frame); past an end it turns back with a new
+	// rate and new ends. Circular: it turns by its rate (picked once if it had none), kept within 0 .. 2 pi.
+	void UpdateWind(std::uint32_t index)
+	{
+		Emitters &e = m_emitters;
+		const ParticleSystemDefinition &d = *e.definition[index];
+		float &angle = e.windAngle[index];
+		if (d.wind == WindMotion::PingPong)
+		{
+			const float start = e.windStart[index], end = e.windEnd[index];
+			const float half = (end - start) / 2.0f;
+			const float fromCentre = std::fabs(half - angle + start);
+			float change = (1.0f - fromCentre / half) * e.windChange[index];
+			if (change < 0.005f)
+				change = 0.005f;
+			const bool turn = e.windToEnd[index] != 0 ? (angle += change) >= end : (angle -= change) <= start;
+			if (turn)
+			{
+				e.windToEnd[index] = e.windToEnd[index] != 0 ? 0 : 1;
+				e.windChange[index] = Uniform(d.windAngleChangeMin, d.windAngleChangeMax);
+				e.windStart[index] = Pick(d.windStartAngle);
+				e.windEnd[index] = Pick(d.windEndAngle);
+			}
+		}
+		else if (d.wind == WindMotion::Circular)
+		{
+			if (e.windChange[index] == 0.0f)
+				e.windChange[index] = Uniform(d.windAngleChangeMin, d.windAngleChangeMax);
+			angle += e.windChange[index];
+			if (angle > 6.283185307f)
+				angle -= 6.283185307f;
+			else if (angle < 0.0f)
+				angle += 6.283185307f;
+		}
+	}
+
+	// ParticleSystem::destroy: it emits no more and goes once its particles have; its slave too.
+	void StopIndex(std::uint32_t index)
+	{
+		Emitters &e = m_emitters;
+		e.stopped[index] = 1;
+		e.held[index] = 0;
+		if (const std::uint32_t slave = e.slaveSystem[index]; slave != 0xFFFFFFFFu && e.live[slave] != 0)
+		{
+			e.stopped[slave] = 1;
+			e.held[slave] = 0;
+		}
+	}
+
+	std::uint32_t Add(std::uint32_t systemIndex, const ParticleInit &info)
 	{
 		const ParticleSystemDefinition &d = *m_emitters.definition[systemIndex];
 		const auto index = static_cast<std::uint32_t>(m_px.size());
+		const auto &p = info.position;
+		const auto &v = info.velocity;
 		m_px.push_back(p[0]);
 		m_py.push_back(p[1]);
 		m_pz.push_back(p[2]);
@@ -568,36 +816,48 @@ private:
 		m_mx.push_back(v[0] + d.drift[0]);
 		m_my.push_back(v[1] + d.drift[1]);
 		m_mz.push_back(v[2] + d.drift[2]);
-		m_size.push_back(size);
-		m_sizeRate.push_back(Pick(d.sizeRate) * m_emitters.sizeScale[systemIndex]);
-		m_sizeDamping.push_back(Pick(d.sizeRateDamping));
-		m_velocityDamping.push_back(Pick(d.velocityDamping));
-		float angle = Pick(d.angleZ);
-		if (d.upTowardsEmitter)
-			angle = std::atan2(p[1] - emitter[1], p[0] - emitter[0]) + 1.5707963f;
-		m_angle.push_back(angle);
-		m_angularRate.push_back(Pick(d.angularRateZ));
-		m_angularDamping.push_back(Pick(d.angularDamping));
-		m_lifetime.push_back(static_cast<std::uint32_t>(Pick(d.lifetime)));
+		m_size.push_back(info.size);
+		m_sizeRate.push_back(info.sizeRate);
+		m_sizeDamping.push_back(info.sizeDamping);
+		m_velocityDamping.push_back(info.velocityDamping);
+		m_angle.push_back(info.angle);
+		m_angularRate.push_back(info.angularRate);
+		m_angularDamping.push_back(info.angularDamping);
+		m_lifetime.push_back(info.lifetime);
 		m_age.push_back(0);
-		std::array<float, KeyframeCount> alphas{};
-		for (std::size_t key = 0; key < KeyframeCount; ++key)
-			alphas[key] = Pick(d.alpha[key].value);
-		m_alphaKeys.push_back(alphas);
-		m_alpha.push_back(alphas[0]);
+		m_alphaKeys.push_back(info.alphas);
+		m_alpha.push_back(info.alphas[0]);
 		m_alphaTarget.push_back(1);
 		m_alphaRate.push_back(0.0f);
 		m_red.push_back(d.color[0].color[0]);
 		m_green.push_back(d.color[0].color[1]);
 		m_blue.push_back(d.color[0].color[2]);
 		m_colorTarget.push_back(1);
-		m_colorScale.push_back(Pick(d.colorScale));
+		m_colorScale.push_back(info.colorScale);
+		m_emitterX.push_back(info.emitter[0]);
+		m_emitterY.push_back(info.emitter[1]);
+		m_upTowards.push_back(info.upTowardsEmitter ? 1 : 0);
+		m_windRandomness.push_back(info.windRandomness);
 		m_system.push_back(systemIndex);
 		m_dead.push_back(0);
 		ComputeAlphaRate(index);
 		ComputeColorRate(index);
 		++m_emitters.particles[systemIndex];
 		return index;
+	}
+
+	// angleBetween (ParticleSys.cpp): the angle from (0, 1) to `b`, by acos of their dot over their lengths, negative
+	// when b points to -x; 0 for a zero `b`; at right angles pi when b points to +x, else 0.
+	static float AngleFromUp(float bx, float by)
+	{
+		const float length = std::sqrt(bx * bx + by * by);
+		if (!(length != 0.0f))
+			return 0.0f;
+		const float dot = by;
+		if (dot == 0.0f)
+			return bx > 0.0f ? 3.14159265f : 0.0f;
+		const float theta = std::acos(dot / length);
+		return bx > 0.0f ? theta : -theta;
 	}
 
 	void ComputeAlphaRate(std::size_t i)
@@ -662,8 +922,32 @@ private:
 			m_px[i] += m_mx[i];
 			m_py[i] += m_my[i];
 			m_pz[i] += m_mz[i];
+			// Particle::doWindMotion: within 200 of its system's position the wind pushes it 2 x its randomness along the
+			// wind's angle, in full within 75 and fading out to 200 (its motion this frame includes the push).
+			if (d.wind != WindMotion::None)
+			{
+				const auto at = m_emitters.transform[owner].Position();
+				const float dx = m_px[i] - at[0], dy = m_py[i] - at[1], dz = m_pz[i] - at[2];
+				const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+				if (distance < 200.0f)
+				{
+					float strength = 2.0f * m_windRandomness[i];
+					if (distance > 75.0f)
+						strength *= 1.0f - (distance - 75.0f) / (200.0f - 75.0f);
+					const float angle = m_emitters.windAngle[owner];
+					const float pushX = std::cos(angle) * strength, pushY = std::sin(angle) * strength;
+					m_px[i] += pushX;
+					m_py[i] += pushY;
+					m_mx[i] += pushX;
+					m_my[i] += pushY;
+				}
+			}
 			m_angle[i] += m_angularRate[i];
 			m_angularRate[i] *= m_angularDamping[i];
+			// IsParticleUpTowardsEmitter: turned each frame so its up points away from where its system was when it
+			// was made (angleBetween((0, 1), here - there) + pi).
+			if (m_upTowards[i] != 0)
+				m_angle[i] = AngleFromUp(m_px[i] - m_emitterX[i], m_py[i] - m_emitterY[i]) + 3.14159265f;
 			m_size[i] += m_sizeRate[i];
 			m_sizeRate[i] *= m_sizeDamping[i];
 			const std::uint32_t age = m_age[i];
@@ -727,8 +1011,9 @@ private:
 		case ParticleShader::Multiply:
 			return settled && m_red[i] > 0.99f && m_green[i] > 0.99f && m_blue[i] > 0.99f;
 		case ParticleShader::AlphaTest:
-		case ParticleShader::None:
 			break;
+		case ParticleShader::None:
+			return true; // Particle::isInvisible: no shader is data the original never draws ("should never get here")
 		}
 		return false;
 	}
@@ -809,7 +1094,7 @@ private:
 	{
 		MoveEach(from, to, m_px, m_py, m_pz, m_vx, m_vy, m_vz, m_mx, m_my, m_mz, m_size, m_sizeRate, m_sizeDamping, m_velocityDamping,
 			m_angle, m_angularRate, m_angularDamping, m_lifetime, m_age, m_alphaKeys, m_alpha, m_alphaTarget, m_alphaRate, m_red, m_green,
-			m_blue, m_colorTarget, m_redRate, m_greenRate, m_blueRate, m_colorScale, m_system, m_dead);
+			m_blue, m_colorTarget, m_redRate, m_greenRate, m_blueRate, m_colorScale, m_emitterX, m_emitterY, m_upTowards, m_windRandomness, m_system, m_dead);
 		m_dead[to] = 0;
 	}
 
@@ -817,29 +1102,44 @@ private:
 	{
 		ResizeEach(size, m_px, m_py, m_pz, m_vx, m_vy, m_vz, m_mx, m_my, m_mz, m_size, m_sizeRate, m_sizeDamping, m_velocityDamping, m_angle,
 			m_angularRate, m_angularDamping, m_lifetime, m_age, m_alphaKeys, m_alpha, m_alphaTarget, m_alphaRate, m_red, m_green, m_blue,
-			m_colorTarget, m_redRate, m_greenRate, m_blueRate, m_colorScale, m_system, m_dead);
+			m_colorTarget, m_redRate, m_greenRate, m_blueRate, m_colorScale, m_emitterX, m_emitterY, m_upTowards, m_windRandomness, m_system,
+			m_dead);
 	}
 
-	// Systems done emitting with nothing left out go (a slave with its master).
-	void RetireSystems()
+	// ParticleSystem::update's end: with nothing left out (and not still waiting out its initial delay), a system goes
+	// once destroyed (Stop) or, not running forever, once its SystemLifetime is spent; a slave by the same rules (its
+	// own lifetime counts down while its master feeds it). A slave whose master has gone emits nothing and goes once
+	// empty: the original's freed slave would emit on its own at the world's origin (it was never placed), a retail
+	// quirk not kept.
+	bool Done(std::uint32_t index) const
+	{
+		const Emitters &e = m_emitters;
+		if (e.live[index] == 0 || e.particles[index] != 0 || e.delayLeft[index] > 0)
+			return false;
+		return (e.stopped[index] != 0 && e.held[index] == 0) || (e.forever[index] == 0 && e.lifetimeLeft[index] == 0) ||
+			(e.slave[index] != 0 && !Get(e.master[index]).has_value());
+	}
+
+	// ~ParticleSystem: its slave is freed (setMaster(nullptr)); its master makes no more slave particles.
+	void Retire(std::uint32_t index)
 	{
 		Emitters &e = m_emitters;
-		for (std::uint32_t index = 0; index < e.size(); ++index)
-		{
-			if (e.live[index] == 0 || e.particles[index] != 0 || e.delayLeft[index] > 0)
-				continue;
-			// A slave lives as long as its master; others until they stop emitting.
-			const bool done = e.slave[index] != 0 ? !Get(e.master[index]).has_value()
-				: ((e.stopped[index] != 0 && e.held[index] == 0) || (e.forever[index] == 0 && e.lifetimeLeft[index] == 0));
-			if (!done)
-				continue;
-			e.live[index] = 0;
-			++e.generation[index];
-			--m_liveSystems;
-			m_free.push_back(index);
-			if (const std::uint32_t slave = e.slaveSystem[index]; slave != 0xFFFFFFFFu && e.live[slave] != 0)
-				e.stopped[slave] = 1;
-		}
+		if (const std::uint32_t slave = e.slaveSystem[index]; slave != 0xFFFFFFFFu && e.live[slave] != 0)
+			e.master[slave] = 0;
+		if (e.slave[index] != 0)
+			if (const auto master = Get(e.master[index]))
+				e.slaveSystem[*master] = 0xFFFFFFFFu;
+		e.live[index] = 0;
+		++e.generation[index];
+		--m_liveSystems;
+		m_free.push_back(index);
+	}
+
+	void RetireSystems()
+	{
+		for (std::uint32_t index = 0; index < m_emitters.size(); ++index)
+			if (Done(index))
+				Retire(index);
 	}
 
 	Find m_find;
@@ -862,8 +1162,12 @@ private:
 	std::vector<float> m_red, m_green, m_blue, m_colorScale;
 	std::vector<std::uint8_t> m_colorTarget;
 	std::vector<float> m_redRate, m_greenRate, m_blueRate;
+	std::vector<float> m_emitterX, m_emitterY, m_windRandomness;
+	std::vector<std::uint8_t> m_upTowards;
+	std::vector<std::uint32_t> m_slaveRequests; // masters that made a particle this frame whose slave makes one too
 	std::vector<std::uint32_t> m_system;
 	std::vector<std::uint8_t> m_dead;
+	std::size_t m_fieldParticles{0};
 	std::size_t m_capRemoved{0}; // particles the cap removed this step, gone at its compaction
 	std::vector<std::uint32_t> m_remap;
 

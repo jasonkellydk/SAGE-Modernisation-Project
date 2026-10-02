@@ -16,9 +16,15 @@ import engine.gameplay.rts.movement.systems.descent_system;
 import engine.gameplay.rts.movement.systems.face_target_system;
 import engine.gameplay.rts.movement.systems.locomotor_damage_system;
 import engine.gameplay.rts.movement.systems.move_path_system;
+import engine.gameplay.rts.movement.systems.path_points_sweep_system;
+import engine.gameplay.rts.movement.resources.path_points;
 import engine.gameplay.rts.movement.systems.movement_system;
 import engine.gameplay.rts.movement.systems.route_request_system;
 import engine.gameplay.rts.movement.systems.wander_system;
+import engine.gameplay.rts.movement.systems.airborne_target_system;
+import engine.gameplay.rts.movement.systems.locomotor_physics_system;
+import engine.gameplay.common.physics.systems.physics_system;
+import games.generalszh.gameplay.combat_drop.systems.combat_drop_systems;
 import games.generalszh.gameplay.movement.systems.destination_adjust_system;
 import games.generalszh.gameplay.movement.systems.goal_claim_system;
 import engine.gameplay.rts.movement.components.descent;
@@ -27,6 +33,10 @@ import engine.gameplay.rts.movement.components.floor_lift;
 import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.movement.components.move_ended;
 import engine.gameplay.rts.movement.components.move_goal;
+import engine.gameplay.rts.movement.components.desired_speed;
+import engine.gameplay.rts.movement.components.formation_member;
+import games.generalszh.gameplay.orders.components.formation_move;
+import games.generalszh.gameplay.orders.systems.formation_speed_system;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.move_path;
 import engine.gameplay.rts.movement.components.path_completed;
@@ -47,6 +57,8 @@ inline void EmplaceMovementResources(ecs::World &world, [[maybe_unused]] const S
 	const std::array<Engine::Math::Fixed, 4> ratios{Engine::Math::Fixed{}, globals.unitDamaged, globals.unitReallyDamaged, Engine::Math::Fixed{}};
 	world.EmplaceResource<engine::gameplay::MovementPenalty>(
 		engine::gameplay::MovementPenalty{ratios[std::min<std::uint32_t>(globals.movementPenaltyState, 3u)], globals.movementPenaltyState == 0});
+	// The goal paths' points (checkpointed).
+	world.EmplaceResource<engine::gameplay::PathPoints>();
 }
 
 inline void RegisterMovementComponents(ecs::World &world)
@@ -56,6 +68,9 @@ inline void RegisterMovementComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::Locomotion>();
 	world.RegisterComponent<engine::gameplay::MoveOrder>();
 	world.RegisterComponent<engine::gameplay::MoveGoal>();
+	world.RegisterComponent<engine::gameplay::DesiredSpeed>();
+	world.RegisterComponent<engine::gameplay::FormationMember>();
+	world.RegisterComponent<generalszh::gameplay::FormationMove>();
 	world.RegisterComponent<engine::gameplay::Wanderer>();
 	world.RegisterComponent<engine::gameplay::WanderAnchor>();
 	world.RegisterComponent<engine::gameplay::FaceTarget>();
@@ -84,8 +99,16 @@ inline void RegisterMovementSystems(ecs::SystemRegistry &registry)
 	registry.Register(wanderers);
 	static engine::gameplay::MovePathSystem movePaths;
 	registry.Register(movePaths);
+	static engine::gameplay::PathPointsSweepSystem pathPointsSweep;
+	registry.Register(pathPointsSweep);
+	static generalszh::gameplay::FormationSpeedSystem formationSpeeds;
+	registry.Register(formationSpeeds);
 	static engine::gameplay::FaceTargetSystem faceTargets;
 	registry.Register(faceTargets);
+	static engine::gameplay::AirborneTargetSystem airborneTargets;
+	registry.Register(airborneTargets);
+	static engine::gameplay::LocomotorPhysicsSystem locomotorPhysics;
+	registry.Register(locomotorPhysics);
 }
 
 // What the movement domain's systems run after (and the few they must precede), within the tick.
@@ -107,6 +130,9 @@ inline void OrderMovementSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<gameplay::FaceTargetSystem, gameplay::MovementSystem>();
 	registry.OrderBefore<gameplay::WanderSystem, gameplay::MovementSystem>();
 	registry.OrderBefore<gameplay::MovePathSystem, gameplay::MovementSystem>();
+	// A formation move's group speed ends once its path's next leg is set and before anything moves.
+	registry.OrderBefore<gameplay::MovePathSystem, domain::FormationSpeedSystem>();
+	registry.OrderBefore<domain::FormationSpeedSystem, gameplay::MovementSystem>();
 	registry.OrderBefore<gameplay::WanderSystem, gameplay::MovePathSystem>();
 	registry.OrderBefore<gameplay::DockSystem, domain::GoalClaimSystem>();
 	registry.OrderBefore<gameplay::LocomotorDamageSystem, gameplay::MovementSystem>();
@@ -118,5 +144,12 @@ inline void OrderMovementSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<domain::CommandButtonHuntSystem, gameplay::MovePathSystem>();
 	registry.OrderBefore<domain::DeploySystem, gameplay::MovementSystem>();
 	registry.OrderBefore<gameplay::DockSystem, gameplay::RouteRequestSystem>();
+	// The airborne target status from where movement left each unit (and what moved it before physics: descents,
+	// parachutes, combat drops, rappels), before physics steps the tick and the spatial index reads it.
+	registry.OrderBefore<domain::RappelSystem, gameplay::AirborneTargetSystem>();
+	registry.OrderBefore<gameplay::AirborneTargetSystem, gameplay::PhysicsSystem>();
+	// Each unit's locomotor sets its body's physics options (setPhysicsOptions) before physics steps it.
+	registry.OrderBefore<domain::RappelSystem, gameplay::LocomotorPhysicsSystem>();
+	registry.OrderBefore<gameplay::LocomotorPhysicsSystem, gameplay::PhysicsSystem>();
 }
 }

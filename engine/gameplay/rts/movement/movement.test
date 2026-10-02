@@ -1,13 +1,23 @@
 #define BOOST_TEST_MODULE EngineGameplayMovement
 #include <boost/test/included/unit_test.hpp>
 
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <optional>
+#include <utility>
 #include <vector>
 
 import engine.gameplay.rts.movement.systems.movement_system;
+import engine.gameplay.rts.movement.systems.route_request_system;
 import engine.gameplay.rts.movement.systems.move_path_system;
-import engine.gameplay.rts.movement.algorithms.formation_layout;
+import engine.gameplay.rts.movement.systems.path_points_sweep_system;
+import engine.gameplay.rts.movement.algorithms.move_paths;
 import engine.gameplay.common.spatial.systems.snapshot_system;
+import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.rts.movement.systems.airborne_target_system;
+import engine.gameplay.rts.movement.systems.locomotor_physics_system;
 import engine.ecs.core.world;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
@@ -295,7 +305,7 @@ BOOST_AUTO_TEST_CASE(units_follow_waypoint_paths_on_the_ground)
 	for (const FixedVector3 &position : run.positions)
 	{
 		BOOST_TEST(position.z.Raw() == Fixed::FromInt(5).Raw()); // held on the ground
-		// Somewhere on or near the square, or at the dead end.
+		// Somewhere on or sentry the square, or at the dead end.
 		BOOST_TEST((position.y > Fixed::FromInt(-60)));
 	}
 }
@@ -401,17 +411,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_produced_unit_follows_its_exit_path)
 		world.RegisterComponent<MoveEnded>();
 	world.RegisterComponent<WanderAnchor>();
 	world.FinalizeComponents();
+	world.EmplaceResource<PathPoints>();
 	const Engine::Math::FixedVector2 rally{Fixed::FromInt(10), Fixed{}}, home{Fixed::FromInt(500), Fixed::FromInt(500)};
 	const auto make = [&] {
 		const ecs::Entity entity = world.Create();
-		world.Add<MovePath>(entity);
 		world.Add<MoveOrder>(entity);
 		*world.Get<MoveOrder>(entity) = MoveToPoint(rally);
-		MovePath &path = *world.Get<MovePath>(entity);
-		path.count = 2;
-		path.next = 1;
-		path.points[0] = rally;
-		path.points[1] = home;
+		const std::array<Engine::Math::FixedVector2, 2> route{rally, home};
+		SetMovePath(world, entity, route, 1, MovePathKind::ExitProduction);
 		return entity;
 	};
 	const ecs::Entity follower = make(), redirected = make();
@@ -436,48 +443,1052 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_produced_unit_follows_its_exit_path)
 	BOOST_TEST((world.Get<MoveOrder>(follower)->mode == MoveMode::Idle));
 }
 
+// AIStateMachine's goal path is a vector (addToGoalPath: as long as the path gets): a path of 40 points keeps every one of
+// them (the old MovePath held 16), and appending grows it past its block, the points before kept.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_goal_path_holds_as_many_points_as_it_is_given)
+{
+	using Engine::Math::Fixed;
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<MovePath>();
+	world.RegisterComponent<MoveOrder>();
+	world.FinalizeComponents();
+	PathPoints &points = world.EmplaceResource<PathPoints>();
+	const ecs::Entity unit = world.Create();
+	world.Add<MoveOrder>(unit);
+	std::vector<Engine::Math::FixedVector2> route;
+	for (int index = 0; index < 40; ++index)
+		route.push_back({Fixed::FromInt(index * 20), Fixed{}});
+	SetMovePath(world, unit, route, 1, MovePathKind::Follow);
+	const MovePath &path = *world.Get<MovePath>(unit);
+	BOOST_TEST(path.count == 40u);
+	BOOST_TEST((MovePathPoint(points, path, 39) == route[39]));
+	for (int index = 40; index < 100; ++index)
+		AppendMovePathPoint(world, unit, {Fixed::FromInt(index * 20), Fixed{}});
+	BOOST_TEST(world.Get<MovePath>(unit)->count == 100u);
+	for (std::uint32_t index = 0; index < 100; ++index)
+		BOOST_TEST((MovePathPoint(points, *world.Get<MovePath>(unit), index) == Engine::Math::FixedVector2{Fixed::FromInt(static_cast<int>(index) * 20), Fixed{}}));
+}
+
+// AIFollowPathState::update: once a leg is done, the next points within a pathfinding cell (10) of where the thing stands
+// are passed over (tooClose); the first farther one is headed for; a path whose remaining points are all that close is
+// done.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_path_passes_over_points_within_a_cell)
+{
+	using Engine::Math::Fixed;
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<MovePath>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<Transform>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PathPoints>();
+	const ecs::Entity unit = world.Create();
+	world.Add<MoveOrder>(unit);
+	world.Add<Transform>(unit);
+	world.Get<Transform>(unit)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed{}};
+	// Reached the first point (100, 100); the next two lie 5 and 9.9 away, the fourth 10 away (not closer than a cell).
+	const std::vector<Engine::Math::FixedVector2> route{{Fixed::FromInt(100), Fixed::FromInt(100)}, {Fixed::FromInt(105), Fixed::FromInt(100)},
+		{Fixed::FromInt(100), Fixed::FromRatio(1099, 10)}, {Fixed::FromInt(110), Fixed::FromInt(100)}, {Fixed::FromInt(300), Fixed::FromInt(100)}};
+	SetMovePath(world, unit, route, 1, MovePathKind::Follow);
+	MovePathSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST((world.Get<MoveOrder>(unit)->destination == route[3]));
+	BOOST_TEST(world.Get<MovePath>(unit)->next == 4u);
+	BOOST_TEST((world.Get<MoveOrder>(unit)->claim == GoalClaim::None)); // a leg with more after it
+	// All the rest within a cell: the path is done.
+	const ecs::Entity near_end = world.Create();
+	world.Add<MoveOrder>(near_end);
+	world.Add<Transform>(near_end);
+	world.Get<Transform>(near_end)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed{}};
+	const std::vector<Engine::Math::FixedVector2> close{{Fixed::FromInt(100), Fixed::FromInt(100)}, {Fixed::FromInt(103), Fixed::FromInt(100)}};
+	SetMovePath(world, near_end, close, 1, MovePathKind::Follow);
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(world.Get<MovePath>(near_end) == nullptr);
+	BOOST_TEST((world.Get<MoveOrder>(near_end)->mode == MoveMode::Idle));
+}
+
+// The goal path freed with its state (the original's vector goes with the state machine's): a path given up, or its
+// owner gone, has its block freed as the tick ends, and the next path takes it.
+BOOST_AUTO_TEST_CASE(the_path_points_of_a_path_given_up_are_taken_again)
+{
+	using Engine::Math::Fixed;
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<MovePath>();
+	world.RegisterComponent<MoveOrder>();
+	world.FinalizeComponents();
+	PathPoints &points = world.EmplaceResource<PathPoints>();
+	const ecs::Entity first = world.Create(), second = world.Create();
+	const std::vector<Engine::Math::FixedVector2> route{{Fixed::FromInt(1), Fixed{}}, {Fixed::FromInt(2), Fixed{}}};
+	SetMovePath(world, first, route, 1, MovePathKind::Follow);
+	const std::uint32_t block = world.Get<MovePath>(first)->block;
+	PathPointsSweepSystem sweep;
+	ecs::SystemRegistry registry;
+	registry.Register(sweep);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(points.Used(block)); // still followed
+	world.Remove<MovePath>(first);
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(!points.Used(block));
+	SetMovePath(world, second, route, 1, MovePathKind::Follow);
+	BOOST_TEST(world.Get<MovePath>(second)->block == block);
+	BOOST_TEST(points.BlockCount() == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 
-BOOST_AUTO_TEST_SUITE(formation_layout)
+BOOST_AUTO_TEST_SUITE(locomotor_template)
 
-// navigation::planFormation (AIGroup::groupMoveToPosition's layout): six units of one kind west of a target face east; the columns nearest a 1.5 ratio (3 x 2), 22 apart (radius 5: 2r + 2 = 12 is less); the
-// two furthest east take the front row, each row ordered left (north, +y) to right; slots centred on the target
-// (front row 11 ahead of it, back row 11 behind).
-BOOST_AUTO_TEST_CASE(legacy_parity_a_group_forms_three_by_two_facing_its_move)
+namespace
 {
-	std::vector<FormationUnit> units;
-	for (std::uint32_t id = 1; id <= 6; ++id)
-		units.push_back({id, {Fixed::FromInt(100 + static_cast<std::int64_t>(id) * 10), Fixed::FromInt(480 + static_cast<std::int64_t>(id % 3) * 20)}, Fixed::FromInt(5), 7, 100});
-	const FixedVector2 target{Fixed::FromInt(1000), Fixed::FromInt(500)};
-	const FormationPlan plan = PlanFormation(units, target, {Fixed{}, Fixed{}}, {Fixed::FromInt(2000), Fixed::FromInt(2000)});
-	BOOST_TEST(plan.columns == 3u);
-	BOOST_TEST(plan.rows == 2u);
-	BOOST_TEST((plan.spacing == Fixed::FromInt(22)));
-	BOOST_TEST_REQUIRE(plan.slots.size() == 6u);
-	const auto slotOf = [&](std::uint32_t id) {
-		for (const FormationSlot &slot : plan.slots)
-			if (slot.id == id)
-				return slot.position;
-		return FixedVector2{};
+double Real(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+
+// SentryLocomotor (Locomotor.ini): TREADS, Speed 60, TurnRate 180, Acceleration 60, Braking 60, TurnPivotOffset -0.33
+// (a frame: 2, 6 degrees, 1/15, 1/15); AmericaVehicleSentryDrone's geometry a 9 x 7 box (bounding circle sqrt(130)).
+Locomotion Sentry()
+{
+	LocomotorDefinition sentry;
+	sentry.maxSpeed = Fixed::FromInt(2);
+	sentry.acceleration = Fixed::FromRatio(1, 15);
+	sentry.braking = Fixed::FromRatio(1, 15);
+	sentry.turnRate = Engine::Math::TurnFromDegrees(6);
+	sentry.appearance = LocomotorAppearance::Treads;
+	sentry.turnPivotOffset = Fixed{} - Fixed::FromRatio(33, 100);
+	Locomotion motion = MakeLocomotion(sentry);
+	motion.boundingRadius = Engine::Math::Length(FixedVector2{Fixed::FromInt(9), Fixed::FromInt(7)});
+	return motion;
+}
+
+// MIGLocomotor: WINGS, Speed 160, MinSpeed 60, TurnRate 120, Acceleration 110, Braking 10, CirclingRadius 100 (a frame:
+// 16/3, 2, 4 degrees, 11/90, 1/90).
+Locomotion Mig(Fixed circling)
+{
+	LocomotorDefinition mig;
+	mig.maxSpeed = Fixed::FromRatio(16, 3);
+	mig.minSpeed = Fixed::FromInt(2);
+	mig.acceleration = Fixed::FromRatio(11, 90);
+	mig.braking = Fixed::FromRatio(1, 90);
+	mig.turnRate = Engine::Math::TurnFromDegrees(4);
+	mig.appearance = LocomotorAppearance::Wings;
+	mig.circlingRadius = circling;
+	Locomotion motion = MakeLocomotion(mig);
+	motion.speed = mig.maxSpeed;
+	return motion;
+}
+
+// HelixLocomotor: HOVER, Speed 75, TurnRate 180, Acceleration 60, Braking 60, SlideIntoPlaceTime 100 (a frame: 2.5,
+// 6 degrees, 1/15, 1/15; 3 frames).
+Locomotion Helix()
+{
+	LocomotorDefinition helix;
+	helix.maxSpeed = Fixed::FromRatio(5, 2);
+	helix.acceleration = Fixed::FromRatio(1, 15);
+	helix.braking = Fixed::FromRatio(1, 15);
+	helix.turnRate = Engine::Math::TurnFromDegrees(6);
+	helix.appearance = LocomotorAppearance::Hover;
+	helix.slideIntoPlace = Fixed::FromInt(3);
+	return MakeLocomotion(helix);
+}
+}
+
+// Locomotor::rotateObjAroundLocoPivot (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Locomotor.cpp) through
+// moveTowardsPositionTreads: a Sentry Drone at rest at (100, 100) facing east, its goal (0, 160) behind it to its left,
+// turns 6 degrees a frame about the point 0.33 of its bounding circle behind its centre, (96.2374, 100), which stays put:
+// its centre swings round it and the goal's bearing from it falls 6 degrees a frame (148.058, 142.058, ...). While that
+// is 45 degrees or more before the turn it stands (goal speed none): frames 1 to 18, at the original's positions below
+// (its float arithmetic, to 4 places). On the 19th (40.058 off) it starts to roll. Tolerance 0.01: the fixed-point sine
+// table, the pivot taken afresh each frame. Without a pivot it turns where it stands.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sentry_drone_turns_about_its_rear_pivot)
+{
+	static constexpr double expected[18][2] = {{99.9794, 100.3933}, {99.9178, 100.7823}, {99.8158, 101.1627}, {99.6747, 101.5304},
+		{99.4959, 101.8813}, {99.2814, 102.2116}, {99.0336, 102.5177}, {98.7551, 102.7961}, {98.4490, 103.0440}, {98.1187, 103.2585},
+		{97.7678, 103.4373}, {97.4001, 103.5784}, {97.0197, 103.6804}, {96.6307, 103.7420}, {96.2374, 103.7626}, {95.8441, 103.7420},
+		{95.4551, 103.6804}, {95.0747, 103.5784}};
+	Locomotion motion = Sentry();
+	Transform transform;
+	transform.position = {Fixed::FromInt(100), Fixed::FromInt(100), {}};
+	const FixedVector2 goal{Fixed::FromInt(0), Fixed::FromInt(160)};
+	const std::uint32_t six = Engine::Math::TurnFromDegrees(6).units;
+	for (int tick = 1; tick <= 18; ++tick)
+	{
+		BOOST_TEST(!SteerGround(transform, motion, goal, true, Fixed::FromInt(1000), static_cast<std::uint64_t>(tick)));
+		BOOST_TEST_REQUIRE((motion.speed == Fixed{}));
+		BOOST_TEST(motion.turning == 1);
+		BOOST_TEST(transform.facing.units == six * static_cast<std::uint32_t>(tick));
+		BOOST_TEST(std::abs(Real(transform.position.x) - expected[tick - 1][0]) <= 0.01, "frame " << tick << " x " << Real(transform.position.x));
+		BOOST_TEST(std::abs(Real(transform.position.y) - expected[tick - 1][1]) <= 0.01, "frame " << tick << " y " << Real(transform.position.y));
+	}
+	SteerGround(transform, motion, goal, true, Fixed::FromInt(1000), 19);
+	BOOST_TEST((motion.speed > Fixed{}));
+	Locomotion centred = Sentry();
+	centred.locomotor.turnPivotOffset = Fixed{};
+	Transform still;
+	still.position = {Fixed::FromInt(100), Fixed::FromInt(100), {}};
+	SteerGround(still, centred, goal, true, Fixed::FromInt(1000), 1);
+	BOOST_TEST((still.position.XY() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
+	BOOST_TEST(still.facing.units == six);
+}
+
+// rotateObjAroundLocoPivot: braking (IS_BRAKING: it then moves exactly at its goal) it turns about its centre; and with
+// its pivot within 0.1 of the goal on both axes ("we twitch due to rounding error") it does not turn at all.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_pivot_while_braking_nor_on_top_of_the_goal)
+{
+	const FixedVector2 goal{Fixed::FromInt(0), Fixed::FromInt(160)};
+	Locomotion braking = Sentry();
+	braking.braking = 1;
+	Transform at;
+	at.position = {Fixed::FromInt(100), Fixed::FromInt(100), {}};
+	ground_detail::TurnAbout(at, braking, goal, MaxTurnRate(braking));
+	BOOST_TEST((at.position.XY() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
+	BOOST_TEST(at.facing.units == Engine::Math::TurnFromDegrees(6).units);
+	Locomotion sentry = Sentry();
+	Transform here;
+	here.position = {Fixed::FromInt(100), Fixed::FromInt(100), {}};
+	const Fixed pivotX = Fixed::FromInt(100) - sentry.boundingRadius * Fixed::FromRatio(33, 100);
+	const FixedVector2 onPivot{pivotX + Fixed::FromRatio(1, 20), Fixed::FromInt(100) + Fixed::FromRatio(1, 20)};
+	BOOST_TEST(ground_detail::TurnAbout(here, sentry, onPivot, MaxTurnRate(sentry)) == 0);
+	BOOST_TEST(here.facing.units == 0u);
+	BOOST_TEST(sentry.turning == 0);
+	BOOST_TEST((here.position.XY() == FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
+}
+
+// Locomotor::locoUpdate_maintainCurrentPosition / maintainCurrentPositionWings / moveTowardsPositionOther: a MIG flying
+// east at full speed at (500, 500) loses its goal. It holds (500, 500) and aims for the point CirclingRadius (100) off it,
+// 157.5 degrees round from its bearing to it: the first frame, on the place, from its facing (to its left: turns left 4
+// degrees); then the place is behind it and the point on the far side, so it turns right; it brakes 1/90 a frame toward
+// MinSpeed, rolling along its facing (the port's kinematic flight: its velocity along its facing). Positions as the
+// original's arithmetic gives them, within 0.01 (fixed-point sine table). After 600 frames it circles the place 92.8
+// out at MinSpeed. A negative radius mirrors it; 0 is its tightest turn (calcMinTurnRadius: MinSpeed / TurnRate, 28.65),
+// circling 27.33 out (within 0.1: 600 frames of fixed-point steps).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_wing_with_no_goal_circles_the_place_it_holds)
+{
+	const auto run = [](Fixed circling, int frames, Transform &transform) {
+		Locomotion motion = Mig(circling);
+		transform.position = {Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(100)};
+		std::vector<int> turning;
+		for (int frame = 1; frame <= frames; ++frame)
+		{
+			Coast(transform, motion);
+			turning.push_back(motion.turning);
+		}
+		BOOST_TEST((motion.maintainPos == FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}));
+		return std::pair{motion, turning};
 	};
-	// Due east exactly: within a thousandth (fixed-point rounding of the normalised heading).
-	const auto close = [](FixedVector2 a, FixedVector2 b) { return Engine::Math::Distance(a, b) <= Fixed::FromRatio(1, 1000); };
-	// Front row: ids 6, 5, 4 (furthest east); left to right by y: 5 (y 520), 4 (y 500), 6 (y 480).
-	BOOST_TEST(close(slotOf(5), {Fixed::FromInt(1011), Fixed::FromInt(522)}));
-	BOOST_TEST(close(slotOf(4), {Fixed::FromInt(1011), Fixed::FromInt(500)}));
-	BOOST_TEST(close(slotOf(6), {Fixed::FromInt(1011), Fixed::FromInt(478)}));
-	// Back row: 2 (y 520), 1 (y 500), 3 (y 480).
-	BOOST_TEST(close(slotOf(2), {Fixed::FromInt(989), Fixed::FromInt(522)}));
-	BOOST_TEST(close(slotOf(1), {Fixed::FromInt(989), Fixed::FromInt(500)}));
-	BOOST_TEST(close(slotOf(3), {Fixed::FromInt(989), Fixed::FromInt(478)}));
-	// Against the map's edge the whole formation moves in, keeping its shape.
-	const FormationPlan edge = PlanFormation(units, {Fixed::FromInt(1995), Fixed::FromInt(500)}, {Fixed{}, Fixed{}}, {Fixed::FromInt(2000), Fixed::FromInt(2000)});
-	BOOST_TEST_REQUIRE(edge.slots.size() == 6u);
-	for (const FormationSlot &slot : edge.slots)
-		BOOST_TEST((slot.position.x <= Fixed::FromInt(1995)));
-	// No room at all: no formation.
-	BOOST_TEST(PlanFormation(units, target, {Fixed{}, Fixed{}}, {Fixed::FromInt(20), Fixed::FromInt(20)}).slots.empty());
+	const std::uint32_t four = Engine::Math::TurnFromDegrees(4).units;
+	const double left[3][2] = {{505.3093, 500.3713}, {510.6204, 500.3713}, {515.9075, 500.0016}};
+	const std::uint32_t leftFacing[3] = {four, 0u, 0u - four};
+	for (int frames = 1; frames <= 3; ++frames)
+	{
+		Transform transform;
+		const auto [motion, turning] = run(Fixed::FromInt(100), frames, transform);
+		BOOST_TEST(turning.back() == (frames == 1 ? 1 : -1));
+		BOOST_TEST(transform.facing.units == leftFacing[frames - 1]);
+		BOOST_TEST(std::abs(Real(transform.position.x) - left[frames - 1][0]) <= 0.01);
+		BOOST_TEST(std::abs(Real(transform.position.y) - left[frames - 1][1]) <= 0.01);
+		BOOST_TEST((motion.speed == Fixed::FromRatio(16, 3) - Fixed::FromRatio(1, 90) * Fixed::FromInt(frames)));
+	}
+	Transform mirrored;
+	const auto [mirror, mirrorTurning] = run(Fixed{} - Fixed::FromInt(100), 1, mirrored);
+	BOOST_TEST(mirrorTurning.back() == -1);
+	BOOST_TEST(std::abs(Real(mirrored.position.y) - 499.6287) <= 0.01);
+	Transform settled;
+	const auto [circling, circlingTurning] = run(Fixed::FromInt(100), 600, settled);
+	BOOST_TEST((circling.speed == Fixed::FromInt(2)));
+	const double out = Real(Engine::Math::Distance(settled.position.XY(), FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}));
+	BOOST_TEST(std::abs(out - 92.8) <= 0.1, "circling " << out << " out");
+	Transform tight;
+	run(Fixed{}, 600, tight);
+	const double tightOut = Real(Engine::Math::Distance(tight.position.XY(), FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}));
+	BOOST_TEST(std::abs(tightOut - 27.33) <= 0.1, "circling " << tightOut << " out");
+	// Heading anywhere lets the place go; on the ground (not above its terrain) it does not circle.
+	Locomotion moved = Mig(Fixed::FromInt(100));
+	Transform flying;
+	Coast(flying, moved);
+	BOOST_TEST(moved.maintaining == 1);
+	Steer(flying, moved, FixedVector2{Fixed::FromInt(1000), Fixed{}}, true);
+	BOOST_TEST(moved.maintaining == 0);
+	Locomotion landed = Mig(Fixed::FromInt(100));
+	Transform ground;
+	Coast(ground, landed, false);
+	BOOST_TEST(ground.facing.units == 0u);
+}
+
+// Locomotor::moveTowardsPositionOther: ultra-accurate (setUltraAccurate: a helicopter settling on its pad), a Helix with
+// its goal (-3, 5) off, within SlideIntoPlaceTime's 3 frames of travel at the speed it asks for (2.5: 7.5) on both axes,
+// does not turn but is pushed straight at it: from rest, its acceleration (1/15) along (-3, 5) normalised, facing east
+// still (within 0.001: fixed-point normalising). Not ultra-accurate, or with the goal (-9, 5) 9 off on one axis, it turns
+// (ultra-accurate at twice its turn rate).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_ultra_accurate_hover_slides_into_place)
+{
+	Locomotion helix = Helix();
+	helix.ultraAccurate = 1;
+	Transform transform;
+	const FixedVector2 sentry{Fixed::FromInt(-3), Fixed::FromInt(5)};
+	SteerGround(transform, helix, sentry, true, Fixed::FromInt(6), 1);
+	BOOST_TEST(transform.facing.units == 0u);
+	BOOST_TEST(helix.turning == 0);
+	BOOST_TEST((helix.speed == Fixed::FromRatio(1, 15)));
+	BOOST_TEST(std::abs(Real(transform.position.x) - -0.0342997) <= 0.001);
+	BOOST_TEST(std::abs(Real(transform.position.y) - 0.0571662) <= 0.001);
+	Locomotion plain = Helix();
+	Transform turning;
+	SteerGround(turning, plain, sentry, true, Fixed::FromInt(6), 1);
+	BOOST_TEST(turning.facing.units == Engine::Math::TurnFromDegrees(6).units);
+	Locomotion helixFar = Helix();
+	helixFar.ultraAccurate = 1;
+	Transform wide;
+	SteerGround(wide, helixFar, FixedVector2{Fixed::FromInt(-9), Fixed::FromInt(5)}, true, Fixed::FromInt(11), 1);
+	BOOST_TEST(wide.facing.units == Engine::Math::TurnFromDegrees(6).units * 2u);
+}
+
+// AIUpdateInterface::doLocomotor (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate.cpp): after its
+// movement each frame a unit is an airborne target (OBJECT_STATUS_AIRBORNE_TARGET) while it is higher over the ground
+// under it than its locomotor's AirborneTargetingHeight (strictly), and not otherwise; a locomotor without one (INT_MAX)
+// never makes it one, however high. A thing with the status but no locomotor (a parachute) keeps its own height. The
+// spatial index classes targets by the status (WeaponSet::getVictimAntiMask: isAirborneTarget); one without it by
+// height alone.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_locomotor_marks_its_unit_an_airborne_target_over_its_height)
+{
+	engine::level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(1000);
+	field.heights.assign(4, Fixed::FromInt(5));
+	ecs::World world(ecs::WorldConfig{16});
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Locomotion>();
+	world.RegisterComponent<AirborneTarget>();
+	world.RegisterComponent<SurfaceLayer>();
+	world.RegisterComponent<Targetable>();
+	world.RegisterComponent<Owner>();
+	world.RegisterComponent<OffMap>();
+	world.FinalizeComponents();
+	LocomotorDefinition comanche = Tank();
+	comanche.airborneTargetingHeight = Fixed::FromInt(30); // ComancheLocomotor
+	const LocomotorDefinition tank = Tank();
+	const auto make = [&](std::int64_t height, const LocomotorDefinition *locomotor, bool status, Fixed threshold) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(5 + height)};
+		world.Add<Targetable>(entity);
+		world.Get<Targetable>(entity)->classes = target_class::Vehicle;
+		world.Add<Owner>(entity);
+		if (locomotor != nullptr)
+		{
+			world.Add<Locomotion>(entity);
+			*world.Get<Locomotion>(entity) = MakeLocomotion(*locomotor);
+		}
+		if (status)
+		{
+			world.Add<AirborneTarget>(entity);
+			world.Get<AirborneTarget>(entity)->height = threshold;
+		}
+		return entity;
+	};
+	const ecs::Entity over = make(31, &comanche, true, Fixed{});
+	const ecs::Entity at = make(30, &comanche, true, Fixed{});
+	const ecs::Entity tankHigh = make(500, &tank, true, Fixed{});
+	const ecs::Entity parachute = make(40, nullptr, true, Fixed::FromInt(30));
+	const ecs::Entity bare = make(11, nullptr, false, Fixed{});
+	world.EmplaceResource<GroundHeight>(GroundHeight(field));
+	world.EmplaceResource<DeckSurfaces>();
+	SpatialIndex &index = world.EmplaceResource<SpatialIndex>(FixedVector2{Fixed::FromInt(1000), Fixed::FromInt(1000)}, Fixed::FromInt(50));
+	world.EmplaceResource<SpatialGather>();
+	AirborneTargetSystem airborne;
+	SpatialIndexSystem spatial;
+	ecs::SystemRegistry registry;
+	registry.Register(airborne);
+	registry.Register(spatial);
+	registry.OrderBefore<AirborneTargetSystem, SpatialIndexSystem>();
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	const auto airborneClass = [&](ecs::Entity entity) {
+		const SpatialEntry *entry = index.Find(entity);
+		return entry != nullptr && (entry->classes & target_class::AirborneVehicle) != 0;
+	};
+	BOOST_TEST(world.Get<AirborneTarget>(over)->airborne == 1u);
+	BOOST_TEST(world.Get<AirborneTarget>(at)->airborne == 0u);
+	BOOST_TEST(world.Get<AirborneTarget>(tankHigh)->airborne == 0u);
+	BOOST_TEST(world.Get<AirborneTarget>(parachute)->airborne == 1u);
+	BOOST_TEST((world.Get<AirborneTarget>(over)->height == Fixed::FromInt(30)));
+	BOOST_TEST(index.Find(at) != nullptr);
+	BOOST_TEST(airborneClass(over));
+	BOOST_TEST(!airborneClass(at));
+	BOOST_TEST(!airborneClass(tankHigh));
+	BOOST_TEST(airborneClass(parachute));
+	BOOST_TEST(airborneClass(bare));
+	// Down to 10 over the ground: cleared the next frame.
+	world.Get<Transform>(over)->position.z = Fixed::FromInt(15);
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(world.Get<AirborneTarget>(over)->airborne == 0u);
+	BOOST_TEST(!airborneClass(over));
+}
+
+// Locomotor::setPhysicsOptions (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Locomotor.cpp), called by
+// AIUpdateInterface::doLocomotor every frame: the current locomotor sets its body's extra friction (Extra2DFriction, plus
+// EXTRA_FRIC 0.5 while ULTRA_ACCURATE), airborne friction (Apply2DFrictionWhenAirborne) and STICK_TO_GROUND
+// (StickToGround), overwriting what was there; a body no longer its locomotor's (flung by its death) keeps its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_locomotor_sets_its_bodys_physics_options_each_frame)
+{
+	ecs::World world(ecs::WorldConfig{16});
+	world.RegisterComponent<Locomotion>();
+	world.RegisterComponent<PhysicsBody>();
+	world.FinalizeComponents();
+	LocomotorDefinition walker = Tank();
+	walker.extraFriction = Fixed::One();
+	walker.airborneFriction = 1;
+	walker.stickToGround = 1;
+	const auto make = [&](bool locomotive) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Locomotion>(entity);
+		*world.Get<Locomotion>(entity) = MakeLocomotion(walker);
+		world.Add<PhysicsBody>(entity);
+		PhysicsBody &body = *world.Get<PhysicsBody>(entity);
+		body.extraFriction = Fixed::FromInt(7);
+		if (locomotive)
+			body.flags |= physics_flag::Locomotive;
+		return entity;
+	};
+	const ecs::Entity unit = make(true);
+	const ecs::Entity flung = make(false);
+	world.Get<Locomotion>(unit)->ultraAccurate = 1;
+	LocomotorPhysicsSystem options;
+	ecs::SystemRegistry registry;
+	registry.Register(options);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	const PhysicsBody &body = *world.Get<PhysicsBody>(unit);
+	BOOST_TEST((body.extraFriction == Fixed::FromRatio(3, 2)));
+	BOOST_TEST(body.Has(physics_flag::AirborneFriction));
+	BOOST_TEST(body.Has(physics_flag::StickToGround));
+	BOOST_TEST((world.Get<PhysicsBody>(flung)->extraFriction == Fixed::FromInt(7)));
+	BOOST_TEST(!world.Get<PhysicsBody>(flung)->Has(physics_flag::StickToGround));
+	// No longer ultra-accurate, and on a locomotor that neither sticks nor has airborne friction: cleared the next frame.
+	world.Get<Locomotion>(unit)->ultraAccurate = 0;
+	world.Get<Locomotion>(unit)->locomotor = Tank();
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST((world.Get<PhysicsBody>(unit)->extraFriction == Fixed{}));
+	BOOST_TEST(!world.Get<PhysicsBody>(unit)->Has(physics_flag::AirborneFriction));
+	BOOST_TEST(!world.Get<PhysicsBody>(unit)->Has(physics_flag::StickToGround));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(flight_forces)
+
+namespace
+{
+double Real(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+
+// ComancheLocomotor (Locomotor.ini): HOVER over AIR, Speed 120, TurnRate 180, Acceleration 60, Braking 240, Lift 120,
+// PreferredHeight 100, SURFACE_RELATIVE_HEIGHT, AllowAirborneMotiveForce, Apply2DFrictionWhenAirborne (a frame: 4, 6
+// degrees, 1/15, 4/15, 2/15); AmericaVehicleComanche's PhysicsBehavior Mass 50.
+LocomotorDefinition Comanche()
+{
+	LocomotorDefinition comanche;
+	comanche.maxSpeed = Fixed::FromInt(4);
+	comanche.acceleration = Fixed::FromRatio(1, 15);
+	comanche.braking = Fixed::FromRatio(4, 15);
+	comanche.turnRate = Engine::Math::TurnFromDegrees(6);
+	comanche.lift = Fixed::FromRatio(2, 15);
+	comanche.preferredHeight = Fixed::FromInt(100);
+	comanche.height = HeightBehavior::SurfaceRelative;
+	comanche.appearance = LocomotorAppearance::Hover;
+	comanche.surfaces = 8;
+	comanche.airborneMotiveForce = 1;
+	comanche.airborneFriction = 1;
+	SettleLocomotorRates(comanche);
+	return comanche;
+}
+
+struct Flyer
+{
+	Transform transform;
+	Locomotion motion;
+	PhysicsBody body;
+	PhysicsSettings settings; // GameData Gravity -64
+	std::uint64_t tick{0};
+
+	explicit Flyer(const LocomotorDefinition &locomotor, Fixed z) : motion(MakeLocomotion(locomotor))
+	{
+		transform.position = {Fixed{}, Fixed{}, z};
+		body.mass = Fixed::FromInt(50);
+		body.flags = physics_flag::Locomotive | physics_flag::AirborneFriction;
+	}
+
+	FlightStep Step()
+	{
+		FlightStep step;
+		step.body = &body;
+		step.settings = &settings;
+		step.tick = ++tick;
+		step.aloft = transform.position.z > Fixed{};
+		return step;
+	}
+
+	void Finish(const FlightStep &step)
+	{
+		EndFlight(transform, motion, step, [](FixedVector2) { return Fixed{}; });
+	}
+
+	// One frame holding its place (no goal: locoUpdate_maintainCurrentPosition), then physics.
+	void Hold()
+	{
+		const FlightStep step = Step();
+		BeginFlight(transform, motion, body);
+		FlightMaintain(transform, motion, step);
+		Finish(step);
+	}
+
+	// One frame toward a final goal straight ahead (locoUpdate_moveTowardsPosition), then physics; true once there.
+	bool Toward(FixedVector2 goal)
+	{
+		const FlightStep step = Step();
+		BeginFlight(transform, motion, body);
+		const bool there = FlightSteer(transform, motion, step, goal, true, Engine::Math::Distance(transform.position.XY(), goal), motion.locomotor.maxSpeed);
+		Finish(step);
+		return there;
+	}
+};
+}
+
+// Locomotor::handleBehaviorZ / calcLiftToUseAtPt and PhysicsBehavior::update (Locomotor.cpp, PhysicsUpdate.cpp): a
+// Comanche holding its place at 50 over flat ground lifts toward its preferred 100: its full net lift (2/15 - 64/900 =
+// 0.06222 a frame squared) while it has longer to climb than to stop, then by gravity alone (no lift) going up. Its
+// height and climb each frame as the original's arithmetic gives them, frames 1 to 24 (frame 25 is within 0.03 of the
+// switch to stopping, too close for fixed point to call the same way): within 0.01 in height and 0.001 in climb (the
+// fixed-point gravity and lift, 1/65536 a frame squared, summed). It then hovers about 100, its lift on and off (within
+// 0.1).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_lifts_itself_to_its_preferred_height)
+{
+	static constexpr double expected[24][2] = {{50.0622, 0.06222}, {50.1867, 0.12444}, {50.3733, 0.18667}, {50.6222, 0.24889},
+		{50.9333, 0.31111}, {51.3067, 0.37333}, {51.7422, 0.43556}, {52.2400, 0.49778}, {52.8000, 0.56000}, {53.4222, 0.62222},
+		{54.1067, 0.68444}, {54.8533, 0.74667}, {55.6622, 0.80889}, {56.5333, 0.87111}, {57.4667, 0.93333}, {58.4622, 0.99556},
+		{59.5200, 1.05778}, {60.6400, 1.12000}, {61.8222, 1.18222}, {63.0667, 1.24444}, {64.3733, 1.30667}, {65.7422, 1.36889},
+		{67.1733, 1.43111}, {68.6667, 1.49333}};
+	Flyer comanche(Comanche(), Fixed::FromInt(50));
+	for (int frame = 1; frame <= 24; ++frame)
+	{
+		comanche.Hold();
+		BOOST_TEST(std::abs(Real(comanche.transform.position.z) - expected[frame - 1][0]) <= 0.01, "frame " << frame << " z " << Real(comanche.transform.position.z));
+		BOOST_TEST(std::abs(Real(comanche.body.velocity.z) - expected[frame - 1][1]) <= 0.001, "frame " << frame << " vz " << Real(comanche.body.velocity.z));
+	}
+	for (int frame = 25; frame <= 120; ++frame)
+		comanche.Hold();
+	BOOST_TEST(std::abs(Real(comanche.transform.position.z) - 100.0) <= 0.1);
+	BOOST_TEST((comanche.transform.position.XY() == FixedVector2{}));
+}
+
+// Locomotor::locoUpdate_moveTowardsPosition -> moveTowardsPositionHover / Other (Locomotor.cpp): a Comanche at rest at
+// its preferred height is pushed along its facing by its acceleration (1/15 a frame) toward its speed (4: reached on
+// frame 60, at 122), no forward friction while driven; it starts braking (by 4/15) on frame 123, the first with less
+// left (30) than calcSlowDownDist (31.5 at full speed), at 373.73. Positions as the original's arithmetic, within 0.05
+// (fixed-point 1/15). Its height holds at 100 throughout (lift balancing gravity exactly).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_accelerates_and_brakes_by_forces)
+{
+	Flyer comanche(Comanche(), Fixed::FromInt(100));
+	const FixedVector2 goal{Fixed::FromInt(400), Fixed{}};
+	const double early[3] = {0.0667, 0.2, 0.4};
+	for (int frame = 1; frame <= 122; ++frame)
+	{
+		BOOST_TEST_REQUIRE(!comanche.Toward(goal));
+		if (frame <= 3)
+			BOOST_TEST(std::abs(Real(comanche.transform.position.x) - early[frame - 1]) <= 0.01);
+		if (frame == 60)
+		{
+			BOOST_TEST(std::abs(Real(comanche.motion.speed) - 4.0) <= 0.001);
+			BOOST_TEST(std::abs(Real(comanche.transform.position.x) - 122.0) <= 0.05);
+		}
+		BOOST_TEST_REQUIRE(Real(comanche.motion.speed) >= 0.06);
+	}
+	BOOST_TEST(std::abs(Real(comanche.motion.speed) - 4.0) <= 0.001); // frame 122: still full speed
+	comanche.Toward(goal);
+	BOOST_TEST(std::abs(Real(comanche.motion.speed) - 3.7333) <= 0.001); // frame 123: braking
+	BOOST_TEST(std::abs(Real(comanche.transform.position.x) - 373.7333) <= 0.05);
+	BOOST_TEST((comanche.transform.position.z == Fixed::FromInt(100)));
+	BOOST_TEST((comanche.transform.position.y == Fixed{}));
+}
+
+// moveTowardsPositionOther under locoUpdate_moveTowardsPosition: more than three frames' fall over its terrain
+// (-9 x gravity) a locomotor without AllowAirborneMotiveForce applies no push (only its lift); with it, its acceleration.
+// handleBehaviorZ under SpeedLimitZ: climbing faster than it, the lift asked is the limit minus the climb (as the
+// original, unsigned). CloseEnoughDist3D: the arrival distance measured to the goal on the ground, in 3D.
+BOOST_AUTO_TEST_CASE(legacy_parity_airborne_push_speed_limit_z_and_3d_arrival)
+{
+	LocomotorDefinition grounded = Comanche();
+	grounded.airborneMotiveForce = 0;
+	Flyer still(grounded, Fixed::FromInt(100));
+	still.Toward({Fixed::FromInt(400), Fixed{}});
+	BOOST_TEST((still.body.velocity.x == Fixed{}));
+	BOOST_TEST((still.transform.position.z == Fixed::FromInt(100)));
+	Flyer pushed(Comanche(), Fixed::FromInt(100));
+	pushed.Toward({Fixed::FromInt(400), Fixed{}});
+	BOOST_TEST(std::abs(Real(pushed.body.velocity.x) - 1.0 / 15.0) <= 0.0001);
+
+	LocomotorDefinition limited = Comanche();
+	limited.speedLimitZ = Fixed::FromRatio(1, 2);
+	Flyer climbing(limited, Fixed::FromInt(10));
+	climbing.body.velocity.z = Fixed::One();
+	climbing.motion.forced = 1;
+	climbing.motion.flownSpeed = climbing.motion.speed;
+	const FlightStep step = climbing.Step();
+	FlightHeight(climbing.transform, climbing.motion, step, Fixed{});
+	// desired 0.5 - 1 = -0.5; lift -0.5 + 64/900, clipped to none.
+	BOOST_TEST((climbing.body.acceleration.z == Fixed{}));
+	climbing.body.velocity.z = Fixed{} - Fixed::One(); // falling faster than the limit: limit - vz = 1.5, clipped to its lift
+	FlightHeight(climbing.transform, climbing.motion, step, Fixed{});
+	BOOST_TEST((climbing.body.acceleration.z == Fixed::FromRatio(2, 15) * climbing.body.mass / climbing.body.mass));
+
+	engine::level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(1000);
+	field.heights.assign(4, Fixed{});
+	const GroundHeight ground(field);
+	LocomotorDefinition chute = Comanche();
+	chute.closeEnough3D = 1;
+	Flyer over(chute, Fixed::FromInt(100));
+	FlightStep above = over.Step();
+	above.ground = &ground;
+	BOOST_TEST(!FlightSteer(over.transform, over.motion, above, {Fixed::FromRatio(1, 2), Fixed{}}, true, Fixed::FromRatio(1, 2), Fixed::FromInt(4)));
+	Flyer flat(Comanche(), Fixed::FromInt(100));
+	FlightStep level = flat.Step();
+	level.ground = &ground;
+	BOOST_TEST(FlightSteer(flat.transform, flat.motion, level, {Fixed::FromRatio(1, 2), Fixed{}}, true, Fixed::FromRatio(1, 2), Fixed::FromInt(4)));
+}
+
+// Locomotor::getMaxLift: LiftDamaged once the damage state is no better than MovementPenaltyDamageState (as the other
+// damaged rates); LocomotorTemplate::validate: unset (below zero), Lift.
+BOOST_AUTO_TEST_CASE(legacy_parity_damaged_lift)
+{
+	LocomotorDefinition comanche = Comanche();
+	BOOST_TEST((comanche.liftDamaged == Fixed::FromRatio(2, 15)));
+	LocomotorDefinition hurt;
+	hurt.lift = Fixed::FromRatio(2, 15);
+	hurt.liftDamaged = Fixed::FromRatio(4, 45); // LiftDamaged 80
+	hurt.damagedGiven = 8;
+	SettleLocomotorRates(hurt);
+	BOOST_TEST((hurt.liftFull == Fixed::FromRatio(2, 15)));
+	BOOST_TEST((hurt.liftDamaged == Fixed::FromRatio(4, 45)));
+}
+
+// The movement system flies such a unit by forces (with the world's physics; otherwise kinematically), stepping its
+// body itself: one frame after holding its place at 50 it is at 50.0622 (as the first frame above).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_movement_system_flies_flyers_by_forces)
+{
+	engine::level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(1000);
+	field.heights.assign(4, Fixed{});
+	ecs::World world(ecs::WorldConfig{16});
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Locomotion>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<PhysicsBody>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<Descent>();
+	world.RegisterComponent<FloorLift>();
+	world.FinalizeComponents();
+	const ecs::Entity comanche = world.Create();
+	world.Add<Transform>(comanche);
+	world.Add<Locomotion>(comanche);
+	world.Add<MoveOrder>(comanche);
+	world.Add<PhysicsBody>(comanche);
+	world.Get<Transform>(comanche)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(50)};
+	*world.Get<Locomotion>(comanche) = MakeLocomotion(Comanche());
+	world.Get<PhysicsBody>(comanche)->mass = Fixed::FromInt(50);
+	world.Get<PhysicsBody>(comanche)->flags = physics_flag::Locomotive;
+	const auto waypoints = Square();
+	world.EmplaceResource<WaypointGraph>(WaypointGraph(waypoints));
+	world.EmplaceResource<GroundHeight>(GroundHeight(field));
+	world.EmplaceResource<DeckSurfaces>();
+	world.EmplaceResource<RandomSeed>(RandomSeed{1});
+	world.EmplaceResource<PhysicsSettings>();
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	registry.Register(movement);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(std::abs(Real(world.Get<Transform>(comanche)->position.z) - 50.0622) <= 0.001);
+	BOOST_TEST(world.Get<Locomotion>(comanche)->forced == 1u);
+}
+
+// Locomotor::maintainCurrentPositionWings by forces (moveTowardsPositionWings -> moveTowardsPositionOther, then
+// PhysicsBehavior::update with Apply2DFrictionWhenAirborne: lateral friction 0.15, no forward friction while driven): a
+// MIG flying east at full speed (16/3) at (500, 500, 100) with no goal turns left 4 degrees, then right; it is braked
+// along its facing as it was before turning (1/90 a frame, toward MinSpeed 2) and its sideways drift is rubbed off.
+// Positions as the original's arithmetic, within 0.01; its forward speed as getForwardSpeed2D gives it, within 0.001.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mig_circles_by_forces)
+{
+	LocomotorDefinition mig;
+	mig.maxSpeed = Fixed::FromRatio(16, 3);
+	mig.minSpeed = Fixed::FromInt(2);
+	mig.acceleration = Fixed::FromRatio(11, 90);
+	mig.braking = Fixed::FromRatio(1, 90);
+	mig.turnRate = Engine::Math::TurnFromDegrees(4);
+	mig.lift = Fixed::FromRatio(2, 15);
+	mig.preferredHeight = Fixed::FromInt(100);
+	mig.height = HeightBehavior::SurfaceRelative;
+	mig.appearance = LocomotorAppearance::Wings;
+	mig.surfaces = 8;
+	mig.circlingRadius = Fixed::FromInt(100);
+	mig.airborneMotiveForce = 1;
+	SettleLocomotorRates(mig);
+	Flyer jet(mig, Fixed::FromInt(100));
+	jet.transform.position = {Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(100)};
+	jet.body.velocity = {Fixed::FromRatio(16, 3), Fixed{}, Fixed{}};
+	jet.body.motiveUntil = 1000; // driven all along
+	jet.motion.speed = jet.motion.flownSpeed = Fixed::FromRatio(16, 3);
+	jet.motion.forced = 1;
+	const double expected[3][3] = {{505.3183, 500.0557, 5.30538}, {510.6256, 500.1022, 5.30725}, {515.9173, 500.0864, 5.27888}};
+	const std::uint32_t four = Engine::Math::TurnFromDegrees(4).units;
+	const std::uint32_t facing[3] = {four, 0u, 0u - four};
+	for (int frame = 1; frame <= 3; ++frame)
+	{
+		jet.Hold();
+		BOOST_TEST(jet.transform.facing.units == facing[frame - 1]);
+		BOOST_TEST(std::abs(Real(jet.transform.position.x) - expected[frame - 1][0]) <= 0.01);
+		BOOST_TEST(std::abs(Real(jet.transform.position.y) - expected[frame - 1][1]) <= 0.01);
+		BOOST_TEST(std::abs(Real(jet.motion.speed) - expected[frame - 1][2]) <= 0.001);
+	}
+	BOOST_TEST((jet.motion.maintainPos == FixedVector2{Fixed::FromInt(500), Fixed::FromInt(500)}));
+}
+
+namespace
+{
+// MIGLocomotor as above (a frame: 16/3, MinSpeed 2, 4 degrees, 11/90, 1/90, lift 2/15).
+LocomotorDefinition MigLocomotor()
+{
+	LocomotorDefinition mig;
+	mig.maxSpeed = Fixed::FromRatio(16, 3);
+	mig.minSpeed = Fixed::FromInt(2);
+	mig.acceleration = Fixed::FromRatio(11, 90);
+	mig.braking = Fixed::FromRatio(1, 90);
+	mig.turnRate = Engine::Math::TurnFromDegrees(4);
+	mig.lift = Fixed::FromRatio(2, 15);
+	mig.preferredHeight = Fixed::FromInt(100);
+	mig.height = HeightBehavior::SurfaceRelative;
+	mig.appearance = LocomotorAppearance::Wings;
+	mig.surfaces = 8;
+	mig.circlingRadius = Fixed::FromInt(100);
+	mig.airborneMotiveForce = 1;
+	SettleLocomotorRates(mig);
+	return mig;
+}
+}
+
+// AIInternalMoveToState::update for aircraft (AIStates.cpp; AIUpdateInterface::getLocomotorDistanceToGoal,
+// Path::computeFlightDistToGoal): a flyer has arrived once what is left of its leg along the line from where it set off
+// to the goal (0 once past it; no more than the straight distance) is under its CloseEnoughDist (1), however far off to
+// the side. A MIG flying east at full speed from (500, 500, 100) for (560, 530) cannot turn onto it (4 degrees a frame):
+// it passes abeam and has arrived on frame 16, 11 short and 8 to the side. Its first frames as the original's arithmetic
+// (moveTowardsPositionWings with lateral friction), within 0.01.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_aircraft_has_arrived_once_abeam_its_goal)
+{
+	Flyer jet(MigLocomotor(), Fixed::FromInt(100));
+	jet.transform.position = {Fixed::FromInt(500), Fixed::FromInt(500), Fixed::FromInt(100)};
+	jet.body.velocity = {Fixed::FromRatio(16, 3), Fixed{}, Fixed{}};
+	jet.body.motiveUntil = 1000;
+	jet.motion.speed = jet.motion.flownSpeed = Fixed::FromRatio(16, 3);
+	jet.motion.forced = 1;
+	const FixedVector2 goal{Fixed::FromInt(560), Fixed::FromInt(530)};
+	const double expected[3][2] = {{505.3183, 500.0557}, {510.6113, 500.2123}, {515.8637, 500.5064}};
+	int arrived = 0;
+	FixedVector2 judged; // where it was as its state machine judged it there
+	for (int frame = 1; frame <= 40 && arrived == 0; ++frame)
+	{
+		judged = jet.transform.position.XY();
+		if (jet.Toward(goal))
+			arrived = frame;
+		else if (frame <= 3)
+		{
+			BOOST_TEST(std::abs(Real(jet.transform.position.x) - expected[frame - 1][0]) <= 0.01);
+			BOOST_TEST(std::abs(Real(jet.transform.position.y) - expected[frame - 1][1]) <= 0.01);
+		}
+	}
+	BOOST_TEST(arrived == 16);
+	BOOST_TEST(std::abs(Real(judged.x) - 568.4855) <= 0.05);
+	BOOST_TEST(std::abs(Real(judged.y) - 518.9069) <= 0.05);
+}
+
+// Locomotor::locoUpdate_moveTowardsPosition's braking slide for a hover (Locomotor.cpp; PhysicsBehavior::update with
+// OBJECT_STATUS_BRAKING): a Comanche at rest at (95, 30, 100) on its way from (0, 0) to (100, 0) has 5 left along its leg
+// but 30.4 straight: more than twice, so it brakes (IS_BRAKING; with no stopping left to need, nothing lets it go). Frame
+// 1 its push and turn as ever, but braking its physics moves it in z only: still at (95, 30). From frame 2 it is set
+// straight at the goal by its forward speed, at least MIN_VEL (a third a frame): (95.0548, 29.6712), (95.1096, 29.3424).
+// Within 0.001.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_braking_hover_slides_straight_at_its_goal)
+{
+	Flyer comanche(Comanche(), Fixed::FromInt(100));
+	comanche.transform.position = {Fixed::FromInt(95), Fixed::FromInt(30), Fixed::FromInt(100)};
+	comanche.motion.forced = 1;
+	comanche.motion.tracking = 1;
+	comanche.motion.flightFrom = {};
+	comanche.motion.flightGoal = {Fixed::FromInt(100), Fixed{}};
+	const double expected[3][2] = {{95.0, 30.0}, {95.0548, 29.6712}, {95.1096, 29.3424}};
+	for (int frame = 1; frame <= 3; ++frame)
+	{
+		BOOST_TEST(!comanche.Toward({Fixed::FromInt(100), Fixed{}}));
+		BOOST_TEST(comanche.motion.braking == 1u);
+		BOOST_TEST(comanche.motion.brakingStatus == 1u);
+		BOOST_TEST(std::abs(Real(comanche.transform.position.x) - expected[frame - 1][0]) <= 0.001, "frame " << frame << " x " << Real(comanche.transform.position.x));
+		BOOST_TEST(std::abs(Real(comanche.transform.position.y) - expected[frame - 1][1]) <= 0.001, "frame " << frame << " y " << Real(comanche.transform.position.y));
+	}
+	BOOST_TEST(std::abs(Real(comanche.body.velocity.x) - 0.19624) <= 0.001); // its velocity still integrated
+}
+
+// HeliTakeoffOrLandingState (JetAIUpdate.cpp), lifting off: setLocomotorGoalPositionExplicit to over its spot at the
+// airfield's ApproachHeight (50), PRECISE_Z_POS and ULTRA_ACCURATE (twice the braking, up to three times its lift:
+// calcLiftToUseAtPt). A Comanche on the ground climbs 0.3289, 0.9867, 1.9733, 3.2889, 4.9333 by frame 5 and is within 3
+// of the point (THRESH) at the end of frame 31, at 47.53 (the original's arithmetic, within 0.02). In 2D, its goal its
+// own spot (an explicit goal: nothing left to go), it is pushed off it on frame 1 (1/15), then brakes (straight more than
+// twice nothing) and frame 3 slides back onto it, held there by its braking.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_comanche_lifts_off_to_its_approach_height)
+{
+	Flyer comanche(Comanche(), Fixed{});
+	comanche.motion.preciseZ = 1;
+	comanche.motion.ultraAccurate = 1;
+	comanche.motion.preciseHeight = Fixed::FromInt(50);
+	const double early[5] = {0.3289, 0.9867, 1.9733, 3.2889, 4.9333};
+	int within = 0;
+	for (int frame = 1; frame <= 60 && within == 0; ++frame)
+	{
+		const FlightStep step = comanche.Step();
+		BeginFlight(comanche.transform, comanche.motion, comanche.body);
+		BOOST_TEST(!FlightSteer(comanche.transform, comanche.motion, step, FixedVector2{}, true, Fixed{}, comanche.motion.locomotor.maxSpeed, true));
+		comanche.Finish(step);
+		if (frame <= 5)
+			BOOST_TEST(std::abs(Real(comanche.transform.position.z) - early[frame - 1]) <= 0.01, "frame " << frame << " z " << Real(comanche.transform.position.z));
+		const Fixed below = Fixed::FromInt(50) - comanche.transform.position.z;
+		if (below * below <= Fixed::FromInt(9))
+			within = frame;
+	}
+	BOOST_TEST(within == 31);
+	BOOST_TEST(std::abs(Real(comanche.transform.position.z) - 47.5289) <= 0.02);
+	BOOST_TEST(std::abs(Real(comanche.transform.position.x)) <= 0.001);
+	BOOST_TEST(std::abs(Real(comanche.transform.position.y)) <= 0.001);
+	BOOST_TEST(comanche.motion.brakingStatus == 1u);
+}
+
+// PhysicsBehavior::update for a flyer's own step (the movement system): falling it lands, a landing hurts by how fast it
+// came down (activeVelZ less MinFallSpeed, times mass and FallHeightDamageFactor: LocomotorFalls, for the tick's falling
+// damage), and its pitch turns by its pitch rate times its rate factor. A flyer without lift (Lift 0) from 20 over the
+// ground falls 64/900 a frame squared: on the ground on frame 24 (24 x 25 / 2 x 64/900 > 20), down at 1.7067 a frame.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_flyers_own_physics_step_lands_hurts_and_pitches)
+{
+	engine::level::Heightfield field;
+	field.width = 2;
+	field.height = 2;
+	field.cellSize = Fixed::FromInt(1000);
+	field.heights.assign(4, Fixed{});
+	ecs::World world(ecs::WorldConfig{16});
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Locomotion>();
+	world.RegisterComponent<MoveOrder>();
+	world.RegisterComponent<PhysicsBody>();
+	world.RegisterComponent<Attitude>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<Descent>();
+	world.RegisterComponent<FloorLift>();
+	world.FinalizeComponents();
+	LocomotorDefinition dead = Comanche();
+	dead.lift = Fixed{};
+	SettleLocomotorRates(dead);
+	const ecs::Entity flyer = world.Create();
+	world.Add<Transform>(flyer);
+	world.Add<Locomotion>(flyer);
+	world.Add<MoveOrder>(flyer);
+	world.Add<PhysicsBody>(flyer);
+	world.Add<Attitude>(flyer);
+	world.Get<Transform>(flyer)->position = {Fixed::FromInt(100), Fixed::FromInt(100), Fixed::FromInt(20)};
+	*world.Get<Locomotion>(flyer) = MakeLocomotion(dead);
+	PhysicsBody &body = *world.Get<PhysicsBody>(flyer);
+	body.mass = Fixed::FromInt(50);
+	body.flags = physics_flag::Locomotive;
+	body.fallDamageFactor = Fixed::One();
+	body.pitchRate = 1000;
+	const auto waypoints = Square();
+	world.EmplaceResource<WaypointGraph>(WaypointGraph(waypoints));
+	world.EmplaceResource<GroundHeight>(GroundHeight(field));
+	world.EmplaceResource<DeckSurfaces>();
+	world.EmplaceResource<RandomSeed>(RandomSeed{1});
+	world.EmplaceResource<PhysicsSettings>();
+	const LocomotorFalls &falls = world.EmplaceResource<LocomotorFalls>();
+	world.EmplaceResource<LocomotorLandings>();
+	MovementSystem movement;
+	ecs::SystemRegistry registry;
+	registry.Register(movement);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST(world.Get<Attitude>(flyer)->pitch.units == 2000u); // 1000 x rate factor 2
+	int landed = 0;
+	for (std::uint64_t frame = 2; frame <= 40 && landed == 0; ++frame)
+	{
+		scheduler.Execute(engine::time::SimulationTime{frame, engine::time::FixedStep{30}});
+		if (falls.Size() != 0)
+			landed = static_cast<int>(frame);
+	}
+	BOOST_TEST(landed == 24);
+	BOOST_TEST((world.Get<Transform>(flyer)->position.z == Fixed{}));
+	double amount = 0.0;
+	falls.ForEach([&](const DamageRecord &record) { amount = Real(record.amount); });
+	BOOST_TEST(std::abs(amount - 1.7067 * 50.0) <= 0.05); // its landing speed x its mass
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(attack_paths)
+
+// legacy_parity: Pathfinder::findAttackPath (AIUpdateInterface::requestAttackPath; EA's goal test: a cell half a cell or
+// more from the mover, its weapon reaching the victim from there, isGoalPosWithinAttackRange FROM_BOUNDINGSPHERE_2D with its
+// range less a quarter cell, and its view from there clear, isAttackViewBlockedByObstacle): the route search toward the
+// victim stops at the first such cell it takes in. On open ground a mover at cell (10, 10) after a victim at (25, 10) (both
+// radius 5, range 100: 97.5 between the circles, centres within 107.5) stops at cell (15, 10) (its centre 100 from the
+// victim's; cell 14's is 110). With a wall of someone else's obstacle cells down column 20 (a gap from row 31) the cells
+// before the wall are in reach but see only the wall: the search goes on to a cell with a clear view.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_attack_route_stops_at_the_first_spot_it_may_fire_from)
+{
+	const auto search = [](bool walled) {
+		NavigationGrid grid(40, 40);
+		if (walled)
+			for (std::int32_t y = 0; y < 31; ++y)
+				grid.SetObstacle(20, y, ecs::Entity{999, 1}, ObstacleFootprint{Fixed::FromInt(1), Fixed::FromInt(1), ObstacleShape::Box}, false);
+		ClearancePlane ground{locomotor_surface::Ground, {}};
+		BuildClearance(grid, ground);
+		engine::level::Heightfield field;
+		field.width = field.height = 41;
+		field.cellSize = Fixed::FromInt(10);
+		field.heights.assign(41 * 41, Fixed{});
+		const GroundHeight height(field);
+		AttackApproach attack;
+		attack.victimAt = {Fixed::FromInt(255), Fixed::FromInt(105), Fixed{}};
+		attack.victimRadius = Fixed::FromInt(5);
+		attack.ownRadius = Fixed::FromInt(5);
+		attack.goalRange = Fixed::FromInt(100) - Fixed::FromRatio(5, 2);
+		attack.victim = ecs::Entity{7, 1};
+		attack.active = 1;
+		attack.sight = 1; // a looker that needs a line of sight
+		const ecs::Entity self{8, 1};
+		const FixedVector2 from{Fixed::FromInt(105), Fixed::FromInt(105)};
+		RouteScratch scratch;
+		const FoundRoute route = SearchRoute(grid, ground, RouteMover{0, AttackRouteBudget, {}}, from, attack.victimAt.XY(), scratch, GroundLayer,
+			GroundLayer, nullptr, true, [&](std::int32_t x, std::int32_t y) { return AttackSpot(grid, height, attack, self, from, x, y); });
+		BOOST_TEST_REQUIRE(route.reachedGoal);
+		BOOST_TEST_REQUIRE(!route.points.empty());
+		const FixedVector2 end = route.points.back();
+		const auto cellX = static_cast<std::int32_t>((end.x / Fixed::FromInt(10)).Floor());
+		const auto cellY = static_cast<std::int32_t>((end.y / Fixed::FromInt(10)).Floor());
+		BOOST_TEST(AttackSpot(grid, height, attack, self, from, cellX, cellY));
+		return std::pair{end, AttackSpot(grid, height, attack, self, from, 19, 10)};
+	};
+	const auto [open, openBeforeWall] = search(false);
+	BOOST_TEST((open == FixedVector2{Fixed::FromInt(155), Fixed::FromInt(105)}));
+	BOOST_TEST(openBeforeWall);
+	const auto [around, blockedBeforeWall] = search(true);
+	BOOST_TEST(!blockedBeforeWall); // in reach, the view blocked by the wall
+	BOOST_TEST((around != FixedVector2{Fixed::FromInt(155), Fixed::FromInt(105)}));
+}
+
+// legacy_parity: Weapon::isGoalPosWithinAttackRange's lower bound: the gap between the bounding circles no less than the
+// minimum attack range plus a quarter cell (2.5), even without a minimum range. A victim at (255, 105), both radius 5, range
+// 100: cell (23, 10) (gap 10) is a spot, cell (24, 10) (overlapping: gap 0) is not; with MinimumAttackRange 50, cell (19, 10)
+// (gap 50, under 52.5) is not, cell (18, 10) (gap 60) is.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_attack_spot_keeps_off_the_minimum_range)
+{
+	NavigationGrid grid(40, 40);
+	engine::level::Heightfield field;
+	field.width = field.height = 41;
+	field.cellSize = Fixed::FromInt(10);
+	field.heights.assign(41 * 41, Fixed{});
+	const GroundHeight height(field);
+	AttackApproach attack;
+	attack.victimAt = {Fixed::FromInt(255), Fixed::FromInt(105), Fixed{}};
+	attack.victimRadius = Fixed::FromInt(5);
+	attack.ownRadius = Fixed::FromInt(5);
+	attack.goalRange = Fixed::FromInt(100) - Fixed::FromRatio(5, 2);
+	const FixedVector2 from{Fixed::FromInt(105), Fixed::FromInt(105)};
+	BOOST_TEST(AttackSpot(grid, height, attack, {}, from, 23, 10));
+	BOOST_TEST(!AttackSpot(grid, height, attack, {}, from, 24, 10));
+	attack.minimumRange = Fixed::FromInt(50);
+	BOOST_TEST(!AttackSpot(grid, height, attack, {}, from, 19, 10));
+	BOOST_TEST(AttackSpot(grid, height, attack, {}, from, 18, 10));
+}
+
+// legacy_parity: AIUpdateInterface::computeAttackPath: findAttackPath's route ending where its weapon does not reach
+// (isGoalPosWithinAttackRange false) after a move under three cells: it takes a closest path to where it stands instead
+// ("this will unstack us"). A mover penned in a ring of obstacle cells two cells round it, its victim far beyond: the search
+// gets no nearer than the next cell (10 away), so its route ends where it stands (105, 105) rather than at (115, 105).
+BOOST_AUTO_TEST_CASE(legacy_parity_an_attack_route_with_no_spot_nearby_stays_put)
+{
+	NavigationGrid grid(40, 40);
+	for (std::int32_t y = 8; y <= 12; ++y)
+		for (std::int32_t x = 8; x <= 12; ++x)
+			if (std::abs(x - 10) == 2 || std::abs(y - 10) == 2)
+				grid.SetObstacle(x, y, ecs::Entity{999, 1}, ObstacleFootprint{Fixed::FromInt(1), Fixed::FromInt(1), ObstacleShape::Box}, false);
+	ClearancePlane ground{locomotor_surface::Ground, {}};
+	BuildClearance(grid, ground);
+	engine::level::Heightfield field;
+	field.width = field.height = 41;
+	field.cellSize = Fixed::FromInt(10);
+	field.heights.assign(41 * 41, Fixed{});
+	const GroundHeight height(field);
+	AttackApproach attack;
+	attack.victimAt = {Fixed::FromInt(305), Fixed::FromInt(105), Fixed{}};
+	attack.victimRadius = Fixed::FromInt(5);
+	attack.ownRadius = Fixed::FromInt(5);
+	attack.goalRange = Fixed::FromInt(100) - Fixed::FromRatio(5, 2);
+	attack.active = 1;
+	attack.search = 1;
+	const FixedVector2 from{Fixed::FromInt(105), Fixed::FromInt(105)};
+	RouteScratch scratch;
+	Route route;
+	PlanRoute(route, grid, ground, NavigationAgent{}, from, attack.victimAt.XY(), scratch, 1, {}, GroundLayer, std::nullopt, nullptr, &attack, &height,
+		ecs::Entity{8, 1});
+	BOOST_TEST_REQUIRE(route.count >= 1u);
+	BOOST_TEST((route.points[route.count - 1u] == from));
+}
+
+// legacy_parity: a new order's route is asked for on the frame it is given (AIUpdateInterface::requestPath on every new
+// move; for an attack, AIAttackApproachTargetState::computePath -> requestAttackPath), not after the route requests' re-plan
+// wait: a route planned on tick 5 for (100, 100); on tick 6 its attack is re-targeted to (115, 100) (15 away: inside the
+// two cells a drifting destination must move). Given as a new order (MoveOrder::replan, the house rule's cleared
+// Route::planned) it is planned again on tick 6; the same point merely drifted to is not (until tick 15 and over two cells).
+// Once planned for it on tick 6 the movement lets the request go; planned for another destination it keeps it.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_retargeted_attack_route_is_planned_on_its_frame)
+{
+	Route route;
+	route.planned = true;
+	route.complete = true;
+	route.plannedTick = 5;
+	route.destination = {Fixed::FromInt(100), Fixed::FromInt(100)};
+	route.count = 1;
+	route.points[0] = route.destination;
+	const FixedVector2 retarget{Fixed::FromInt(115), Fixed::FromInt(100)};
+	BOOST_TEST(!RouteStale(&route, MoveToPoint(retarget, GoalClaim::Keep), 6));
+	BOOST_TEST(RouteStale(&route, Replanned(MoveToPoint(retarget, GoalClaim::Keep)), 6));
+	Route planned = route;
+	planned.plannedTick = 6;
+	planned.destination = retarget;
+	const MoveOrder order = Replanned(MoveToPoint(retarget, GoalClaim::Keep));
+	BOOST_TEST(ReplanServed(&planned, order, 6));
+	BOOST_TEST(!ReplanServed(&route, order, 6)); // planned on tick 5, for (100, 100)
+	BOOST_TEST(ReplanServed(nullptr, order, 6)); // no route of its own
 }
 
 BOOST_AUTO_TEST_SUITE_END()

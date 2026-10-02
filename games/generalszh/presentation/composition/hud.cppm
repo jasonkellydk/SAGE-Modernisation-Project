@@ -27,6 +27,11 @@ import games.generalszh.presentation.hud.systems.eva_system;
 import games.generalszh.presentation.hud.systems.production_presentation_system;
 import games.generalszh.presentation.hud.systems.overcharge_notice_system;
 import games.generalszh.presentation.hud.systems.rally_notice_system;
+import games.generalszh.presentation.hud.systems.construction_notice_system;
+import games.generalszh.presentation.hud.systems.money_sound_system;
+import games.generalszh.presentation.hud.resources.money_feedback;
+import games.generalszh.presentation.hud.resources.radar_sounds;
+import games.generalszh.presentation.hud.systems.radar_sound_system;
 import games.generalszh.presentation.hud.systems.beacon_system;
 import games.generalszh.presentation.hud.systems.radar_event_system;
 import games.generalszh.presentation.objects.systems.script_flash_systems;
@@ -56,15 +61,6 @@ struct HudSetup
 inline void EmplaceRadarFeedback(ecs::World &world, session::SessionView &game, const HudSetup &setup)
 {
 	auto &radar = world.EmplaceResource<RadarFeedback>();
-	for (std::size_t index = 0; index < game.DefinitionCount(); ++index)
-	{
-		const content::ObjectDefinition &kind = game.Definition(static_cast<std::uint32_t>(index));
-		bool shown = kind.radarPriority != "NOT_ON_RADAR";
-		if (kind.radarPriority.empty() || kind.radarPriority == "INVALID")
-			shown = kind.Is("CAPTURABLE") ||
-				std::any_of(kind.modules.begin(), kind.modules.end(), [](const content::ModuleEntry &module) { return module.type == "GarrisonContain"; });
-		radar.onRadar.push_back(shown);
-	}
 	radar.penaltyDamage = content::DamageTypeIndex("PENALTY").value_or(0xFFFFFFFFu);
 	radar.healingDamage = content::DamageTypeIndex("HEALING").value_or(0xFFFFFFFFu);
 	if (setup.labels)
@@ -75,21 +71,21 @@ inline void EmplaceRadarFeedback(ecs::World &world, session::SessionView &game, 
 		radar.harvesterUnderAttack = labels("RADAR:HarvesterUnderAttack");
 		radar.structureUnderAttack = labels("RADAR:StructureUnderAttack");
 		radar.infiltration = labels("RADAR:Infiltration");
-		// BattlePlanUpdate's message labels, by definition.
-		for (std::size_t index = 0; index < game.DefinitionCount(); ++index)
-		{
-			std::array<std::u16string, 3> messages;
-			for (const content::ModuleEntry &module : game.Definition(static_cast<std::uint32_t>(index)).modules)
+		radar.stealthDiscovered = labels("MESSAGE:StealthDiscovered");
+		radar.stealthNeutralized = labels("MESSAGE:StealthNeutralized");
+		// BattlePlanUpdate's message labels, by object name (every object of the content: a Strategy Center is built later).
+		for (const auto &[name, object] : game.Content().objects)
+			for (const content::ModuleEntry &module : object.modules)
 				if (module.block != nullptr && module.type == "BattlePlanUpdate")
 				{
+					std::array<std::u16string, 3> messages;
 					constexpr std::array<std::string_view, 3> keys{"BombardmentMessageLabel", "HoldTheLineMessageLabel", "SearchAndDestroyMessageLabel"};
 					for (std::size_t plan = 0; plan < keys.size(); ++plan)
 						if (const auto *node = module.block->Find(keys[plan]); node != nullptr && !node->values.empty())
 							messages[plan] = labels(node->Value());
+					radar.battlePlanMessages.emplace(name, std::move(messages));
 					break;
 				}
-			radar.battlePlanMessages.push_back(std::move(messages));
-		}
 	}
 	const auto misc = [&](std::string_view field) {
 		const auto found = setup.content->miscAudio.find(field);
@@ -98,6 +94,8 @@ inline void EmplaceRadarFeedback(ecs::World &world, session::SessionView &game, 
 	radar.harvesterSound = misc("RadarNotifyHarvesterUnderAttackSound");
 	radar.structureSound = misc("RadarNotifyStructureUnderAttackSound");
 	radar.infiltrationSound = misc("RadarNotifyInfiltrationSound");
+	radar.stealthDiscoveredSound = misc("StealthDiscoveredSound");
+	radar.stealthNeutralizedSound = misc("StealthNeutralizedSound");
 }
 
 // InGameUI's messages: its colours and delay (MessageDelayMS / 30 / 1000, whole numbers), the words and the players'
@@ -119,6 +117,9 @@ inline void EmplaceInGameMessages(ecs::World &world, session::SessionView &game,
 		messages.beaconPlacedText = labels("GUI:BeaconPlaced");
 		messages.tooManyBeaconsText = labels("GUI:TooManyBeacons");
 		messages.beaconFailedText = labels("GUI:BeaconPlacementFailed");
+		messages.constructionCompleteText = labels("DOZER:ConstructionComplete");
+		messages.missingDisplayNameText = labels("INI:MissingDisplayName");
+		messages.repairCompleteText = labels("DOZER:RepairComplete");
 		for (const auto &[name, object] : setup.content->objects)
 			if (!object.displayName.empty() && !messages.displayNames.contains(object.displayName))
 				messages.displayNames.emplace(object.displayName, labels(object.displayName));
@@ -142,6 +143,28 @@ inline void EmplaceHudResources(ecs::World &world, session::SessionView &game, c
 	world.EmplaceResource<PopupMessage>().color = setup.inGameUi->popupMessageColor;
 	world.EmplaceResource<EvaState>().catalog = *setup.eva;
 	world.EmplaceResource<RadarEvents>();
+	// Money::deposit / withdraw's sounds (MiscAudio).
+	auto &money = world.EmplaceResource<MoneyFeedback>();
+	if (setup.content != nullptr)
+	{
+		const auto misc = [&](std::string_view field) {
+			const auto found = setup.content->miscAudio.find(field);
+			return found != setup.content->miscAudio.end() ? found->second : std::string{};
+		};
+		money.depositSound = misc("MoneyDepositSound");
+		money.withdrawSound = misc("MoneyWithdrawSound");
+	}
+	// Player::addRadar / removeRadar / enableRadar / disableRadar's sounds (MiscAudio), and the radar last seen.
+	auto &radarSounds = world.EmplaceResource<RadarSounds>();
+	if (setup.content != nullptr)
+	{
+		const auto &misc = setup.content->miscAudio;
+		if (const auto found = misc.find("RadarNotifyOnlineSound"); found != misc.end())
+			radarSounds.online = found->second;
+		if (const auto found = misc.find("RadarNotifyOfflineSound"); found != misc.end())
+			radarSounds.offline = found->second;
+	}
+	world.EmplaceResource<RadarHeard>();
 	world.EmplaceResource<hud::SuperweaponFlash>(); // the ready countdowns' flash (InGameUI's, kept across frames)
 	EmplaceRadarFeedback(world, game, setup);
 	EmplaceInGameMessages(world, game, setup);
@@ -170,6 +193,9 @@ inline void RegisterHudTickSystems(ecs::SystemRegistry &registry)
 	static ProductionPresentationSystem productionPresentation;
 	static OverchargeNoticeSystem overchargeNotices;
 	static RallyNoticeSystem rallyNotices;
+	static ConstructionNoticeSystem constructionNotices;
+	static MoneySoundSystem moneySounds;
+	static RadarSoundSystem radarSounds;
 	static BeaconSystem beacons;
 	static RadarEventSystem radarEvents;
 	registry.Register(inGameMessages);
@@ -193,12 +219,25 @@ inline void RegisterHudTickSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<AbilityFeedbackSystem, RallyNoticeSystem>();
 	registry.OrderBefore<DisabledSoundSystem, RallyNoticeSystem>();
 	registry.OrderBefore<OverchargeNoticeSystem, RallyNoticeSystem>();
+	// DozerActionDoActionState's messages after the rally notices', its radar event before the radar's update.
+	registry.Register(constructionNotices);
+	registry.OrderBefore<RallyNoticeSystem, ConstructionNoticeSystem>();
+	registry.OrderBefore<ConstructionNoticeSystem, BeaconSystem>();
+	// Money::deposit / withdraw's sounds, after the construction notices'.
+	registry.Register(moneySounds);
+	registry.OrderBefore<ConstructionNoticeSystem, MoneySoundSystem>();
+	registry.OrderBefore<MoneySoundSystem, BeaconSystem>();
+	// Player::addRadar / removeRadar's sounds, after the money's.
+	registry.Register(radarSounds);
+	registry.OrderBefore<MoneySoundSystem, RadarSoundSystem>();
+	registry.OrderBefore<RadarSoundSystem, BeaconSystem>();
 	registry.Register(beacons);
 	registry.OrderBefore<RallyNoticeSystem, BeaconSystem>();
 	registry.Register(radarEvents);
 	registry.OrderBefore<BeaconSystem, RadarEventSystem>();
 	registry.OrderBefore<OverchargeNoticeSystem, RadarEventSystem>();
 	registry.OrderBefore<RallyNoticeSystem, RadarEventSystem>();
+	registry.OrderBefore<ConstructionNoticeSystem, RadarEventSystem>();
 	registry.OrderBefore<ProductionPresentationSystem, RadarEventSystem>();
 	registry.OrderBefore<RadarEventSystem, EvaSystem>();
 	registry.OrderBefore<ProductionPresentationSystem, DisabledSoundSystem>();

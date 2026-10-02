@@ -55,6 +55,7 @@ export import games.generalszh.session.composition.status;
 export import games.generalszh.session.composition.stealth;
 export import games.generalszh.session.composition.teams;
 export import games.generalszh.session.composition.topple;
+export import games.generalszh.session.composition.wave_guides;
 export import games.generalszh.session.composition.upgrades;
 export import games.generalszh.session.composition.veterancy;
 export import games.generalszh.session.composition.vision;
@@ -122,6 +123,7 @@ inline void ComposeSimulation(ecs::World &world, ecs::SystemRegistry &registry, 
 	RegisterEmpComponents(world);
 	RegisterAreasComponents(world);
 	RegisterToppleComponents(world);
+	RegisterWaveGuidesComponents(world);
 	RegisterDockingComponents(world);
 	RegisterHarvestingComponents(world);
 	RegisterLoadoutComponents(world);
@@ -170,6 +172,7 @@ inline void ComposeSimulation(ecs::World &world, ecs::SystemRegistry &registry, 
 	EmplaceStatusResources(world, setup);
 	EmplaceStealthResources(world, setup);
 	EmplaceToppleResources(world, setup);
+	EmplaceWaveGuidesResources(world, setup);
 	EmplaceVeterancyResources(world, setup);
 	EmplaceVisionResources(world, setup);
 	EmplaceWorldResources(world, setup);
@@ -213,6 +216,7 @@ inline void ComposeSimulation(ecs::World &world, ecs::SystemRegistry &registry, 
 	RegisterBlockingSystems(registry);
 	RegisterTeamsSystems(registry);
 	RegisterToppleSystems(registry);
+	RegisterWaveGuidesSystems(registry);
 	RegisterPropagandaSystems(registry);
 	RegisterMinesSystems(registry);
 	RegisterEmpSystems(registry);
@@ -270,6 +274,7 @@ inline void ComposeSimulation(ecs::World &world, ecs::SystemRegistry &registry, 
 	OrderEmpSystems(registry);
 	OrderMatchSystems(registry);
 	OrderToppleSystems(registry);
+	OrderWaveGuidesSystems(registry);
 	OrderLifetimeSystems(registry);
 	OrderFireSystems(registry);
 	OrderPoisonSystems(registry);

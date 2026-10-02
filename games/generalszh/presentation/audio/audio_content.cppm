@@ -34,6 +34,9 @@ struct AudioSettings
 	float zoomMinDistance{0.0f};
 	float zoomMaxDistance{0.0f};
 	float zoomVolumeAmount{0.0f};
+	// TimeToFadeAudio in whole logic frames (parseDurationUnsignedInt: milliseconds, rounded up): how long a faded
+	// music track takes to fall silent (MilesAudioManager::processFadingList).
+	std::uint64_t fadeAudioFrames{0};
 };
 
 struct AudioContent
@@ -163,12 +166,16 @@ Schema<AudioSettings> SettingsSchema()
 		.On("ZoomMaxDistance", number(&A::zoomMaxDistance))
 		.On("ZoomSoundVolumePercentageAmount", percent(&A::zoomVolumeAmount))
 		.On("SampleCount2D", [](const Node &n, A &a, BindContext &c) { a.sampleCount2D = static_cast<std::uint32_t>(std::max(0.0f, Number(n, c).value_or(6.0f))); })
-		.On("SampleCount3D", [](const Node &n, A &a, BindContext &c) { a.sampleCount3D = static_cast<std::uint32_t>(std::max(0.0f, Number(n, c).value_or(24.0f))); });
-	// Miles provider and cache settings: the modern mixer has no use for them.
+		.On("SampleCount3D", [](const Node &n, A &a, BindContext &c) { a.sampleCount3D = static_cast<std::uint32_t>(std::max(0.0f, Number(n, c).value_or(24.0f))); })
+		.Duration("TimeToFadeAudio", &A::fadeAudioFrames);
+	// Nothing audible to port: the Miles driver, provider and speaker set-up (AIL_quick_startup, the 3D provider and
+	// speaker type), its file cache's memory budget, a stream count only ever reported (getNumStreams), a value
+	// nothing reads (TimeBetweenDrawableSounds), and the SuperHackers fork's own additions (the 3D range fade, the
+	// money volume) that EA's original does not have.
 	for (const char *key : {"UseDigital", "UseMidi", "OutputRate", "OutputBits", "OutputChannels",
 			 "StreamCount", "Preferred3DHW1", "Preferred3DHW2", "Preferred3DHW3", "Preferred3DHW4", "Preferred3DSW", "Default2DSpeakerType",
 			 "Default3DSpeakerType", "Use3DSoundRangeVolumeFade", "3DSoundRangeVolumeFadeExponent", "TimeBetweenDrawableSounds",
-			 "TimeToFadeAudio", "AudioFootprintInBytes", "DefaultMoneyTransactionVolume"})
+			 "AudioFootprintInBytes", "DefaultMoneyTransactionVolume"})
 		schema.Ignore(key);
 	return schema;
 }

@@ -7,6 +7,7 @@ export import engine.gameplay.rts.parachute.algorithms.parachute_release;
 export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.rts.lifecycle.resources.casualties;
 export import engine.gameplay.rts.parachute.resources.parachute_openings;
+export import engine.gameplay.rts.parachute.resources.parachute_landings;
 export import engine.gameplay.common.physics.components.physics_body;
 export import engine.gameplay.common.physics.resources.physics_settings;
 export import engine.gameplay.common.spatial.components.transform;
@@ -121,12 +122,13 @@ struct ParachuteLandingSystem
 		ecs::Exclude<Dying>>;
 	using Lookup = ecs::Lookup<ecs::Read<Transform>, ecs::Read<Disabled>, ecs::Read<PhysicsBody>, ecs::Read<OffMap>>;
 	using Resources = ecs::Resources<ecs::Read<ParachuteCatalog>, ecs::Read<GroundHeight>, ecs::Read<NavigationGrid>, ecs::Write<KillRequests>,
-		ecs::Write<ParachuteOpenings>>;
+		ecs::Write<ParachuteOpenings>, ecs::Write<ParachuteLandings>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
 		using namespace parachute_detail;
 		const ParachuteCatalog &catalog = context.Read<ParachuteCatalog>();
+		auto &landings = context.Write<ParachuteLandings>().riders;
 		const GroundHeight &ground = context.Read<GroundHeight>();
 		const NavigationGrid &grid = context.Read<NavigationGrid>();
 		KillRequests &kills = context.Write<KillRequests>();
@@ -167,6 +169,7 @@ struct ParachuteLandingSystem
 					if (landed)
 					{
 						ReleaseRider(chute.rider, rider.position, definition, lookup, commands, ground, grid, kills, false);
+						landings.push_back(chute.rider);
 						chute.rider = {};
 					}
 				}

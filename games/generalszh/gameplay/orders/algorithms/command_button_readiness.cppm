@@ -10,6 +10,7 @@ import engine.gameplay.rts.powers.components.special_power_timers;
 import engine.gameplay.rts.upgrades.components.upgradable;
 import engine.gameplay.rts.upgrades.resources.upgrade_triggers;
 import engine.gameplay.rts.upgrades.resources.player_upgrades;
+export import games.generalszh.gameplay.upgrades.algorithms.upgrade_affects;
 
 // Whether a team's command button is ready (ScriptConditions::evaluateSkirmishCommandButtonIsReady, over
 // CommandButton::isReady): SKIRMISH_COMMAND_BUTTON_READY_ALL / _PARTIAL and the sequential scripts'
@@ -19,23 +20,7 @@ export namespace generalszh::gameplay
 // Object::affectedByUpgrade: one of its upgrade modules would go for its player's, its own and this upgrade together.
 inline bool AffectedByUpgrade(const GameWorld &game, ecs::Entity unit, std::uint32_t upgrade)
 {
-	namespace gp = engine::gameplay;
-	const auto *ref = game.world.Get<gp::DefinitionRef>(unit);
-	const auto *triggers = ref != nullptr ? game.world.Resource<gp::UpgradeTriggers>().Of(ref->index) : nullptr;
-	if (triggers == nullptr)
-		return false;
-	const auto *own = game.world.Get<gp::Upgradable>(unit);
-	gp::UpgradeMask key = game.world.Resource<gp::PlayerUpgrades>().Completed(OwnerPlayer(game, unit));
-	if (own != nullptr)
-		key.Add(own->completed);
-	key.Set(upgrade);
-	for (std::size_t index = 0; index < triggers->size(); ++index)
-	{
-		const bool executed = own != nullptr && index < 32 && ((own->executed >> index) & 1u) != 0;
-		if (gp::WouldUpgrade((*triggers)[index], key, executed))
-			return true;
-	}
-	return false;
+	return AffectedByUpgrade(game, unit, OwnerPlayer(game, unit), upgrade);
 }
 
 // CommandButton::isReady: its power's module is fully charged (getPercentReady() == 1), or it names an upgrade the

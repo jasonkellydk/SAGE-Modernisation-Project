@@ -4,6 +4,7 @@ import std;
 export import engine.gameplay.rts.movement.components.floor_lift;
 export import engine.ecs.system.system;
 export import engine.gameplay.rts.combat.components.countermeasures;
+export import engine.gameplay.rts.combat.components.sneaky_target;
 export import engine.gameplay.rts.aircraft.components.jet;
 export import engine.gameplay.rts.aircraft.components.airfield;
 export import engine.gameplay.rts.movement.components.locomotion;
@@ -18,6 +19,8 @@ export import engine.gameplay.common.spatial.resources.ground_height;
 export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.rts.aircraft.resources.jet_damage;
 export import Engine.Core.Math.FixedVector;
+import engine.gameplay.rts.aircraft.algorithms.helicopter_flight;
+import engine.gameplay.rts.aircraft.algorithms.jet_runway_cycle;
 
 // Jets through their cycle at their airfield, once a tick between targeting
 // and movement (a batch: runways are shared, so it runs in one
@@ -28,16 +31,17 @@ export import Engine.Core.Math.FixedVector;
 // another jet of its airfield taxies to take off it waits; then afterburners
 // on and TakeoffPause more ticks); its afterburners burn until it is flying.
 // On a flight deck (JetAIUpdate's DECK_HEIGHT_OFFSET paths): it stands on the deck (its floor raised by the deck's
-// height); only the front row takes off (one further back waits to be moved up); it comes in over the landing strip's
-// start from well behind it and lands along the strip, touching down at the deck's height, then rolls through the
-// runway's taxi points to its space; one new from the hangar comes out by the runway's creation points.
+// height); only the front row takes off (one further back waits to be moved up), rolling down the runway and climbing to
+// runwayExit (FlightDeckBehavior::calcPPInfo: DeckPlacesOf, ApproachHeight + LandingDeckHeightOffset up); it comes back to
+// runwayApproach behind the landing strip's start and lands along the strip (JetTakeoffOrLandingState's path), then
+// rolls through the runway's taxi points to its space; one new from the hangar comes out by the runway's creation points.
 export namespace engine::gameplay
 {
 struct JetSystem
 {
 	using Query = ecs::Query<ecs::Write<Jet>, ecs::Write<Locomotion>, ecs::Write<MoveOrder>, ecs::Write<Transform>, ecs::Optional<Aggression>,
 		ecs::OptionalWrite<AttackTarget>, ecs::OptionalWrite<Armament>, ecs::OptionalWrite<Appearance>, ecs::OptionalWrite<DrawOffset>, ecs::Optional<Health>,
-		ecs::OptionalWrite<Countermeasures>, ecs::OptionalWrite<FloorLift>>;
+		ecs::OptionalWrite<Countermeasures>, ecs::OptionalWrite<FloorLift>, ecs::OptionalWrite<SneakyTarget>>;
 	using Lookup = ecs::Lookup<ecs::Read<Airfield>, ecs::Read<Transform>>;
 	using Resources = ecs::Resources<ecs::Read<GroundHeight>, ecs::Write<JetDamage>>;
 
@@ -52,6 +56,7 @@ struct JetSystem
 		std::vector<std::pair<ecs::Entity, std::uint32_t>> busy;
 		// Jets taxiing to take off, by airfield (JetPauseBeforeTakeoffState::findWaiter waits for them).
 		std::vector<std::pair<ecs::Entity, ecs::Entity>> taxiing;
+		RunwayTable runways;
 		const auto runwayOf = [&](const Jet &jet) -> std::uint32_t {
 			const Airfield *field = lookup.Get<Airfield>(jet.airfield);
 			return field != nullptr && jet.space < field->spaceCount ? field->spaces[jet.space].runway : 0u;
@@ -67,6 +72,18 @@ struct JetSystem
 					busy.push_back({jet.airfield, runwayOf(jet)});
 				if (jet.state == JetState::TaxiToStart)
 					taxiing.push_back({jet.airfield, entities[row]});
+				// An airfield jet's runway hold (ParkingPlaceBehavior's RunwayInfo).
+				if (jet.runwayHold != 0)
+				{
+					RunwayLane &lane = runways.Lane(jet.airfield, runwayOf(jet));
+					if (jet.runwayHold == 1)
+					{
+						lane.inUse = entities[row];
+						lane.wasInLine = jet.wasInLine;
+					}
+					else
+						lane.next = entities[row];
+				}
 			}
 		});
 		const auto inUse = [&](ecs::Entity field, std::uint32_t runway) {
@@ -86,6 +103,7 @@ struct JetSystem
 			const auto healths = chunk.template Get<Health>();
 			auto countermeasureRows = chunk.template Get<Countermeasures>();
 			auto lifts = chunk.template Get<FloorLift>();
+			auto sneakies = chunk.template Get<SneakyTarget>();
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < jets.size(); ++row)
 			{
@@ -95,6 +113,9 @@ struct JetSystem
 				Transform &transform = transforms[row];
 				Armament *armament = armaments.empty() ? nullptr : &armaments[row];
 				AttackTarget *target = targets.empty() ? nullptr : &targets[row];
+				// JetAIUpdate::update, before its state machine steps: JETEXHAUST while its body moves (its speed as the last
+				// tick left it) on its air locomotion (ALLOW_AIR_LOCO as its last state left it).
+				const bool exhaust = motion.speed > Fixed{} && AllowsAirLocomotion(jet.state);
 				const Airfield *field = lookup.IsAlive(jet.airfield) ? lookup.Get<Airfield>(jet.airfield) : nullptr;
 				const bool hasSpace = field != nullptr && jet.space < field->spaceCount;
 				const ParkingSpace space = hasSpace ? field->spaces[jet.space] : ParkingSpace{};
@@ -107,13 +128,7 @@ struct JetSystem
 						jet.hasHome = 1;
 					}
 				const auto along = runway.end.XY() - runway.start.XY();
-				const Fixed length = Engine::Math::Length(along);
-				// Where it lands: a flight deck's own strip, else the runway.
 				const bool deck = field != nullptr && field->frontRow != 0;
-				const auto landStart = runway.landing != 0 ? runway.landStart.XY() : runway.start.XY();
-				const auto landEnd = runway.landing != 0 ? runway.landEnd.XY() : runway.end.XY();
-				const auto landAlong = landEnd - landStart;
-				const Fixed landLength = Engine::Math::Length(landAlong);
 				// Its floor: the deck while it is one of a flight deck's.
 				if (!lifts.empty())
 					lifts[row].height = field != nullptr ? field->deckHeight : Fixed{};
@@ -137,18 +152,81 @@ struct JetSystem
 					jet.since = tick;
 					jet.leg = 0;
 				};
+				// A change of locomotor set: fresh locomotors (Locomotor's m_maxLift, m_maxSpeed BIGNUM).
+				const auto freshCaps = [&] {
+					motion.liftCap = Fixed::FromInt(99999);
+					motion.speedCap = Fixed::FromInt(99999);
+				};
 				const auto head = [&](Engine::Math::FixedVector2 goal, const LocomotorDefinition &locomotor) {
 					jet.goal = goal;
+					freshCaps(); // (taxiing: its own set)
 					motion.locomotor = locomotor;
 				};
 				const auto arrived = [&] {
-					const Fixed near = std::max(motion.locomotor.closeEnough * Fixed::FromInt(2), Fixed::FromInt(4));
-					return Engine::Math::DistanceSquared(transform.position.XY(), jet.goal) <= near * near;
+					const Fixed reach = std::max(motion.locomotor.closeEnough * Fixed::FromInt(2), Fixed::FromInt(4));
+					return Engine::Math::DistanceSquared(transform.position.XY(), jet.goal) <= reach * reach;
+				};
+				// A flight deck jet's takeoff and landing (JetTakeoffOrLandingState: AIFollowPathState over calcPPInfo's
+				// points): on to the next point once near this one, true past the last.
+				const runway_detail::DeckPlaces deckPlaces = deck ? runway_detail::DeckPlacesOf(*field, runway) : runway_detail::DeckPlaces{};
+				const auto setPath = [&](std::initializer_list<Engine::Math::FixedVector3> points) {
+					jet.pathCount = 0;
+					for (const Engine::Math::FixedVector3 &point : points)
+						if (jet.pathCount < Jet::MaxPath)
+							jet.path[jet.pathCount++] = point;
+					jet.leg = 0;
+					if (jet.pathCount > 0)
+						jet.goal = jet.path[0].XY();
+				};
+				// Flown by forces, each leg is done by the aircraft arrival rule (AIInternalMoveToState::update: what is left of it
+				// along its line under CloseEnoughDist, TrackFlightLeg; the next points within a cell skipped), its height the
+				// node's z, the next leg's length past it (setPathExtraDistance); kinematic (no body), within reach.
+				const auto followPath = [&] {
+					const bool done = jet.leg < jet.pathCount &&
+						(motion.forced != 0 ? motion.tracking != 0 && motion.flightGoal == jet.path[jet.leg].XY() &&
+								TrackFlightLeg(transform, motion, motion.flightGoal).left < motion.locomotor.closeEnough
+											: arrived());
+					if (done)
+					{
+						++jet.leg;
+						if (motion.forced != 0)
+							while (jet.leg < jet.pathCount && Engine::Math::DistanceSquared(jet.path[jet.leg].XY(), transform.position.XY()) < Fixed::FromInt(100))
+								++jet.leg;
+					}
+					if (jet.leg >= jet.pathCount)
+						return true;
+					jet.goal = jet.path[jet.leg].XY();
+					order = MoveStraightTo(jet.goal);
+					order.claim = GoalClaim::None;
+					if (motion.forced != 0)
+						motion.preciseHeight = jet.path[jet.leg].z;
+					motion.flightExtra = {};
+					if (jet.leg + 1u < jet.pathCount)
+					{
+						motion.flightExtra = Engine::Math::Distance(jet.path[jet.leg + 1u].XY(), jet.path[jet.leg].XY());
+						if (jet.leg + 2u < jet.pathCount)
+							motion.flightExtra += Fixed::FromInt(40);
+					}
+					return false;
 				};
 				const bool grounded = jet.state != JetState::TakeoffRoll && jet.state != JetState::Flying && jet.state != JetState::Returning &&
 					jet.state != JetState::AwaitLanding && jet.state != JetState::Landing &&
 					jet.state != JetState::ReturnToDeadAirfield && jet.state != JetState::CirclingDeadAirfield;
 
+				// A helicopter's own cycle (HeliAIStateMachine).
+				bool heliCycle = false;
+				// An airfield's (or no airfield's) jet: its runway cycle (JetAIStateMachine); a flight deck's keeps the deck's.
+				const bool deckJet = field != nullptr && field->frontRow != 0;
+				if (jet.helicopter != 0)
+					heliCycle = StepHelicopter(jet, motion, order, transform, target, armament, healths.empty() ? nullptr : &healths[row], field, tick);
+				else if (!deckJet)
+				{
+					RunwayJetContext runwayContext{entities[row], field, &runways, taxiing, wantsToFly,
+						!aggressions.empty() && (aggressions[row].stance == Stance::Hunt || aggressions[row].stance == Stance::Guard), tick};
+					heliCycle = StepRunwayJet(runwayContext, jet, motion, order, transform, target, armament, healths.empty() ? nullptr : &healths[row],
+						countermeasureRows.empty() ? nullptr : &countermeasureRows[row], damage);
+				}
+				else
 				switch (jet.state)
 				{
 				case JetState::Parked:
@@ -202,25 +280,48 @@ struct JetSystem
 					}
 					if (tick >= jet.takeoffAt)
 					{
-						// Roll down the runway on the ground, flight speeds.
+						// JetTakeoffOrLandingState (takeoff) on a flight deck: its flight locomotor, precise and ultra
+						// accurate, down the runway to its end at runwayApproach's height, on to runwayExit.
 						enter(JetState::TakeoffRoll);
-						LocomotorDefinition roll = jet.flight;
-						roll.height = HeightBehavior::NoMotiveForce;
-						roll.preferredHeight = {};
-						head(runway.end.XY() + along, roll);
+						setPath({{runway.end.x, runway.end.y, deckPlaces.approach.z}, deckPlaces.exit});
+						freshCaps();
+						motion.locomotor = jet.flight;
+						motion.ultraAccurate = 1;
+						motion.preciseZ = 1;
+						motion.preciseHeight = transform.position.z;
+						motion.liftCap = Fixed{}; // setMaxLift(0)
+						followPath();
 					}
 					break;
 				}
 				case JetState::TakeoffRoll:
 				{
-					const Fixed rolled = Engine::Math::Distance(runway.start.XY(), transform.position.XY());
-					if (rolled >= length * jet.lift)
-						motion.locomotor = jet.flight; // lift off
-					if (rolled >= length)
+					// Its lift: (1 - its distance to the runway's end / runwayTakeoffDist) squared, full past the end; the
+					// port lifts it from the end's height toward the point it makes for in that share.
+					// Flown by forces: the original's own (JetTakeoffOrLandingState::update: setMaxLift(m_maxLift x ratio), the
+					// path node's height precise; TakeoffLift).
+					if (motion.forced != 0)
+						motion.liftCap = runway_detail::TakeoffLift(motion.locomotor.lift, runway.end - transform.position, deckPlaces.takeoffDistance);
+					else
 					{
+						const auto toEnd = runway.end - transform.position;
+						const Fixed distance = Engine::Math::Sqrt(toEnd.x * toEnd.x + toEnd.y * toEnd.y + toEnd.z * toEnd.z);
+						Fixed ratio = deckPlaces.takeoffDistance > Fixed{} ? Fixed::One() - distance / deckPlaces.takeoffDistance : Fixed::One();
+						ratio = std::clamp(ratio * ratio, Fixed{}, Fixed::One());
+						if (jet.leg >= 1)
+							ratio = Fixed::One();
+						const Fixed toward = jet.path[std::min<std::uint32_t>(jet.leg, Jet::MaxPath - 1)].z;
+						motion.preciseHeight = runway.end.z + (toward - runway.end.z) * ratio;
+					}
+					if (followPath())
+					{
+						motion.preciseZ = 0;
+						motion.ultraAccurate = 0;
+						motion.liftCap = Fixed::FromInt(99999); // onExit: setMaxLift(BIGNUM)
+						motion.flightExtra = {};
 						enter(JetState::Flying);
 						jet.idleSince = tick;
-						order = MoveToPoint(jet.goal);
+						order = {};
 					}
 					break;
 				}
@@ -249,9 +350,10 @@ struct JetSystem
 					if (hasSpace && (!loaded || idleTooLong || recalled))
 					{
 						enter(JetState::Returning);
-						// In over the start of its runway (its landing strip), from well behind it.
-						head(landStart - landAlong - landAlong / Fixed::FromInt(2), jet.flight);
-						order = MoveToPoint(jet.goal);
+						// JetOrHeliReturnForLandingState: to runwayApproach (0.75 of its landing strip short of the strip's
+						// start, ApproachHeight + LandingDeckHeightOffset over it).
+						head(deckPlaces.approach.XY(), jet.flight);
+						order = MoveToPoint(jet.goal, GoalClaim::None);
 						if (target != nullptr)
 							*target = {};
 					}
@@ -283,10 +385,10 @@ struct JetSystem
 				case JetState::Returning:
 					if (!hasSpace)
 						enter(JetState::Flying);
-					else if (arrived() || Engine::Math::DistanceSquared(transform.position.XY(), jet.goal) <= landLength * landLength)
+					else if (arrived())
 						enter(JetState::AwaitLanding);
 					else
-						order = MoveToPoint(jet.goal);
+						order = MoveToPoint(jet.goal, GoalClaim::None);
 					if (target != nullptr)
 						*target = {};
 					break;
@@ -296,34 +398,43 @@ struct JetSystem
 					else if (!inUse(jet.airfield, space.runway))
 					{
 						busy.push_back({jet.airfield, space.runway});
+						// JetTakeoffOrLandingState (landing) on a flight deck: over runwayApproach, onto its landing strip's
+						// start and along it to its end, precise and ultra accurate, its speed held at its least.
 						enter(JetState::Landing);
-						// Down along the runway: aimed at its end (wings count as there from far off),
-						// touching down near its start (a flight deck: on its deck).
-						LocomotorDefinition landing = jet.flight;
-						landing.preferredHeight = field->deckHeight;
-						head(landEnd, landing);
-						order = MoveToPoint(jet.goal);
+						setPath({deckPlaces.approach, deckPlaces.landStart, deckPlaces.landEnd});
+						motion.locomotor = jet.flight;
+						motion.locomotor.maxSpeed = motion.locomotor.minSpeed;
+						motion.speedCap = motion.locomotor.minSpeed; // setMaxSpeed(MinSpeed)
+						motion.liftCap = Fixed::FromInt(99999);
+						motion.ultraAccurate = 1;
+						motion.preciseZ = 1;
+						motion.preciseHeight = deckPlaces.approach.z;
+						followPath();
 					}
 					else
-						order = MoveToPoint(landStart - landAlong - landAlong); // circle out and try again
+						order = {}; // circling (setLocomotorGoalNone)
 					if (target != nullptr)
 						*target = {};
 					break;
 				case JetState::Landing:
 				{
-					// How far along the runway (its landing strip) it is (negative: short of it).
-					const auto from = transform.position.XY() - landStart;
-					const Fixed covered = landLength > Fixed{} ? Engine::Math::Dot(from, landAlong) / landLength : Fixed{};
 					if (!hasSpace)
+					{
+						motion.preciseZ = 0;
+						motion.ultraAccurate = 0;
+						motion.locomotor = jet.flight;
 						enter(JetState::Flying);
-					else if (jet.leg == 0 && covered > Fixed{} - landLength / Fixed::FromInt(4))
-					{
-						// Touch down: on its wheels, braking, down the runway.
-						jet.leg = 1;
-						head(landEnd, jet.taxi);
+						break;
 					}
-					else if (jet.leg == 1 && covered >= landLength * Fixed::FromRatio(3, 4))
+					// The height of the point it makes for (the path's end: its strip's end); its lift uncapped each frame.
+					if (jet.leg < jet.pathCount)
+						motion.preciseHeight = jet.path[jet.leg].z;
+					motion.liftCap = Fixed::FromInt(99999);
+					if (followPath())
 					{
+						motion.preciseZ = 0;
+						motion.ultraAccurate = 0;
+						motion.flightExtra = {};
 						enter(JetState::TaxiToParking);
 						jet.route = 0;
 						// Its way as a landed jet's: through the taxi points on a flight deck.
@@ -369,6 +480,9 @@ struct JetSystem
 					break;
 				}
 
+				// getSneakyTargetingOffset: SneakyOffsetWhenAttacking along its facing while its attackers miss it.
+				if (!sneakies.empty())
+					sneakies[row] = {Engine::Math::Direction(transform.facing) * jet.sneakyOffset, jet.missUntil};
 				// JetAIUpdate::update's MinHeight: in its airfield cycle (not plain flight), or not above the terrain, it is
 				// drawn raised to MinHeight above the terrain when lower.
 				if (!offsets.empty() && jet.minHeight > Fixed{})
@@ -377,20 +491,51 @@ struct JetSystem
 					const bool check = jet.state != JetState::Flying || height <= Fixed{};
 					offsets[row].z = check && height < jet.minHeight ? jet.minHeight - height : Fixed{};
 				}
+				if (!appearances.empty() && jet.exhaustBit != Jet::NoExhaust)
+					appearances[row].Set(jet.exhaustBit, exhaust);
 				// friend_enableAfterburners: lit from the pause's countdown until it is flying.
 				if (!appearances.empty() && jet.afterburnerBit != Jet::NoAfterburner)
 					appearances[row].Set(jet.afterburnerBit,
-						(jet.state == JetState::PauseBeforeTakeoff && jet.leg != 0) || jet.state == JetState::TakeoffRoll);
-				if (grounded || jet.state == JetState::Landing || jet.state == JetState::TakeoffRoll)
+						(jet.state == JetState::PauseBeforeTakeoff && (jet.leg != 0 || jet.paused != 0)) || jet.state == JetState::TakeoffRoll);
+				if (heliCycle)
+				{
+					// Coming down, down or lifting off: no shots.
+					if (armament != nullptr && armament->readyTick != OutOfAmmo && armament->readyTick <= tick)
+						armament->readyTick = tick + 1;
+				}
+				else if (jet.helicopter == 0 && deckJet && (grounded || jet.state == JetState::Landing || jet.state == JetState::TakeoffRoll))
 				{
 					// Its own way only; no shots on the ground.
 					const bool still = jet.state == JetState::Parked || jet.state == JetState::AwaitRunway || jet.state == JetState::Reloading ||
 						jet.state == JetState::PauseBeforeTakeoff;
-					order = still ? MoveOrder{} : MoveToPoint(jet.goal);
+					// (Rolling or landing it follows its path's explicit points.)
+					if (jet.state != JetState::Landing && jet.state != JetState::TakeoffRoll)
+						order = still ? MoveOrder{} : MoveToPoint(jet.goal);
 					if (still)
 						motion.speed = {};
 					if (armament != nullptr && armament->readyTick != OutOfAmmo && armament->readyTick <= tick)
 						armament->readyTick = tick + 1;
+				}
+			}
+		});
+		// The runways as the jets left them: each keeps its own hold.
+		query.ForEachChunk([&](auto chunk) {
+			auto jets = chunk.template Get<Jet>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < jets.size(); ++row)
+			{
+				Jet &jet = jets[row];
+				jet.runwayHold = 0;
+				jet.wasInLine = 0;
+				for (const RunwayLane &lane : runways.lanes)
+				{
+					if (lane.inUse == entities[row])
+					{
+						jet.runwayHold = 1;
+						jet.wasInLine = lane.wasInLine;
+					}
+					else if (lane.next == entities[row] && jet.runwayHold == 0)
+						jet.runwayHold = 2;
 				}
 			}
 		});

@@ -65,7 +65,8 @@ struct Turret
 	bool rotating{false};              // turning or pitching this tick (TURRET_ROTATE, its rotation sound)
 	bool enabled{true};                // TurretAI::m_enabled: off, it stays as it is (unless recentering) and aims at nothing
 	bool positiveSweep{true};          // TurretAI::m_positiveSweep: the side it sweeps to next
-	std::uint8_t reserved[6]{};        // no padding: checkpoints hold its bytes
+	bool onTemporary{false};           // aiming at its attack's temporary target this tick (AttackTarget::temporary)
+	std::uint8_t reserved[5]{};        // no padding: checkpoints hold its bytes
 };
 
 // TurretAI::isTurretInNaturalPosition.
@@ -93,7 +94,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Turret>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.turret";
-	static constexpr std::uint32_t Version = 5;
+	static constexpr std::uint32_t Version = 6; // 6: onTemporary
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Turret &value, StateHasher &hasher) noexcept
 	{
@@ -114,7 +115,7 @@ struct ComponentTraits<engine::gameplay::Turret>
 		hasher.AppendU64(value.scanAngle.units);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.state) | (d.allowsPitch ? 0x100u : 0u) | (d.firesWhileTurning ? 0x200u : 0u) |
 			(value.aligned ? 0x400u : 0u) | (value.rotating ? 0x800u : 0u) | (value.fireReady ? 0x1000u : 0u) | (value.enabled ? 0x2000u : 0u) |
-			(d.initiallyDisabled ? 0x4000u : 0u));
+			(d.initiallyDisabled ? 0x4000u : 0u) | (value.onTemporary ? 0x8000u : 0u));
 	}
 };
 template<>

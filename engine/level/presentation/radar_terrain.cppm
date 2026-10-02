@@ -9,7 +9,8 @@ export import engine.level.model.level;
 // the average of it and its neighbours: on land each sample's tile colour (the tile mipped to one pixel) lightened
 // toward white above the middle height (up to 95% at the highest) or darkened toward black below it (up to 60% at the
 // lowest); under water the radar water colour darkened by the depth below the water (from the water's height down to
-// the lowest height), from the neighbours under water. Rows run from world y = 0 up (the radar draws them flipped).
+// the lowest height), from the neighbours under water; over a standing bridge (its centre on one not broken) the
+// bridge's radar colour lightened or darkened for its deck's height, in every sample. Rows run from world y = 0 up (the radar draws them flipped).
 export namespace engine::level::presentation
 {
 inline constexpr std::uint32_t RadarCells = 128; // RADAR_CELL_WIDTH / RADAR_CELL_HEIGHT
@@ -28,6 +29,13 @@ struct RadarTerrain
 	float SampleY() const noexcept { return extentHeight / static_cast<float>(height); }
 };
 
+// A bridge as the radar shows it.
+struct RadarDeck
+{
+	std::array<float, 3> color{}; // its RadarColor (0..1)
+	float height{0};              // its deck's height (the average of its four corners)
+};
+
 struct RadarTerrainSource
 {
 	const Heightfield *terrain{nullptr};
@@ -36,6 +44,8 @@ struct RadarTerrainSource
 	std::array<float, 3> waterColor{140.0f / 255.0f, 140.0f / 255.0f, 1.0f}; // WaterTransparency RadarWaterColor
 	std::function<float(float, float)> ground;                            // getGroundHeight
 	std::function<std::optional<float>(float, float)> water;              // the water height over a point, if any
+	// A standing bridge over a point (none: no bridge there, or it is broken): its radar colour and its deck's height.
+	std::function<std::optional<RadarDeck>(float, float)> bridge;
 };
 
 namespace radar_detail
@@ -140,8 +150,10 @@ inline RadarTerrain BuildRadarTerrain(const RadarTerrainSource &source)
 			const auto [wx, wy] = worldOf(x, y);
 			std::array<float, 3> sum{};
 			int samples = 0;
+			// A standing bridge over the cell's point: the cell is the bridge's colour for the deck's height, all round.
+			const std::optional<RadarDeck> deck = source.bridge ? source.bridge(wx, wy) : std::nullopt;
 			const auto centreWater = source.water(wx, wy);
-			const bool underwater = centreWater && source.ground(wx, wy) < *centreWater;
+			const bool underwater = !deck && centreWater && source.ground(wx, wy) < *centreWater;
 			for (std::int32_t j = y - 1; j <= y + 1; ++j)
 				for (std::int32_t i = x - 1; i <= x + 1; ++i)
 				{
@@ -157,6 +169,8 @@ inline RadarTerrain BuildRadarTerrain(const RadarTerrainSource &source)
 							continue;
 						color = ShadeForHeight(source.waterColor, ground, *centreWater, *centreWater, radar.lowZ);
 					}
+					else if (deck)
+						color = ShadeForHeight(deck->color, deck->height, radar.terrainAverageZ, radar.highZ, radar.lowZ);
 					else
 						color = ShadeForHeight(TileColorAt(source, px, py), source.ground(px, py), radar.terrainAverageZ, radar.highZ, radar.lowZ);
 					for (std::size_t c = 0; c < 3; ++c)

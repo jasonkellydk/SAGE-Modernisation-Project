@@ -2,6 +2,7 @@ export module games.generalszh.hosts.game.shell_menu;
 import std;
 
 import games.generalszh.content.images.mapped_image_files;
+import games.generalszh.content.global.header_templates;
 import Engine.UI.WND;
 import Engine.UI.WND.Document;
 import Engine.UI.WND.Layout;
@@ -91,6 +92,8 @@ public:
 		for (WNDWindow &window : m_document.Mutable_Windows())
 			if (window.draw_callback == "W3DNoDraw")
 				window.flags |= static_cast<std::uint32_t>(WindowFlag::SeeThrough);
+		// HEADERTEMPLATE: a known template's font replaces the window's FONT (Data\English\HeaderTemplate.ini).
+		content::ApplyHeaderTemplates(m_document.Mutable_Windows(), content::ReadHeaderTemplates(files));
 		WNDDocumentResolveReport report;
 		m_document.Resolve_Images(m_catalog, report, false);
 		if (!m_document.Resolve_Fonts(report, fontScale))
@@ -111,6 +114,7 @@ public:
 
 	// The layout, for binding a view model to it (see Engine.UI.WND.Bindings).
 	Engine::UI::WND::WNDDocument &Document() noexcept { return m_document; }
+	const Engine::UI::WND::WNDDocument &Document() const noexcept { return m_document; }
 
 	// Layout units to screen pixels.
 	float ScaleX() const noexcept { return m_scaleX; }

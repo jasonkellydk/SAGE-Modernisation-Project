@@ -29,6 +29,8 @@ struct AiBuildListEntry
 	Engine::Math::Fixed angleDegrees;
 	bool initiallyBuilt{false};
 	bool automaticallyBuild{true};
+	std::string name;                            // Name: what the built structure is called (its script name)
+	Engine::Math::FixedVector2 rallyPointOffset; // RallyPointOffset: off its factory's natural rally point
 };
 
 struct AiBuildList
@@ -50,6 +52,9 @@ struct AiData
 	Engine::Math::Fixed teamResourcesToStart{Engine::Math::Fixed::FromRatio(1, 10)};
 	Engine::Math::Fixed maxRecruitRadius{Engine::Math::Fixed::FromInt(500)};
 	Engine::Math::Fixed skirmishBaseDefenseExtraDistance{Engine::Math::Fixed::FromInt(150)};
+	// SkirmishGroupFudgeDistance (TAiData m_skirmishGroupFudgeValue, default 0): a skirmish AI's team following a path as a
+	// team is there once its centre is within this times its member count of a member's goal (AIFollowWaypointPathState).
+	Engine::Math::Fixed skirmishGroupFudgeDistance;
 	Engine::Math::Fixed supplyCenterSafeRadius{Engine::Math::Fixed::FromInt(300)};
 	Engine::Math::Fixed attackPriorityDistanceModifier; // AttackPriorityDistanceModifier (0 as the original's default)
 	Engine::Math::Fixed rebuildDelaySeconds{Engine::Math::Fixed::FromInt(30)};
@@ -69,10 +74,32 @@ struct AiData
 	// ForceIdleMSEC (ms; TAiData's default a single frame): how long a unit that went idle waits before its first look.
 	std::optional<Engine::Math::Fixed> forceIdleMs;
 	bool rotateSkirmishBases{false};
+	// ForceSkirmishAI (Player::setPlayerType: a map's computer player gets the skirmish AI too), AIDozerBoredRadiusModifier
+	// (DozerAIUpdate::getBoredRange: a computer player's dozer looks this many times as far), AttackIgnoreInsignificantBuildings
+	// (getNextMoodTarget: AI::IGNORE_INSIGNIFICANT_BUILDINGS); TAiData's defaults No, 2 and No.
+	bool forceSkirmishAi{false};
+	Engine::Math::Fixed aiDozerBoredRadiusModifier{Engine::Math::Fixed::FromInt(2)};
+	bool attackIgnoreInsignificantBuildings{false};
+	// AICrushesInfantry (TAiData's default Yes): a computer player's vehicles set out to crush infantry (wantToSquishTarget,
+	// canPursue).
+	bool aiCrushesInfantry{true};
 	// EnableRepulsors (KINDOF_CAN_BE_REPULSED run from enemies and repulsors), RepulsedDistance (how much further than
 	// their vision they run).
 	bool enableRepulsors{false};
 	Engine::Math::Fixed repulsedDistance;
+	// AttackUsesLineOfSight (TAiData's default Yes): whether obstacles block the view of KINDOF_ATTACK_NEEDS_LINE_OF_SIGHT
+	// lookers (Pathfinder::isAttackViewBlockedByObstacle).
+	bool attackUsesLineOfSight{true};
+	// Group ground movement (AIGroup::friend_computeGroundPath / friend_moveInfantryToPos / friend_moveVehicleToPos):
+	// MinInfantryForGroup, MinVehiclesForGroup (TAiData's defaults 3 and 4), MinDistanceForGroup (100) and
+	// DistanceRequiresGroup (0).
+	std::int32_t minInfantryForGroup{3};
+	std::int32_t minVehiclesForGroup{4};
+	Engine::Math::Fixed minDistanceForGroup{Engine::Math::Fixed::FromInt(100)};
+	// WallHeight (TAiData m_wallHeight, default 0): the height of the wall made of WALK_ON_TOP_OF_WALL pieces (Pathfinder's
+	// m_wallHeight: the wall layer's height everywhere).
+	Engine::Math::Fixed wallHeight;
+	Engine::Math::Fixed distanceRequiresGroup;
 	// MaxRetaliationDistance / RetaliationFriendsRadius (TAiData's defaults 210 and 120): how far an aggressor may be for
 	// a human player's things to strike back, and how far round the victim they are called from.
 	Engine::Math::Fixed maxRetaliateDistance{Engine::Math::Fixed::FromInt(210)};
@@ -131,7 +158,9 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 		for (const engine::config::Node &field : root.children)
 		{
 			const std::string_view key = field.key;
-			if (key == "StructureSeconds")
+			if (key == "WallHeight")
+				fixed(field, data.wallHeight);
+			else if (key == "StructureSeconds")
 				fixed(field, data.structureSeconds);
 			else if (key == "TeamSeconds")
 				fixed(field, data.teamSeconds);
@@ -153,6 +182,8 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 				fixed(field, data.maxRecruitRadius);
 			else if (key == "SkirmishBaseDefenseExtraDistance")
 				fixed(field, data.skirmishBaseDefenseExtraDistance);
+			else if (key == "SkirmishGroupFudgeDistance")
+				fixed(field, data.skirmishGroupFudgeDistance);
 			else if (key == "SupplyCenterSafeRadius")
 				fixed(field, data.supplyCenterSafeRadius);
 			else if (key == "AttackPriorityDistanceModifier")
@@ -185,18 +216,43 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 				fixed(field, data.guardEnemyReturnScanRateMs);
 			else if (key == "EnableRepulsors")
 				data.enableRepulsors = yes(field, data.enableRepulsors);
+			else if (key == "MinInfantryForGroup" || key == "MinVehiclesForGroup")
+			{
+				// INI::parseInt.
+				Engine::Math::Fixed count = Engine::Math::Fixed::FromInt(key == "MinInfantryForGroup" ? data.minInfantryForGroup : data.minVehiclesForGroup);
+				fixed(field, count);
+				(key == "MinInfantryForGroup" ? data.minInfantryForGroup : data.minVehiclesForGroup) = static_cast<std::int32_t>(count.Floor());
+			}
+			else if (key == "MinDistanceForGroup")
+				fixed(field, data.minDistanceForGroup);
+			else if (key == "DistanceRequiresGroup")
+				fixed(field, data.distanceRequiresGroup);
+			else if (key == "AttackUsesLineOfSight")
+				data.attackUsesLineOfSight = yes(field, data.attackUsesLineOfSight);
 			else if (key == "RepulsedDistance")
 				fixed(field, data.repulsedDistance);
 			else if (key == "MaxRetaliationDistance")
 				fixed(field, data.maxRetaliateDistance);
 			else if (key == "RetaliationFriendsRadius")
 				fixed(field, data.retaliateFriendsRadius);
+			else if (key == "AICrushesInfantry")
+				data.aiCrushesInfantry = yes(field, data.aiCrushesInfantry);
+			else if (key == "ForceSkirmishAI")
+				data.forceSkirmishAi = yes(field, data.forceSkirmishAi);
+			else if (key == "AIDozerBoredRadiusModifier")
+				fixed(field, data.aiDozerBoredRadiusModifier);
+			else if (key == "AttackIgnoreInsignificantBuildings")
+				data.attackIgnoreInsignificantBuildings = yes(field, data.attackIgnoreInsignificantBuildings);
 			else if (key == "RotateSkirmishBases")
 				data.rotateSkirmishBases = yes(field, data.rotateSkirmishBases);
 			else if (key == "SideInfo" && !field.values.empty())
 			{
+				// AI::parseSideInfo: onto the side's info if it has one (a later AIData block, a map.ini override), each
+				// SkillSetN replacing set N alone.
 				AiSideInfo info;
 				info.side = std::string(field.Value());
+				if (const AiSideInfo *existing = data.Side(info.side))
+					info = *existing;
 				for (const engine::config::Node &entry : field.children)
 				{
 					if (entry.key == "ResourceGatherersEasy")
@@ -209,14 +265,21 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 						info.baseDefenseStructure = std::string(entry.Value());
 					else if (entry.key.starts_with("SkillSet"))
 					{
-						auto &set = info.skillSets.emplace_back();
+						const std::size_t slot = entry.key.size() == 9 && entry.key[8] >= '1' && entry.key[8] <= '5'
+							? static_cast<std::size_t>(entry.key[8] - '1') : info.skillSets.size();
+						if (info.skillSets.size() <= slot)
+							info.skillSets.resize(slot + 1);
+						auto &set = info.skillSets[slot];
+						set.clear();
 						for (const engine::config::Node &science : entry.children)
 							if (science.key == "Science" && !science.values.empty())
 								set.push_back(std::string(science.Value()));
 					}
 				}
-				std::erase_if(data.sides, [&](const AiSideInfo &old) { return old.side == info.side; });
-				data.sides.push_back(std::move(info));
+				if (AiSideInfo *existing = const_cast<AiSideInfo *>(data.Side(info.side)))
+					*existing = std::move(info);
+				else
+					data.sides.push_back(std::move(info));
 			}
 			else if (key == "SkirmishBuildList" && !field.values.empty())
 			{
@@ -232,6 +295,10 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 					{
 						if (value.key == "Location")
 							entry.location = ai_data_detail::Location(value);
+						else if (value.key == "Name" && !value.values.empty())
+							entry.name = std::string(value.Value());
+						else if (value.key == "RallyPointOffset")
+							entry.rallyPointOffset = ai_data_detail::Location(value);
 						else if (value.key == "Rebuilds")
 							integer(value, entry.rebuilds);
 						else if (value.key == "Angle")
@@ -243,7 +310,11 @@ inline AiData BindAiData(const engine::config::Document &document, engine::confi
 					}
 					list.structures.push_back(std::move(entry));
 				}
-				data.buildLists.push_back(std::move(list));
+				// TAiData::addFactionBuildList: a side's later list replaces its earlier one.
+				if (AiBuildList *existing = const_cast<AiBuildList *>(data.BuildList(list.side)))
+					*existing = std::move(list);
+				else
+					data.buildLists.push_back(std::move(list));
 			}
 		}
 	}

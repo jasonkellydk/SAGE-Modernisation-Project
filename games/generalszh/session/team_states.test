@@ -20,6 +20,10 @@ import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.construction.components.sale;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.resources.relationships;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
 import games.generalszh.content.loading.game_content;
@@ -379,6 +383,98 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_maps_computer_player_rebuilds_what_it_lost)
 	BOOST_TEST(slot.rebuilds == 0);
 }
 
+// Player::setPlayerType (ForceSkirmishAI; shipped No): with it a map's own computer player gets the skirmish AI
+// (AISkirmishPlayer::newMap: its side's skirmish build list from AIData, laid out about its command centre); without it
+// the map's AI (AIPlayer::newMap: the map's plan). The shell map's PlyrAmerica both ways.
+BOOST_AUTO_TEST_CASE(legacy_parity_force_skirmish_ai_gives_a_maps_computer_player_the_skirmish_ai)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	BOOST_TEST(!shell.game.aiData.forceSkirmishAi);
+	content::GameContent forced = shell.game;
+	forced.aiData.forceSkirmishAi = true;
+	const content::AiBuildList *plan = forced.aiData.BuildList("America");
+	BOOST_TEST_REQUIRE(plan != nullptr);
+	for (const bool force : {false, true})
+	{
+		session::Session game(shell.map->level, force ? forced : shell.game, {42, 0, {}});
+		const std::uint32_t player = *game.Teams().FindPlayer("PlyrAmerica");
+		const auto *ai = game.World().Resource<generalszh::gameplay::AiPlayers>().Of(player);
+		BOOST_TEST_REQUIRE(ai != nullptr);
+		BOOST_TEST(ai->skirmish == force);
+		if (force)
+		{
+			BOOST_TEST(ai->side == "America");
+			BOOST_TEST_REQUIRE(ai->buildList.size() == plan->structures.size());
+			for (std::size_t index = 0; index < plan->structures.size(); ++index)
+				BOOST_TEST(ai->buildList[index].structure == plan->structures[index].structure);
+		}
+	}
+}
+
+// legacy_parity: Object::setTeam / setOrRestoreTeam / onCapture (EA's CnC_Generals_Zero_Hour Object.cpp, which wins over the
+// fork's ally exception and dozer cancelAllTasks) on the shell map (PlyrAmerica and PlyrChina, enemies). Taken over by another
+// player, a dozer on its way stops (aiIdle(CMD_FROM_AI)), its task kept; moved to another team of its own player it keeps
+// going (oldOwner == newOwner: no idle). Given to a dead player's team, it goes
+// to the neutral player's default team instead (isPlayerActive). A skirmish computer player that takes a faction
+// structure sells it (isSkirmishAIPlayer && isFactionStructure: sellObject).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_captured_unit_changes_hands_as_set_team_does)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const std::uint32_t america = *game.Teams().FindPlayer("PlyrAmerica");
+	const std::uint32_t china = *game.Teams().FindPlayer("PlyrChina");
+	const std::uint32_t americaTeam = *game.Teams().DefaultTeam(america);
+	const std::uint32_t chinaTeam = *game.Teams().DefaultTeam(china);
+	BOOST_TEST_REQUIRE((world.Resource<gp::Relationships>().Between(gp::Relationships::NoTeam, america, chinaTeam, china) != gp::Relationship::Allies));
+	Engine::Math::FixedVector2 at;
+	for (const auto &placement : shell.map->level.placements)
+		if (placement.type == "AmericaCommandCenter")
+			at = placement.position.XY();
+	const Engine::Math::FixedVector2 aside{Engine::Math::Fixed::FromInt(200), Engine::Math::Fixed{}};
+	// An enemy's capture.
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", at + aside, {}, americaTeam);
+	BOOST_TEST_REQUIRE(world.IsAlive(dozer));
+	*world.Get<gp::MoveOrder>(dozer) = gp::MoveToPoint(at + aside + aside);
+	if (!world.Has<gp::Builder>(dozer))
+		world.Add<gp::Builder>(dozer);
+	gameplay::ChangeTeam(game.Game(), dozer, chinaTeam);
+	BOOST_TEST(world.Get<gp::Owner>(dozer)->player == china);
+	BOOST_TEST((world.Get<gp::MoveOrder>(dozer)->mode == gp::MoveMode::Idle));
+	BOOST_TEST(world.Has<gp::Builder>(dozer)); // EA's onCapture cancels no dozer task
+	// Another team of its own player.
+	std::optional<std::uint32_t> otherAmerican;
+	for (std::uint32_t team = 0; team < game.Teams().TeamCount(); ++team)
+		if (team != americaTeam && game.Teams().TeamAt(team).owner == america)
+			otherAmerican = team;
+	if (otherAmerican)
+	{
+		const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", at + aside, {}, americaTeam);
+		*world.Get<gp::MoveOrder>(humvee) = gp::MoveToPoint(at + aside + aside);
+		gameplay::ChangeTeam(game.Game(), humvee, *otherAmerican);
+		BOOST_TEST((world.Get<gp::MoveOrder>(humvee)->mode == gp::MoveMode::Point));
+	}
+	// A dead player's team: the neutral player's instead.
+	game.Game().roster.PlayerAt(china).dead = true;
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at + aside, {}, americaTeam);
+	gameplay::ChangeTeam(game.Game(), ranger, chinaTeam);
+	BOOST_TEST(game.Teams().PlayerAt(world.Get<gp::Owner>(ranger)->player).name.empty());
+	game.Game().roster.PlayerAt(china).dead = false;
+	// A skirmish computer player's capture of a faction structure: sold.
+	auto *ai = world.Resource<gameplay::AiPlayers>().Of(china);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	ai->skirmish = true;
+	const ecs::Entity barracks = game.Place("AmericaBarracks", at - aside - aside, {}, americaTeam);
+	BOOST_TEST_REQUIRE(world.IsAlive(barracks));
+	gameplay::ChangeTeam(game.Game(), barracks, chinaTeam);
+	BOOST_TEST(world.Has<gp::Sale>(barracks));
+}
+
 // Legacy parity (ScriptEngine::isSpeechComplete / isAudioComplete): the first time a speech is asked about it is done
 // its length in ticks later (45 here: from tick 10, done on tick 55, not 54); once done it is taken off, so asking again
 // starts it afresh; speech and sounds are kept apart; a checkpoint keeps what is waiting.
@@ -498,6 +594,185 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_script_freezes_time_while_the_scripts_run_o
 	BOOST_TEST((seen == std::vector<std::uint64_t>{0, 0, 0, 0, 0, 1, 2}));
 	BOOST_TEST(game.ScriptCounter("runs") == 7);
 	BOOST_TEST(!game.TimeFrozen());
+}
+
+// ScriptActions::doSetMoney / doGiveMoney (EA ScriptActions.cpp; Money::withdraw / deposit, each heard by its player
+// through Money::triggerAudioEvent unless it moves nothing): PLAYER_SET_MONEY 5000 withdraws all there is (heard when there
+// was any) and deposits 5000 (heard: EA's deposit(money); the fork's FALSE is not followed); PLAYER_GIVE_MONEY -300
+// withdraws 300 (heard), +200 deposits 200 (heard): 4900 at the end of the tick, the sounds in that order.
+BOOST_AUTO_TEST_CASE(legacy_parity_script_money_is_set_given_and_heard)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	std::size_t seat = 0;
+	for (; seat < level.scenario.participants.size(); ++seat)
+		if (!level.scenario.participants[seat].properties.Get<std::string>("playerName").value_or("").empty())
+			break;
+	BOOST_TEST_REQUIRE(seat < level.scenario.participants.size());
+	const std::string name = *level.scenario.participants[seat].properties.Get<std::string>("playerName");
+	const auto amount = [](level::ScriptCall call, std::int64_t value) {
+		level::ScriptParameter money;
+		money.integer = value;
+		money.number = Engine::Math::Fixed::FromInt(value);
+		call.parameters.push_back(money);
+		return call;
+	};
+	level::Script cash;
+	cash.name = "cash";
+	cash.oneShot = true;
+	cash.conditions = {{Call("CONDITION_TRUE")}};
+	cash.actions = {amount(Call("PLAYER_SET_MONEY", {"<This Player>"}), 5000), amount(Call("PLAYER_GIVE_MONEY", {"<This Player>"}), -300),
+		amount(Call("PLAYER_GIVE_MONEY", {"<This Player>"}), 200)};
+	level.scenario.participants[seat].scripts.scripts.push_back(cash);
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto player = game.Teams().FindPlayer(name);
+	BOOST_TEST_REQUIRE(player.has_value());
+	const std::int64_t before = game.World().Resource<engine::gameplay::PlayerMoney>().Balance(*player);
+	game.Tick();
+	const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+	BOOST_TEST(money.Balance(*player) == 4900);
+	using Kind = engine::gameplay::MoneyTransaction::Kind;
+	std::vector<Kind> heard;
+	for (const auto &transaction : money.Transactions())
+		if (transaction.player == *player)
+			heard.push_back(transaction.kind);
+	std::vector<Kind> expected;
+	if (before > 0)
+		expected.push_back(Kind::Withdraw);
+	expected.insert(expected.end(), {Kind::Deposit, Kind::Withdraw, Kind::Deposit});
+	BOOST_TEST((heard == expected));
+}
+
+// ScriptActions::doBuildTeam -> Player::buildSpecificTeam -> AIPlayer::buildSpecificAITeam(priorityBuild true) (EA
+// AIPlayer.cpp): the shell map's own BUILD_TEAM team, built by script on tick 1 for its computer player, goes to the front
+// of its build queue flagged priorityBuild, as a new inactive instance, with work orders prepended slot by slot (the slots
+// with a type and a MaxUnits): first each slot's optional count (MaxUnits - MinUnits, when above none), then each slot's
+// required count (MinUnits) in front of them: the required ones in reverse slot order, then the optional ones.
+BOOST_AUTO_TEST_CASE(legacy_parity_build_team_queues_its_work_orders_first)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	engine::level::Level level = shell.map->level;
+	// The team the shell map's scripts build.
+	std::string teamName;
+	std::size_t seat = 0;
+	for (std::size_t participant = 0; participant < level.scenario.participants.size() && teamName.empty(); ++participant)
+		for (const auto &script : level.scenario.participants[participant].scripts.scripts)
+		{
+			for (const auto &call : script.actions)
+				if (call.name == "BUILD_TEAM" && !call.parameters.empty())
+				{
+					teamName = call.parameters.front().text;
+					seat = participant;
+					break;
+				}
+			if (!teamName.empty())
+				break;
+		}
+	BOOST_TEST_REQUIRE(!teamName.empty());
+	level::Script build;
+	build.name = "buildNow";
+	build.oneShot = true;
+	build.conditions = {{Call("CONDITION_TRUE")}};
+	build.actions = {Call("BUILD_TEAM", {teamName})};
+	auto &own = level.scenario.participants[seat].scripts.scripts;
+	own.insert(own.begin(), build);
+	const engine::level::Properties *info = nullptr;
+	for (const auto &group : level.scenario.groups)
+		if (group.Get<std::string>("teamName").value_or("") == teamName)
+			info = &group;
+	BOOST_TEST_REQUIRE(info != nullptr);
+	struct Wanted
+	{
+		std::string type;
+		std::int64_t count;
+		bool mandatory;
+	};
+	std::vector<Wanted> expected;
+	const auto slots = [&](auto &&each) {
+		for (int slot = 1; slot <= 7; ++slot)
+		{
+			const std::string type = info->Get<std::string>("teamUnitType" + std::to_string(slot)).value_or("");
+			const std::int64_t most = info->Get<std::int64_t>("teamUnitMaxCount" + std::to_string(slot)).value_or(0);
+			const std::int64_t least = info->Get<std::int64_t>("teamUnitMinCount" + std::to_string(slot)).value_or(0);
+			if (type.empty() || most <= 0 || shell.game.objects.Find(type) == nullptr)
+				continue;
+			each(type, least, most);
+		}
+	};
+	slots([&](const std::string &type, std::int64_t least, std::int64_t most) {
+		if (most - least > 0)
+			expected.insert(expected.begin(), Wanted{type, most - least, false});
+	});
+	slots([&](const std::string &type, std::int64_t least, std::int64_t) { expected.insert(expected.begin(), Wanted{type, least, true}); });
+	session::Session game(level, shell.game, {42, 0, {}});
+	const auto prototype = game.Teams().FindTeam(teamName);
+	BOOST_TEST_REQUIRE(prototype.has_value());
+	const std::uint32_t player = game.Teams().TeamAt(*prototype).owner;
+	game.Tick();
+	const auto *ai = game.World().Resource<generalszh::gameplay::AiPlayers>().Of(player);
+	BOOST_TEST_REQUIRE(ai != nullptr);
+	BOOST_TEST_REQUIRE(!ai->buildQueue.empty());
+	const auto &entry = ai->buildQueue.front();
+	BOOST_TEST(entry.priorityBuild);
+	BOOST_TEST(entry.team != *prototype); // a new instance
+	BOOST_TEST(game.Teams().PrototypeOf(entry.team) == *prototype);
+	BOOST_TEST_REQUIRE(entry.orders.size() == expected.size());
+	for (std::size_t index = 0; index < expected.size(); ++index)
+	{
+		BOOST_TEST(game.Game().templates.DefinitionAt(entry.orders[index].definition).name == expected[index].type);
+		BOOST_TEST(entry.orders[index].required == expected[index].count);
+		BOOST_TEST(entry.orders[index].mandatory == expected[index].mandatory);
+	}
+}
+
+// Player::killPlayer (EA Player.cpp, ScriptActions::doKillPlayer): after its teams are evacuated and killed the player is
+// dead (m_isPlayerDead) and its money is withdrawn to nothing (Money::withdraw: heard); in a single-player game a
+// computer player is left alive (m_isPlayerDead FALSE again) with its money, to be used later in the mission.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_killed_player_is_dead_and_penniless_unless_a_solo_computer)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	const auto run = [&](bool solo) {
+		engine::level::Level level = shell.map->level;
+		std::size_t seat = 0;
+		for (; seat < level.scenario.participants.size(); ++seat)
+			if (!level.scenario.participants[seat].properties.Get<std::string>("playerName").value_or("").empty())
+				break;
+		BOOST_TEST_REQUIRE(seat < level.scenario.participants.size());
+		const std::string name = *level.scenario.participants[seat].properties.Get<std::string>("playerName");
+		level::ScriptCall give = Call("PLAYER_SET_MONEY", {"<This Player>"});
+		level::ScriptParameter amount;
+		amount.integer = 1000;
+		amount.number = Engine::Math::Fixed::FromInt(1000);
+		give.parameters.push_back(amount);
+		level::Script kill;
+		kill.name = "kill";
+		kill.oneShot = true;
+		kill.conditions = {{Call("CONDITION_TRUE")}};
+		kill.actions = {give, Call("PLAYER_KILL", {"<This Player>"})};
+		auto &own = level.scenario.participants[seat].scripts.scripts;
+		own.insert(own.begin(), kill);
+		session::SessionOptions options{42, 0, {}};
+		options.singlePlayer = solo;
+		session::Session game(level, shell.game, options);
+		const auto player = game.Teams().FindPlayer(name);
+		BOOST_TEST_REQUIRE(player.has_value());
+		BOOST_TEST_REQUIRE(!game.Teams().PlayerAt(*player).human);
+		game.Tick();
+		const auto &money = game.World().Resource<engine::gameplay::PlayerMoney>();
+		return std::pair{game.Teams().PlayerAt(*player).dead, money.Balance(*player)};
+	};
+	const auto [dead, left] = run(false);
+	BOOST_TEST(dead);
+	BOOST_TEST(left == 0);
+	const auto [soloDead, soloLeft] = run(true);
+	BOOST_TEST(!soloDead);
+	BOOST_TEST(soloLeft == 1000);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

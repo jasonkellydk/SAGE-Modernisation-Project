@@ -301,4 +301,169 @@ BOOST_AUTO_TEST_CASE(legacy_parity_inventory_buttons_show_riders_and_let_one_out
 	BOOST_TEST((std::get<commands::Evacuate>(sent[1]).units == std::vector<ecs::Entity>{humvee}));
 }
 
+// ControlBar::processCommandUI's GUI_COMMAND_HACK_INTERNET (the Hacker's Command_HackInternet): MSG_INTERNET_HACK at once
+// for the selection, no target waited for.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_hack_internet_button_orders_the_hack)
+{
+	std::vector<commands::GameCommand> sent;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	content::CommandButtonContent hack;
+	hack.name = "Command_HackInternet";
+	hack.command = content::ButtonCommand::Other;
+	hack.commandName = "HACK_INTERNET";
+	ecs::Entity hacker;
+	hacker.index = 4;
+	hacker.generation = 1;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = hacker;
+	state.slots[0] = {&hack, gameplay::ButtonState::Available, "SNHackInternet"};
+	bar.Apply(state);
+	BOOST_TEST(bar.commandClicked[0].Execute());
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(std::holds_alternative<commands::HackInternet>(sent[0]));
+	BOOST_TEST((std::get<commands::HackInternet>(sent[0]).units == std::vector<ecs::Entity>{hacker}));
+}
+
+// ControlBar::setControlCommand's setCommandBarBorder (ButtonBorderType BUILD / UPGRADE / ACTION / SYSTEM in the scheme's
+// ButtonBorderBuildColor / UpgradeColor / ActionColor / SystemColor: updateCommandBarBorderColors; NONE: no border) and
+// its hotkey (HotKeyManager::searchHotKey(TextLabel): the letter after '&' in its text, addHotKey keeping the first of a
+// key); HotKeyManager::executeHotKey: a shown, enabled button is clicked with a GUIClick, a disabled one gets a
+// GUIClickDisabled and nothing else, a hidden one nothing; SCRIPT_ONLY buttons have no hotkey.
+BOOST_AUTO_TEST_CASE(legacy_parity_command_buttons_take_their_border_and_hotkey)
+{
+	std::vector<commands::GameCommand> sent;
+	std::vector<std::string> sounds;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	bar.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	bar.SetBorderColors(0xFF00FF00u, 0xFF0000FFu, 0xFFFF0000u, 0xFFFFFFFFu);
+	bar.SetLabels([](std::string_view label) -> std::u16string {
+		if (label == "CONTROLBAR:Worker")
+			return u"&Worker";
+		if (label == "CONTROLBAR:Scorpion")
+			return u"&Scorpion Tank";
+		if (label == "CONTROLBAR:Shoes")
+			return u"Worker &Shoes";
+		if (label == "CONTROLBAR:Other")
+			return u"&Wait";
+		return u"";
+	});
+	auto worker = Button(content::ButtonCommand::UnitBuild, "GLAInfantryWorker", "SUWorker");
+	worker.textLabel = "CONTROLBAR:Worker";
+	worker.borderType = "BUILD";
+	auto tank = Button(content::ButtonCommand::UnitBuild, "GLATankScorpion", "SUScorpion");
+	tank.textLabel = "CONTROLBAR:Scorpion";
+	tank.borderType = "ACTION";
+	auto shoes = Button(content::ButtonCommand::PlayerUpgrade, "Upgrade_GLAWorkerShoes", "SUShoes");
+	shoes.textLabel = "CONTROLBAR:Shoes";
+	shoes.borderType = "UPGRADE";
+	auto clash = Button(content::ButtonCommand::Stop, "", "SSStop");
+	clash.textLabel = "CONTROLBAR:Other"; // 'w' again: the worker's keeps it
+	clash.borderType = "NONE";
+	auto scripted = Button(content::ButtonCommand::Stop, "", "SSStop");
+	scripted.textLabel = "CONTROLBAR:Shoes";
+	scripted.options = content::button_option::ScriptOnly;
+	ecs::Entity factory;
+	factory.index = 4;
+	factory.generation = 1;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = factory;
+	state.slots[0] = {&scripted, gameplay::ButtonState::Hidden, "SSStop"};
+	state.slots[1] = {&worker, gameplay::ButtonState::Available, "SUWorker"};
+	state.slots[2] = {&tank, gameplay::ButtonState::Restricted, "SUScorpion"};
+	state.slots[3] = {&shoes, gameplay::ButtonState::Hidden, "SUShoes"};
+	state.slots[4] = {&clash, gameplay::ButtonState::Available, "SSStop"};
+	bar.Apply(state);
+	BOOST_TEST(bar.commandBorder[1].Get() == 0xFF00FF00u);
+	BOOST_TEST(bar.commandBorder[2].Get() == 0xFFFF0000u);
+	BOOST_TEST(bar.commandBorder[4].Get() == 0u);
+	BOOST_TEST(bar.commandBorder[3].Get() == 0u); // hidden
+	// 'W' (any case): the worker, clicked.
+	BOOST_TEST(bar.PressHotKey('W'));
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST(std::get<commands::QueueUnit>(sent[0]).unit == "GLAInfantryWorker");
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "GUIClick");
+	// 's': the tank, restricted: a disabled click only.
+	BOOST_TEST(!bar.PressHotKey('s'));
+	BOOST_TEST(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1] == "GUIClickDisabled");
+	// 's' was first the tank's; the hidden shoes upgrade's key is its own ('s' taken): nothing more. A key no button
+	// marks: nothing.
+	BOOST_TEST(!bar.PressHotKey('q'));
+	BOOST_TEST(sounds.size() == 2u);
+	BOOST_TEST(sent.size() == 1u);
+}
+
+// ControlBar::processCommandUI: a button's UnitSpecificSound plays as it is pressed; a button needing a target with
+// USES_MINE_CLEARING_WEAPONSET (Command_DisarmMinesAtPosition) first sends MSG_SET_MINE_CLEARING_DETAIL for the
+// selection, then waits for its target. GUI_COMMAND_SPECIAL_POWER_CONSTRUCT (Command_SneakAttack) places its Object as a
+// build (placeBuildAvailable) for its power, ordering nothing yet.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_pressed_button_plays_its_sound_and_readies_mine_clearing_or_placement)
+{
+	std::vector<commands::GameCommand> sent;
+	std::vector<std::string> sounds;
+	ControlBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	bar.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	content::CommandButtonContent disarm;
+	disarm.name = "Command_DisarmMinesAtPosition";
+	disarm.command = content::ButtonCommand::Other;
+	disarm.commandName = "FIRE_WEAPON";
+	disarm.options = content::button_option::NeedTarget | content::button_option::NeedTargetPos | content::button_option::OkForMultiSelect |
+		content::button_option::UsesMineClearingWeaponSet;
+	disarm.unitSpecificSound = "DozerVoiceDisarm";
+	content::CommandButtonContent sneak;
+	sneak.name = "Command_SneakAttack";
+	sneak.command = content::ButtonCommand::SpecialPower;
+	sneak.commandName = "SPECIAL_POWER_CONSTRUCT";
+	sneak.specialPower = "SuperweaponSneakAttack";
+	sneak.object = "GLASneakAttackTunnelNetwork";
+	sneak.options = content::button_option::NeedScience;
+	ecs::Entity dozer;
+	dozer.index = 7;
+	dozer.generation = 2;
+	ControlBarState state;
+	state.hasPlayer = true;
+	state.selected = dozer;
+	state.slots[0] = {&disarm, gameplay::ButtonState::Available, "SSClearMines_L"};
+	state.slots[1] = {&sneak, gameplay::ButtonState::Available, "SUSneakAttack"};
+	bar.Apply(state);
+	BOOST_TEST(bar.commandClicked[0].Execute());
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "DozerVoiceDisarm");
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(std::holds_alternative<commands::SetMineClearingDetail>(sent[0]));
+	BOOST_TEST((std::get<commands::SetMineClearingDetail>(sent[0]).units == std::vector<ecs::Entity>{dozer}));
+	BOOST_TEST(bar.targeting.Get() == "Command_DisarmMinesAtPosition");
+	BOOST_TEST(bar.commandClicked[1].Execute());
+	BOOST_TEST(sent.size() == 1u);
+	BOOST_TEST(bar.placing.Get() == "GLASneakAttackTunnelNetwork");
+	BOOST_TEST(bar.placingPower == "SuperweaponSneakAttack");
+	BOOST_TEST(bar.placingOptions == content::button_option::NeedScience);
+}
+
+// legacy_parity: CommandXlat.cpp MSG_META_TOGGLE_CONTROL_BAR (F9) -> ControlBarCallback.cpp ToggleControlBar: in a game
+// (not a replay played back) the control bar's parent window is hidden when it shows and shown when hidden, staying so
+// as the selection changes; a replay leaves it be.
+BOOST_AUTO_TEST_CASE(legacy_parity_f9_toggles_the_control_bar)
+{
+	ControlBarViewModel bar([](commands::GameCommand) {}, [](std::int64_t) { return std::u16string(); });
+	ControlBarState state;
+	state.hasPlayer = true;
+	bar.Apply(state);
+	BOOST_TEST(bar.shown.Get());
+	bar.ToggleHidden(false);
+	BOOST_TEST(!bar.shown.Get());
+	bar.Apply(state);
+	BOOST_TEST(!bar.shown.Get());
+	bar.ToggleHidden(true);
+	BOOST_TEST(!bar.shown.Get());
+	bar.ToggleHidden(false);
+	BOOST_TEST(bar.shown.Get());
+	bar.Apply(state);
+	BOOST_TEST(bar.shown.Get());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

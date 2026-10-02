@@ -1,0 +1,67 @@
+#include <boost/test/unit_test.hpp>
+
+import std;
+
+import games.generalszh.presentation.rendering.building_occlusion;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(building_occlusion)
+
+// legacy_parity: W3DScene.cpp playerIndexToColorIndex: the colour index's four bits mirrored (1 -> 8, 2 -> 4, 3 -> 12,
+// 4 -> 2, 8 -> 1, 15 -> 15).
+BOOST_AUTO_TEST_CASE(legacy_parity_colour_indices_are_mirrored_bits)
+{
+	BOOST_TEST(PlayerIndexToColorIndex(1) == 8u);
+	BOOST_TEST(PlayerIndexToColorIndex(2) == 4u);
+	BOOST_TEST(PlayerIndexToColorIndex(3) == 12u);
+	BOOST_TEST(PlayerIndexToColorIndex(4) == 2u);
+	BOOST_TEST(PlayerIndexToColorIndex(8) == 1u);
+	BOOST_TEST(PlayerIndexToColorIndex(15) == 15u);
+}
+
+// legacy_parity: RTS3DScene::flushOccludedObjectsIntoStencil. With an occluder and occludees of players 3 and 1 in view:
+// the occludees drawn first, player 1's (colour index mirror(1) = 8: stencil 8 << 3 = 64), then player 3's (mirror(2) = 4:
+// 32), then the rest, then the occluders (0xFF, top bit); the quads after: player 1's colour where the stencil is
+// 64 | 0x80 = 192, player 3's at 32 | 0x80 = 160, each the player's colour x OccludedColorLuminanceScale (0.5) at alpha
+// 0.5. Without an occluder (or an occludee) in view, nothing is planned (all drawn as usual).
+BOOST_AUTO_TEST_CASE(legacy_parity_occludees_then_the_rest_then_occluders_then_colours)
+{
+	std::vector<ObjectInstance> instances(5);
+	instances[0].occlusion = 2;
+	instances[0].occludedPlayer = 3;
+	instances[0].occludedColor = {0.0f, 0.0f, 1.0f, 1.0f};
+	instances[1].occlusion = 1;
+	instances[2].occlusion = 2;
+	instances[2].occludedPlayer = 1;
+	instances[2].occludedColor = {1.0f, 0.4f, 0.0f, 1.0f};
+	instances[3].occlusion = 0;
+	instances[4].occlusion = 2;
+	instances[4].occludedPlayer = 3;
+	instances[4].occludedColor = {0.0f, 0.0f, 1.0f, 1.0f};
+	const OcclusionPlan plan = PlanOcclusion(instances, 0.5f);
+	BOOST_TEST_REQUIRE(plan.active);
+	BOOST_TEST_REQUIRE(plan.order.size() == 5u);
+	BOOST_TEST(plan.order[0].instance == 2u);
+	BOOST_TEST(plan.order[0].reference == 64u);
+	BOOST_TEST(plan.order[1].instance == 0u);
+	BOOST_TEST(plan.order[1].reference == 32u);
+	BOOST_TEST(plan.order[2].instance == 4u);
+	BOOST_TEST(plan.order[3].instance == 3u);
+	BOOST_TEST((plan.order[3].group == OcclusionPlan::Group::Plain));
+	BOOST_TEST(plan.order[4].instance == 1u);
+	BOOST_TEST((plan.order[4].group == OcclusionPlan::Group::Occluder));
+	BOOST_TEST(plan.order[4].reference == 0xFFu);
+	BOOST_TEST_REQUIRE(plan.quads.size() == 2u);
+	BOOST_TEST(plan.quads[0].reference == 192u);
+	BOOST_TEST((plan.quads[0].color == std::array<float, 4>{0.5f, 0.2f, 0.0f, 0.5f}));
+	BOOST_TEST(plan.quads[1].reference == 160u);
+	BOOST_TEST((plan.quads[1].color == std::array<float, 4>{0.0f, 0.0f, 0.5f, 0.5f}));
+
+	std::vector<ObjectInstance> alone(2);
+	alone[0].occlusion = 2;
+	alone[1].occlusion = 0;
+	BOOST_TEST(!PlanOcclusion(alone, 0.5f).active);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

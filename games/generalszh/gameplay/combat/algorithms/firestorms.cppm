@@ -7,6 +7,8 @@ export import games.generalszh.gameplay.effects.resources.effect_cues;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import games.generalszh.content.combat.combat_catalog;
 import engine.gameplay.common.spatial.resources.spatial_index;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // The tick's FirestormEvents, after the step: its FXList on it (doFXObj); its scorch mark; and doDamageScan: everything
 // within its bounding circle (FROM_BOUNDINGSPHERE_2D: to their bounding circles), no higher than MaxHeightForDamage over
@@ -38,6 +40,9 @@ inline void ApplyFirestorms(GameWorld &game)
 		case Kind::Effects:
 			if (cues != nullptr && !config->fx.empty())
 				cues->list.push_back({config->fx, event.at, event.firestorm});
+			// Its effects fired: its player's academy records a firestorm made (recordFirestormCreated).
+			if (const auto *owner = world.IsAlive(event.firestorm) ? world.Get<gp::Owner>(event.firestorm) : nullptr)
+				RecordAcademy(game, owner->player, AcademyCount::FirestormCreated);
 			break;
 		case Kind::Scorch:
 			if (cues != nullptr && event.radius > Engine::Math::Fixed{})

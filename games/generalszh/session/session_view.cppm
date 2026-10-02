@@ -1,6 +1,7 @@
 export module games.generalszh.session.session_view;
 import std;
 export import games.generalszh.gameplay.orders.algorithms.command_availability;
+export import games.generalszh.gameplay.orders.algorithms.build_tooltip_facts;
 
 export import engine.level.model.level;
 export import engine.jobs.job_system;
@@ -193,6 +194,11 @@ public:
 	// PlayerTemplate's Side: the control bar scheme's).
 	virtual std::string CommandSetOf(ecs::Entity entity) const = 0;
 	virtual gameplay::ButtonState CommandAvailability(ecs::Entity entity, const content::CommandButtonContent &button) = 0;
+	// What the build tooltip asks the game of a command button for a player and its first selected object
+	// (ControlBar::populateBuildTooltipLayout).
+	virtual gameplay::BuildTooltipFacts BuildTooltip(std::uint32_t player, ecs::Entity selected, const content::CommandButtonContent &button) = 0;
+	// AIUpdateInterface::isQuickPathAvailable (or a CLIFF locomotor over a cliff cell) for the move hint; false without an AI.
+	virtual bool QuickPathAvailable(ecs::Entity unit, Engine::Math::FixedVector2 to) = 0;
 	virtual std::string PlayerSide(std::uint32_t player) const = 0;
 	// Every player's score keeping, by player index (the score screen's).
 	virtual std::vector<PlayerScore> Scores() const = 0;
@@ -205,8 +211,10 @@ public:
 	// The simulation's tick (TheGameLogic->getFrame()).
 	virtual std::uint64_t CurrentTick() const noexcept = 0;
 	// Whether `builder` may put up `structure` at `at` facing `facing` now (BuildAssistant::canMakeUnit and
-	// isLocationLegalToBuild), and a definition's index by name (none: unknown).
-	virtual bool CanBuildAt(ecs::Entity builder, std::string_view structure, Engine::Math::FixedVector2 at, Engine::Math::TurnAngle facing) = 0;
+	// isLocationLegalToBuild), and a definition's index by name (none: unknown). `specialPowerConstruct`: placed for the
+	// builder's SPECIAL_POWER_CONSTRUCT button (canMakeUnit's special case).
+	virtual bool CanBuildAt(ecs::Entity builder, std::string_view structure, Engine::Math::FixedVector2 at, Engine::Math::TurnAngle facing,
+		bool specialPowerConstruct) = 0;
 	virtual std::optional<std::uint32_t> DefinitionIndex(std::string_view name) = 0;
 	// Whether a player's order may fire `power` of `source` at `target` now (canDoSpecialPowerAtObject with its source's
 	// module fully ready).
@@ -223,6 +231,9 @@ public:
 	virtual std::int32_t ReadyShortcutPowers(std::uint32_t player, std::string_view type) = 0;
 	virtual std::optional<ecs::Entity> AnyObjectOfType(std::uint32_t player, const std::string &object) = 0;
 	virtual std::vector<ecs::Entity> ObjectsOfType(std::uint32_t player, const std::string &object) = 0;
+	// CommandXlat's viewCommandCenter (VIEW_COMMAND_CENTER) and iNeedAHero (SELECT_HERO) among the player's objects.
+	virtual std::optional<ecs::Entity> CommandCenterToView(std::uint32_t player) = 0;
+	virtual std::optional<ecs::Entity> HeroToSelect(std::uint32_t player) const = 0;
 	virtual std::optional<ecs::Entity> MostReadyPowerOfType(std::uint32_t player, const std::string &object) = 0;
 	virtual std::size_t WorkerCount() const noexcept = 0;
 };

@@ -4,6 +4,7 @@ import std;
 export import engine.config.binding.schema;
 export import games.generalszh.content.objects.object_definition;
 export import games.generalszh.content.global.radius_decal;
+import games.generalszh.content.upgrades.upgrade_content;
 
 // Special powers as content: which power a command button fires
 // ("CommandButton" blocks, Data/INI/CommandButton.ini), which object
@@ -103,6 +104,9 @@ struct OclPower
 	// UpgradeOCL: a science and the creation list it gives the power instead, in module order (findOCL: the first its
 	// player has; none: `creationList`).
 	std::vector<std::pair<std::string, std::string>> upgrades;
+	// ReferenceObject: what the power's creation list finally makes (OCLSpecialPower::getReferenceThingTemplate; the
+	// sneak attack's tunnel network), for a computer player's placement (calcClosestConstructionZoneLocation). Empty: none.
+	std::string referenceObject;
 };
 
 // A SpecialPower block (SpecialPowerTemplate): its type (Enum), how long it recharges (ReloadTime, in ticks), the
@@ -123,6 +127,8 @@ struct SpecialPowerTemplate
 	Engine::Math::Fixed viewObjectRange;
 	std::string initiateSound;           // InitiateSound: on the source as it fires
 	std::string initiateAtLocationSound; // InitiateAtLocationSound: where it lands
+	// AcademyClassify (parseIndexList over TheAcademyClassificationTypeNames: ACT_NONE 0, ACT_UPGRADE_RADAR 1, ACT_SUPERPOWER 2).
+	std::uint8_t academyClassification{0};
 	std::uint64_t detectionTicks{30 * 10}; // DetectionTime (ms rounded up; default 10 seconds): how long a defector hides
 };
 
@@ -158,11 +164,13 @@ struct SpyVisionModule
 	std::vector<std::string> kinds;
 };
 
-// CleanupHazardUpdate: how often (ScanRate, ms rounded up to ticks) and how far (ScanRange) it looks for hazards.
+// CleanupHazardUpdate: how often (ScanRate, ms rounded up to ticks) and how far (ScanRange) it looks for hazards, and the
+// weapon slot it cleans with (WeaponSlot: PRIMARY 0, SECONDARY 1, TERTIARY 2; PRIMARY unless given).
 struct CleanupHazardModule
 {
 	std::uint64_t scanTicks{0};
 	Engine::Math::Fixed scanRange;
+	std::uint8_t weaponSlot{0};
 };
 
 struct SpecialPowerContent
@@ -393,6 +401,8 @@ std::vector<SpecialPowerTemplate> BindSpecialPowerTemplates(const engine::config
 				found->initiateSound = std::string(field.Value());
 			else if (field.key == "InitiateAtLocationSound")
 				found->initiateAtLocationSound = std::string(field.Value());
+			else if (field.key == "AcademyClassify")
+				found->academyClassification = AcademyClassification(field.Value());
 		}
 	}
 	return out;
@@ -638,6 +648,8 @@ std::optional<CleanupHazardModule> ReadCleanupHazard(const ObjectDefinition &obj
 		const std::int64_t milliseconds = detail::Fixed(module.block->Find("ScanRate")).Ceil();
 		data.scanTicks = milliseconds <= 0 ? 0 : static_cast<std::uint64_t>((milliseconds * static_cast<std::int64_t>(step.TicksPerSecond()) + 999) / 1000);
 		data.scanRange = detail::Fixed(module.block->Find("ScanRange"));
+		if (const auto *slot = module.block->Find("WeaponSlot"))
+			data.weaponSlot = static_cast<std::uint8_t>(slot->Value() == "SECONDARY" ? 1 : slot->Value() == "TERTIARY" ? 2 : 0);
 		return data;
 	}
 	return std::nullopt;
@@ -785,6 +797,8 @@ std::optional<OclPower> FindOclPower(const ObjectDefinition &object, std::string
 					found.location = location;
 		if (const auto *adjust = module.block->Find("OCLAdjustPositionToPassable"))
 			found.adjustToPassable = detail::Yes(adjust);
+		if (const auto *reference = module.block->Find("ReferenceObject"))
+			found.referenceObject = std::string(reference->Value());
 		for (const engine::config::Node &field : module.block->children)
 			if (detail::Same(field.key, "UpgradeOCL") && field.values.size() >= 2)
 				found.upgrades.emplace_back(std::string(field.Value(0)), std::string(field.Value(1)));

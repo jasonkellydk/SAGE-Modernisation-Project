@@ -278,8 +278,10 @@ private:
 		const Experience *experience = lookup.template Get<Experience>(entity);
 		const std::uint32_t veterancy = experience != nullptr ? experience->level : 0u;
 		// And by its status (its ExemptStatus and RequiredStatus).
+		// (Being built is its UnderConstruction, seen here as the game's UNDER_CONSTRUCTION bit.)
 		const StatusFlags *flags = lookup.template Get<StatusFlags>(entity);
-		const std::uint64_t status = flags != nullptr ? flags->bits : 0u;
+		const std::uint64_t status = (flags != nullptr ? flags->bits : 0u) |
+			(lookup.template Get<UnderConstruction>(entity) != nullptr ? catalog.underConstructionStatus : 0u);
 
 		// Upgrade-switched die modules look at the object's and its player's upgrades.
 		UpgradeMask upgrades;

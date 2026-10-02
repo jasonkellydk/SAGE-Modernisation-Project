@@ -25,6 +25,18 @@ struct WorldAnimation
 		return {at[0], at[1], at[2] + risePerSecond * static_cast<float>(std::max(clock - start, 0.0))};
 	}
 
+	// Its client random draw (Anim2D::Anim2D's randomizeCurrentFrame for an Animation2D with RandomizeStartFrame:
+	// Anim2DTemplate::StartImage; the original's client stream is never synchronised, so any uniform draw does): a
+	// SplitMix64 mix of when and where it began, the same every frame it shows.
+	std::uint32_t Roll() const noexcept
+	{
+		std::uint64_t value = std::bit_cast<std::uint64_t>(start) ^ (std::uint64_t{std::bit_cast<std::uint32_t>(at[0])} << 32 | std::bit_cast<std::uint32_t>(at[1])) ^
+			(std::uint64_t{std::bit_cast<std::uint32_t>(at[2])} * 0x9E3779B97F4A7C15ull);
+		value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ull;
+		value = (value ^ (value >> 27)) * 0x94D049BB133111EBull;
+		return static_cast<std::uint32_t>((value ^ (value >> 31)) >> 32);
+	}
+
 	// How opaque it is at `clock`: fading over its last second to nothing at its expiry.
 	float AlphaAt(double clock) const noexcept
 	{

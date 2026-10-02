@@ -1,0 +1,157 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <iterator>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.rendering.bridge_models;
+import games.generalszh.presentation.objects.algorithms.bridge_geometry;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import Engine.Core.Math.FixedPresentation;
+
+// The map-drawn bridges' models on shipped data (W3DBridge::load per damage state, W3DBridge::getIndicesNVertices).
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	BridgeArt art;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		art = LoadBridgeArt(files, game.bridges);
+		loaded = true;
+	}
+
+	std::size_t Index(const std::string &name) const
+	{
+		return static_cast<std::size_t>(std::distance(game.bridges.begin(), game.bridges.find(name)));
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+std::array<float, 2> SpanX(const BridgeGeometry &geometry)
+{
+	std::array<float, 2> span{1e9f, -1e9f};
+	for (const BridgeVertex &vertex : geometry.vertices)
+	{
+		span[0] = (std::min)(span[0], vertex.position[0]);
+		span[1] = (std::max)(span[1], vertex.position[0]);
+	}
+	return span;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(bridge_models)
+
+// TerrainRoads.cpp's Bridge fields and W3DBridge::load on Roads.ini's KandaharBridge (Winding River's): one model per
+// damage state (CBWBridgeKH, _D, _E, _R), each with its Roads.ini texture (the damaged one reusing the pristine
+// CBWBridgeKH.tga, the really damaged and broken ones CBWBridgeKH_R.tga). The pristine model's BRIDGE_LEFT (438
+// vertices, x -105.363 to -32.555 at rest), BRIDGE_SPAN (282, -32.571 to 31.680) and BRIDGE_RIGHT (438, 31.656 to
+// 104.308) line up: sectional, its length 209.670, a span 64.211; its BRIDGE_LEFT's y extent is the one the simulation
+// made the bridge's width from (fixed point against floats: within 1e-3).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bridge_has_a_model_and_texture_per_damage_state)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	BOOST_TEST_REQUIRE(shell.art.kinds.size() == shell.game.bridges.size());
+	const BridgeKind &kandahar = shell.art.kinds[shell.Index("KandaharBridge")];
+	BOOST_TEST(kandahar.scale == 1.0f);
+	for (const BridgeModel &model : kandahar.states)
+		BOOST_TEST(model.loaded);
+	BOOST_TEST(kandahar.states[0].texture == "CBWBridgeKH.tga");
+	BOOST_TEST(kandahar.states[1].texture == "CBWBridgeKH.tga");
+	BOOST_TEST(kandahar.states[2].texture == "CBWBridgeKH_R.tga");
+	BOOST_TEST(kandahar.states[3].texture == "CBWBridgeKH_R.tga");
+	const BridgeModel &pristine = kandahar.states[0];
+	BOOST_TEST_REQUIRE((pristine.left && pristine.span && pristine.right));
+	BOOST_TEST(pristine.left->positions.size() == 438u);
+	BOOST_TEST(pristine.span->positions.size() == 282u);
+	BOOST_TEST(pristine.right->positions.size() == 438u);
+	BOOST_TEST(pristine.left->triangles.size() == 146u);
+	const BridgeShape shape = MeasureBridge(pristine);
+	BOOST_TEST(shape.sectional);
+	BOOST_TEST(shape.leftMinX == -105.3626f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shape.leftMaxX == -32.5553f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shape.rightMinX == 31.6555f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(shape.length == 209.6704f, boost::test_tools::tolerance(1e-5f));
+	const auto &content = shell.game.bridges.at("KandaharBridge");
+	BOOST_TEST_REQUIRE(content.extentY.has_value());
+	BOOST_TEST(std::abs(shape.minY - Engine::Math::ToFloat(content.extentY->first)) < 1e-3f);
+	BOOST_TEST(std::abs(shape.maxY - Engine::Math::ToFloat(content.extentY->second)) < 1e-3f);
+}
+
+// W3DBridge::getIndicesNVertices on TBDoubWide (IronSectionalDoublewide: BRIDGE_LEFT 110 vertices, BRIDGE_SPAN 390,
+// BRIDGE_RIGHT 110; its length 172.753, a span 86.527): a bridge 400 long lays floor((400 - 86.226 + 43.263) / 86.527)
+// = 4 spans, 1780 vertices, from its start to its end exactly (floats: within 1e-3). CBTampico_R (Tampico broken) has
+// two sub-objects named BRIDGE_LEFT... (the later, BRIDGE_LEFT itself, is the one used: x -181.499 to -96.130) and no
+// BRIDGE_RIGHT: fixed, one span, and the bridge stops after the span (196 + 24 vertices). Tampico's damaged state is
+// drawn with the pristine texture (TextureDamaged = CBTampico.tga).
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_bridges_lay_their_sections)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const BridgeKind &doublewide = shell.art.kinds[shell.Index("IronSectionalDoublewide")];
+	BOOST_TEST(doublewide.scale == 0.85f, boost::test_tools::tolerance(1e-4f)); // BridgeScale read in fixed point
+	const BridgeModel &iron = doublewide.states[0];
+	BOOST_TEST_REQUIRE(iron.loaded);
+	const BridgeShape shape = MeasureBridge(iron);
+	BOOST_TEST(shape.sectional);
+	BOOST_TEST(shape.length == 172.7530f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(BridgeSpans(shape, {0, 0, 0}, {400, 0, 0}) == 4);
+	BridgeLighting lighting;
+	BridgeGeometry geometry;
+	BuildBridgeGeometry(iron, shape, doublewide.scale, {0, 0, 0}, {400, 0, 0}, lighting, geometry);
+	BOOST_TEST(geometry.vertices.size() == 110u + 4u * 390u + 110u);
+	const auto span = SpanX(geometry);
+	BOOST_TEST(std::abs(span[0]) < 1e-3f);
+	BOOST_TEST(std::abs(span[1] - 400.0f) < 1e-3f);
+
+	const BridgeKind &tampico = shell.art.kinds[shell.Index("Tampico")];
+	BOOST_TEST(tampico.states[1].texture == "CBTampico.tga");
+	const BridgeModel &broken = tampico.states[3];
+	BOOST_TEST_REQUIRE(broken.loaded);
+	BOOST_TEST_REQUIRE((broken.left && broken.span));
+	BOOST_TEST(!broken.right.has_value());
+	const BridgeShape rubble = MeasureBridge(broken);
+	BOOST_TEST(!rubble.sectional);
+	BOOST_TEST(rubble.leftMaxX == -96.1299f, boost::test_tools::tolerance(1e-5f));
+	BridgeGeometry laid;
+	BuildBridgeGeometry(broken, rubble, tampico.scale, {0, 0, 0}, {300, 0, 0}, lighting, laid);
+	BOOST_TEST(laid.vertices.size() == 196u + 24u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

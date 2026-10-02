@@ -22,11 +22,17 @@ export import games.generalszh.presentation.objects.systems.tree_breeze_systems;
 export import games.generalszh.presentation.objects.systems.tree_bend_systems;
 export import games.generalszh.presentation.objects.systems.debris_systems;
 export import games.generalszh.presentation.objects.systems.disable_presentation_systems;
+export import games.generalszh.presentation.objects.systems.rotor_wash_system;
+export import games.generalszh.presentation.objects.systems.repair_weld_system;
+export import games.generalszh.presentation.objects.systems.jet_touchdown_sound_system;
+export import games.generalszh.presentation.objects.systems.spectre_strafe_system;
+export import games.generalszh.presentation.objects.systems.fade_presentation_system;
 export import games.generalszh.presentation.objects.systems.ability_presentation_systems;
 export import games.generalszh.presentation.objects.systems.object_icon_systems;
 export import games.generalszh.presentation.objects.systems.uplink_systems;
 export import games.generalszh.presentation.objects.algorithms.vehicle_motion_setup;
 export import games.generalszh.presentation.objects.algorithms.look_setup;
+export import games.generalszh.presentation.objects.systems.wave_guide_effect_system;
 
 // Presentation's schedules, composed in one place for the host and the
 // tests alike: its side-table components (registered with the simulation's
@@ -38,6 +44,7 @@ void RegisterPresentationComponents(ecs::World &world)
 {
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
+	world.RegisterComponent<WaveGuideEffects>();
 }
 
 inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
@@ -49,6 +56,7 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 	static ExhaustSampleSystem exhausts;
 	static HitFxSystem hits;
 	static MissileIgnitionSystem ignitions;
+	static BunkerCrashFxSystem bunkerCrashes;
 	static HarvestPresentationSystem harvest;
 	static CratePresentationSystem crates;
 	static PromotionPresentationSystem promotions;
@@ -59,8 +67,14 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 	static CashPresentationSystem cash;
 	static DisabledSoundSystem disabledSounds;
 	static EmpSparkSystem empSparks;
+	static RotorWashSystem rotorWash;
+	static RepairWeldSystem welds;
+	static JetTouchdownSoundSystem touchdowns;
+	static SpectreStrafeSystem spectreStrafes;
+	static FadePresentationSystem fades;
 	static AutoDepositPresentationSystem autoDeposits;
 	static AbilityFeedbackSystem abilities;
+	static StealthGrantPresentationSystem stealthGrants;
 	static UplinkStatusSystem uplinks;
 	static AttachedParticleClearSystem particleClears;
 	// Things falling past their DestroyAttachedParticlesAtHeight lose their riding systems, after the tick's new ones.
@@ -72,6 +86,10 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 	// Abilities' sounds with the tick's other one-shots; their flashes step with the frames.
 	tick.Register(abilities);
 	tick.OrderBefore<DisabledSoundSystem, AbilityFeedbackSystem>();
+	// Stealth grants flash after the abilities' flashes.
+	tick.Register(stealthGrants);
+	tick.OrderBefore<AbilityFeedbackSystem, StealthGrantPresentationSystem>();
+	tick.OrderBefore<SpectreStrafeSystem, StealthGrantPresentationSystem>();
 	// Payments float up after the floating texts aged, with the other cash.
 	tick.Register(autoDeposits);
 	tick.OrderBefore<HarvestPresentationSystem, AutoDepositPresentationSystem>();
@@ -79,6 +97,27 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 	tick.OrderBefore<ChassisSystem, AutoDepositPresentationSystem>();
 	tick.Register(disabledSounds);
 	tick.Register(empSparks);
+	// Landing Chinooks wash the ground after the tick's sparks are out.
+	tick.Register(rotorWash);
+	tick.OrderBefore<EmpSparkSystem, RotorWashSystem>();
+	// Repairing drones' weld sparks with the rotor wash.
+	tick.Register(welds);
+	tick.OrderBefore<RotorWashSystem, RepairWeldSystem>();
+	tick.OrderBefore<RepairWeldSystem, SpectreStrafeSystem>();
+	// Jets touching down screech with the welds.
+	tick.Register(touchdowns);
+	tick.OrderBefore<RepairWeldSystem, JetTouchdownSoundSystem>();
+	tick.OrderBefore<JetTouchdownSoundSystem, SpectreStrafeSystem>();
+	// After the fades, so after every sound system they follow.
+	tick.OrderBefore<FadePresentationSystem, RepairWeldSystem>();
+	// A Spectre's gattling smokes the ground where its fire walks, after the rotor wash.
+	tick.Register(spectreStrafes);
+	tick.OrderBefore<RotorWashSystem, SpectreStrafeSystem>();
+	// Objects made fading (Rebel Ambush) start their fade with the tick, FadeSound with the tick's other sounds.
+	tick.Register(fades);
+	tick.OrderBefore<AbilityFeedbackSystem, FadePresentationSystem>();
+	// After the EMP sparks, so after every host's sound and notice system (they run before the sparks).
+	tick.OrderBefore<EmpSparkSystem, FadePresentationSystem>();
 	tick.Register(tracks);
 	tick.Register(treeContacts);
 	tick.Register(harvest);
@@ -97,6 +136,10 @@ inline void RegisterPresentationTick(ecs::SystemRegistry &tick)
 	tick.Register(hits);
 	tick.Register(ignitions);
 	tick.OrderBefore<HitFxSystem, MissileIgnitionSystem>();
+	// Bunker busters crashing through after the tick's hits.
+	tick.Register(bunkerCrashes);
+	tick.OrderBefore<MissileIgnitionSystem, BunkerCrashFxSystem>();
+	tick.OrderBefore<SceneryContactSystem, BunkerCrashFxSystem>();
 	tick.OrderBefore<DetectorPingSystem, HarvestPresentationSystem>();
 	tick.Register(motion);
 	tick.Register(pose);
@@ -210,6 +253,10 @@ inline void RegisterPresentationFrame(ecs::SystemRegistry &frame)
 	frame.OrderBefore<ObjectPresentationSystem, LaserSystem>();
 	frame.OrderBefore<ExhaustSystem, LaserSystem>();
 	frame.OrderBefore<LaserSystem, DamageEffectSystem>();
+	// The flood waves' riding sprays and their tick's splashes, once the frame's FX played (the last to start systems).
+	static WaveGuideEffectSystem waveGuides;
+	frame.Register(waveGuides);
+	frame.OrderBefore<FxPlaybackSystem, WaveGuideEffectSystem>();
 }
 
 // The weapons' projectile streams, drawn into the frame's beams after the lasers began them and the uplinks added theirs,

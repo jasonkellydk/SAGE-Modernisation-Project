@@ -140,6 +140,35 @@ inline std::optional<QueueExit> ReadQueueExit(const ObjectDefinition &object, co
 	return std::nullopt;
 }
 
+// A building's DefaultProductionExitUpdate on its own (it may have no ProductionUpdate: a Tech Reinforcement Pad): its
+// UnitCreatePoint and NaturalRallyPoint in its frame, and UseSpawnRallyPoint (what its deliveries drop goes out by it).
+struct ProductionExit
+{
+	Engine::Math::FixedVector3 createPoint;
+	Engine::Math::FixedVector3 rallyPoint;
+	bool useSpawnRallyPoint{false};
+};
+
+inline std::optional<ProductionExit> ReadProductionExit(const ObjectDefinition &object)
+{
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr || module.type != "DefaultProductionExitUpdate")
+			continue;
+		engine::config::Diagnostics diagnostics;
+		engine::config::BindContext bind{diagnostics, engine::time::FixedStep{30}};
+		ProductionExit exit;
+		if (const auto *create = module.block->Find("UnitCreatePoint"))
+			exit.createPoint = engine::config::ReadVec3(*create, bind).value_or(Engine::Math::FixedVector3{});
+		if (const auto *rally = module.block->Find("NaturalRallyPoint"))
+			exit.rallyPoint = engine::config::ReadVec3(*rally, bind).value_or(Engine::Math::FixedVector3{});
+		if (const auto *spawn = module.block->Find("UseSpawnRallyPoint"))
+			exit.useSpawnRallyPoint = engine::config::values::ParseBool(spawn->Value()).value_or(false);
+		return exit;
+	}
+	return std::nullopt;
+}
+
 std::optional<ObjectProduction> ReadObjectProduction(const ObjectDefinition &object, const engine::time::FixedStep &step)
 {
 	using production_detail::Same;

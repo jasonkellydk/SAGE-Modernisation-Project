@@ -31,6 +31,9 @@ struct TeamScriptHooks
 	std::function<void(const std::string &, std::uint32_t)> actions;
 	std::function<bool(const std::string &)> oneShot;
 	std::function<bool(const std::string &)> exists;
+	// A team instance about to be deleted (Team's destructor: Player::preTeamDestroy for every player, so the computer
+	// players drop it from their queues). Optional.
+	std::function<void(std::uint32_t)> destroying;
 };
 
 // AIUpdateInterface::isIdle, as far as the port has states: not moving, attacking or building.
@@ -224,6 +227,8 @@ inline void UpdateTeamStates(GameWorld &game, const TeamScriptHooks &hooks)
 					defaultTeam = game.roster.DefaultTeam(player);
 				if (*defaultTeam && **defaultTeam == instance)
 					continue;
+				if (hooks.destroying)
+					hooks.destroying(instance);
 				game.roster.DeleteInstance(instance);
 			}
 		}

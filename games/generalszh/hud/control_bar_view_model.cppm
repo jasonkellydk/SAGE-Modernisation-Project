@@ -5,6 +5,8 @@ export import engine.gui.mvvm.observable;
 export import games.generalszh.hud.control_bar_state;
 export import games.generalszh.hud.control_bar_portrait;
 export import games.generalszh.commands.game_commands;
+export import games.generalszh.hud.hot_keys;
+export import games.generalszh.hud.build_refusal;
 import games.generalszh.presentation.hud.algorithms.control_bar_timers;
 
 // The control bar's logic without windows (the original's ControlBar populate / update / processCommandUI): what each
@@ -57,6 +59,8 @@ public:
 	std::array<engine::gui::mvvm::Observable<std::string>, CommandButtons> commandOverlay;
 	// WIN_STATUS_ALWAYS_COLOR: disabled, it dims rather than greys (the structure inventory's buttons).
 	std::array<engine::gui::mvvm::Observable<bool>, CommandButtons> commandAlwaysColor;
+	// GadgetButtonSetBorder: the button's border colour by its kind (0xAARRGGBB; 0: none).
+	std::array<engine::gui::mvvm::Observable<std::uint32_t>, CommandButtons> commandBorder;
 	// The production queue (ButtonQueue01..09) shows while something is queued, in place of the portrait.
 	engine::gui::mvvm::Observable<bool> queueShown{false};
 	// The selection's portrait (WinUnitSelected: setPortraitByObject shows it for a portrait object; none,
@@ -75,6 +79,9 @@ public:
 	engine::gui::mvvm::Observable<std::uint32_t> buildProgress{0};
 	// A builder's structure awaiting its place (DOZER_CONSTRUCT: InGameUI::placeBuildAvailable); empty: none.
 	engine::gui::mvvm::Observable<std::string> placing;
+	// Placing for a SPECIAL_POWER_CONSTRUCT button: its power and options (empty: a DOZER_CONSTRUCT build).
+	std::string placingPower;
+	std::uint32_t placingOptions{0};
 	// A command button waiting for its target (InGameUI::setGUICommand: a special power needing a spot or an object):
 	// the button's name; empty: none.
 	engine::gui::mvvm::Observable<std::string> targeting;
@@ -98,6 +105,12 @@ public:
 	engine::gui::mvvm::Command idleWorkerClicked;
 	// The selected object whose commands show (none: no single one of the player's).
 	ecs::Entity Selected() const noexcept { return m_state.selected; }
+	// The button on a command window (ButtonCommand01..14 by slot; none: an empty slot): its build tooltip's
+	// (GadgetButtonGetData).
+	const content::CommandButtonContent *CommandButtonAt(std::size_t slot) const noexcept
+	{
+		return slot < CommandButtons ? m_state.slots[slot].button : nullptr;
+	}
 
 	// What selects the next idle worker and looks at it (InGameUI::selectNextIdleWorker: a selection and the view's).
 	void SetSelectNextIdleWorker(std::function<void()> select) { m_selectNextIdleWorker = std::move(select); }
@@ -105,13 +118,81 @@ public:
 	// Generals.csf's text by label (CONTROLBAR:UnderConstructionDesc, CONTROLBAR:OCLTimerDesc...).
 	void SetLabels(std::function<std::u16string(std::string_view)> labels) { m_labels = std::move(labels); }
 
+	// ControlBar::updateCommanBarBorderColors (ControlBarScheme::init): the scheme's ButtonBorderBuildColor,
+	// ButtonBorderUpgradeColor, ButtonBorderActionColor and ButtonBorderSystemColor (0xAARRGGBB; 0: none given).
+	void SetBorderColors(std::uint32_t build, std::uint32_t upgrade, std::uint32_t action, std::uint32_t system)
+	{
+		m_borderColors = {build, upgrade, action, system};
+	}
+
+	// ControlBar::updateSlotExitImage (ControlBarScheme::init, the scheme's CommandMarkerImage; none: left as they are): the
+	// art of Command_StructureExit, Command_TransportExit and Command_BunkerExit becomes that image.
+	void SetSlotExitImage(std::string image) { m_exitImage = std::move(image); }
+
+	// A command button's art as it shows: an exit button's own art is the scheme's exit image when it gave one (an
+	// occupied slot shows its rider instead).
+	std::string ButtonArt(const CommandSlot &command) const
+	{
+		if (command.button != nullptr && !m_exitImage.empty() && command.image == command.button->buttonImage &&
+			(command.button->name == "Command_StructureExit" || command.button->name == "Command_TransportExit" ||
+				command.button->name == "Command_BunkerExit"))
+			return m_exitImage;
+		return command.image;
+	}
+
+	// ControlBar::setCommandBarBorder: a command button's border in its ButtonBorderType's colour (BUILD, UPGRADE, ACTION,
+	// SYSTEM); NONE or an unknown kind: no border (GadgetButtonSetBorder(GAME_COLOR_UNDEFINED, FALSE)).
+	std::uint32_t CommandBorderColor(std::string_view borderType) const noexcept
+	{
+		static constexpr std::array<std::string_view, 4> kinds{"BUILD", "UPGRADE", "ACTION", "SYSTEM"};
+		for (std::size_t kind = 0; kind < kinds.size(); ++kind)
+			if (borderType == kinds[kind])
+				return m_borderColors[kind];
+		return 0u;
+	}
+
+	// processCommandUI's canMakeUnit check on a build-type press, and how a refusal is told (hud::BuildRefusalHooks).
+	void SetBuildRefusal(BuildRefusalHooks hooks) { m_refusal = std::move(hooks); }
+
+	// What plays an interface sound (HotKeyManager::executeHotKey's GUIClick / GUIClickDisabled).
+	void SetSound(std::function<void(std::string_view)> sound) { m_sound = std::move(sound); }
+
+	// HotKeyTranslator / HotKeyManager::executeHotKey for a key released with no modifier (`key`: its printable character):
+	// the command window its key marks (the first registered: populateCommand's setControlCommand, the transport's exit
+	// buttons first, then the set's slots in order, none for a SCRIPT_ONLY one), unless hidden: enabled, it is clicked
+	// (GBM_SELECTED) with a GUIClick and the key is used; disabled, a GUIClickDisabled and the key goes on.
+	bool PressHotKey(char key)
+	{
+		const std::optional<std::size_t> slot = m_hotKeys.Find(key);
+		if (!slot)
+			return false;
+		return ExecuteHotKey(commandShown[*slot].Get(), commandEnabled[*slot].Get(), [&] { commandClicked[*slot].Execute(); },
+			[this](std::string_view sound) {
+				if (m_sound)
+					m_sound(sound);
+			});
+	}
+	// Whether a command window registered `key` (the shortcut bar's and science screen's registrations come after).
+	bool HasHotKey(char key) const noexcept { return m_hotKeys.Find(key).has_value(); }
+
 	// Told of each command button pressed (its window and name): ControlBar::processCommandUI stops its flash.
 	void SetPressed(std::function<void(std::size_t, std::string_view)> pressed) { m_pressed = std::move(pressed); }
+
+	// CommandXlat's MSG_META_TOGGLE_CONTROL_BAR (F9) through ToggleControlBar: ControlBarParent (and with it the special
+	// power shortcut bar) hidden when shown, shown when hidden; never while a replay plays back (`replay`).
+	void ToggleHidden(bool replay)
+	{
+		if (replay)
+			return;
+		m_hidden = !m_hidden;
+		shown.Set(m_state.hasPlayer && !m_hidden);
+	}
+	bool Hidden() const noexcept { return m_hidden; }
 
 	void Apply(ControlBarState state)
 	{
 		m_state = std::move(state);
-		shown.Set(m_state.hasPlayer);
+		shown.Set(m_state.hasPlayer && !m_hidden);
 		money.Set(m_state.hasPlayer ? m_formatMoney(m_state.money) : std::u16string{});
 		powerProduced.Set(m_state.powerProduced);
 		powerConsumed.Set(m_state.powerConsumed);
@@ -128,13 +209,28 @@ public:
 			commandEnabled[slot].Set(visible && pressable);
 			commandChecked[slot].Set(visible && command.state == gameplay::ButtonState::Active &&
 				(command.button->options & content::button_option::CheckLike) != 0);
-			commandImage[slot].Set(visible ? command.image : std::string{});
+			commandImage[slot].Set(visible ? ButtonArt(command) : std::string{});
 			commandClock[slot].Set(visible ? command.clock : 1000u);
 			commandClicked[slot].enabled.Set(visible && pressable);
 			commandFlashing[slot].Set(visible && command.flashing);
 			commandOverlay[slot].Set(visible ? command.overlay : std::string{});
 			commandAlwaysColor[slot].Set(visible && command.alwaysColor);
+			commandBorder[slot].Set(visible ? CommandBorderColor(command.button->borderType) : 0u);
 		}
+		// setControlCommand's hotkeys (searchHotKey(TextLabel), addHotKey keeping the first of a key): the transport's
+		// exit buttons as doTransportInventoryUI sets them, then the set's other slots in order, SCRIPT_ONLY ones never.
+		m_hotKeys.Clear();
+		const auto addHotKey = [&](std::size_t slot) {
+			const content::CommandButtonContent &button = *m_state.slots[slot].button;
+			m_hotKeys.Add(button.textLabel.empty() || !m_labels ? char{0} : HotKeyOf(m_labels(button.textLabel)), slot);
+		};
+		for (std::size_t slot = 0; slot < CommandButtons; ++slot)
+			if (m_state.slots[slot].button != nullptr && m_state.slots[slot].button->commandName == "EXIT_CONTAINER")
+				addHotKey(slot);
+		for (std::size_t slot = 0; slot < CommandButtons; ++slot)
+			if (const content::CommandButtonContent *button = m_state.slots[slot].button;
+				button != nullptr && button->commandName != "EXIT_CONTAINER" && (button->options & content::button_option::ScriptOnly) == 0)
+				addHotKey(slot);
 		queueShown.Set(!m_state.queue.empty());
 		for (std::size_t slot = 0; slot < QueueButtons; ++slot)
 		{
@@ -193,10 +289,20 @@ private:
 		const ecs::Entity selected = m_state.selected;
 		// processCommandUI's orders to the selection (a group: every selected object that counts).
 		const std::vector<ecs::Entity> group = m_state.group.empty() ? std::vector<ecs::Entity>{selected} : m_state.group;
+		// "Play any available unit specific sound for button" (for the local player).
+		if (m_sound && !button.unitSpecificSound.empty())
+			m_sound(button.unitSpecificSound);
+		// A button needing a target with USES_MINE_CLEARING_WEAPONSET: MSG_SET_MINE_CLEARING_DETAIL first.
+		if ((button.options & content::button_option::NeedTarget) != 0 && (button.options & content::button_option::UsesMineClearingWeaponSet) != 0)
+			m_submit(commands::SetMineClearingDetail{group});
 		using content::ButtonCommand;
 		switch (button.command)
 		{
-		case ButtonCommand::UnitBuild: m_submit(commands::QueueUnit{selected, button.object}); break;
+		case ButtonCommand::UnitBuild:
+			// canMakeUnit(factory, Object): refused (no money, queue full, parking full, maxed out), nothing is queued.
+			if (!m_refusal.Refuses(selected, button))
+				m_submit(commands::QueueUnit{selected, button.object});
+			break;
 		case ButtonCommand::PlayerUpgrade:
 		case ButtonCommand::ObjectUpgrade: m_submit(commands::ResearchUpgrade{selected, button.upgrade}); break;
 		case ButtonCommand::CancelUpgrade: m_submit(commands::CancelResearch{selected, button.upgrade}); break;
@@ -204,7 +310,14 @@ private:
 		case ButtonCommand::Stop: m_submit(commands::Stop{group}); break;
 		case ButtonCommand::ToggleOvercharge: m_submit(commands::ToggleOvercharge{group}); break;
 		case ButtonCommand::SwitchWeapon: m_submit(commands::SwitchWeapon{group, button.weaponSlot}); break;
-		case ButtonCommand::DozerConstruct: placing.Set(button.object); break;
+		case ButtonCommand::DozerConstruct:
+			// "Make sure we have enough CASH to build it WHEN we click the button" (canMakeUnit): refused, no placement.
+			if (m_refusal.Refuses(selected, button))
+				break;
+			placingPower.clear();
+			placingOptions = 0;
+			placing.Set(button.object);
+			break;
 		// GUI_COMMAND_SPECIAL_POWER: needing a target, it waits for one (setGUICommand); else it goes at once
 		// (MSG_DO_SPECIAL_POWER, no target).
 		// GUARD (GUI_COMMAND_GUARD, and GUARD_WITHOUT_PURSUIT, GUARD_FLYING_UNITS_ONLY): always waits for its target (setGUICommand).
@@ -224,6 +337,9 @@ private:
 			// GUI_COMMAND_EVACUATE without NEED_TARGET_POS (every shipped one): MSG_EVACUATE at once.
 			else if (button.commandName == "EVACUATE" && (button.options & content::button_option::NeedTargetPos) == 0)
 				m_submit(commands::Evacuate{group});
+			// GUI_COMMAND_HACK_INTERNET: MSG_INTERNET_HACK at once.
+			else if (button.commandName == "HACK_INTERNET")
+				m_submit(commands::HackInternet{group});
 			// GUI_COMMAND_EXECUTE_RAILED_TRANSPORT: MSG_EXECUTE_RAILED_TRANSPORT.
 			else if (button.commandName == "EXECUTE_RAILED_TRANSPORT")
 				m_submit(commands::ExecuteRailedTransport{group});
@@ -236,7 +352,19 @@ private:
 			}
 			break;
 		case ButtonCommand::SpecialPower:
-			if ((button.options & (content::button_option::NeedTargetPos | content::button_option::NeedObjectTarget)) != 0)
+			// GUI_COMMAND_SPECIAL_POWER_CONSTRUCT (the sneak attack): its Object placed as a build is
+			// (placeBuildAvailable), the selected object noting the button (setSpecialPowerConstructionCommandButton).
+			if (button.commandName == "SPECIAL_POWER_CONSTRUCT")
+			{
+				// canMakeUnit(selected, Object), answering OK while it already places that Object for a power
+				// (getSpecialPowerConstructionCommandButton's template): refused, no placement.
+				if (!(placing.Get() == button.object && !placingPower.empty()) && m_refusal.Refuses(selected, button))
+					break;
+				placingPower = button.specialPower;
+				placingOptions = button.options;
+				placing.Set(button.object);
+			}
+			else if ((button.options & (content::button_option::NeedTargetPos | content::button_option::NeedObjectTarget)) != 0)
 				targeting.Set(button.name);
 			else
 				m_submit(commands::UseSpecialPower{selected, button.specialPower, {}, false, button.options});
@@ -278,5 +406,11 @@ private:
 	std::function<std::u16string(std::string_view)> m_labels;
 	std::function<void()> m_selectNextIdleWorker;
 	ControlBarState m_state;
+	bool m_hidden{false}; // ControlBarParent hidden by the player (ToggleControlBar)
+	std::array<std::uint32_t, 4> m_borderColors{}; // build, upgrade, action, system (0: GAME_COLOR_UNDEFINED)
+	std::function<void(std::string_view)> m_sound;
+	BuildRefusalHooks m_refusal; // processCommandUI's canMakeUnit check (none set: every press goes on)
+	HotKeys m_hotKeys; // HotKeyManager's map: key to command window, first kept
+	std::string m_exitImage;                       // the scheme's CommandMarkerImage (none: the buttons' own art)
 };
 }

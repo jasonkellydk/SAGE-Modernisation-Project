@@ -2,10 +2,15 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <string>
+#include <optional>
+#include <vector>
+#include <algorithm>
 
 import games.generalszh.session.setup.game_setup;
 import games.generalszh.session.setup.match_plan;
 import games.generalszh.session.setup.replay_body;
+import games.generalszh.session.setup.start_positions;
+import games.generalszh.session.setup.map_metadata;
 
 using namespace generalszh::session::setup;
 
@@ -167,6 +172,145 @@ BOOST_AUTO_TEST_CASE(a_replay_body_round_trips)
 	const std::vector<std::byte> cut(bytes.begin(), bytes.end() - 5);
 	engine::core::serialization::ByteReader damaged(cut);
 	BOOST_TEST(!ReadReplayBody(damaged).has_value());
+}
+
+// legacy_parity: GameLogic.cpp populateRandomStartPosition ("the new way"), on a square of four start spots
+// (Player_1_Start (0,0), Player_2_Start (100,0), Player_3_Start (0,100), Player_4_Start (100,100)): the first random
+// player, when nobody picked a spot, takes GameLogicRandomValue(0, 3), drawn again while any slot holds it; the next
+// without a placed team takes the free spot whose summed distance to the taken ones is greatest (the first such on a
+// tie); a teammate the free spot nearest its team's (the first on a tie); a picked spot stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_random_start_spots_spread_teams_and_group_teammates)
+{
+	using Engine::Math::Fixed;
+	using Engine::Math::FixedVector2;
+	const std::vector<std::optional<FixedVector2>> square{FixedVector2{Fixed::FromInt(0), Fixed::FromInt(0)},
+		FixedVector2{Fixed::FromInt(100), Fixed::FromInt(0)}, FixedVector2{Fixed::FromInt(0), Fixed::FromInt(100)},
+		FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}};
+	const auto drawing = [](std::vector<int> values) {
+		return [values = std::move(values), next = std::size_t{0}](int high) mutable {
+			BOOST_TEST(high == 3);
+			return values[(std::min)(next++, values.size() - 1)];
+		};
+	};
+	const auto occupy = [](GameSetup &setup, int slot, SlotState state, int team = -1, int start = -1, int playerTemplate = -1) {
+		GameSlot &each = setup.slots[static_cast<std::size_t>(slot)];
+		each.state = state;
+		each.team = team;
+		each.startPos = start;
+		each.playerTemplate = playerTemplate;
+	};
+
+	// No teams: the first at random (spot 4), the next farthest from it (spot 1, 141 away), the third tied at 200
+	// between spots 2 and 3 takes the first (spot 2).
+	GameSetup spread;
+	occupy(spread, 0, SlotState::Player);
+	occupy(spread, 1, SlotState::EasyAI);
+	occupy(spread, 2, SlotState::HardAI);
+	auto chosen = PopulateRandomStartPositions(spread, 4, square, drawing({3}));
+	BOOST_TEST(chosen[0] == 3);
+	BOOST_TEST(chosen[1] == 0);
+	BOOST_TEST(chosen[2] == 1);
+	BOOST_TEST(chosen[3] == -1);
+
+	// Teams: team 0 starts at spot 1 (drawn), team 1 the farthest (spot 4), team 0's second the nearest free to spot 1
+	// (spots 2 and 3 both 100 away: spot 2).
+	GameSetup teams;
+	occupy(teams, 0, SlotState::Player, 0);
+	occupy(teams, 1, SlotState::EasyAI, 1);
+	occupy(teams, 2, SlotState::EasyAI, 0);
+	chosen = PopulateRandomStartPositions(teams, 4, square, drawing({0}));
+	BOOST_TEST(chosen[0] == 0);
+	BOOST_TEST(chosen[1] == 3);
+	BOOST_TEST(chosen[2] == 1);
+
+	// A spot picked: no draw; the random player goes farthest from it (spot 3 picked: spot 2 is 141 away).
+	GameSetup fixed;
+	occupy(fixed, 0, SlotState::Player, -1, 2);
+	occupy(fixed, 1, SlotState::EasyAI);
+	chosen = PopulateRandomStartPositions(fixed, 4, square, [](int) {
+		BOOST_TEST(false);
+		return 0;
+	});
+	BOOST_TEST(chosen[0] == 2);
+	BOOST_TEST(chosen[1] == 1);
+
+	// An observer holding spot 2 does not count as a pick, but its spot is drawn again (isStartPositionTaken).
+	GameSetup watched;
+	occupy(watched, 0, SlotState::Player, -1, 1, ObserverTemplate);
+	occupy(watched, 1, SlotState::EasyAI);
+	chosen = PopulateRandomStartPositions(watched, 4, square, drawing({1, 2}));
+	BOOST_TEST(chosen[0] == -1);
+	BOOST_TEST(chosen[1] == 2);
+
+	// A start spot missing from the map is 1000000 from every other: the farthest.
+	std::vector<std::optional<FixedVector2>> holed = square;
+	holed[1].reset();
+	chosen = PopulateRandomStartPositions(spread, 4, holed, drawing({3}));
+	BOOST_TEST(chosen[0] == 3);
+	BOOST_TEST(chosen[1] == 1);
+}
+
+// legacy_parity: MapUtil.cpp loadMap / MapCache::addMap / WaypointMap::update / getExtent: the cache's record of a map
+// it loads: InitialCameraPosition and Player_1_Start on to the first missing (Player_4_Start without Player_3_Start is
+// not counted), at least one start counted, multiplayer from two on; tech buildings, else preview supplies, in object
+// order; the extent from 0,0 to (width - 2 border, height - 2 border) cells x 10; WorldInfo's mapName as the tag.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_loaded_map_is_described_as_the_cache_records_it)
+{
+	using Engine::Math::Fixed;
+	engine::level::Level level;
+	level.terrain.width = 120;
+	level.terrain.height = 100;
+	level.terrain.border = 10;
+	level.properties.Set("mapName", std::string("MAP:Duel"));
+	const auto marker = [&](std::string name, int x, int y) {
+		engine::level::Marker each;
+		each.name = std::move(name);
+		each.position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		level.markers.push_back(each);
+	};
+	marker("Player_1_Start", 100, 100);
+	marker("InitialCameraPosition", 50, 60);
+	marker("Player_2_Start", 900, 700);
+	marker("Player_4_Start", 400, 400);
+	const auto place = [&](std::string type, int x, int y) {
+		engine::level::Placement each;
+		each.type = std::move(type);
+		each.position = {Fixed::FromInt(x), Fixed::FromInt(y), Fixed{}};
+		level.placements.push_back(each);
+	};
+	place("TechOilDerrick", 10, 20);
+	place("SupplyDock", 30, 40);
+	place("Tree", 1, 1);
+	place("TechHospital", 50, 60);
+	const auto kind = [](std::string_view type) {
+		return type.starts_with("Tech") ? MapPreviewKind::TechBuilding : type == "SupplyDock" ? MapPreviewKind::SupplyOnPreview : MapPreviewKind::None;
+	};
+	const generalszh::content::MapMetaData map = DescribeMap(level, 99u, kind);
+	BOOST_TEST(map.crc == 99u);
+	BOOST_TEST(map.players == 2);
+	BOOST_TEST(map.multiplayer);
+	BOOST_TEST_REQUIRE(map.starts.size() == 2u);
+	BOOST_TEST(map.starts[1].x.Floor() == 900);
+	BOOST_TEST(map.hasInitialCamera);
+	BOOST_TEST(map.initialCamera.y.Floor() == 60);
+	BOOST_TEST_REQUIRE(map.techs.size() == 2u);
+	BOOST_TEST(map.techs[1].x.Floor() == 50);
+	BOOST_TEST(map.supplies.size() == 1u);
+	BOOST_TEST(map.extentMin.x.Floor() == 0);
+	BOOST_TEST(map.extentMax.x.Floor() == 1000);
+	BOOST_TEST(map.extentMax.y.Floor() == 800);
+	BOOST_TEST(map.nameLookupTag == "MAP:Duel");
+
+	// No start spots: one counted, not multiplayer; no camera, no tag.
+	engine::level::Level bare;
+	bare.terrain.width = 10;
+	bare.terrain.height = 10;
+	const generalszh::content::MapMetaData empty = DescribeMap(bare, 1u, {});
+	BOOST_TEST(empty.players == 1);
+	BOOST_TEST(!empty.multiplayer);
+	BOOST_TEST(empty.starts.empty());
+	BOOST_TEST(!empty.hasInitialCamera);
+	BOOST_TEST(empty.nameLookupTag.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

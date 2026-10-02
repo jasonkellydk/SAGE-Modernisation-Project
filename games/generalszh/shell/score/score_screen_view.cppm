@@ -6,7 +6,7 @@ export import Engine.UI.WND.Bindings;
 
 // Binds Window/Menus/ScoreScreen.wnd to the ScoreScreenViewModel: each row's name and values (StaticTextPlayer<n>,
 // StaticTextUnitsBuilt<n> ... StaticTextResources<n>) in its colour, shown or hidden with the row (hideWindows); the
-// backdrop (ParentScoreScreen's image); OK, and Continue with its text.
+// backdrop (ParentScoreScreen's image); each row's side icon (GameWindowWinner<n>); OK, and Continue with its text.
 export namespace generalszh::shell
 {
 inline void BindScoreScreenView(Engine::UI::WND::WNDBindings &bindings, ScoreScreenViewModel &viewModel,
@@ -24,6 +24,8 @@ inline void BindScoreScreenView(Engine::UI::WND::WNDBindings &bindings, ScoreScr
 		bindings.BindVisible(menu + "StaticTextObserver" + number, row.observer);
 		bindings.BindText(player, row.name);
 		bindings.BindTextColor(player, row.color);
+		bindings.BindVisible(menu + "GameWindowWinner" + number, row.winnerShown);
+		bindings.BindImage(menu + "GameWindowWinner" + number, row.winnerImage, resolve);
 		for (std::size_t column = 0; column < columns.size(); ++column)
 		{
 			const std::string window = menu + std::string(columns[column]) + number;
@@ -32,10 +34,21 @@ inline void BindScoreScreenView(Engine::UI::WND::WNDBindings &bindings, ScoreScr
 			bindings.BindTextColor(window, row.color);
 		}
 	}
-	bindings.BindImage(menu + "ParentScoreScreen", viewModel.backdrop, std::move(resolve));
-	for (const char *extra : {"TextEntryChat", "ButtonEmote", "ListboxChatWindowScoreScreen", "ButtonBuddy", "ListboxWarschoolAdvice",
-			 "StaticTextWarSchool"})
+	bindings.BindImage(menu + "ParentScoreScreen", viewModel.backdrop, resolve);
+	// displayChallengeWinLoss.
+	bindings.BindVisible(menu + "MainBackdrop", viewModel.scoresShown);
+	bindings.BindVisible(menu + "GadgetParent", viewModel.scoresShown);
+	for (const char *challenge : {"ChallengeWinLossText", "GeneralRemarks", "BigPortrait"})
+		bindings.BindVisible(menu + challenge, viewModel.challengeShown);
+	bindings.BindText(menu + "ChallengeWinLossText", viewModel.challengeHeader);
+	bindings.BindText(menu + "GeneralRemarks", viewModel.challengeRemarks);
+	bindings.BindImage(menu + "BigPortrait", viewModel.challengePortrait, std::move(resolve));
+	for (const char *extra : {"TextEntryChat", "ButtonEmote", "ListboxChatWindowScoreScreen", "ButtonBuddy"})
 		bindings.BindVisible(menu + extra, viewModel.never);
+	// The war school: its title and the local player's academy advice.
+	bindings.BindVisible(menu + "ListboxWarschoolAdvice", viewModel.warSchoolShown);
+	bindings.BindVisible(menu + "StaticTextWarSchool", viewModel.warSchoolShown);
+	bindings.BindList(menu + "ListboxWarschoolAdvice", viewModel.warSchoolAdvice, viewModel.warSchoolSelected);
 	bindings.BindVisible(menu + "StaticTextGameSaveComplete", viewModel.gameSavedShown);
 	bindings.BindVisible(menu + "ButtonSaveReplay", viewModel.saveReplayShown);
 	bindings.BindEnabled(menu + "ButtonSaveReplay", viewModel.never);

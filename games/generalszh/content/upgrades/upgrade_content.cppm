@@ -23,7 +23,19 @@ struct UpgradeContent
 	std::string buttonImage;      // ButtonImage
 	std::string researchSound;    // ResearchSound
 	std::string unitSpecificSound; // UnitSpecificSound
+	// AcademyClassify (parseIndexList over TheAcademyClassificationTypeNames: ACT_NONE 0, ACT_UPGRADE_RADAR 1, ACT_SUPERPOWER 2).
+	std::uint8_t academyClassification{0};
 };
+
+// TheAcademyClassificationTypeNames' index of `name` (ACT_NONE for a name it does not hold).
+inline std::uint8_t AcademyClassification(std::string_view name) noexcept
+{
+	constexpr std::array<std::string_view, 3> names{"ACT_NONE", "ACT_UPGRADE_RADAR", "ACT_SUPERPOWER"};
+	for (std::uint8_t index = 0; index < names.size(); ++index)
+		if (names[index] == name)
+			return index;
+	return 0;
+}
 
 struct UpgradeCatalog
 {
@@ -83,7 +95,7 @@ inline UpgradeCatalog BuildUpgradeCatalog(const engine::config::Document &docume
 			else if (field.key == "BuildTime")
 			{
 				const auto seconds = engine::config::values::ParseFixed(field.Value()).value_or(Engine::Math::Fixed{});
-				upgrade.buildTicks = static_cast<std::uint64_t>((seconds * Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(ticksPerSecond))).Ceil());
+				upgrade.buildTicks = BuildFrames(seconds, static_cast<std::uint64_t>(ticksPerSecond)); // UpgradeTemplate::calcTimeToBuild
 			}
 			else if (field.key == "DisplayName")
 				upgrade.displayName = std::string(field.Value());
@@ -93,6 +105,8 @@ inline UpgradeCatalog BuildUpgradeCatalog(const engine::config::Document &docume
 				upgrade.researchSound = std::string(field.Value());
 			else if (field.key == "UnitSpecificSound")
 				upgrade.unitSpecificSound = std::string(field.Value());
+			else if (field.key == "AcademyClassify")
+				upgrade.academyClassification = AcademyClassification(field.Value());
 		}
 	}
 	return catalog;

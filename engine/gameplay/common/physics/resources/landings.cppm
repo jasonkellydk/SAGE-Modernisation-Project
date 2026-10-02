@@ -21,6 +21,11 @@ struct Landing
 struct Landings : ecs::ChunkOutputs<Landing>
 {
 };
+
+// The same from bodies their locomotor steps itself (flyers: the movement's chunks).
+struct LocomotorLandings : ecs::ChunkOutputs<Landing>
+{
+};
 }
 
 export namespace ecs
@@ -29,5 +34,10 @@ template<>
 struct ResourceTraits<engine::gameplay::Landings>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.landings";
+};
+template<>
+struct ResourceTraits<engine::gameplay::LocomotorLandings>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.locomotor_landings";
 };
 }

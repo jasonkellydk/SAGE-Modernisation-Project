@@ -459,9 +459,10 @@ inline ControlBarState ReadControlBar(session::SessionView &view, std::optional<
 				slot.image = content.upgrades.upgrades[entry.definition].buttonImage;
 				slot.upgrade = content.upgrades.upgrades[entry.definition].name;
 			}
-			if (index == 0 && entry.ticksTotal > 0)
+			// m_percentComplete: its updates over calcTimeToBuild as its last update had it (in tenths of a percent).
+			if (const std::uint64_t total = entry.ticksNow != 0 ? entry.ticksNow : entry.ticksTotal; index == 0 && total > 0)
 				slot.progress = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-					entry.progress.Raw() * 1000 / (static_cast<std::int64_t>(entry.ticksTotal) << 16), 0, 1000));
+					static_cast<std::int64_t>(entry.frames) * 1000 / static_cast<std::int64_t>(total), 0, 1000));
 			state.queue.push_back(std::move(slot));
 		}
 	return state;

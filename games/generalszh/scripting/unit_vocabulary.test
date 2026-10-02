@@ -282,6 +282,7 @@ struct RecordingHost final : generalszh::scripting::UnitScriptHost
 	void EnableUnitConstruction(const std::string &) override {}
 	void DisableUnitConstruction(const std::string &player) override { calls.push_back(player + " builds no units"); }
 	void SetWarehouseValue(const std::string &warehouse, std::int64_t cash) override { calls.push_back(warehouse + " $" + std::to_string(cash)); }
+	void SetCaveIndex(const std::string &cave, std::int64_t index) override { calls.push_back(cave + " cave " + std::to_string(index)); }
 	void PlayerBuildUpgrade(const std::string &player, const std::string &upgrade) override { calls.push_back(player + " builds " + upgrade); }
 	std::vector<std::string> recruited;
 	void RecruitTeam(const std::string &team, Engine::Math::Fixed radius) override { recruited.push_back(team + ":" + std::to_string(radius.Floor())); }
@@ -392,6 +393,32 @@ BOOST_AUTO_TEST_CASE(legacy_parity_orders_damage_kills_transfers_and_money_reach
 	const std::vector<std::string> expected{"Tank stops", "Squad stops", "Squad disbands", "Squad to Here", "Tank -50", "Squad -25", "Squad killed",
 		"Squad deleted living", "me killed", "Tank to PlyrGLA", "Squad to me", "PlyrGLA +$-300", "me =$5000"};
 	BOOST_TEST(host.calls == expected, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+}
+
+// ScriptActions::doSetCaveIndex: SET_CAVE_INDEX(cave, index) asks the host for the named cave and the index (Desert Fury's
+// scripts call it; the host finds no CaveContain on a Zero Hour object and does nothing).
+BOOST_AUTO_TEST_CASE(legacy_parity_set_cave_index_reaches_the_host)
+{
+	level::Scenario scenario;
+	auto &participant = scenario.participants.emplace_back();
+	level::Script script;
+	script.name = "cave";
+	script.oneShot = true;
+	script.conditions = {{Call("CONDITION_TRUE", {})}};
+	level::ScriptCall call = Call("SET_CAVE_INDEX", {"Cave1", ""});
+	call.parameters[1].integer = 3;
+	call.parameters[1].number = Engine::Math::Fixed::FromInt(3);
+	script.actions = {call};
+	participant.scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	RecordingHost host;
+	generalszh::scripting::AddUnitVocabulary(vocabulary, host);
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST_REQUIRE(host.calls.size() == 1u);
+	BOOST_TEST(host.calls[0] == "Cave1 cave 3");
 	BOOST_TEST(runtime.UnknownActions().empty());
 }
 

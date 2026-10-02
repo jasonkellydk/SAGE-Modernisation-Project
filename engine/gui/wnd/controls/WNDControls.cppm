@@ -137,6 +137,8 @@ export struct ControlVisual final
 	bool clock_remaining = false;
 	Graphics::Color2D clock_color{};
 	ImageRef overlay_image{}; // a push button's overlay image (GadgetButtonDrawOverlayImage), over its whole rectangle
+	bool extra_border = false; // a push button's border (GadgetButtonSetBorder), one pixel outside it
+	Graphics::Color2D extra_border_color{};
 	const ImageRef *highlighted_overlay = nullptr; // Cameo_hilited
 	const ImageRef *pushed_overlay = nullptr;      // Cameo_push
 	bool wrap_centered = false;
@@ -306,6 +308,12 @@ bool Render_Push_Button(DrawList &draw_list, const ControlVisual &visual) noexce
 		button.clock_percent = visual.clock_percent;
 		button.remaining_clock = visual.clock_remaining;
 		button.clock_color = visual.clock_color;
+	}
+	// W3DGadgetPushButtonImageDraw: drawOpenRect(start - 1, size + 2, 1, colorBorder) when a border is set.
+	if (visual.extra_border) {
+		button.has_extra_border = true;
+		button.extra_border = {visual.rectangle.left - 1.0f, visual.rectangle.top - 1.0f, visual.rectangle.right + 1.0f, visual.rectangle.bottom + 1.0f};
+		button.extra_border_color = visual.extra_border_color;
 	}
 	return Add_Push_Button_Background(draw_list, button)
 		&& Add_Push_Button_Overlays(draw_list, button);

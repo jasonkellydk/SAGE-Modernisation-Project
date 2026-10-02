@@ -579,4 +579,69 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_shroud_crate_reveals_the_map_to_its_player)
 	BOOST_TEST(restored->StateHash() == one->StateHash());
 }
 
+// CrateCollide::isValidToExecute with AllowMultiPickup No (TheSuperHackers' fix of the retail quirk that let two pickers
+// both collect a crate in one frame, kept by the port; no shipped crate sets it): two Humvees standing where a
+// SupplyDropZoneCrate lands touch it in the same frame; only the first collects its 250.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_crate_is_collected_once_in_a_frame)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const std::uint32_t america = *game.Teams().FindPlayer("player0");
+	const ecs::Entity first = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	game.Place("AmericaVehicleHumvee", match->At(204, -200), {}, match->Team(game, 0));
+	auto &money = world.Resource<engine::gameplay::PlayerMoney>();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	const std::int64_t before = money.Balance(america);
+	game.Place("SupplyDropZoneCrate", game.TransformOf(first)->position.XY(), {}, 0);
+	game.Tick();
+	BOOST_TEST(pickups.size() == 1u);
+	game.Tick();
+	BOOST_TEST(money.Balance(america) - before == 250);
+}
+
+// VeterancyCrateCollide::executeCrateBehavior / isValidToExecute (the shipped MediumLevelUpCrate: EffectRange 250): a
+// Humvee touching it takes it, and every object of its player within 250 of the Humvee (FROM_CENTER_2D) gains a level
+// (gainExpForLevel, with the next tick's veterancy pass); one of its player's 400 away and an enemy beside it do not.
+// A retail quirk fixed (ledger B): the original first asks the crate's own AI whether it heads for the collector, which a
+// crate (no AI) never does, so retail never gives a level-up crate.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_level_up_crate_promotes_its_players_objects_about_the_collector)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", match->At(200, -200), {}, match->Team(game, 0));
+	const ecs::Entity near = game.Place("AmericaVehicleHumvee", match->At(400, -200), {}, match->Team(game, 0));
+	const ecs::Entity far = game.Place("AmericaVehicleHumvee", match->At(600, -200), {}, match->Team(game, 0));
+	const ecs::Entity enemy = game.Place("GLAVehicleTechnical", match->At(260, -200), {}, match->Team(game, 1));
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(humvee) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::Experience>(humvee)->trainable);
+	const ecs::Entity crate = game.Place("MediumLevelUpCrate", game.TransformOf(humvee)->position.XY(), {}, 0);
+	BOOST_TEST_REQUIRE(world.IsAlive(crate));
+	game.Tick();
+	const auto &pickups = world.Resource<gameplay::CratePickups>().list;
+	BOOST_TEST_REQUIRE(pickups.size() == 1u);
+	BOOST_TEST((pickups[0].kind == gameplay::CratePickup::Kind::Veterancy));
+	BOOST_TEST((pickups[0].picker == humvee));
+	game.Tick();
+	BOOST_TEST(!world.IsAlive(crate));
+	BOOST_TEST(world.Get<gp::Experience>(humvee)->level == 1u);
+	BOOST_TEST(world.Get<gp::Experience>(near)->level == 1u);
+	BOOST_TEST(world.Get<gp::Experience>(far)->level == 0u);
+	BOOST_TEST(world.Get<gp::Experience>(enemy)->level == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

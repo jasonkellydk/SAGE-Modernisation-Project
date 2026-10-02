@@ -23,6 +23,7 @@ import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.rts.aircraft.components.jet;
 import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.common.weapons.components.armament;
 import games.generalszh.gameplay.effects.resources.effect_cues;
 import engine.gameplay.common.identity.components.team_member;
@@ -340,6 +341,111 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_carrier_replaces_a_lost_jet)
 		game.Tick();
 	const std::uint32_t settled = world.Get<gp::Jet>(replacement)->space;
 	BOOST_TEST((Engine::Math::DistanceSquared(world.Get<gp::Transform>(replacement)->position.XY(), field.spaces[settled].prep.XY()) < Fixed::FromInt(100)));
+}
+
+// Legacy parity (FlightDeckBehavior.cpp: calcPPInfo; JetAIUpdate.cpp: JetTakeoffOrLandingState::onEnter / update,
+// JetOrHeliReturnForLandingState::onEnter; the shipped AmericaAircraftCarrier: ApproachHeight 50, LandingDeckHeightOffset
+// 45): runwayExit is the runway's end plus 0.75 of (end - start), ApproachHeight + LandingDeckHeightOffset = 95 over the
+// end; runwayApproach the landing strip's start plus 0.75 of (landStart - landEnd), 95 over the strip's start. A front
+// jet sent off rolls down its runway to its end at runwayApproach's height and on to runwayExit, held precise between
+// the end's height and the point it makes for (lift (1 - distance to the end / runway length) squared), at runwayExit's
+// height once past the end; recalled, it flies to runwayApproach, then lands over it, onto the strip's start and along
+// to its end at its least speed, and taxies to its space.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_carrier_jet_climbs_out_and_comes_in_at_its_approach_height)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-500), Fixed::FromInt(-300)};
+	const ecs::Entity carrier = game.Place("AmericaAircraftCarrier", site, {}, america);
+	game.Tick();
+	game.Tick();
+	const auto &field = *world.Get<gp::Airfield>(carrier);
+	BOOST_TEST((field.approachHeight == Fixed::FromInt(50)));
+	BOOST_TEST((field.deckHeight == Fixed::FromInt(45)));
+	ecs::Entity jet;
+	{
+		ecs::Query<ecs::Read<gp::Jet>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto rows = chunk.template Get<gp::Jet>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < rows.size(); ++row)
+				if (rows[row].airfield == carrier && rows[row].space == 0)
+					jet = entities[row];
+		});
+	}
+	BOOST_TEST_REQUIRE(world.IsAlive(jet));
+	const auto &runway = field.runways[field.spaces[0].runway];
+	BOOST_TEST_REQUIRE(runway.landing == 1u);
+	const Fixed rise = Fixed::FromInt(95);
+	const Fixed quarters = Fixed::FromRatio(3, 4);
+	const Engine::Math::FixedVector3 exit{runway.end.x + (runway.end.x - runway.start.x) * quarters,
+		runway.end.y + (runway.end.y - runway.start.y) * quarters, runway.end.z + rise};
+	const Engine::Math::FixedVector3 approach{runway.landStart.x + (runway.landStart.x - runway.landEnd.x) * quarters,
+		runway.landStart.y + (runway.landStart.y - runway.landEnd.y) * quarters, runway.landStart.z + rise};
+	const auto state = [&] { return world.Get<gp::Jet>(jet)->state; };
+	const auto motion = [&] { return world.Get<gp::Locomotion>(jet); };
+
+	// Sent off: the roll.
+	world.Get<gp::Jet>(jet)->order = gp::Jet::Scramble;
+	for (int tick = 0; tick < 900 && state() != gp::JetState::TakeoffRoll; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE((state() == gp::JetState::TakeoffRoll));
+	{
+		const gp::Jet &rolling = *world.Get<gp::Jet>(jet);
+		BOOST_TEST_REQUIRE(rolling.pathCount == 2u);
+		BOOST_TEST((rolling.path[0] == Engine::Math::FixedVector3{runway.end.x, runway.end.y, approach.z}));
+		BOOST_TEST((rolling.path[1] == exit));
+		BOOST_TEST(motion()->preciseZ == 1u);
+		BOOST_TEST(motion()->ultraAccurate == 1u);
+	}
+	for (int tick = 0; tick < 900 && state() == gp::JetState::TakeoffRoll; ++tick)
+	{
+		game.Tick();
+		const Fixed height = motion()->preciseHeight;
+		if (state() == gp::JetState::TakeoffRoll && world.Get<gp::Jet>(jet)->leg == 0)
+		{
+			BOOST_TEST((height >= runway.end.z));
+			BOOST_TEST((height <= approach.z));
+		}
+	}
+	BOOST_TEST_REQUIRE((state() == gp::JetState::Flying));
+	// Past the end, its lift full: held at runwayExit's height to the exit; flying, no longer precise.
+	BOOST_TEST((motion()->preciseHeight == exit.z));
+	BOOST_TEST(motion()->preciseZ == 0u);
+
+	// Recalled: back to runwayApproach.
+	world.Get<gp::Jet>(jet)->order = gp::Jet::Recall;
+	game.Tick();
+	BOOST_TEST_REQUIRE((state() == gp::JetState::Returning));
+	// (Moved up behind it, its space may have changed: on the same runway.)
+	BOOST_TEST_REQUIRE(field.spaces[world.Get<gp::Jet>(jet)->space].runway == field.spaces[0].runway);
+	BOOST_TEST((world.Get<gp::Jet>(jet)->goal == approach.XY()));
+	for (int tick = 0; tick < 1800 && state() != gp::JetState::Landing; ++tick)
+		game.Tick();
+	BOOST_TEST_REQUIRE((state() == gp::JetState::Landing));
+	{
+		const gp::Jet &landing = *world.Get<gp::Jet>(jet);
+		BOOST_TEST_REQUIRE(landing.pathCount == 3u);
+		BOOST_TEST((landing.path[0] == approach));
+		BOOST_TEST((landing.path[1] == runway.landStart));
+		BOOST_TEST((landing.path[2] == runway.landEnd));
+		BOOST_TEST((motion()->preciseHeight == approach.z));
+		BOOST_TEST((motion()->locomotor.maxSpeed == motion()->locomotor.minSpeed));
+	}
+	for (int tick = 0; tick < 1800 && state() == gp::JetState::Landing; ++tick)
+	{
+		game.Tick();
+		const gp::Jet &landing = *world.Get<gp::Jet>(jet);
+		if (state() == gp::JetState::Landing && landing.leg >= 1 && landing.leg < landing.pathCount)
+			BOOST_TEST((motion()->preciseHeight == landing.path[landing.leg - 1].z || motion()->preciseHeight == landing.path[landing.leg].z));
+	}
+	BOOST_TEST((state() == gp::JetState::TaxiToParking));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

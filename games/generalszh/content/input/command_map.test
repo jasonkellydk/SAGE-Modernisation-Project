@@ -1,0 +1,151 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.input.command_map;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh::content;
+using namespace engine::config;
+
+namespace
+{
+struct Bound
+{
+	Document document;
+	Diagnostics diagnostics;
+	CommandMap map;
+};
+
+void Bind(Bound &bound, std::string text)
+{
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	ini::Read(bound.document, bound.document.AddSource("CommandMap.ini", std::move(text)), grammar, bound.diagnostics);
+	BindContext context{bound.diagnostics, engine::time::FixedStep{30}};
+	BindCommandMap(bound.document, bound.map, context);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(command_map)
+
+// legacy_parity: MetaEvent.cpp MetaMap::parseMetaMap / getMetaMapRec with TheMetaMapFieldParseTable: each block names a
+// meta-event; a new one goes to the front of the list with its defaults (KEY_NONE, DOWN, NONE, usable nowhere,
+// MISC), a known one is updated in place; Key, Transition, Modifiers and Category are lookup lists (any case),
+// UseableIn a bit string over SHELL and GAME, Description and DisplayName labels; an unknown meta-event is an error.
+BOOST_AUTO_TEST_CASE(legacy_parity_command_map_blocks_make_meta_map_records)
+{
+	Bound bound;
+	Bind(bound, "CommandMap SAVE_VIEW1\n"
+				"  Key = KEY_F1\n"
+				"  Transition = DOWN\n"
+				"  Modifiers = CTRL\n"
+				"  UseableIn = GAME\n"
+				"  Category = INTERFACE\n"
+				"  Description = GUI:SaveView1Description\n"
+				"  DisplayName = GUI:SaveView1\n"
+				"End\n"
+				"CommandMap TAKE_SCREENSHOT\n"
+				"  Key = KEY_F12\n"
+				"  Transition = Down\n"
+				"  Modifiers = NONE\n"
+				"  UseableIn = GAME SHELL\n"
+				"End\n"
+				"CommandMap END_FORCEATTACK\n"
+				"  Key = KEY_NONE\n"
+				"  Transition = UP\n"
+				"  Modifiers = SHIFT_ALT_CTRL\n"
+				"End\n"
+				"CommandMap SAVE_VIEW1\n"
+				"  Modifiers = ALT\n"
+				"End\n"
+				"CommandMap NOT_A_META_EVENT\n"
+				"  Key = KEY_A\n"
+				"End\n");
+	BOOST_TEST(bound.diagnostics.ErrorCount() == 1u);
+	BOOST_TEST_REQUIRE(bound.map.records.size() == 3u);
+	BOOST_TEST(bound.map.records[0].meta == "END_FORCEATTACK");
+	BOOST_TEST(bound.map.records[1].meta == "TAKE_SCREENSHOT");
+	BOOST_TEST(bound.map.records[2].meta == "SAVE_VIEW1");
+	const MetaMapRecord &view = bound.map.records[2];
+	BOOST_TEST((view.key == MappableKey::F1));
+	BOOST_TEST((view.transition == MetaTransition::Down));
+	BOOST_TEST(view.modifiers == meta_modifier::Alt); // updated in place by the second block
+	BOOST_TEST(view.usableIn == command_usable::Game);
+	BOOST_TEST((view.category == MetaCategory::Interface));
+	BOOST_TEST(view.description == "GUI:SaveView1Description");
+	BOOST_TEST(view.displayName == "GUI:SaveView1");
+	const MetaMapRecord &shot = bound.map.records[1];
+	BOOST_TEST((shot.key == MappableKey::F12));
+	BOOST_TEST(shot.usableIn == (command_usable::Game | command_usable::Shell));
+	BOOST_TEST((shot.category == MetaCategory::Misc));
+	const MetaMapRecord &end = bound.map.records[0];
+	BOOST_TEST((end.key == MappableKey::NONE));
+	BOOST_TEST((end.transition == MetaTransition::Up));
+	BOOST_TEST(end.modifiers == (meta_modifier::Shift | meta_modifier::Alt | meta_modifier::Ctrl));
+	BOOST_TEST(end.usableIn == command_usable::None);
+	BOOST_TEST(MappableKeyName(MappableKey::K0) == "KEY_0");
+	BOOST_TEST(MappableKeyName(MappableKey::NONE) == "KEY_NONE");
+}
+
+// legacy_parity: the shipped CommandMap.ini (GameEngine::init loads Data\English\CommandMap.ini, then
+// Data\INI\CommandMap.ini, which ships empty): 96 meta-events, last defined first (TOGGLE_FAST_FORWARD_REPLAY, the
+// file's last), DEMO_INSTANT_QUIT (its first) last; OPTIONS is Esc down in a game; the camera keys are the keypad's;
+// the force attack pair is CTRL's own change.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_command_map)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/English/CommandMap", "Data/INI/CommandMap"});
+	Diagnostics &diagnostics = loader.DiagnosticsFor(document);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	CommandMap map;
+	BindCommandMap(document, map, context);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	BOOST_TEST(map.records.size() == 96u);
+	BOOST_TEST_REQUIRE(!map.records.empty());
+	BOOST_TEST(map.records.front().meta == "TOGGLE_FAST_FORWARD_REPLAY");
+	BOOST_TEST(map.records.back().meta == "DEMO_INSTANT_QUIT");
+	const MetaMapRecord *options = map.Find("OPTIONS");
+	BOOST_TEST_REQUIRE((options != nullptr));
+	BOOST_TEST((options->key == MappableKey::ESC));
+	BOOST_TEST((options->transition == MetaTransition::Down));
+	BOOST_TEST(options->modifiers == meta_modifier::None);
+	BOOST_TEST(options->usableIn == command_usable::Game);
+	const MetaMapRecord *beacon = map.Find("PLACE_BEACON");
+	BOOST_TEST_REQUIRE((beacon != nullptr));
+	BOOST_TEST((beacon->key == MappableKey::B));
+	BOOST_TEST(beacon->modifiers == meta_modifier::Ctrl);
+	const MetaMapRecord *remove = map.Find("DELETE_BEACON");
+	BOOST_TEST_REQUIRE((remove != nullptr));
+	BOOST_TEST((remove->key == MappableKey::DEL));
+	const MetaMapRecord *zoom = map.Find("END_CAMERA_ZOOM_IN");
+	BOOST_TEST_REQUIRE((zoom != nullptr));
+	BOOST_TEST((zoom->key == MappableKey::KP8));
+	BOOST_TEST((zoom->transition == MetaTransition::Up));
+	const MetaMapRecord *force = map.Find("BEGIN_FORCEATTACK");
+	BOOST_TEST_REQUIRE((force != nullptr));
+	BOOST_TEST((force->key == MappableKey::NONE));
+	BOOST_TEST(force->modifiers == meta_modifier::Ctrl);
+	const MetaMapRecord *shot = map.Find("TAKE_SCREENSHOT");
+	BOOST_TEST_REQUIRE((shot != nullptr));
+	BOOST_TEST(shot->usableIn == (command_usable::Game | command_usable::Shell));
+	const MetaMapRecord *view = map.Find("SAVE_VIEW1");
+	BOOST_TEST_REQUIRE((view != nullptr));
+	BOOST_TEST((view->category == MetaCategory::Interface));
+	BOOST_TEST(view->displayName == "GUI:SaveView1");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

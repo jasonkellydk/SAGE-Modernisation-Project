@@ -80,4 +80,30 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_move_ordered_shows_its_hint_for_forty_frame
 	BOOST_TEST(hints.instances.empty());
 }
 
+// HintSpy's MSG_ADD_WAYPOINT: a waypoint added shows the move hint where it goes, as a move does.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_waypoint_added_shows_the_move_hint)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<Selected>();
+	world.FinalizeComponents();
+	world.EmplaceResource<PresentationFrame>().clock = 1.0;
+	world.EmplaceResource<LookCatalog>().moveHintLook = 9;
+	world.EmplaceResource<SelectionCatalog>();
+	world.EmplaceResource<TerrainHeightHandle>();
+	PlayerOrders &orders = world.EmplaceResource<PlayerOrders>();
+	MoveHints &hints = world.EmplaceResource<MoveHints>();
+	MoveHintSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	orders.pending.push_back(commands::AddWaypoint{{}, {Fixed::FromInt(30), Fixed::FromInt(60)}});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(hints.instances.size() == 1u);
+	BOOST_TEST(hints.instances[0].world[3] == 30.0f);
+	BOOST_TEST(hints.instances[0].world[7] == 60.0f);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

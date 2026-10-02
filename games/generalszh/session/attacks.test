@@ -275,6 +275,72 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_hazard_cleaner_cleans_near_it_and_where_it_
 	BOOST_TEST(!game.World().IsAlive(far));
 }
 
+// CleanupHazardUpdate::fireWhenReady (WeaponSlot): before attacking the hazard it picked it locks its WeaponSlot for the
+// attack (setWeaponLock(m_weaponSlot, LOCKED_TEMPORARILY)), and its reach is that slot's weapon's (m_weaponTemplate's
+// AttackRange). Every shipped cleaner names PRIMARY and holds one weapon, so an Ambulance is given here a set with the
+// Ranger's rifle as PRIMARY and its clean-up weapon as SECONDARY, and WeaponSlot = SECONDARY: on its first look, beside a
+// hazard, it attacks it with SECONDARY locked, temporarily (the clean-up weapon's 30-shot clip has not emptied).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hazard_cleaner_locks_its_weapon_slot_to_clean)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	std::string hazardType;
+	for (const auto &[name, object] : shell.game.objects)
+		if (hazardType.empty() && object.Is("CLEANUP_HAZARD") && !object.Is("PROJECTILE"))
+			hazardType = name;
+	BOOST_TEST_REQUIRE(!hazardType.empty());
+	content::GameContent modded = shell.game;
+	content::ObjectDefinition *ambulance = modded.objects.Find("AmericaVehicleMedic");
+	BOOST_TEST_REQUIRE(ambulance != nullptr);
+	static engine::config::Node set;
+	set = engine::config::Node{};
+	set.key = "WeaponSet";
+	set.block = true;
+	engine::config::Node conditions, primary, secondary;
+	conditions.key = "Conditions";
+	conditions.values = {"None"};
+	primary.key = secondary.key = "Weapon";
+	primary.values = {"PRIMARY", "RangerAdvancedCombatRifle"};
+	secondary.values = {"SECONDARY", "AmbulanceCleanHazardWeapon"};
+	set.children = {conditions, primary, secondary};
+	ambulance->weaponSets = {&set};
+	static engine::config::Node cleanup;
+	bool given = false;
+	for (content::ModuleEntry &module : ambulance->modules)
+		if (module.type == "CleanupHazardUpdate" && module.block != nullptr)
+		{
+			cleanup = *module.block;
+			for (engine::config::Node &child : cleanup.children)
+				if (child.key == "WeaponSlot")
+				{
+					child.values = {"SECONDARY"};
+					given = true;
+				}
+			module.block = &cleanup;
+		}
+	BOOST_TEST_REQUIRE(given);
+	session::Session game(shell.map->level, modded, session::SessionOptions{42, 0, {}});
+	game.Tick();
+	const auto team = *game.Teams().FindTeam("teamPlyrCivilian");
+	const auto [low, high] = game.Game().ground.Extent();
+	const FixedVector2 centre = (low + high) / Fixed::FromInt(2);
+	const ecs::Entity cleaner = game.Place("AmericaVehicleMedic", centre, {}, team);
+	const ecs::Entity hazard = game.Place(hazardType, centre + FixedVector2{Fixed::FromInt(40), Fixed{}}, {}, team);
+	BOOST_TEST_REQUIRE((game.World().IsAlive(cleaner) && game.World().IsAlive(hazard)));
+	BOOST_TEST(game.World().Get<gameplay::CleanupHazard>(cleaner)->slot == 1u);
+	const auto *before = game.World().Get<gp::WeaponSlots>(cleaner);
+	BOOST_TEST_REQUIRE(before != nullptr);
+	BOOST_TEST(before->locked == gp::WeaponSlots::Unlocked);
+	game.Tick();
+	BOOST_TEST((game.World().Get<gp::AttackTarget>(cleaner)->target == hazard));
+	const auto *slots = game.World().Get<gp::WeaponSlots>(cleaner);
+	BOOST_TEST_REQUIRE(slots != nullptr);
+	BOOST_TEST(slots->locked == 1u);
+	BOOST_TEST(slots->temporary == 1u);
+	BOOST_TEST(slots->current == 1u);
+}
+
 // DefectorSpecialPower::doSpecialPowerAtObject (Object::defect). No shipped object carries the module, so Colonel
 // Burton is given one here naming a shipped power template: fired at an enemy unit (the
 // GLA's, on the shell map) it turns it over to its own player's default team, an undetected defector until the
@@ -1699,11 +1765,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_comes_in_circles_fires_and_
 	// From the corner farthest from the spot.
 	BOOST_TEST((Engine::Math::Distance(world.Get<gp::Transform>(gunship)->position.XY(), high) < Fixed::FromInt(5)));
 	std::uint64_t orbiting = 0, departing = 0, gone = 0;
-	int shots = 0;
+	int shots = 0, strafes = 0;
 	for (int tick = 0; tick < 30 * 180 && gone == 0; ++tick)
 	{
 		const ecs::Entity gattling = world.IsAlive(gunship) ? ship()->gattling : ecs::Entity{};
+		const auto walkedFrom = world.IsAlive(gunship) ? ship()->gattlingTarget : Engine::Math::FixedVector3{};
 		game.Tick();
+		// Each tick its gattling's fire walks, the presentation hears of it (its GattlingStrafeFXParticleSystem).
+		if (world.IsAlive(gunship) && !(ship()->gattlingTarget == walkedFrom))
+		{
+			++strafes;
+			BOOST_TEST(ship()->strafedTick == game.CurrentTick());
+		}
 		if (!world.IsAlive(gunship))
 		{
 			gone = game.CurrentTick();
@@ -1729,6 +1802,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_comes_in_circles_fires_and_
 	BOOST_TEST_REQUIRE(orbiting != 0u);
 	BOOST_TEST(departing == orbiting + 450);
 	BOOST_TEST(shots > 0);
+	BOOST_TEST(strafes > 0);
 	BOOST_TEST(gone > departing);
 }
 

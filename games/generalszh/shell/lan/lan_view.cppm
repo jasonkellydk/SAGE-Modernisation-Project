@@ -81,11 +81,12 @@ private:
 	engine::gui::mvvm::Observable<int> m_chatLast{-1};
 };
 
-// GameInfoWindow.wnd over the lobby's StaticTextGameInfo: the selected game's host, map and players.
+// GameInfoWindow.wnd over the lobby's StaticTextGameInfo: the selected game's host, map and players (RefreshGameInfoWindow:
+// each name in the list's second column, its side's icon, 22 x 25, in the first).
 class GameInfoView : detail::Derived
 {
 public:
-	GameInfoView(wnd::WNDBindings &bindings, LanLobbyViewModel &viewModel)
+	GameInfoView(wnd::WNDBindings &bindings, LanLobbyViewModel &viewModel, std::function<wnd::ImageRef(std::string_view)> resolve = {})
 	{
 		const std::string info = "GameInfoWindow.wnd:";
 		bindings.BindVisible(info + "ParentGameInfo", m_shown);
@@ -93,18 +94,22 @@ public:
 		bindings.BindText(info + "StaticTextMapName", m_map);
 		bindings.BindList(info + "ListBoxPlayers", m_players, m_noRow);
 		bindings.BindRowColors(info + "ListBoxPlayers", m_colors);
+		bindings.BindRowImages(info + "ListBoxPlayers", m_icons, std::move(resolve));
 		Watch(viewModel.details, [this, &viewModel] {
 			const GameDetails &details = viewModel.details.Get();
 			m_host.Set(details.host);
 			m_map.Set(details.map);
 			std::vector<std::u16string> names;
 			std::vector<std::uint32_t> colors;
-			for (const ChatLine &player : details.players)
+			std::vector<std::vector<wnd::ListImageSource>> icons;
+			for (std::size_t index = 0; index < details.players.size(); ++index)
 			{
-				names.push_back(player.text);
-				colors.push_back(player.rgba);
+				names.push_back(u'\t' + details.players[index].text);
+				colors.push_back(details.players[index].rgba);
+				icons.push_back({{index < details.icons.size() ? details.icons[index] : std::string{}, 22, 25}});
 			}
 			m_colors.Set(std::move(colors));
+			m_icons.Set(std::move(icons));
 			m_players.Set(std::move(names));
 			m_shown.Set(details.shown);
 		});
@@ -115,6 +120,7 @@ private:
 	engine::gui::mvvm::Observable<std::u16string> m_host, m_map;
 	engine::gui::mvvm::Observable<std::vector<std::u16string>> m_players;
 	engine::gui::mvvm::Observable<std::vector<std::uint32_t>> m_colors;
+	engine::gui::mvvm::Observable<std::vector<std::vector<wnd::ListImageSource>>> m_icons;
 	engine::gui::mvvm::Observable<int> m_noRow{-1};
 };
 

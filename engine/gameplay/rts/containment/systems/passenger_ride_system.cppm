@@ -15,7 +15,10 @@ export import engine.gameplay.common.spatial.components.transform;
 // there. In a transport with fire points (its FIREPOINT bones: OpenContain::redeployOccupants), its riders stand at
 // them in turn from the first in (wrapping round), turned with the transport (and with its turret when they ride in it).
 // Passengers keep their own facing
-// (a passenger allowed to fire turns to its victim itself).
+// (a passenger allowed to fire turns to its victim itself). A container that does not enclose its occupants (a fire
+// base) keeps each at its station (GarrisonContain::positionObjectsAtStationGarrisonPoints; who is where as
+// CurrentStations has it) and leaves one without a station where it stands.
+export import engine.gameplay.rts.containment.algorithms.garrison_stations;
 export import engine.gameplay.rts.containment.components.garrison_points;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.rts.combat.components.turret;
@@ -26,7 +29,7 @@ struct PassengerRideSystem
 {
 	using Query = ecs::Query<ecs::Read<Passenger>>;
 	using Lookup = ecs::Lookup<ecs::Read<Transform>, ecs::Read<GarrisonPoints>, ecs::Read<AttackTarget>, ecs::Read<Transport>, ecs::Read<TransportFirePoints>,
-		ecs::Read<Turret>>;
+		ecs::Read<Turret>, ecs::Read<GarrisonStations>>;
 	using Resources = ecs::Resources<ecs::Read<CargoManifest>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
@@ -52,7 +55,23 @@ struct PassengerRideSystem
 				if (carrier == nullptr || self == nullptr)
 					continue;
 				Engine::Math::FixedVector3 at = carrier->position;
-				if (const Transport *transport = lookup.Get<Transport>(passengers[row].transport))
+				const Transport *transport = lookup.Get<Transport>(passengers[row].transport);
+				if (transport != nullptr && transport->definition.enclosesRiders == 0)
+				{
+					const GarrisonStations *stations = lookup.Get<GarrisonStations>(passengers[row].transport);
+					if (stations == nullptr)
+						continue;
+					const auto occupants = CurrentStations(*stations, manifest.Aboard(passengers[row].transport), false);
+					const std::size_t count = std::min<std::size_t>(stations->count, GarrisonStations::Max);
+					const auto found = std::find(occupants.begin(), occupants.begin() + static_cast<std::ptrdiff_t>(count), entities[row]);
+					if (found == occupants.begin() + static_cast<std::ptrdiff_t>(count))
+						continue;
+					const Engine::Math::FixedVector3 station = StationPosition(*stations, static_cast<std::size_t>(found - occupants.begin()), *carrier);
+					if (!(station == self->position))
+						commands.Set<Transform>(entities[row], Transform{station, self->facing});
+					continue;
+				}
+				if (transport != nullptr)
 					at.z += transport->definition.riderHeight;
 				// putObjAtNextFirePoint: its turn among the riders (the first in takes the first point).
 				if (const TransportFirePoints *fire = lookup.Get<TransportFirePoints>(passengers[row].transport); fire != nullptr && fire->count > 0)

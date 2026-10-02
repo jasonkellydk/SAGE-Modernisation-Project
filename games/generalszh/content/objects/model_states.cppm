@@ -118,6 +118,9 @@ struct ModelStates
 	// MinLODRequired: the lowest static detail level (0 Low .. 4 Custom) the draw module is made at while draw module
 	// LOD is on (W3DModelDrawModuleData m_minLODRequired: Low by default).
 	std::int32_t minLodRequired{0};
+	// AttachToBoneInAnotherModule (lower-cased, parseAsciiStringLC): drawn at that bone of its drawable as it is now (the
+	// object's own model first: a Technical's gun on its chassis' Dum_Turret), not at the object (none: at the object).
+	std::string attachToBone;
 	// OkToChangeModelColor: its model takes a new indicator colour later (a capture, a script's colour); without, it keeps
 	// the one it was made with (W3DModelDraw::replaceIndicatorColor).
 	bool okToChangeColor{false};
@@ -332,6 +335,12 @@ ModelStates ReadDrawStates(const ModuleEntry &module)
 				for (std::size_t level = 0; level < levels.size(); ++level)
 					if (upper == levels[level])
 						result.minLodRequired = static_cast<std::int32_t>(level);
+			}
+			else if (child.key == "AttachToBoneInAnotherModule" && !child.values.empty())
+			{
+				result.attachToBone = std::string(child.Value());
+				for (char &c : result.attachToBone)
+					c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 			}
 			else if (child.key == "AnimationsRequirePower")
 				result.animationsRequirePower = engine::config::values::ParseBool(child.Value()).value_or(true);

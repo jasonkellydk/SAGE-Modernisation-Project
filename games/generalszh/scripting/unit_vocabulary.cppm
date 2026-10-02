@@ -259,6 +259,9 @@ public:
 	virtual void DisableUnitConstruction(const std::string &player) = 0;
 	// SupplyWarehouseDockUpdate::setCashValue: the named warehouse holds what that cash takes, in boxes rounded up.
 	virtual void SetWarehouseValue(const std::string &warehouse, std::int64_t cash) = 0;
+	// doSetCaveIndex: the named object's CaveContain (findCave) tries to take the cave network `index`
+	// (tryToSetCaveIndex); without one, nothing.
+	virtual void SetCaveIndex(const std::string &cave, std::int64_t index) = 0;
 	// The player researches a player upgrade at one of its buildings (AI_PLAYER_BUILD_UPGRADE).
 	virtual void PlayerBuildUpgrade(const std::string &player, const std::string &upgrade) = 0;
 	// A player parameter as named by a script of `participant` (ScriptEngine::getPlayerFromAsciiString): "<This
@@ -514,6 +517,8 @@ inline void AddUnitVocabulary(engine::scripting::Vocabulary &vocabulary, UnitScr
 	vocabulary.AddAction("PLAYER_DISABLE_UNIT_CONSTRUCTION", [units](ScriptCallContext &c) { units->DisableUnitConstruction(units->PlayerNamed(c.participant, Arg(units, c, 0))); });
 	// WAREHOUSE_SET_VALUE(warehouse, cash)
 	vocabulary.AddAction("WAREHOUSE_SET_VALUE", [units](ScriptCallContext &c) { units->SetWarehouseValue(Arg(units, c, 0), Integer(c, 1)); });
+	// SET_CAVE_INDEX(cave, index)
+	vocabulary.AddAction("SET_CAVE_INDEX", [units](ScriptCallContext &c) { units->SetCaveIndex(Arg(units, c, 0), Integer(c, 1)); });
 
 	// SKIRMISH_COMMAND_BUTTON_READY_ALL / _PARTIAL(player, team, button)
 	vocabulary.AddCondition("SKIRMISH_COMMAND_BUTTON_READY_ALL",

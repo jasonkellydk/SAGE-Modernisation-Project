@@ -40,6 +40,8 @@ struct Player
 	// All its units hunt (Player::m_unitsShouldHunt: PLAYER_HUNT): hunting, they never stop for want of victims and look
 	// past their attack priorities when those find none.
 	bool unitsShouldHunt{false};
+	// Killed (Player::killPlayer: m_isPlayerDead): object creation lists that require a live player make nothing for it.
+	bool dead{false};
 };
 
 struct Team
@@ -233,6 +235,7 @@ public:
 			writer.U64(player.attackedTick);
 			writer.Flag(player.listInScoreScreen);
 			writer.Flag(player.unitsShouldHunt);
+			writer.Flag(player.dead);
 		}
 		writer.U32(static_cast<std::uint32_t>(m_teams.size()));
 		for (const Team &team : m_teams)
@@ -289,6 +292,7 @@ public:
 			player.attackedTick = reader.U64().value_or(0);
 			player.listInScoreScreen = reader.Flag().value_or(true);
 			player.unitsShouldHunt = reader.Flag().value_or(false);
+			player.dead = reader.Flag().value_or(false);
 			players.push_back(std::move(player));
 		}
 		const auto teamCount = reader.U32();

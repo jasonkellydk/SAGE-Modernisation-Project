@@ -33,6 +33,7 @@ struct BlockingBody
 	bool waiting{false};    // isWaitingForPath
 	bool wanderer{false};   // its locomotor's WanderWidthFactor is above 0
 	bool panicking{false};  // in AI_PANIC
+	std::uint32_t formation{0}; // its user formation (getFormationID; 0: none)
 };
 
 namespace blocking_detail
@@ -82,7 +83,7 @@ inline bool HasHigherPathPriority(const BlockingBody &self, const BlockingBody &
 
 // AIUpdateInterface::calculateMaxBlockedSpeed: the fastest it may go behind `other` without closing on it (how fast the
 // other goes away from it over how much of its own way points at the other), no faster than `current`; 0 when the other
-// comes at it. (Two units of one formation keep further apart, x 0.55: formations are not ported.)
+// comes at it; behind one of its own formation (both in it), x 0.55: formations do not crowd each other.
 inline Fixed MaxBlockedSpeed(const BlockingBody &self, const BlockingBody &other, Fixed current) noexcept
 {
 	using namespace blocking_detail;
@@ -96,7 +97,9 @@ inline Fixed MaxBlockedSpeed(const BlockingBody &self, const BlockingBody &other
 	const Fixed toward = Engine::Math::Dot(toOther, self.direction);
 	if (toward <= Fixed{})
 		return current;
-	const Fixed most = awaySpeed / toward;
+	Fixed most = awaySpeed / toward;
+	if (other.formation != 0 && self.formation == other.formation)
+		most = most * Fixed::FromRatio(55, 100);
 	return most > current ? current : most;
 }
 

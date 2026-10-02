@@ -45,6 +45,30 @@ struct Locomotion
 	std::uint8_t preciseZ{0};
 	std::uint8_t ultraAccurate{0};
 	Engine::Math::Fixed preciseHeight;
+	// Its geometry's bounding circle radius (GeometryInfo::getBoundingCircleRadius: it turns about a point TurnPivotOffset
+	// times that along its facing).
+	Engine::Math::Fixed boundingRadius;
+	// The place it holds while it has no goal (Locomotor::m_maintainPos, MAINTAIN_POS_IS_VALID: taken the first tick it
+	// has none, let go whenever it heads for something).
+	Engine::Math::FixedVector2 maintainPos;
+	std::uint8_t maintaining{0};
+	// Its last tick was flown by forces (its body's velocity is its motion): FlightForces.
+	std::uint8_t forced{0};
+	// A flyer's leg toward a goal (the path AIInternalMoveToState::computePath gives it: from where it was when the goal
+	// was set, `flightFrom`, to `flightGoal`) is being tracked.
+	std::uint8_t tracking{0};
+	std::uint8_t reserved1[5]{}; // no padding: checkpoints hold its bytes
+	// The speed its last force-flown tick left (another rule setting `speed` since is the original's
+	// scrubVelocity2D / setVelocity on its body).
+	Engine::Math::Fixed flownSpeed;
+	Engine::Math::FixedVector2 flightFrom;
+	Engine::Math::FixedVector2 flightGoal;
+	// The rest of its path past this goal (AIUpdateInterface::m_pathExtraDistance: the next leg, 4 cells more with more
+	// after it), added to what it has left (onPathDistToGoal); its AI sets it with a path's legs.
+	Engine::Math::Fixed flightExtra;
+	// Its locomotor's caps its AI sets (Locomotor::setMaxLift / setMaxSpeed: m_maxLift, m_maxSpeed; none: BIGNUM).
+	Engine::Math::Fixed liftCap{Engine::Math::Fixed::FromInt(99999)};
+	Engine::Math::Fixed speedCap{Engine::Math::Fixed::FromInt(99999)};
 };
 
 // Locomotor::Locomotor: a weaving locomotor starts somewhere within pi/6 of straight, swinging one way or the other at
@@ -77,7 +101,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Locomotion>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.locomotion";
-	static constexpr std::uint32_t Version = 5;
+	static constexpr std::uint32_t Version = 6;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Locomotion &value, StateHasher &hasher) noexcept
 	{
@@ -98,6 +122,13 @@ struct ComponentTraits<engine::gameplay::Locomotion>
 			static_cast<std::uint64_t>(value.preciseZ) << 48 | static_cast<std::uint64_t>(value.ultraAccurate) << 56);
 		hasher.AppendU64(static_cast<std::uint64_t>(l.wanderAboutPointRadius.Raw()));
 		hasher.AppendU64(static_cast<std::uint64_t>(value.preciseHeight.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.boundingRadius.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.maintainPos.x.Raw()));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.maintainPos.y.Raw()) ^ (static_cast<std::uint64_t>(value.maintaining) << 63) ^ (static_cast<std::uint64_t>(value.forced) << 62));
+		hasher.AppendU64(static_cast<std::uint64_t>(value.flownSpeed.Raw()));
+		for (const auto fixed : {value.flightFrom.x, value.flightFrom.y, value.flightGoal.x, value.flightGoal.y, value.flightExtra, value.liftCap, value.speedCap})
+			hasher.AppendU64(static_cast<std::uint64_t>(fixed.Raw()));
+		hasher.AppendU64(value.tracking);
 	}
 };
 }

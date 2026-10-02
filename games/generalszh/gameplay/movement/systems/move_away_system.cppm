@@ -130,6 +130,8 @@ struct MoveAwaySystem
 			view.unmanned = disabled != nullptr && (disabled->mask & gp::disabled_type::Unmanned) != 0;
 			view.centered = agent.centered != 0;
 			view.throughUnits = throughUnits;
+			if (const auto *state = lookup.template Get<gp::BlockedState>(entity); state != nullptr && state->ignoring != ecs::Entity{})
+				view.ignored = state->ignoring;
 			return view;
 		}
 

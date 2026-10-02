@@ -104,15 +104,19 @@ struct PhysicsSystem
 struct FallingDamageSystem
 {
 	using Query = ecs::Query<ecs::Read<Health>>;
-	using Resources = ecs::Resources<ecs::Read<FallDamage>, ecs::Write<IncomingDamage>>;
+	using Resources = ecs::Resources<ecs::Read<FallDamage>, ecs::Read<LocomotorFalls>, ecs::Write<IncomingDamage>>;
 
 	void Execute(ecs::SystemContext &context) const
 	{
 		const FallDamage &falls = context.Read<FallDamage>();
-		if (falls.Size() == 0)
+		// And the falls of bodies their locomotor stepped (flyers), after the physics step's.
+		const LocomotorFalls *flown = context.Find<LocomotorFalls>();
+		if (falls.Size() == 0 && (flown == nullptr || flown->Size() == 0))
 			return;
 		IncomingDamage &incoming = context.Write<IncomingDamage>();
 		falls.ForEach([&](const DamageRecord &record) { incoming.Add(record); });
+		if (flown != nullptr)
+			flown->ForEach([&](const DamageRecord &record) { incoming.Add(record); });
 		incoming.Seal();
 	}
 };

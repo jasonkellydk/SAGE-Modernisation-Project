@@ -153,6 +153,7 @@ target_sources(generals_graphics
             scene/particles/ParticleRenderer.cppm
             scene/weather/WeatherParticles.cppm
             scene/screen/ScreenDistortion.cppm
+            scene/screen/ScreenFilterPass.cppm
             scene/screen/FullscreenOverlay.cppm
             scene/ring/Ring.cppm
             scene/ring/RingRuntime.cppm
@@ -225,6 +226,7 @@ target_sources(generals_graphics
             scene/ScenePass.cppm
             scene/Traversal.cppm
             scene/OrderedDraws.cppm
+            scene/StaticDrawOrder.cppm
             frame/ToolFrame.cppm
             frame/SceneRenderers.cppm
             render-graph/Frame.cppm
@@ -853,6 +855,7 @@ if(RTS_BUILD_GRAPHICS_TESTS)
         add_graphics_test(generals_graphics_resource_recreation_test resources/ResourceRecreation.test.cppm)
         add_graphics_test(generals_graphics_scene_object_list_test scene/SceneObjectList.test.cppm)
         add_graphics_test(generals_graphics_ordered_draws_test scene/OrderedDraws.test.cppm)
+        add_graphics_test(generals_graphics_static_draw_order_test scene/StaticDrawOrder.test.cppm)
         target_compile_definitions(generals_graphics_ordered_draws_test PRIVATE GRAPHICS_TERRAIN_SHADER_DIRECTORY="${GRAPHICS_SHADER_ASSET_DIRECTORY}")
         if(TARGET generals_graphics_shaders)
             add_dependencies(generals_graphics_ordered_draws_test generals_graphics_shaders)

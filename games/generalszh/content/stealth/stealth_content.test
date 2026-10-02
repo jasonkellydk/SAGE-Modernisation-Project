@@ -72,6 +72,22 @@ BOOST_AUTO_TEST_CASE(shipped_detectors_and_the_gps_scrambler_bind)
 	const auto burton = ReadObjectStealth(*objects.Find("AmericaInfantryColonelBurton"), step);
 	BOOST_TEST_REQUIRE(burton.has_value());
 	BOOST_TEST(burton->stealth.hint == engine::gameplay::stealth_hint::FiringWeapon);
+
+	// StealthUpdateModuleData GrantedBySpecialPower (Default/Object.ini's OverrideableByLikeKind StealthUpdate: Yes, its
+	// StealthForbiddenConditions FIRING_PRIMARY FIRING_SECONDARY FIRING_TERTIARY RIDERS_ATTACKING): a Crusader, with no
+	// StealthUpdate of its own, takes the default one, asleep till a power grants it (the StealthUpdate constructor's
+	// UPDATE_SLEEP_FOREVER); the Rebel's own stealth is not granted and runs from the start.
+	namespace sf = engine::gameplay::stealth_forbidden;
+	const auto crusader = ReadObjectStealth(*objects.Find("AmericaTankCrusader"), step);
+	BOOST_TEST_REQUIRE(crusader.has_value());
+	BOOST_TEST(crusader->stealth.Option(engine::gameplay::stealth_option::GrantedBySpecialPower));
+	BOOST_TEST(crusader->stealth.Has(engine::gameplay::stealth_flag::Asleep));
+	BOOST_TEST(!crusader->stealth.Has(engine::gameplay::stealth_flag::CanStealth));
+	BOOST_TEST(crusader->stealth.forbidden == (sf::FiringPrimary | sf::FiringSecondary | sf::FiringTertiary | sf::RidersAttacking));
+	const auto rebel = ReadObjectStealth(*objects.Find("GLAInfantryRebel"), step);
+	BOOST_TEST_REQUIRE(rebel.has_value());
+	BOOST_TEST(!rebel->stealth.Option(engine::gameplay::stealth_option::GrantedBySpecialPower));
+	BOOST_TEST(!rebel->stealth.Has(engine::gameplay::stealth_flag::Asleep));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

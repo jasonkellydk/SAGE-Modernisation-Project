@@ -52,6 +52,11 @@ inline constexpr std::uint32_t Disguised = 1u << 21;
 // both through.
 inline constexpr std::uint32_t BaseDefense = 1u << 22;
 inline constexpr std::uint32_t ArmedContainer = 1u << 23;
+// A structure of no faction (Object::isNonFactionStructure: none of the KINDOF_FS_ kinds); Insignificant while such a
+// structure is a container that is no garrison or holds nobody (PartitionFilterInsignificantBuildings rejects it;
+// ContainerClassesSystem keeps it).
+inline constexpr std::uint32_t NonFactionStructure = 1u << 24;
+inline constexpr std::uint32_t Insignificant = 1u << 25;
 // Held by nothing: what a rule naming a kind no class stands for requires.
 inline constexpr std::uint32_t Unmatchable = 1u << 31;
 }

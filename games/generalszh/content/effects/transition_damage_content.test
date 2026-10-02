@@ -1,0 +1,146 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.effects.transition_damage_content;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::array<const char *, 3> States{"Damaged", "ReallyDamaged", "Rubble"};
+
+std::uint64_t Bit(std::string_view type)
+{
+	return std::uint64_t{1} << *DamageTypeIndex(type);
+}
+
+std::optional<TransitionCreations> Read(const std::string &text, ModelRigs &rigs)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	Document document;
+	ini::Read(document, document.AddSource("Object.ini", text), ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ObjectDefinition *tower = objects.Find("Tower");
+	BOOST_TEST_REQUIRE(tower != nullptr);
+	return ReadTransitionCreations(*tower, rigs);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(transition_damage_content)
+
+// Legacy parity (TransitionDamageFX.h buildFieldParse; TransitionDamageFX.cpp parseFXLocInfo and parseObjectCreationList;
+// INI.cpp parseDamageTypeFlags): all 37 creation list fields of TransitionDamageFXModuleData: <State>OCL<n> for Damaged,
+// ReallyDamaged and Rubble, n 1 to 12, as "Loc: X:<x> Y:<y> Z:<z> OCL:<name>" (a place in the object's frame) or
+// "Bone:<bone> RandomBone:<bool> OCL:<name>", each in its own state and slot; "OCL:None" is no list; DamageOCLTypes from
+// ALL. Each TransitionDamageFX module keeps its own; one with no creation list keeps none, and an object with none has
+// nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_every_transition_creation_field_lands_in_its_state_and_slot)
+{
+	std::string text = "Object Tower\n  Behavior = TransitionDamageFX ModuleTag_01\n    DamageOCLTypes = ALL -WATER -FLAME\n";
+	for (std::size_t state = 0; state < States.size(); ++state)
+		for (std::size_t slot = 0; slot < TransitionSlots; ++slot)
+			text += "    " + std::string(States[state]) + "OCL" + std::to_string(slot + 1) + " = Loc: X:" + std::to_string(state) + " Y:" +
+				std::to_string(slot) + ".5 Z:-" + std::to_string(slot) + " OCL:L" + std::to_string(state) + "_" + std::to_string(slot) + "\n";
+	text += "  End\n"
+		"  Behavior = TransitionDamageFX ModuleTag_02\n    DamagedFXList1 = Loc: X:0 Y:0 Z:0 FXList:FX_Nothing\n  End\n"
+		"  Behavior = TransitionDamageFX ModuleTag_03\n    RubbleOCL2 = Bone:Missing RandomBone:No OCL:Gone\n    RubbleOCL3 = Loc: X:1 Y:2 Z:3 OCL:None\n"
+		"  End\nEnd\n";
+	engine::filesystem::VirtualFileSystem files;
+	ModelRigs rigs(files);
+	const auto creations = Read(text, rigs);
+	BOOST_TEST_REQUIRE(creations.has_value());
+	BOOST_TEST_REQUIRE(creations->modules.size() == 3u);
+	const TransitionCreationModule &all = creations->modules[0];
+	BOOST_TEST(all.types == (~std::uint64_t{0} & ~Bit("WATER") & ~Bit("FLAME")));
+	int checked = 0;
+	for (const auto &slot : all.slots[0])
+		BOOST_TEST(!slot.Used()); // no Pristine fields
+	for (std::size_t state = 0; state < States.size(); ++state)
+		for (std::size_t slot = 0; slot < TransitionSlots; ++slot)
+		{
+			const TransitionCreation &creation = all.slots[state + 1][slot];
+			BOOST_TEST_CONTEXT(States[state] << "OCL" << slot + 1)
+			{
+				BOOST_TEST(creation.list == "L" + std::to_string(state) + "_" + std::to_string(slot));
+				BOOST_TEST_REQUIRE(creation.at.size() == 1u);
+				BOOST_TEST(creation.at[0].x.Raw() == Fixed::FromInt(static_cast<std::int64_t>(state)).Raw());
+				BOOST_TEST(creation.at[0].y.Raw() == (Fixed::FromInt(static_cast<std::int64_t>(slot)) + Fixed::FromRatio(1, 2)).Raw());
+				BOOST_TEST(creation.at[0].z.Raw() == (Fixed{} - Fixed::FromInt(static_cast<std::int64_t>(slot))).Raw());
+			}
+			++checked;
+		}
+	BOOST_TEST(checked == 36); // + DamageOCLTypes: all 37
+	// An FX list only: no creation lists, every damage type.
+	BOOST_TEST(creations->modules[1].types == ~std::uint64_t{0});
+	for (const auto &state : creations->modules[1].slots)
+		for (const auto &slot : state)
+			BOOST_TEST(!slot.Used());
+	// A bone with no model: the location (the origin); "None": no list.
+	const TransitionCreationModule &bones = creations->modules[2];
+	BOOST_TEST(bones.slots[3][1].list == "Gone");
+	BOOST_TEST_REQUIRE(bones.slots[3][1].at.size() == 1u);
+	BOOST_TEST((bones.slots[3][1].at[0].x.Raw() == 0 && bones.slots[3][1].at[0].y.Raw() == 0 && bones.slots[3][1].at[0].z.Raw() == 0));
+	BOOST_TEST(!bones.slots[3][2].Used());
+
+	BOOST_TEST(!Read("Object Tower\n  Behavior = TransitionDamageFX ModuleTag_01\n    DamagedFXList1 = Loc: X:0 Y:0 Z:0 FXList:FX\n  End\nEnd\n", rigs)
+			.has_value());
+}
+
+// Legacy parity (getLocalEffectPos, Drawable::getPristineBonePositions): on CBTower04_E (as rubble), Bone:Smoke02 is that
+// bone at rest at the object's scale; RandomBone:Yes on Smoke is its family (Smoke01, Smoke02: the first gap ends it),
+// one picked as it plays; a bone the model lacks (Fire02) is the origin.
+BOOST_AUTO_TEST_CASE(legacy_parity_transition_creations_play_at_bones_of_the_states_model)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	ModelRigs rigs(files);
+	const auto creations = Read("Object Tower\n"
+		"  Scale = 2.0\n"
+		"  Draw = W3DModelDraw ModuleTag_01\n"
+		"    DefaultConditionState\n      Model = CBTower04\n    End\n"
+		"    ConditionState = RUBBLE\n      Model = CBTower04_E\n    End\n"
+		"  End\n"
+		"  Behavior = TransitionDamageFX ModuleTag_02\n"
+		"    RubbleOCL1 = Bone:Smoke02 RandomBone:No OCL:One\n"
+		"    RubbleOCL2 = Bone:Smoke RandomBone:Yes OCL:Family\n"
+		"    RubbleOCL3 = Bone:Fire02 RandomBone:No OCL:Missing\n"
+		"  End\nEnd\n",
+		rigs);
+	BOOST_TEST_REQUIRE(creations.has_value());
+	const auto &rubble = creations->modules.at(0).slots[3];
+	const auto smoke01 = rigs.Bone("CBTower04_E", "Smoke01"), smoke02 = rigs.Bone("CBTower04_E", "Smoke02");
+	BOOST_TEST_REQUIRE((smoke01.has_value() && smoke02.has_value()));
+	BOOST_TEST(!rigs.Bone("CBTower04_E", "Smoke03").has_value());
+	const auto scaled = [](const RestBone &bone, std::size_t axis) {
+		const Fixed value = axis == 0 ? bone.position.x : axis == 1 ? bone.position.y : bone.position.z;
+		return (value * Fixed::FromInt(2)).Raw();
+	};
+	BOOST_TEST_REQUIRE(rubble[0].at.size() == 1u);
+	BOOST_TEST(rubble[0].at[0].x.Raw() == scaled(*smoke02, 0));
+	BOOST_TEST(rubble[0].at[0].y.Raw() == scaled(*smoke02, 1));
+	BOOST_TEST(rubble[0].at[0].z.Raw() == scaled(*smoke02, 2));
+	BOOST_TEST_REQUIRE(rubble[1].at.size() == 2u);
+	BOOST_TEST(rubble[1].at[0].z.Raw() == scaled(*smoke01, 2));
+	BOOST_TEST(rubble[1].at[1].z.Raw() == scaled(*smoke02, 2));
+	BOOST_TEST_REQUIRE(rubble[2].at.size() == 1u);
+	BOOST_TEST((rubble[2].at[0].x.Raw() == 0 && rubble[2].at[0].y.Raw() == 0 && rubble[2].at[0].z.Raw() == 0));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

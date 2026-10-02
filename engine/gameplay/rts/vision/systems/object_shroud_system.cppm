@@ -31,7 +31,8 @@ struct ObjectShroudSystem
 		for (std::size_t row = 0; row < shrouds.size(); ++row)
 		{
 			ObjectShroud &shroud = shrouds[row];
-			if (footprints[row].alwaysVisible != 0 || !offMap.empty() || map.Players() == 0)
+			// (A rider its container leaves in the world, a fire base's, is in the partition: seen through the shroud there.)
+			if (footprints[row].alwaysVisible != 0 || (!offMap.empty() && offMap[row].reason != off_map_reason::Stationed) || map.Players() == 0)
 			{
 				shroud = ObjectShroud{};
 				continue;

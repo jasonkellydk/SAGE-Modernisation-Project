@@ -1,10 +1,12 @@
 export module games.generalszh.content.loading.game_content;
 export import games.generalszh.content.effects.bone_fx_content;
+export import games.generalszh.content.effects.transition_damage_content;
 export import games.generalszh.content.sciences.science_content;
 export import games.generalszh.content.ai.ai_data;
 export import games.generalszh.content.global.multiplayer_settings;
 import std;
 export import games.generalszh.content.terrain.bridge_content;
+export import games.generalszh.content.terrain.road_content;
 import engine.gameplay.common.spatial.components.targetable;
 export import games.generalszh.content.control_bar.command_catalog;
 
@@ -225,15 +227,25 @@ struct GameContent
 	// Supply docks' points (from their models' bones) and what they are, by object.
 	std::map<std::string, DockLayout, std::less<>> docks;
 	std::map<std::string, GarrisonPointSets, std::less<>> garrisonPoints; // FIREPOINT bones by damage state, by object
+	std::map<std::string, std::vector<Engine::Math::FixedVector3>, std::less<>> garrisonStations; // a fire base's STATION bones, by object
 	std::map<std::string, TransportFirePointSet, std::less<>> transportFirePoints; // a transport's FIREPOINT bones, by object
 	// TransportContain ExitBone (onRemoving: getPristineBonePositions(name, 0): that bone exactly, in its default model), by object.
 	std::map<std::string, RestBone, std::less<>> transportExitBones;
+	// OpenContain NumberOfExitPaths and their ExitStart / ExitEnd bones at rest in the default model (a missing bone: the
+	// origin, the container's position), per container.
+	struct ExitPaths
+	{
+		std::vector<Engine::Math::FixedVector3> starts;
+		std::vector<Engine::Math::FixedVector3> ends;
+	};
+	std::map<std::string, ExitPaths, std::less<>> transportExitPaths;
 	// SpawnPointProductionExitUpdate: its SpawnPointBoneName bones (getPristineBoneTransforms from 1: <name>01, 02, ... while
 	// there, at most MAX_SPAWN_POINTS 10), by object; none found: it never has a place free.
 	std::map<std::string, std::vector<RestBone>, std::less<>> spawnPoints;
 	// BoneFXUpdate: its FX lists, creation lists and particle systems by damage state, at their bones in its default
 	// model, by object.
 	std::map<std::string, BoneFxContent, std::less<>> boneFx;
+	std::map<std::string, TransitionCreations, std::less<>> transitionCreations; // TransitionDamageFX's creation lists
 	// computeTrackSpacing: the width of the tracks an object that leaves them makes (its TREADFX01 to TREADFX02 bones
 	// plus a track's width of 4; without them 1.4 cells), by object.
 	std::map<std::string, Engine::Math::Fixed, std::less<>> trackWidths;
@@ -278,6 +290,8 @@ struct GameContent
 	std::map<std::string, RopeBones, std::less<>> ropeBones;
 	// HelicopterSlowDeathBehavior: the helicopter's NORMAL locomotor (as a hover locomotor), which flies its death spiral.
 	std::map<std::string, engine::gameplay::HoverLocomotor, std::less<>> helicopterLocomotors;
+	// Locomotor.ini's hover locomotors (ReadHoverLocomotors), for what is derived from objects again (a map's overrides).
+	HoverLocomotors hoverLocomotors;
 	// Parachutes (ParachuteContain with their locomotors and model bones), by object.
 	std::map<std::string, ParachuteContent, std::less<>> parachutes;
 	// Where things hang from a parachute (PARA_MAN at rest in their FREEFALL and PARACHUTING models; without the bone,
@@ -298,10 +312,28 @@ struct GameContent
 	std::vector<RankInfo> ranks;          // Rank.ini: rank 1 first
 	CrateTemplates crates; // Crate.ini's CrateData, by name
 	BridgeCatalog bridges; // Roads.ini's Bridge blocks, by name (with their pristine models' widths)
+	RoadCatalog roads;     // Roads.ini's Road blocks, in the order read, with their ids
 	// BridgeBehavior's BridgeDieFX / BridgeDieOCL (bones at rest from the object's first model state), by object.
 	std::map<std::string, std::vector<BridgeDieEffect>, std::less<>> bridgeDieEffects;
 	Anim2DTemplates animations2d; // Animation2D.ini: world and UI flip-book animations, by name
 	std::map<std::string, std::string, std::less<>> miscAudio; // MiscAudio.ini: the game's own sounds (CrateMoney = ...), by field
+	// The documents the tables above were bound from (kept by the loader), for a map's map.ini overrides to be laid over
+	// (WithMapOverrides), and the documents a match's overrides made (they hold the nodes its definitions point into).
+	struct Sources
+	{
+		const engine::config::Document *locomotors{nullptr};
+		const engine::config::Document *weapons{nullptr};
+		const engine::config::Document *creationLists{nullptr};
+		const engine::config::Document *commandButtons{nullptr};
+		const engine::config::Document *commandSets{nullptr};
+		const engine::config::Document *specialPowers{nullptr};
+		const engine::config::Document *sciences{nullptr};
+		const engine::config::Document *upgrades{nullptr};
+		const engine::config::Document *aiData{nullptr};
+		const engine::config::Document *crates{nullptr};
+	};
+	Sources sources;
+	std::vector<std::shared_ptr<const engine::config::Document>> overlays;
 
 	std::optional<std::uint32_t> Science(std::string_view name) const
 	{
@@ -309,6 +341,274 @@ struct GameContent
 		return found != sciences.end() ? std::optional(static_cast<std::uint32_t>(found - sciences.begin())) : std::nullopt;
 	}
 };
+
+// The tables GameContent derives from one object (its models' bones at rest, its modules), under its name.
+void DeriveObjectTables(GameContent &content, const std::string &name, const ObjectDefinition &object, ModelRigs &rigs,
+	const engine::time::FixedStep &step, engine::config::BindContext &objectContext)
+{
+	if (auto layout = ReadParkingLayout(object, rigs))
+		content.parking.emplace(name, std::move(*layout));
+	else if (auto deck = ReadFlightDeckLayout(object, rigs))
+		content.parking.emplace(name, std::move(*deck));
+	if (auto layout = ReadDockLayout(object, rigs))
+		content.docks.emplace(name, std::move(*layout));
+	if (auto points = ReadGarrisonPoints(object, rigs); !points[0].empty() || !points[1].empty() || !points[2].empty())
+		content.garrisonPoints.emplace(name, std::move(points));
+	if (auto stations = ReadGarrisonStations(object, rigs); !stations.empty())
+		content.garrisonStations.emplace(name, std::move(stations));
+	if (auto points = ReadTransportFirePoints(object, rigs))
+		content.transportFirePoints.emplace(name, std::move(*points));
+	if (const ModuleEntry *contain = TransportModule(object); contain != nullptr && contain->type == "TransportContain")
+		if (const auto *node = contain->block->Find("ExitBone"); node != nullptr && !node->Value().empty())
+			if (const std::string model = DefaultModel(object).model; !model.empty())
+				if (const auto bone = rigs.Bone(model, std::string(node->Value())))
+					content.transportExitBones.emplace(name, *bone);
+	if (const ModuleEntry *contain = ExitPathContain(object); contain != nullptr)
+	{
+		std::int64_t count = 1; // m_numberOfExitPaths' default
+		if (const auto *node = contain->block->Find("NumberOfExitPaths"); node != nullptr && !node->Value().empty())
+			count = engine::config::values::ParseInt(node->Value()).value_or(1);
+		if (count > 0)
+		{
+			const std::string model = DefaultModel(object).model;
+			const auto at = [&](const std::string &bone) {
+				const auto found = model.empty() ? std::nullopt : rigs.Bone(model, bone);
+				return found ? found->position : Engine::Math::FixedVector3{};
+			};
+			GameContent::ExitPaths paths;
+			for (std::int64_t path = 1; path <= count; ++path)
+			{
+				// ExitStart / ExitEnd, or (more than one) ExitStartNN / ExitEndNN: the number two digits under 10.
+				const std::string suffix = count == 1 ? std::string{} : (path < 10 ? "0" : "") + std::to_string(path);
+				paths.starts.push_back(at("ExitStart" + suffix));
+				paths.ends.push_back(at("ExitEnd" + suffix));
+			}
+			content.transportExitPaths.emplace(name, std::move(paths));
+		}
+	}
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr || module.type != "SpawnPointProductionExitUpdate")
+			continue;
+		std::vector<RestBone> bones;
+		const auto *node = module.block->Find("SpawnPointBoneName");
+		const std::string model = DefaultModel(object).model;
+		if (node != nullptr && !model.empty())
+			for (int index = 1; index <= 10; ++index)
+			{
+				char suffix[4];
+				std::snprintf(suffix, sizeof(suffix), "%02d", index);
+				const auto bone = rigs.Bone(model, std::string(node->Value()) + suffix);
+				if (!bone)
+					break;
+				bones.push_back(*bone);
+			}
+		content.spawnPoints.emplace(name, std::move(bones));
+		break;
+	}
+	if (auto boneFx = ReadBoneFx(object, rigs, step.TicksPerSecond()))
+		content.boneFx.emplace(name, std::move(*boneFx));
+	if (auto creations = ReadTransitionCreations(object, rigs))
+		content.transitionCreations.emplace(name, std::move(*creations));
+	{
+		const ModelStates states = ReadModelStates(object);
+		if (!states.trackMarks.empty() && !states.Empty())
+		{
+			Engine::Math::Fixed width = Engine::Math::Fixed::FromRatio(14, 1); // DEFAULT_TRACK_SPACING: MAP_XY_FACTOR * 1.4
+			const std::string &model = states.states.front().model;
+			const auto left = rigs.Bone(model, "TREADFX01"), right = rigs.Bone(model, "TREADFX02");
+			if (left && right)
+				width = Engine::Math::Length(right->position - left->position) + Engine::Math::Fixed::FromInt(4);
+			content.trackWidths.emplace(name, width);
+		}
+	}
+	if (!object.weaponSets.empty())
+	{
+		const ModelStates states = ReadModelStates(object);
+		if (!states.Empty())
+		{
+			const ModelState &rest = states.states.front();
+			const std::string names[] = {rest.fireFxBone, rest.recoilBone, rest.muzzleBone, rest.launchBone};
+			if (!rest.model.empty() && !(names[0].empty() && names[1].empty() && names[2].empty() && names[3].empty()))
+			{
+				if (const std::uint32_t count = rigs.BarrelCount(rest.model, names); count > 1)
+					content.barrels.emplace(name, count);
+				content.launchLayouts.emplace(name, ReadLaunchLayout(rest, rigs));
+			}
+		}
+	}
+	for (const ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.type == "HelicopterSlowDeathBehavior")
+			if (const auto *bone = module.block->Find("BladeBoneName"); bone != nullptr && !bone->Value().empty())
+			{
+				const ModelStates states = ReadModelStates(object);
+				if (states.Empty() || states.states.front().model.empty())
+					continue;
+				if (const auto found = rigs.Bone(states.states.front().model, std::string(bone->Value())))
+					content.bladeBones.emplace(name, found->position);
+			}
+	for (const ModuleEntry &module : object.modules)
+		if (module.block != nullptr && module.type == "ChinookAIUpdate")
+		{
+			const ModelStates states = ReadModelStates(object);
+			if (states.Empty() || states.states.front().model.empty())
+				continue;
+			const std::string &model = states.states.front().model;
+			GameContent::RopeBones ropes;
+			char bone[16];
+			for (int index = 1; index <= 32; ++index)
+			{
+				std::snprintf(bone, sizeof bone, "RopeStart%02d", index);
+				const auto found = rigs.Bone(model, bone);
+				if (!found)
+					break;
+				ropes.starts.push_back(found->position);
+			}
+			for (int index = 1; index <= 32; ++index)
+			{
+				std::snprintf(bone, sizeof bone, "RopeEnd%02d", index);
+				const auto found = rigs.Bone(model, bone);
+				if (!found)
+					break;
+				ropes.ends.push_back(*found);
+			}
+			content.ropeBones.emplace(name, std::move(ropes));
+		}
+	if (auto arc = ReadProjectileArc(object, step))
+		content.projectileArcs.emplace(name, *arc);
+	for (const ModuleEntry &module : object.modules)
+	{
+		if (module.block == nullptr || module.type != "BridgeBehavior")
+			continue;
+		std::vector<BridgeDieEffect> effects;
+		for (const engine::config::Node &field : module.block->children)
+		{
+			if (field.key != "BridgeDieFX" && field.key != "BridgeDieOCL")
+				continue;
+			const std::vector<std::string_view> tokens(field.values.begin(), field.values.end());
+			BridgeDieEffect effect;
+			effect.creationList = field.key == "BridgeDieOCL";
+			const auto what = SubToken(tokens, effect.creationList ? "OCL" : "FX");
+			const auto delay = SubToken(tokens, "Delay");
+			if (!what || !delay)
+				continue;
+			effect.name = *what;
+			// Milliseconds to ticks, rounded up (INI::parseDurationUnsignedInt).
+			const Engine::Math::Fixed ms = engine::config::values::ParseFixed(*delay).value_or(Engine::Math::Fixed{});
+			const auto numerator = static_cast<std::uint64_t>(std::max<std::int64_t>(ms.Raw(), 0)) * step.TicksPerSecond();
+			const std::uint64_t denominator = std::uint64_t{1000} << Engine::Math::Fixed::FractionBits;
+			effect.delayTicks = (numerator + denominator - 1) / denominator;
+			if (const auto bone = SubToken(tokens, "Bone"); bone && !bone->empty())
+			{
+				if (*bone == "ParentObject" && effect.creationList)
+					effect.where = BridgeDieEffect::Where::Parent;
+				else
+				{
+					effect.where = BridgeDieEffect::Where::Bone;
+					const ModelStates states = ReadModelStates(object);
+					if (!states.Empty() && !states.states.front().model.empty())
+						if (const auto found = rigs.Bone(states.states.front().model, *bone))
+							effect.bone = found->position;
+				}
+			}
+			effects.push_back(std::move(effect));
+		}
+		if (!effects.empty())
+			content.bridgeDieEffects.emplace(name, std::move(effects));
+	}
+	if (auto missile = ReadMissileFlight(object, content.locomotors, objectContext))
+		content.missiles.emplace(name, *missile);
+	// ParachuteContain::updateBonePositions: the chute's bones in its PARACHUTING model, the rider's PARA_MAN in its
+	// FREEFALL and PARACHUTING models (else its geometry's top: getMaxHeightAbovePosition).
+	const auto stateModel = [&object](std::string_view condition) {
+		const ModelStates states = ReadModelStates(object);
+		if (states.Empty())
+			return std::string{};
+		ConditionBits bits{};
+		if (const std::uint32_t bit = ModelConditionBit(condition); bit != NoCondition)
+			bits[bit / 64] |= std::uint64_t{1} << (bit % 64);
+		return states.states[SelectModelState(states, bits)].model;
+	};
+	const std::string chuteModel = stateModel("PARACHUTING");
+	if (auto parachute = ReadParachute(object, content.hoverLocomotors, step, [&](std::string_view bone) -> std::optional<Engine::Math::FixedVector3> {
+			if (const auto found = chuteModel.empty() ? std::nullopt : rigs.Bone(chuteModel, bone))
+				return found->position;
+			return std::nullopt;
+		}))
+		content.parachutes.emplace(name, std::move(*parachute));
+	if (object.Is("INFANTRY") || object.Is("PARACHUTABLE"))
+	{
+		const Engine::Math::Fixed top = object.geometry.shape == GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height;
+		std::array<Engine::Math::FixedVector3, 2> bones{};
+		const char *conditions[] = {"FREEFALL", "PARACHUTING"};
+		for (std::size_t index = 0; index < bones.size(); ++index)
+		{
+			const std::string model = stateModel(conditions[index]);
+			const auto bone = model.empty() ? std::nullopt : rigs.Bone(model, "PARA_MAN");
+			bones[index] = bone ? bone->position : Engine::Math::FixedVector3{Engine::Math::Fixed{}, Engine::Math::Fixed{}, top};
+		}
+		content.parachuteRiders.emplace(name, bones);
+	}
+	if (std::ranges::any_of(object.modules, [](const ModuleEntry &module) { return module.type == "HelicopterSlowDeathBehavior"; }))
+		for (const engine::config::Node *node : object.locomotorSets)
+			if (node != nullptr && node->values.size() >= 2 && node->Value(0) == "SET_NORMAL")
+				if (const auto found = content.hoverLocomotors.find(node->Value(1)); found != content.hoverLocomotors.end())
+				{
+					content.helicopterLocomotors.emplace(name, found->second);
+					break;
+				}
+}
+
+// What DeriveObjectTables put down for the object, taken away (before it is derived again).
+void ForgetObjectTables(GameContent &content, const std::string &name)
+{
+	content.parking.erase(name);
+	content.docks.erase(name);
+	content.garrisonPoints.erase(name);
+	content.garrisonStations.erase(name);
+	content.transportFirePoints.erase(name);
+	content.transportExitBones.erase(name);
+	content.transportExitPaths.erase(name);
+	content.spawnPoints.erase(name);
+	content.boneFx.erase(name);
+	content.transitionCreations.erase(name);
+	content.trackWidths.erase(name);
+	content.barrels.erase(name);
+	content.launchLayouts.erase(name);
+	content.bladeBones.erase(name);
+	content.ropeBones.erase(name);
+	content.projectileArcs.erase(name);
+	content.bridgeDieEffects.erase(name);
+	content.missiles.erase(name);
+	content.parachutes.erase(name);
+	content.parachuteRiders.erase(name);
+	content.helicopterLocomotors.erase(name);
+}
+
+// The special powers' visible payload bones on their transports' models at rest (Drawable::getPristineBonePositions:
+// NAME01, NAME02, ...; one missing: the carrier's own position).
+void DeriveVisibleRunBones(GameContent &content, ModelRigs &rigs)
+{
+	for (VisibleRun &run : content.powers.visibleRuns)
+	{
+		run.bones.clear();
+		const ObjectDefinition *transport = content.objects.Find(run.transport);
+		const std::string model = transport != nullptr ? DefaultModel(*transport).model : std::string{};
+		for (std::int32_t index = 1; index <= run.count; ++index)
+		{
+			std::optional<Engine::Math::FixedVector3> at;
+			if (!model.empty() && !run.dropBone.empty())
+			{
+				std::string name = run.dropBone;
+				name.push_back(static_cast<char>('0' + index / 10 % 10));
+				name.push_back(static_cast<char>('0' + index % 10));
+				if (const auto bone = rigs.Bone(model, name))
+					at = bone->position;
+			}
+			run.bones.push_back(at);
+		}
+	}
+}
 
 // Loads and binds the content sets (errors land in the loader's diagnostics).
 GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep &step)
@@ -320,6 +620,7 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	const engine::config::Document &aiDataSet = loader.Load({"Data/INI/Default/AIData", "Data/INI/AIData"});
 	engine::config::BindContext aiDataContext{loader.DiagnosticsFor(aiDataSet), step};
 	content.aiData = BindAiData(aiDataSet, aiDataContext);
+	content.sources.aiData = &aiDataSet;
 	const engine::config::Document &playerTemplateSet = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
 	engine::config::BindContext playerTemplateContext{loader.DiagnosticsFor(playerTemplateSet), step};
 	content.factionColors = BindFactionColors(playerTemplateSet, playerTemplateContext);
@@ -333,6 +634,7 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	const engine::config::Document *documents[] = {&objectSet, &crateSet};
 	content.objects = BuildObjectCatalog(documents, objectContext);
 	content.crates = BindCrateTemplates(crateSet);
+	content.sources.crates = &crateSet;
 	content.animations2d = BindAnim2DTemplates(loader.Load({"Data/INI/Animation2D"}), step.TicksPerSecond());
 	for (const engine::config::Node &root : loader.Load({"Data/INI/MiscAudio"}).Roots())
 		if (root.key == "MiscAudio")
@@ -340,62 +642,6 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 				if (!field.values.empty())
 					content.miscAudio[std::string(field.key)] = std::string(field.Value());
 	ModelRigs rigs(loader.Files());
-	for (const auto &[name, object] : content.objects)
-		if (auto layout = ReadParkingLayout(object, rigs))
-			content.parking.emplace(name, std::move(*layout));
-		else if (auto deck = ReadFlightDeckLayout(object, rigs))
-			content.parking.emplace(name, std::move(*deck));
-	for (const auto &[name, object] : content.objects)
-		if (auto layout = ReadDockLayout(object, rigs))
-			content.docks.emplace(name, std::move(*layout));
-	for (const auto &[name, object] : content.objects)
-		if (auto points = ReadGarrisonPoints(object, rigs); !points[0].empty() || !points[1].empty() || !points[2].empty())
-			content.garrisonPoints.emplace(name, std::move(points));
-	for (const auto &[name, object] : content.objects)
-		if (auto points = ReadTransportFirePoints(object, rigs))
-			content.transportFirePoints.emplace(name, std::move(*points));
-	for (const auto &[name, object] : content.objects)
-		if (const ModuleEntry *contain = TransportModule(object); contain != nullptr && contain->type == "TransportContain")
-			if (const auto *node = contain->block->Find("ExitBone"); node != nullptr && !node->Value().empty())
-				if (const std::string model = DefaultModel(object).model; !model.empty())
-					if (const auto bone = rigs.Bone(model, std::string(node->Value())))
-						content.transportExitBones.emplace(name, *bone);
-	for (const auto &[name, object] : content.objects)
-		for (const ModuleEntry &module : object.modules)
-		{
-			if (module.block == nullptr || module.type != "SpawnPointProductionExitUpdate")
-				continue;
-			std::vector<RestBone> bones;
-			const auto *node = module.block->Find("SpawnPointBoneName");
-			const std::string model = DefaultModel(object).model;
-			if (node != nullptr && !model.empty())
-				for (int index = 1; index <= 10; ++index)
-				{
-					char suffix[4];
-					std::snprintf(suffix, sizeof(suffix), "%02d", index);
-					const auto bone = rigs.Bone(model, std::string(node->Value()) + suffix);
-					if (!bone)
-						break;
-					bones.push_back(*bone);
-				}
-			content.spawnPoints.emplace(name, std::move(bones));
-			break;
-		}
-	for (const auto &[name, object] : content.objects)
-		if (auto boneFx = ReadBoneFx(object, rigs, step.TicksPerSecond()))
-			content.boneFx.emplace(name, std::move(*boneFx));
-	for (const auto &[name, object] : content.objects)
-	{
-		const ModelStates states = ReadModelStates(object);
-		if (states.trackMarks.empty() || states.Empty())
-			continue;
-		Engine::Math::Fixed width = Engine::Math::Fixed::FromRatio(14, 1); // DEFAULT_TRACK_SPACING: MAP_XY_FACTOR * 1.4
-		const std::string &model = states.states.front().model;
-		const auto left = rigs.Bone(model, "TREADFX01"), right = rigs.Bone(model, "TREADFX02");
-		if (left && right)
-			width = Engine::Math::Length(right->position - left->position) + Engine::Math::Fixed::FromInt(4);
-		content.trackWidths.emplace(name, width);
-	}
 	for (const engine::config::Node &root : loader.Load({"Data/INI/GameLOD"}).Roots())
 		if (root.key == "StaticGameLOD" && !root.values.empty())
 		{
@@ -436,166 +682,28 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 			}
 			content.staticLods.push_back(std::move(lod));
 		}
-	for (const auto &[name, object] : content.objects)
-		if (!object.weaponSets.empty())
-		{
-			const ModelStates states = ReadModelStates(object);
-			if (states.Empty())
-				continue;
-			const ModelState &rest = states.states.front();
-			const std::string names[] = {rest.fireFxBone, rest.recoilBone, rest.muzzleBone, rest.launchBone};
-			if (rest.model.empty() || (names[0].empty() && names[1].empty() && names[2].empty() && names[3].empty()))
-				continue;
-			if (const std::uint32_t count = rigs.BarrelCount(rest.model, names); count > 1)
-				content.barrels.emplace(name, count);
-			content.launchLayouts.emplace(name, ReadLaunchLayout(rest, rigs));
-		}
-	for (const auto &[name, object] : content.objects)
-		for (const ModuleEntry &module : object.modules)
-			if (module.block != nullptr && module.type == "HelicopterSlowDeathBehavior")
-				if (const auto *bone = module.block->Find("BladeBoneName"); bone != nullptr && !bone->Value().empty())
-				{
-					const ModelStates states = ReadModelStates(object);
-					if (states.Empty() || states.states.front().model.empty())
-						continue;
-					if (const auto found = rigs.Bone(states.states.front().model, std::string(bone->Value())))
-						content.bladeBones.emplace(name, found->position);
-				}
-	for (const auto &[name, object] : content.objects)
-		for (const ModuleEntry &module : object.modules)
-			if (module.block != nullptr && module.type == "ChinookAIUpdate")
-			{
-				const ModelStates states = ReadModelStates(object);
-				if (states.Empty() || states.states.front().model.empty())
-					continue;
-				const std::string &model = states.states.front().model;
-				GameContent::RopeBones ropes;
-				char bone[16];
-				for (int index = 1; index <= 32; ++index)
-				{
-					std::snprintf(bone, sizeof bone, "RopeStart%02d", index);
-					const auto found = rigs.Bone(model, bone);
-					if (!found)
-						break;
-					ropes.starts.push_back(found->position);
-				}
-				for (int index = 1; index <= 32; ++index)
-				{
-					std::snprintf(bone, sizeof bone, "RopeEnd%02d", index);
-					const auto found = rigs.Bone(model, bone);
-					if (!found)
-						break;
-					ropes.ends.push_back(*found);
-				}
-				content.ropeBones.emplace(name, std::move(ropes));
-			}
-	for (const auto &[name, object] : content.objects)
-		if (auto arc = ReadProjectileArc(object, step))
-			content.projectileArcs.emplace(name, *arc);
 	// Roads.ini's bridges, each with its pristine model's BRIDGE_LEFT width (W3DBridge::load).
 	content.bridges = BindBridges(loader.Load({"Data/INI/Roads"}));
+	// Roads.ini's roads (TheTerrainRoads reads Data\INI\Default\Roads, then Data\INI\Roads).
+	content.roads = BindRoads(loader.Load({"Data/INI/Default/Roads", "Data/INI/Roads"}));
 	for (auto &[name, bridge] : content.bridges)
 		if (!bridge.models[0].empty())
 			bridge.extentY = rigs.MeshExtentY(bridge.models[0], "BRIDGE_LEFT");
-	for (const auto &[name, object] : content.objects)
-		for (const ModuleEntry &module : object.modules)
-		{
-			if (module.block == nullptr || module.type != "BridgeBehavior")
-				continue;
-			std::vector<BridgeDieEffect> effects;
-			for (const engine::config::Node &field : module.block->children)
-			{
-				if (field.key != "BridgeDieFX" && field.key != "BridgeDieOCL")
-					continue;
-				const std::vector<std::string_view> tokens(field.values.begin(), field.values.end());
-				BridgeDieEffect effect;
-				effect.creationList = field.key == "BridgeDieOCL";
-				const auto what = SubToken(tokens, effect.creationList ? "OCL" : "FX");
-				const auto delay = SubToken(tokens, "Delay");
-				if (!what || !delay)
-					continue;
-				effect.name = *what;
-				// Milliseconds to ticks, rounded up (INI::parseDurationUnsignedInt).
-				const Engine::Math::Fixed ms = engine::config::values::ParseFixed(*delay).value_or(Engine::Math::Fixed{});
-				const auto numerator = static_cast<std::uint64_t>(std::max<std::int64_t>(ms.Raw(), 0)) * step.TicksPerSecond();
-				const std::uint64_t denominator = std::uint64_t{1000} << Engine::Math::Fixed::FractionBits;
-				effect.delayTicks = (numerator + denominator - 1) / denominator;
-				if (const auto bone = SubToken(tokens, "Bone"); bone && !bone->empty())
-				{
-					if (*bone == "ParentObject" && effect.creationList)
-						effect.where = BridgeDieEffect::Where::Parent;
-					else
-					{
-						effect.where = BridgeDieEffect::Where::Bone;
-						const ModelStates states = ReadModelStates(object);
-						if (!states.Empty() && !states.states.front().model.empty())
-							if (const auto found = rigs.Bone(states.states.front().model, *bone))
-								effect.bone = found->position;
-					}
-				}
-				effects.push_back(std::move(effect));
-			}
-			if (!effects.empty())
-				content.bridgeDieEffects.emplace(name, std::move(effects));
-		}
-
 	const engine::config::Document &locomotorSet = loader.Load({"Data/INI/Locomotor"});
 	engine::config::BindContext locomotorContext{loader.DiagnosticsFor(locomotorSet), step};
 	content.locomotors = BuildLocomotorCatalog(locomotorSet, locomotorContext);
-	for (const auto &[name, object] : content.objects)
-		if (auto missile = ReadMissileFlight(object, content.locomotors, objectContext))
-			content.missiles.emplace(name, *missile);
 	content.wheelTurnAngles = ReadWheelTurnAngles(locomotorSet);
 	content.chassisLooks = ReadChassisLooks(locomotorSet);
-	// ParachuteContain::updateBonePositions: the chute's bones in its PARACHUTING model, the rider's PARA_MAN in its
-	// FREEFALL and PARACHUTING models (else its geometry's top: getMaxHeightAbovePosition).
-	{
-		const HoverLocomotors hovers = ReadHoverLocomotors(locomotorSet, step);
-		const auto stateModel = [](const ObjectDefinition &object, std::string_view condition) {
-			const ModelStates states = ReadModelStates(object);
-			if (states.Empty())
-				return std::string{};
-			ConditionBits bits{};
-			if (const std::uint32_t bit = ModelConditionBit(condition); bit != NoCondition)
-				bits[bit / 64] |= std::uint64_t{1} << (bit % 64);
-			return states.states[SelectModelState(states, bits)].model;
-		};
-		for (const auto &[name, object] : content.objects)
-		{
-			const std::string chuteModel = stateModel(object, "PARACHUTING");
-			if (auto parachute = ReadParachute(object, hovers, step, [&](std::string_view bone) -> std::optional<Engine::Math::FixedVector3> {
-					if (const auto found = chuteModel.empty() ? std::nullopt : rigs.Bone(chuteModel, bone))
-						return found->position;
-					return std::nullopt;
-				}))
-				content.parachutes.emplace(name, std::move(*parachute));
-			if (!object.Is("INFANTRY") && !object.Is("PARACHUTABLE"))
-				continue;
-			const Engine::Math::Fixed top = object.geometry.shape == GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height;
-			std::array<Engine::Math::FixedVector3, 2> bones{};
-			const char *conditions[] = {"FREEFALL", "PARACHUTING"};
-			for (std::size_t index = 0; index < bones.size(); ++index)
-			{
-				const std::string model = stateModel(object, conditions[index]);
-				const auto bone = model.empty() ? std::nullopt : rigs.Bone(model, "PARA_MAN");
-				bones[index] = bone ? bone->position : Engine::Math::FixedVector3{Engine::Math::Fixed{}, Engine::Math::Fixed{}, top};
-			}
-			content.parachuteRiders.emplace(name, bones);
-		}
-		for (const auto &[name, object] : content.objects)
-			if (std::ranges::any_of(object.modules, [](const ModuleEntry &module) { return module.type == "HelicopterSlowDeathBehavior"; }))
-				for (const engine::config::Node *node : object.locomotorSets)
-					if (node != nullptr && node->values.size() >= 2 && node->Value(0) == "SET_NORMAL")
-						if (const auto found = hovers.find(node->Value(1)); found != hovers.end())
-						{
-							content.helicopterLocomotors.emplace(name, found->second);
-							break;
-						}
-	}
+	content.hoverLocomotors = ReadHoverLocomotors(locomotorSet, step);
+	content.sources.locomotors = &locomotorSet;
+	// What each object's models and modules give (DeriveObjectTables).
+	for (const auto &[name, object] : content.objects)
+		DeriveObjectTables(content, name, object, rigs, step, objectContext);
 
 	const engine::config::Document &weaponSet = loader.Load({"Data/INI/Weapon"});
 	engine::config::BindContext weaponContext{loader.DiagnosticsFor(weaponSet), step};
 	content.weapons = BuildWeaponCatalog(weaponSet, weaponContext);
+	content.sources.weapons = &weaponSet;
 
 	const engine::config::Document &armorSet = loader.Load({"Data/INI/Armor"});
 	engine::config::BindContext armorContext{loader.DiagnosticsFor(armorSet), step};
@@ -605,36 +713,27 @@ GameContent LoadGameContent(ContentLoader &loader, const engine::time::FixedStep
 	const engine::config::Document &creationLists = loader.Load({"Data/INI/ObjectCreationList"});
 	const engine::config::Document &commandButtons = loader.Load({"Data/INI/CommandButton"});
 	content.powers = BindSpecialPowers(commandButtons, creationLists, step);
-	// The runs' visible payload bones on their transports' models at rest (Drawable::getPristineBonePositions: NAME01,
-	// NAME02, ...; one missing: the carrier's own position).
-	for (VisibleRun &run : content.powers.visibleRuns)
-	{
-		const ObjectDefinition *transport = content.objects.Find(run.transport);
-		const std::string model = transport != nullptr ? DefaultModel(*transport).model : std::string{};
-		for (std::int32_t index = 1; index <= run.count; ++index)
-		{
-			std::optional<Engine::Math::FixedVector3> at;
-			if (!model.empty() && !run.dropBone.empty())
-			{
-				std::string name = run.dropBone;
-				name.push_back(static_cast<char>('0' + index / 10 % 10));
-				name.push_back(static_cast<char>('0' + index % 10));
-				if (const auto bone = rigs.Bone(model, name))
-					at = bone->position;
-			}
-			run.bones.push_back(at);
-		}
-	}
-	content.powers.templates = BindSpecialPowerTemplates(loader.Load({"Data/INI/Default/SpecialPower", "Data/INI/SpecialPower"}), step);
-	content.buildLists = BindBuildLists(loader.Load({"Data/INI/CommandSet"}), commandButtons);
-	content.researchLists = BindResearchLists(loader.Load({"Data/INI/CommandSet"}), commandButtons);
-	content.commands = BindCommandCatalog(loader.Load({"Data/INI/CommandSet"}), commandButtons);
+	DeriveVisibleRunBones(content, rigs);
+	const engine::config::Document &specialPowerSet = loader.Load({"Data/INI/Default/SpecialPower", "Data/INI/SpecialPower"});
+	content.powers.templates = BindSpecialPowerTemplates(specialPowerSet, step);
+	const engine::config::Document &commandSets = loader.Load({"Data/INI/CommandSet"});
+	content.buildLists = BindBuildLists(commandSets, commandButtons);
+	content.researchLists = BindResearchLists(commandSets, commandButtons);
+	content.commands = BindCommandCatalog(commandSets, commandButtons);
 	content.creation = BindCreationLists(creationLists, step);
-	content.scienceInfo = BindSciences(loader.Load({"Data/INI/Default/Science", "Data/INI/Science"}));
+	const engine::config::Document &scienceSet = loader.Load({"Data/INI/Default/Science", "Data/INI/Science"});
+	content.scienceInfo = BindSciences(scienceSet);
 	for (const ScienceInfo &science : content.scienceInfo)
 		content.sciences.push_back(science.name);
 	content.ranks = BindRanks(loader.Load({"Data/INI/Rank"}));
-	content.upgrades = BuildUpgradeCatalog(loader.Load({"Data/INI/Default/Upgrade", "Data/INI/Upgrade"}), step.TicksPerSecond());
+	const engine::config::Document &upgradeSet = loader.Load({"Data/INI/Default/Upgrade", "Data/INI/Upgrade"});
+	content.upgrades = BuildUpgradeCatalog(upgradeSet, step.TicksPerSecond());
+	content.sources.creationLists = &creationLists;
+	content.sources.commandButtons = &commandButtons;
+	content.sources.commandSets = &commandSets;
+	content.sources.specialPowers = &specialPowerSet;
+	content.sources.sciences = &scienceSet;
+	content.sources.upgrades = &upgradeSet;
 	return content;
 }
 }

@@ -35,6 +35,7 @@ struct HoverLocomotor
 	Engine::Math::TurnAngle turnRate; // per tick
 	bool airborneFriction{false};     // Apply2DFrictionWhenAirborne
 	bool closeEnough3D{false};        // CloseEnoughDist3D
+	bool worksWhenDead{false};        // LocomotorWorksWhenDead: it goes on flying its body once its unit is dead
 };
 
 // Locomotor::setPhysicsOptions: its friction (half more when ultra-accurate) and airborne friction on its body.

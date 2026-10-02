@@ -19,6 +19,7 @@ import Engine.UI.WND.Document;
 import Graphics.Frame.Runtime;
 import Graphics.Renderer2D;
 import games.generalszh.hosts.game.frame_draws;
+import games.generalszh.hosts.game.movie_player;
 
 // The load screen a game loads behind (GameLogic::m_loadScreen): its layout loaded and bound to its view model as the
 // load begins (LoadScreen::init), and drawn on its own each time the load reports its progress (LoadScreen::update:
@@ -55,9 +56,21 @@ inline std::vector<shell::LoadScreenFaction> LoadScreenFactions(content::Content
 	return factions;
 }
 
+// How a load screen sounds (LoadScreen.cpp's TheAudio calls), played at once by the host's sound player (the load holds
+// the game loop, and the match it starts replaces the world whose systems would play them).
+struct LoadScreenAudio
+{
+	std::function<std::uint64_t(std::string_view)> play; // addAudioEvent; 0: not playing
+	std::function<void(std::uint64_t, bool)> stop;       // removeAudioEvent (true: faded as AHSV_StopTheMusicFade)
+	std::function<void()> fadeMusic;                     // removeAudioEvent(AHSV_StopTheMusicFade) on the music playing
+	std::function<void()> update;                        // TheAudio->update
+};
+
 class LoadScreenLayer
 {
 public:
+	void SetAudio(LoadScreenAudio audio) { m_audio = std::move(audio); }
+
 	// LoadScreen::init: the screen `kind` shows, its view model set up by `init` (once bound, so the view shows it).
 	bool Show(shell::LoadScreenKind kind, const engine::filesystem::VirtualFileSystem &files, const engine::localization::StringTable &strings,
 		std::uint32_t width, std::uint32_t height, float fontScale, const std::function<void(LoadScreenLayer &)> &init)
@@ -92,6 +105,13 @@ public:
 			m_missionView.emplace(*m_bindings, mission, kind == shell::LoadScreenKind::Challenge, resolve, size);
 		if (init)
 			init(*this);
+		// MultiPlayerLoadScreen::init: the local player's faction's LoadScreenMusic, after the music playing fades.
+		if (shell::LoadScreenPlaysMusic(kind) && !multiplayer.music.Get().empty() && m_audio.play)
+		{
+			if (m_audio.fadeMusic)
+				m_audio.fadeMusic();
+			m_music = m_audio.play(multiplayer.music.Get());
+		}
 		Present();
 		return true;
 	}
@@ -101,6 +121,9 @@ public:
 	{
 		if (!m_menu)
 			return;
+		// The original's sound runs on its own (Miles); here the host's player is sequenced at each step of the load.
+		if (m_audio.update)
+			m_audio.update();
 		if (m_kind == shell::LoadScreenKind::ShellGame)
 			shellGame.Update(percent);
 		else if (m_kind == shell::LoadScreenKind::MultiPlayer)
@@ -134,8 +157,25 @@ public:
 			return;
 		for (; m_movieFrame <= frameIndex; ++m_movieFrame)
 			mission.MovieFrame(static_cast<int>(m_movieFrame + 1)); // the stream's index after frameNext
+		if (m_kind == shell::LoadScreenKind::Challenge)
+			UpdateWindowMovies(playing);
 		if (!playing)
+		{
 			mission.EndMovie();
+			// SinglePlayerLoadScreen / ChallengeLoadScreen::init's end (after the challenge's taunt): the ambient loop.
+			if (!m_ambientStarted && !shell::LoadScreenAmbientFor(m_kind).empty() && m_audio.play)
+			{
+				m_ambientStarted = true;
+				m_ambient = m_audio.play(shell::LoadScreenAmbientFor(m_kind));
+			}
+		}
+	}
+
+	// Where the challenge screen's window movies (its portraits and versus overlay) are found (Video.ini, the install).
+	void SetWindowMovieSource(const content::VideoCatalog &videos, std::filesystem::path install)
+	{
+		m_videos = &videos;
+		m_install = std::move(install);
 	}
 
 	// Where the background window's movie frame comes from (the display's movie) while the screen shows one.
@@ -161,6 +201,24 @@ public:
 	// GameLogic::deleteLoadScreen.
 	void Close()
 	{
+		for (WindowMovie &movie : m_windowMovies)
+		{
+			movie.player.reset();
+			movie.started.clear();
+		}
+		m_windowClock.reset();
+		// The screen's destructor: the ambient loop removed; the multiplayer screen's music faded
+		// (removeAudioEvent(AHSV_StopTheMusicFade)).
+		if (m_audio.stop)
+		{
+			if (m_ambient != 0)
+				m_audio.stop(m_ambient, false);
+			if (m_music != 0)
+				m_audio.stop(m_music, true);
+		}
+		m_ambient = 0;
+		m_music = 0;
+		m_ambientStarted = false;
 		m_missionView.reset();
 		m_multiplayerView.reset();
 		m_bindings.reset();
@@ -203,6 +261,37 @@ private:
 																		: "SinglePlayerLoadScreen.wnd:ParentSinglePlayerLoadScreen";
 		if (Engine::UI::WND::WNDWindow *window = m_menu ? m_menu->Document().Find_Window(parent) : nullptr)
 			window->video = video;
+		if (m_kind != shell::LoadScreenKind::Challenge || !m_menu)
+			return;
+		for (WindowMovie &movie : m_windowMovies)
+			if (Engine::UI::WND::WNDWindow *window = m_menu->Document().Find_Window(movie.window))
+				window->video = movie.player ? movie.player->FrameImage(renderer) : std::nullopt;
+	}
+
+	// ChallengeLoadScreen's WindowVideoManager: each window's movie starts when the screen asks for it
+	// (WINDOW_PLAY_MOVIE_SHOW_LAST_FRAME: once, its last frame kept), and is updated, on real time, only while the
+	// mission's movie plays (m_wndVideoManager->update in init's loop), so it stays as it was over the load.
+	void UpdateWindowMovies(bool playing)
+	{
+		const auto now = std::chrono::steady_clock::now();
+		const double seconds = m_windowClock ? std::chrono::duration<double>(now - *m_windowClock).count() : 0.0;
+		m_windowClock = now;
+		const std::array<const engine::gui::mvvm::Observable<std::string> *, 3> asked{&mission.portraitMovieLeft, &mission.portraitMovieRight,
+			&mission.versusMovie};
+		for (std::size_t index = 0; index < m_windowMovies.size(); ++index)
+		{
+			WindowMovie &movie = m_windowMovies[index];
+			const std::string &name = asked[index]->Get();
+			if (!name.empty() && name != movie.started && m_videos != nullptr)
+			{
+				movie.started = name;
+				movie.player = std::make_unique<MoviePlayer>(nullptr, movie.texture);
+				if (!movie.player->Play(*m_videos, m_install, "English", name))
+					std::fprintf(stderr, "load screen: movie '%s' could not be played\n", name.c_str());
+			}
+			if (playing && movie.player)
+				movie.player->Update(seconds);
+		}
 	}
 
 	std::unique_ptr<ShellMenu> m_menu;
@@ -215,5 +304,21 @@ private:
 	int m_shotCount{0};
 	std::uint64_t m_movieFrame{0}; // the next movie frame to step the bar for
 	std::function<std::optional<Engine::UI::WND::ImageRef>(Graphics::Renderer2D &)> m_videoSource;
+	// The challenge screen's window movies: PortraitMovieLeft, PortraitMovieRight, OverlayVs.
+	struct WindowMovie
+	{
+		const char *window;
+		std::uint32_t texture;
+		std::string started;
+		std::unique_ptr<MoviePlayer> player;
+	};
+	std::array<WindowMovie, 3> m_windowMovies{{{"ChallengeLoadScreen.wnd:PortraitMovieLeft", 0x7AD1002u, {}, {}},
+		{"ChallengeLoadScreen.wnd:PortraitMovieRight", 0x7AD1003u, {}, {}}, {"ChallengeLoadScreen.wnd:OverlayVs", 0x7AD1004u, {}, {}}}};
+	std::optional<std::chrono::steady_clock::time_point> m_windowClock;
+	const content::VideoCatalog *m_videos{nullptr};
+	std::filesystem::path m_install;
+	LoadScreenAudio m_audio;
+	std::uint64_t m_ambient{0}, m_music{0};
+	bool m_ambientStarted{false};
 };
 }

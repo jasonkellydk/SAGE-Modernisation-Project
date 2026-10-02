@@ -67,6 +67,7 @@ struct DeckLayer
 	std::vector<PathfindCellType> type;
 	std::vector<std::uint8_t> toGround;
 	bool destroyed{false};
+	bool wall{false}; // the wall layer (LAYER_WALL): its cells from the wall pieces, never linked to the ground
 
 	bool Contains(std::int32_t x, std::int32_t y) const noexcept { return x >= x0 && y >= y0 && x < x0 + width && y < y0 + height; }
 	std::size_t Index(std::int32_t x, std::int32_t y) const noexcept
@@ -75,7 +76,8 @@ struct DeckLayer
 	}
 };
 
-// Decks are layers 1 and up (the original's bridge layers, at most 13 below LAYER_WALL; the ground is GroundLayer).
+// Decks are layers 1 and up (the original's bridge layers, at most 13 below LAYER_WALL; the ground is GroundLayer); the
+// wall, when a map has one, is a deck of its own past those it was made after (DeckLayer::wall).
 inline constexpr std::size_t MaxDecks = 13;
 
 struct StampedObstacle

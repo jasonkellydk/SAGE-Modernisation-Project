@@ -7,6 +7,7 @@ export import engine.gameplay.rts.topple.components.topple;
 export import engine.gameplay.rts.topple.resources.topple_events;
 export import engine.gameplay.rts.collision.systems.collision_systems;
 export import engine.gameplay.common.spatial.components.attitude;
+export import engine.gameplay.common.spatial.components.body_extent;
 export import engine.gameplay.common.lifetime.components.lifetime;
 export import engine.gameplay.rts.death.components.dying;
 export import engine.gameplay.rts.death.resources.blast_waves;
@@ -16,7 +17,8 @@ export import Engine.Core.Math.FixedVector;
 // Toppling, in parallel per chunk: an upright thing run into by a heavy
 // crusher (crusher level above 1), or reached by a blast's push (the
 // tick's BlastWaves: away from the blast at its topple speed, not bouncing,
-// no bounce effects), starts falling away from it; nothing dead topples
+// no bounce effects), or pushed by a game rule (the tick's TopplePushes: a
+// flood wave's victims), starts falling away from it; nothing dead topples
 // (ToppleUpdate::applyTopplingForce); falling, it
 // turns to lie along its fall, tips over by its angular velocity (with its
 // acceleration), bounces back off the ground with a share of it until it
@@ -26,8 +28,8 @@ export namespace engine::gameplay
 {
 struct ToppleSystem
 {
-	using Query = ecs::Query<ecs::Write<Topple>, ecs::Write<Transform>, ecs::Write<Attitude>, ecs::Optional<Dying>>;
-	using Resources = ecs::Resources<ecs::Read<Contacts>, ecs::Read<ToppleSettings>, ecs::Read<BlastWaves>, ecs::Write<ToppleEvents>>;
+	using Query = ecs::Query<ecs::Write<Topple>, ecs::Write<Transform>, ecs::Write<Attitude>, ecs::Optional<Dying>, ecs::Optional<BodyExtent>>;
+	using Resources = ecs::Resources<ecs::Read<Contacts>, ecs::Read<ToppleSettings>, ecs::Read<BlastWaves>, ecs::Read<TopplePushes>, ecs::Write<ToppleEvents>>;
 
 	// Just short of flat, as the original.
 	static constexpr Engine::Math::Fixed Limit = Engine::Math::Fixed::FromRatio(152170, 100000); // pi/2 - pi/64
@@ -40,12 +42,14 @@ struct ToppleSystem
 		const Contacts &contacts = context.Read<Contacts>();
 		const ToppleSettings &settings = context.Read<ToppleSettings>();
 		const auto &pushes = context.Read<BlastWaves>().pushes;
+		const auto &rulePushes = context.Read<TopplePushes>().list;
 		auto &events = context.Write<ToppleEvents>().Slot(context);
 		const std::uint64_t tick = context.Tick();
 		auto topples = chunk.Get<Topple>();
 		auto transforms = chunk.Get<Transform>();
 		auto attitudes = chunk.Get<Attitude>();
 		const auto dyings = chunk.Get<Dying>();
+		const auto extents = chunk.Get<BodyExtent>();
 		const auto entities = chunk.Entities();
 		const auto kill = [&](ecs::Entity entity) {
 			context.Commands().Set<Lifetime>(entity, Lifetime{tick, 0, settings.toppledDeathType});
@@ -72,6 +76,10 @@ struct ToppleSystem
 				for (const BlastPush &push : pushes)
 					if (topple.state == ToppleState::Upright && BlastWaves::Reaches(push.center, push.radius, transform.position))
 						start(transform.position.XY() - push.center.XY(), push.toppleSpeed, topple_option::NoBounce | topple_option::NoFx);
+				// Object::topple from a game rule (WaveGuideUpdate::doDamage: a flood wave's victim, NO_BOUNCE | NO_FX).
+				for (const TopplePush &push : rulePushes)
+					if (topple.state == ToppleState::Upright && push.entity == entities[row])
+						start(push.away, push.speed, push.options);
 				if (topple.state != ToppleState::Upright)
 					continue;
 				for (const Contact &contact : contacts.For(entities[row]))
@@ -103,7 +111,20 @@ struct ToppleSystem
 					topple.angularVelocity = {};
 					topple.state = ToppleState::Down;
 					if ((topple.flags & topple_flag::KillWhenDown) != 0)
+					{
 						kill(entities[row]);
+						// ReorientToppledRubble: its separate rubble state upright and centred on where its top (its geometry's
+						// height above its position, tilted as it lies) now is.
+						if ((topple.flags & topple_flag::ReorientRubble) != 0 && !extents.empty())
+						{
+							const Fixed height = extents[row].maxHeight;
+							const Engine::Math::TurnAngle tilt = Engine::Math::TurnFromRadians(topple.fallen);
+							const auto toward = Engine::Math::Direction(transform.facing) * (Fixed::FromInt(topple.fallSign) * height * Engine::Math::Sin(tilt));
+							transform.position = {transform.position.x + toward.x, transform.position.y + toward.y, transform.position.z + height * Engine::Math::Cos(tilt)};
+							attitudes[row].pitch = {};
+							attitudes[row].roll = {};
+						}
+					}
 				}
 				else if (Engine::Math::Abs(topple.angularVelocity) >= Fixed::FromRatio(3, 100) && (topple.options & topple_option::NoFx) == 0)
 					events.push_back({entities[row], ToppleEvent::Kind::Bounced, transform.position, transform.facing});

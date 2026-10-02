@@ -54,6 +54,9 @@ import games.generalszh.hosts.game.world_animation_view;
 import games.generalszh.hosts.game.control_bar_layer;
 import games.generalszh.hosts.game.match_end_layer;
 import games.generalszh.hosts.game.popup_message_layer;
+import games.generalszh.hosts.game.comm_layer;
+import games.generalszh.hud.in_game_chat;
+import Engine.UI.WND.Input;
 import games.generalszh.hosts.game.cinematic_text_view;
 import games.generalszh.hosts.game.superweapon_timers_view;
 import games.generalszh.content.global.in_game_ui;
@@ -66,12 +69,16 @@ import games.generalszh.hosts.game.load_screen;
 import games.generalszh.hosts.game.window_scale;
 import games.generalszh.hosts.game.host_options;
 import games.generalszh.hosts.game.frame_draws;
+import games.generalszh.hosts.game.mouse_tooltip_view;
 import games.generalszh.hosts.game.cursor_set;
 import games.generalszh.hosts.game.overlay_views;
 import games.generalszh.hosts.game.match_files;
 import games.generalszh.hosts.game.match_setup;
 import games.generalszh.hosts.game.match_results;
 import games.generalszh.hosts.game.pointer_input;
+import engine.filesystem.adapters.directory.directory_source;
+import games.generalszh.presentation.hud.algorithms.screen_capture;
+import games.generalszh.presentation.hud.algorithms.replay_fast_forward;
 import games.generalszh.shell.intro.intro_sequence;
 import games.generalszh.hud.match_record;
 import games.generalszh.shell.score.battle_honors;
@@ -107,6 +114,14 @@ int Run(int argc, char **argv)
 	const auto mount = generalszh::content::MountInstall(files, options->install);
 	for (const std::string &error : mount.errors)
 		std::fprintf(stderr, "mount: %s\n", error.c_str());
+	// MapCache::getUserMapDir: the user's own maps (user data\Maps) as "Maps\<name>\...", beneath the shipped files (a
+	// shipped map of the same name wins, as loadStandardMaps reads over the user's): their .map, map.ini, map.str, .tga.
+	{
+		const std::filesystem::path userMaps = (options->userData.empty() ? generalszh::host::DefaultUserData() : options->userData) / "Maps";
+		std::error_code error;
+		std::filesystem::create_directories(userMaps, error);
+		files.Mount(std::make_unique<engine::filesystem::DirectorySource>(userMaps, "maps"));
+	}
 	// The shell's map (GameEngine::init: GlobalData ShellMapName), unless one is asked for; and PlayIntro.
 	{
 		engine::config::Diagnostics shellDiagnostics;
@@ -181,7 +196,8 @@ int Run(int argc, char **argv)
 
 		// The mouse cursors (Mouse.ini's), the arrow first.
 		generalszh::host::CursorSet cursors;
-		cursors.Load(generalszh::content::BindMouse(loader.Load({"Data/INI/Mouse"})), files);
+		const generalszh::content::MouseContent mouseContent = generalszh::content::BindMouse(loader.Load({"Data/INI/Mouse"}));
+		cursors.Load(mouseContent, files);
 		cursors.Show({static_cast<std::uint8_t>(generalszh::content::MouseCursorKind::Arrow), 0});
 
 		// The world's renderers: terrain (textured base + 3-way overlay), objects, water (Water.ini, map.ini overrides), particles.
@@ -214,6 +230,8 @@ int Run(int argc, char **argv)
 		// The map runs through the ordinary game session; the shell map is a map
 		// its scripts play by themselves.
 		generalszh::host::GameClient game;
+		game.SetWeather(stage.weather);
+		game.UseMapObjects(stage.mapIni, &loader);
 		game.Load(loader, files, *stage.level, stage.Height(), stage.mesh->PlayableSize(),
 			static_cast<float>(options->width) / static_cast<float>(options->height), 0x5EED);
 		game.SetGameSpeed(options->speed);
@@ -232,13 +250,34 @@ int Run(int argc, char **argv)
 		// Floating texts over the world ("+$300" where a truck delivered): GUI:AddCash, in the display string font.
 		game.SetAddCashText(generalszh::host::Localized(strings, "GUI:AddCash"));
 		game.SetLoseCashText(generalszh::host::Localized(strings, "GUI:LoseCash"));
-		game.SetLabels([&strings](std::string_view label) { return generalszh::host::Localized(strings, label); });
+		// The match's map.str (loaded as each match starts): GameTextManager::fetch looks there after Generals.csf.
+		engine::localization::StringTable mapStrings;
+		game.SetLabels([&strings, &mapStrings](std::string_view label) {
+			if (strings.Find(label) == nullptr && mapStrings.Find(label) != nullptr)
+				return generalszh::host::Localized(mapStrings, label);
+			return generalszh::host::Localized(strings, label);
+		});
 		const generalszh::content::LanguageFonts languageFonts = generalszh::content::ReadLanguageFonts(loader.Load({"Data/English/Language"}));
+		// The mouse's cursor text and tooltip (W3DMouse::draw), in Language.ini's tooltip font (else Mouse.ini's).
+		generalszh::host::MouseTooltipView mouseTooltips;
+		if (!mouseTooltips.Load(languageFonts.tooltip, mouseContent.tooltip,
+				generalszh::host::FontScale(options->width, options->height, Engine::Math::ToFloat(languageFonts.resolutionAdjustment))))
+			std::fprintf(stderr, "mouse: the tooltip font could not be loaded\n");
 		// The in-game overlay's views (its fonts and images).
 		generalszh::host::OverlayViews overlayViews;
 		generalszh::host::LoadOverlayViews(overlayViews, files, strings, languageFonts,
 			generalszh::content::BindInGameUi(loader.Load({"Data/INI/Default/InGameUI", "Data/INI/InGameUI"})), options->width, options->height);
+		generalszh::host::LoadGroupNumberViews(overlayViews, strings, game.GroupNumberLook());
 		generalszh::host::FrontEnd frontEnd;
+		// TheMetaMap (GameEngine::init: Data\<language>\CommandMap.ini, then Data\INI\CommandMap.ini) and the
+		// MetaEventTranslator's memory of the keys.
+		generalszh::content::CommandMap commandMap;
+		{
+			const engine::config::Document &commandSet = loader.Load({"Data/English/CommandMap", "Data/INI/CommandMap"});
+			engine::config::BindContext commandContext{loader.DiagnosticsFor(commandSet), engine::time::FixedStep{30}};
+			generalszh::content::BindCommandMap(commandSet, commandMap, commandContext);
+		}
+		generalszh::presentation::MetaKeyState metaKeys;
 		// The control bar, loaded as a match starts (ControlBar.wnd with the local player's scheme).
 		generalszh::host::ControlBarLayer controlBar;
 		bool controlBarLoaded = false;
@@ -285,6 +324,10 @@ int Run(int argc, char **argv)
 		generalszh::host::MatchFlow flow;
 		// INGAME_POPUP_MESSAGE's window (InGameUI::popupMessage), the message it shows and whether it paused the game.
 		generalszh::host::PopupMessageLayer popup;
+		// The in-game chat and diplomacy windows (InGameChat.wnd, Diplomacy.wnd), set up again for each match.
+		generalszh::host::CommLayer comm;
+		bool commLoaded = false;
+		std::uint32_t commMatch = 0; // the match (its start time) the windows were last set up for
 		std::uint32_t popupSerial = 0;
 		bool popupPaused = false;
 		// DISPLAY_CINEMATIC_TEXT over the letterbox; REFRESH_RADAR's requests seen.
@@ -298,6 +341,7 @@ int Run(int argc, char **argv)
 		const std::vector<generalszh::shell::LoadScreenFaction> loadScreenFactions = generalszh::host::LoadScreenFactions(loader, game.PlayerTemplates(), strings);
 		generalszh::host::HostParts host{*options, files, loader, strings, campaigns, languageFonts, game, frontEnd, controlBar, controlBarLoaded, loadScreen,
 			loadScreenFactions};
+		host.mapStrings = &mapStrings;
 		// GameClient::update: once the intro is done the shell map loads (Shell::showShellMap), behind the title screen;
 		// not when the game starts straight into a saved game.
 		bool shellMapShown = false;
@@ -305,6 +349,11 @@ int Run(int argc, char **argv)
 			return generalszh::host::LaunchMatch(host, stage, flow, plan, checkpoint, replay);
 		};
 		const std::filesystem::path userData = options->userData.empty() ? DefaultUserData() : options->userData;
+		// F12's screen captures (W3DDisplay::takeScreenShot's static frame_number) and a replay's fast forward (m_TiVOFastMode).
+		int screenshotCounter = 1;
+		std::optional<std::filesystem::path> screenshot;
+		bool screenshotPending = false;
+		bool replayFastForward = false;
 		const auto updateStats = [&](auto &&change) { generalszh::host::UpdateSkirmishStats(userData, change); };
 		generalszh::host::BindGameMenus(host, flow);
 
@@ -348,7 +397,27 @@ int Run(int argc, char **argv)
 				if (frontEnd.InGame() && (!frontEnd.GameMenuShown() || event.type == engine::platform::EventType::key_down))
 				{
 					using engine::platform::EventType;
-					if (!generalszh::host::PointMouse(pointer, event) && (event.type == EventType::key_down || event.type == EventType::key_up))
+					// InGameChatInput: the open chat box has the keyboard (typed text, Backspace, Enter sends, Esc closes).
+					if (commLoaded && comm.KeyboardTaken() && !frontEnd.GameMenuShown() &&
+						(event.type == EventType::text_input || event.type == EventType::key_down || event.type == EventType::key_up))
+					{
+						using engine::platform::KeyCode;
+						if (event.type == EventType::text_input)
+						{
+							std::u16string typed;
+							for (const char *c = event.text; *c != 0; ++c)
+								if (static_cast<unsigned char>(*c) < 0x80)
+									typed.push_back(static_cast<char16_t>(*c));
+							comm.Type(typed);
+						}
+						else if (event.type == EventType::key_down && event.key == KeyCode::backspace)
+							comm.Key(Engine::UI::WND::WNDPointer::EditKey::Backspace);
+						else if (event.type == EventType::key_down && (event.key == KeyCode::enter || event.key == KeyCode::keypad_enter))
+							comm.Key(Engine::UI::WND::WNDPointer::EditKey::Enter);
+						else if (event.type == EventType::key_down && event.key == KeyCode::escape)
+							comm.Escape();
+					}
+					else if (!generalszh::host::PointMouse(pointer, event) && (event.type == EventType::key_down || event.type == EventType::key_up))
 					{
 						keyModifiers = event.modifiers;
 						using engine::platform::KeyCode;
@@ -365,16 +434,82 @@ int Run(int argc, char **argv)
 						}
 						else if (event.type == EventType::key_down && event.key == KeyCode::escape && movie.Playing())
 							skipMovie = true;
-						else if (event.type == EventType::key_down && event.key == KeyCode::escape && !(controlBarLoaded && !frontEnd.GameMenuShown() && controlBar.Escape()))
-							frontEnd.ToggleQuitMenu();
-						// CommandMap.ini's PLACE_BEACON (Ctrl+B down) and DELETE_BEACON (Del down), in a match.
-						if (event.type == EventType::key_down && frontEnd.InGame() && !frontEnd.GameMenuShown())
+						else if (event.type == EventType::key_down && event.key == KeyCode::escape && controlBarLoaded && !frontEnd.GameMenuShown() &&
+							controlBar.Escape())
 						{
-							if (event.key == KeyCode::b && (event.modifiers & engine::platform::modifier_control) != 0 &&
-								(event.modifiers & (engine::platform::modifier_alt | engine::platform::modifier_shift)) == 0)
+						}
+						else
+						{
+							// MetaEventTranslator: the key's CommandMap.ini meta-event (the game client counts frames from the
+							// match's start); those the port answers so far: OPTIONS (ToggleQuitMenu), PLACE_BEACON and
+							// DELETE_BEACON (out of a menu).
+							const generalszh::presentation::MetaTranslation meta = generalszh::presentation::TranslateMetaKey(commandMap, metaKeys,
+								generalszh::host::MetaKeyInputFor(event),
+								generalszh::presentation::MetaKeyContext{false, static_cast<std::uint32_t>(inGameFrames), flow.replaying.has_value()});
+							const std::string_view raised = meta.raised != nullptr ? std::string_view(meta.raised->meta) : std::string_view();
+							// HotKeyTranslator (after the meta translator): a key released with no modifier, the raw key not
+							// used by a meta-event, clicks the command button whose label marks it (its printable character).
+							if (!meta.consumed && event.type == engine::platform::EventType::key_up && event.modifiers == 0 && controlBarLoaded &&
+								!frontEnd.GameMenuShown())
+							{
+								using engine::platform::KeyCode;
+								char printable = 0;
+								if (event.key >= KeyCode::a && event.key <= KeyCode::z)
+									printable = static_cast<char>('a' + (static_cast<int>(event.key) - static_cast<int>(KeyCode::a)));
+								else if (event.key >= KeyCode::digit0 && event.key <= KeyCode::digit9)
+									printable = static_cast<char>('0' + (static_cast<int>(event.key) - static_cast<int>(KeyCode::digit0)));
+								if (printable != 0)
+									controlBar.HotKey(printable);
+							}
+							// GlobalData m_TiVOFastMode flipped (a replay's F), said by InGameUI.
+							if (meta.toggleFastForward)
+							{
+								replayFastForward = !replayFastForward;
+								game.ShowMessage(generalszh::host::Localized(strings, generalszh::presentation::ReplayFastForwardLabel(replayFastForward)));
+							}
+							if (raised == "OPTIONS")
+								frontEnd.ToggleQuitMenu();
+							// CommandXlat's CHAT_ALLIES / CHAT_EVERYONE (ToggleInGameChat, SetInGameChatType) and DIPLOMACY
+							// (ToggleDiplomacy(FALSE)).
+							else if (raised == "CHAT_ALLIES" && commLoaded)
+								comm.Chat(generalszh::hud::InGameChatType::Allies);
+							else if (raised == "CHAT_EVERYONE" && commLoaded)
+								comm.Chat(generalszh::hud::InGameChatType::Everyone);
+							else if (raised == "DIPLOMACY" && commLoaded)
+								comm.ToggleDiplomacy(frontEnd.GameMenuShown());
+							else if (raised == "PLACE_BEACON" && !frontEnd.GameMenuShown())
 								game.PlaceBeaconKey();
-							else if (event.key == KeyCode::del && event.modifiers == 0)
+							else if (raised == "DELETE_BEACON" && !frontEnd.GameMenuShown())
 								game.RemoveBeaconKey();
+							// CommandXlat's TOGGLE_CONTROL_BAR (F9): ToggleControlBar, not in a replay played back.
+							else if (raised == "TOGGLE_CONTROL_BAR")
+							{
+								if (controlBarLoaded)
+									controlBar.ToggleHidden(flow.replaying.has_value());
+							}
+							// CommandXlat's TAKE_SCREENSHOT (F12): W3DDisplay::takeScreenShot into the user data folder.
+							else if (raised == "TAKE_SCREENSHOT")
+								screenshot = userData / generalszh::presentation::NextScreenshotName(screenshotCounter,
+									[&userData](const std::string &name) { std::error_code error; return std::filesystem::exists(userData / name, error); });
+							// The camera keys, reset and tracking, the view bookmarks, the last radar event and STOP.
+							else if (game.MetaEvent(raised))
+							{
+							}
+							// SelectionTranslator: CREATE_TEAMn / SELECT_TEAMn / ADD_TEAMn / VIEW_TEAMn (n 0..9).
+							else if (!frontEnd.GameMenuShown() && raised.size() >= 6 && raised.back() >= '0' && raised.back() <= '9')
+							{
+								using generalszh::presentation::TeamMeta;
+								const std::string_view name = raised.substr(0, raised.size() - 1);
+								const std::int32_t group = raised.back() - '0';
+								if (name == "CREATE_TEAM")
+									game.TeamKey(TeamMeta::Create, group);
+								else if (name == "SELECT_TEAM")
+									game.TeamKey(TeamMeta::Select, group);
+								else if (name == "ADD_TEAM")
+									game.TeamKey(TeamMeta::Add, group);
+								else if (name == "VIEW_TEAM")
+									game.TeamKey(TeamMeta::View, group);
+							}
 						}
 						generalszh::host::HoldArrows(pointer, event);
 					}
@@ -398,6 +533,8 @@ int Run(int argc, char **argv)
 				}
 				// The checks' scripted clicks (--click) and drag (--drag).
 				generalszh::host::ScriptPointer(pointer, options->clicks, options->drag, inGameFrames);
+				if (options->wheel != 0 && inGameFrames == 60)
+					pointer.wheel += options->wheel;
 				pointer.shift = (keyModifiers & engine::platform::modifier_shift) != 0;
 				pointer.ctrl = (keyModifiers & engine::platform::modifier_control) != 0;
 				pointer.alt = (keyModifiers & engine::platform::modifier_alt) != 0;
@@ -407,8 +544,16 @@ int Run(int argc, char **argv)
 				// The popup message first (modal while it pauses the game).
 				if (popup.Showing() && popup.Point(pointer.x, pointer.y, pointer.pressed, pointer.released, pointer.timeMs))
 					pointer.overInterface = true;
+				// The chat and diplomacy windows over the bar and the world.
+				else if (commLoaded && comm.Point(pointer.x, pointer.y, pointer.pressed, pointer.released, pointer.timeMs))
+					pointer.overInterface = true;
 				else
 					pointer.overInterface = controlBarLoaded && controlBar.Point(pointer.x, pointer.y, pointer.pressed, pointer.released, pointer.timeMs);
+				// GameWindowManager's tooltip of the in-game window under the mouse (the world's mouse-over gives none there).
+				pointer.windowTooltip = controlBarLoaded && !popup.Showing() ? controlBar.WindowTooltip(pointer.x, pointer.y) : std::nullopt;
+				// InGameUI::createCommandHint's underWindow loop: over the radar (LeftHUDInput) the hints go on behind it.
+				pointer.overRadar = controlBarLoaded && !popup.Showing() && controlBar.OverRadar(pointer.x, pointer.y);
+				pointer.hasRadar = controlBarLoaded && controlBar.HasRadar();
 				// The debug cheat MSG_META_DEMO_KILL_ALL_ENEMIES, scripted (--kill-enemies-at).
 				if (options->killEnemiesAt != 0 && inGameFrames == options->killEnemiesAt)
 					game.Submit(generalszh::commands::KillAllEnemies{});
@@ -422,6 +567,11 @@ int Run(int argc, char **argv)
 			previous = now;
 			const auto tickLength = std::chrono::nanoseconds(static_cast<std::int64_t>(1e9 / game.TicksPerSecond()));
 			if (options->tickPerFrame)
+				accumulator = tickLength;
+			// GameLogic::startNewGame turns the fast forward off; on in a replay, the loop runs a logic frame a pass, unlimited.
+			if (!flow.replaying || !frontEnd.InGame())
+				replayFastForward = false;
+			if (generalszh::presentation::ReplayFastForwardUnlimited(replayFastForward, flow.replaying.has_value()) && !flow.paused)
 				accumulator = tickLength;
 			// The shell map stops while the credits show (CreditsMenuInit: showShellMap(FALSE)); a paused game stops.
 			if (!frontEnd.ShellMapShown() || (flow.paused && frontEnd.InGame()) || !generalszh::shell::IntroDone(intro))
@@ -456,7 +606,7 @@ int Run(int argc, char **argv)
 				{
 					shownEnd = declared;
 					endTicks = 0;
-					const bool observer = !game.LocalPlayer().has_value();
+					const bool observer = game.LocalPlayerObserver(); // ScriptActions: localPlayer->isPlayerObserver()
 					std::printf("game end: %s%s\n", declared == MatchEnd::Victory ? "victory" : declared == MatchEnd::QuickVictory ? "quick victory"
 						: declared == MatchEnd::Defeat ? "defeat" : "local defeat", observer ? " (observer)" : "");
 					const char *wnd = declared == MatchEnd::LocalDefeat ? "Window/Menus/LocalDefeat.wnd"
@@ -520,6 +670,8 @@ int Run(int argc, char **argv)
 						for (const auto &player : scores.players)
 							if (player.local)
 								scores.localScoreScreenImage = player.scoreScreenImage;
+						// finishSinglePlayerInit: a challenge mission shows its opponent won or lost to.
+						scores.challenge = generalszh::host::ChallengeScoreFor(host, *flow.playing);
 					}
 					else
 					{
@@ -527,13 +679,21 @@ int Run(int argc, char **argv)
 						// set up (a computer's level; on the local player's team: isSlotLocalAlly), unless a sandbox (every
 						// other seat on the local player's team: GameInfo::isSandbox).
 						if (flow.playing && flow.playing->kind == MatchKind::Skirmish && !flow.replaying)
-							if (const auto local = game.LocalPlayer(); local && game.View() != nullptr)
+							if (const auto local = game.LocalPlayer(); local && game.View() != nullptr && !game.LocalPlayerObserver()) // setObserverWindows: no record
 							{
 								const auto result = generalszh::host::ReadSkirmishResult(*game.View(), *local, *flow.playing);
 								updateStats([&](engine::config::Preferences &stats) { generalszh::shell::RecordSkirmishGame(stats, result.record, result.sandbox); });
+								// populatePlayerInfo, isInSkirmishGame: the local player's war school advice.
+								for (const auto &player : scores.players)
+									if (player.local)
+										scores.academy = generalszh::host::ReadScoreAcademy(*game.View(), *local, player.baseSide);
 							}
+						// initLANMultiPlayer ("No academy in LAN") and initReplayMultiPlayer hide the war school.
+						scores.warSchoolHidden = flow.replaying || !flow.playing || flow.playing->kind != MatchKind::Skirmish;
 						// grabMultiPlayerInfo: the seats' players (player<slot>), in slot order.
 						scores.players = generalszh::host::SeatScorePlayers(flow.playing ? &*flow.playing : nullptr, scores.players);
+						if (const auto *observer = game.PlayerTemplates().ForSlot(generalszh::session::setup::ObserverTemplate))
+							scores.observerScoreScreenMusic = observer->scoreScreenMusic;
 						flow.afterScores.reset();
 					}
 					frontEnd.ShowScoreScreen(scores);
@@ -549,6 +709,10 @@ int Run(int argc, char **argv)
 					shownEnd = MatchEnd::None;
 					localDefeatShown = false;
 					generalszh::host::LoadShellMap(host, stage);
+					// ScoreScreenUpdate: a skirmish or network game's score screen plays its side's ScoreScreenMusic (fading
+					// out what played).
+					if (const std::string scoreMusic = generalszh::shell::ScoreScreenMusic(scores); !scoreMusic.empty())
+						game.PlayMenuMusic(scoreMusic);
 					frontEnd.LeaveGame();
 				}
 			}
@@ -595,8 +759,27 @@ int Run(int argc, char **argv)
 				}
 			}
 
+			// The last frame's F12 capture written: GUI:ScreenCapture with its name; the checks' capture file back.
+			if (std::exchange(screenshotPending, false))
+			{
+				game.ShowMessage(generalszh::presentation::ScreenCaptureMessage(generalszh::host::Localized(strings, "GUI:ScreenCapture"),
+					frameCapture.captureFile.filename().string()));
+				frameCapture.captureFile = options->screenshot;
+				frameCapture.captured = false;
+			}
 			frameCapture.captureNextFrame = !options->screenshot.empty() &&
 				(options->matchFrames != 0 ? inGameFrames == options->matchFrames : frame + 1 == options->frames);
+			if (screenshot)
+			{
+				frameCapture.captureFile = std::move(*screenshot);
+				screenshot.reset();
+				frameCapture.captureNextFrame = true;
+				screenshotPending = true;
+			}
+			// W3DDisplay::draw with the fast forward on: only logic frames 1, 31, 61... are drawn.
+			if (frontEnd.InGame() && !generalszh::presentation::ReplayFastForwardDraws(replayFastForward, flow.replaying.has_value(), flow.paused,
+										 game.View() != nullptr ? game.View()->CurrentTick() : 1))
+				continue;
 			if (!Graphics::Graphics_Begin_Frame())
 				continue;
 			Graphics::RenderBeginOptions begin;
@@ -674,13 +857,16 @@ int Run(int argc, char **argv)
 				generalszh::host::DrawOverlay(overlayViews, overlay, static_cast<float>(options->width), static_cast<float>(options->height), Graphics::Get_Renderer2D());
 				if (controlBarLoaded)
 				{
+					// The build tooltip's gates: a military caption showing disables tooltips; a replay or the quit menu
+					// refuses a button's popup.
+					controlBar.SetBuildTooltipGates(overlay.caption.shown, flow.replaying || frontEnd.GameMenuShown());
 					controlBar.Update(game, frameSeconds);
 					for (std::size_t press = 0; press < options->barPresses.size(); ++press)
 						if (inGameFrames == 90 + 20 * press)
 							controlBar.Press(options->barPresses[press]);
 					// DOZER_CONSTRUCT: the structure's ghost follows the mouse until placed or given up.
-					if (const std::string placing = controlBar.TakePlacement(); !placing.empty())
-						game.BeginPlacement(controlBar.Selected(), placing);
+					if (const auto placing = controlBar.TakePlacement())
+						game.BeginPlacement(placing->source, placing->structure, placing->power, placing->options);
 					// GUI_COMMAND_SPECIAL_POWER needing a target: the world waits for it (MOUSEMODE_GUI_COMMAND).
 					if (const std::string button = controlBar.TakeTargeting(); !button.empty())
 						game.BeginTargeting(controlBar.Selected(), button);
@@ -690,8 +876,42 @@ int Run(int argc, char **argv)
 					if (!settings.letterbox)
 						controlBar.Draw(Graphics::Get_Renderer2D());
 				}
+				// The chat and diplomacy windows: made once, set up again for each match (InGameUI::reset), updated and
+				// drawn over the bar.
+				if (!commLoaded)
+				{
+					std::string commError;
+					commLoaded = comm.Load(files, strings, game, options->width, options->height,
+						generalszh::host::FontScale(options->width, options->height, Engine::Math::ToFloat(languageFonts.resolutionAdjustment)), commError);
+					if (!commLoaded)
+					{
+						std::fprintf(stderr, "in-game chat / diplomacy: %s\n", commError.c_str());
+						commLoaded = true; // tried once
+						commMatch = ~0u;
+					}
+					else if (controlBarLoaded)
+						controlBar.SetCommunicatorAction([&comm, &frontEnd] { comm.ToggleDiplomacy(frontEnd.GameMenuShown()); });
+				}
+				if (commLoaded && commMatch != ~0u && flow.playing && flow.matchStartTime != commMatch)
+				{
+					commMatch = flow.matchStartTime;
+					using generalszh::session::setup::MatchKind;
+					const bool lan = flow.playing->kind == MatchKind::Lan;
+					comm.SetMatch(flow.playing->setup, lan ? flow.playing->localSlot : 0, flow.playing->FromSetup(), lan, flow.replaying.has_value());
+					if (controlBarLoaded)
+						controlBar.SetCommunicatorAction([&comm, &frontEnd] { comm.ToggleDiplomacy(frontEnd.GameMenuShown()); });
+				}
+				if (commLoaded && commMatch != ~0u)
+				{
+					comm.Update(frameSeconds);
+					comm.Draw(Graphics::Get_Renderer2D());
+				}
 				popup.Draw(Graphics::Get_Renderer2D());
 				matchEnd.Draw(Graphics::Get_Renderer2D());
+				// W3DDisplay::draw: the mouse (its cursor text and tooltip) over the interface, under the letterbox.
+				mouseTooltips.Draw(game.MouseTooltips(), pointer.x, pointer.y, static_cast<float>(options->width), static_cast<float>(options->height),
+					static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),
+					Graphics::Get_Renderer2D());
 				// W3DDisplay::renderLetterBox, over everything, fading over a second of real time from its last change.
 				letterboxLevel = generalszh::host::StepLetterbox(letterboxLevel, settings.letterbox,
 					std::chrono::duration<float, std::milli>(now - letterboxStart).count() / 1000.0f);
@@ -701,6 +921,17 @@ int Run(int argc, char **argv)
 				if (const auto *cinematic = game.CinematicText())
 					cinematicText.Draw(*cinematic, generalszh::host::FontScale(options->width, options->height, Engine::Math::ToFloat(languageFonts.resolutionAdjustment)),
 						static_cast<std::int32_t>(options->width), static_cast<std::int32_t>(options->height), Graphics::Get_Renderer2D());
+			}
+			// W3DDisplay::draw: the mouse's tooltip over the shell's windows (the game draws its own above).
+			if (!frontEnd.InGame() && !introShowing)
+			{
+				const auto shellTooltip = frontEnd.Tooltip(mouseContent.tooltip,
+					static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()));
+				if (shellTooltip.tooltip != nullptr)
+					mouseTooltips.Draw(shellTooltip, shellTooltip.tooltip->lastX, shellTooltip.tooltip->lastY, static_cast<float>(options->width),
+						static_cast<float>(options->height),
+						static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),
+						Graphics::Get_Renderer2D());
 			}
 			// The display's movie over everything else while it plays.
 			if (flow.briefing && loadScreen.Shown())
