@@ -47,6 +47,13 @@ struct FireSoundLoop
 	std::uint32_t reserved{0};
 };
 
+// The unit voice an object is saying (AudioEventRTS::setObjectID on a voice event; 0: none): SoundManager::violatesVoice
+// lets no other voice of it start while this one plays.
+struct SpeakingVoice
+{
+	std::uint64_t handle{0};
+};
+
 // A locomotive's RunningSound as playing (RailroadBehavior's m_runningSound; 0: none).
 struct TrainSoundLoop
 {
@@ -93,6 +100,14 @@ template<>
 struct ComponentTraits<generalszh::presentation::SoundLoops>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.sound_loops";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+template<>
+struct ComponentTraits<generalszh::presentation::SpeakingVoice>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.speaking_voice";
 	static constexpr std::uint32_t Version = 1;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
 	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;

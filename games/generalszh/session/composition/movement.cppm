@@ -15,6 +15,7 @@ import games.generalszh.gameplay.hacking.systems.internet_hack_system;
 import engine.gameplay.rts.movement.systems.descent_system;
 import engine.gameplay.rts.movement.systems.face_target_system;
 import engine.gameplay.rts.movement.systems.locomotor_damage_system;
+import engine.gameplay.rts.movement.systems.locomotor_choice_system;
 import engine.gameplay.rts.movement.systems.move_path_system;
 import engine.gameplay.rts.movement.systems.path_points_sweep_system;
 import engine.gameplay.rts.movement.resources.path_points;
@@ -66,6 +67,7 @@ inline void RegisterMovementComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::PathCompleted>();
 	world.RegisterComponent<engine::gameplay::MoveEnded>();
 	world.RegisterComponent<engine::gameplay::Locomotion>();
+	world.RegisterComponent<engine::gameplay::LocomotorChoice>();
 	world.RegisterComponent<engine::gameplay::MoveOrder>();
 	world.RegisterComponent<engine::gameplay::MoveGoal>();
 	world.RegisterComponent<engine::gameplay::DesiredSpeed>();
@@ -95,6 +97,8 @@ inline void RegisterMovementSystems(ecs::SystemRegistry &registry)
 	registry.Register(goalClaims);
 	static engine::gameplay::LocomotorDamageSystem locomotorDamage;
 	registry.Register(locomotorDamage);
+	static engine::gameplay::LocomotorChoiceSystem locomotorChoice;
+	registry.Register(locomotorChoice);
 	static engine::gameplay::WanderSystem wanderers;
 	registry.Register(wanderers);
 	static engine::gameplay::MovePathSystem movePaths;
@@ -138,6 +142,9 @@ inline void OrderMovementSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<gameplay::WanderSystem, gameplay::MovePathSystem>();
 	registry.OrderBefore<gameplay::DockSystem, domain::GoalClaimSystem>();
 	registry.OrderBefore<gameplay::LocomotorDamageSystem, gameplay::MovementSystem>();
+	// doLocomotor: the locomotor for where it stands first, then that locomotor's rates for its damage.
+	registry.OrderBefore<gameplay::LocomotorChoiceSystem, gameplay::LocomotorDamageSystem>();
+	registry.OrderBefore<domain::ScriptedEvacuationSystem, gameplay::LocomotorChoiceSystem>();
 	registry.OrderBefore<domain::ScriptedEvacuationSystem, gameplay::LocomotorDamageSystem>();
 	registry.OrderBefore<domain::ScriptedEvacuationSystem, gameplay::FaceTargetSystem>();
 	registry.OrderBefore<domain::ScriptedEvacuationSystem, gameplay::WanderSystem>();

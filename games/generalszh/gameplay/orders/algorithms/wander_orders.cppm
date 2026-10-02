@@ -10,6 +10,8 @@ import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.systems.locomotor_choice_system;
+import engine.gameplay.common.spatial.components.surface_layer;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.wander_anchor;
 import engine.gameplay.rts.navigation.components.navigation;
@@ -71,7 +73,37 @@ inline bool ChooseLocomotorSet(GameWorld &game, ecs::Entity unit, std::uint8_t s
 	fresh.donutTimer = game.tick + game.step.TicksPerSecond() * 5 / 2;
 	if (definition->wanderWidth != Engine::Math::Fixed{})
 		gp::StartWander(fresh, [&](std::int64_t low, std::int64_t high) { return Engine::Math::UniformInt(game.random, low, high); });
-	*motion = fresh;
+	// chooseLocomotorSetExplicit then chooseGoodLocomotorFromCurrentSet: a set of more than one locomotor keeps them all,
+	// the one for the cell it stands in used at once; it is routed over every surface of the set.
+	const auto all = content::ObjectLocomotors(game.templates.DefinitionAt(ref->index), game.templates.Content().locomotors, name);
+	std::uint8_t surfaces = definition->surfaces;
+	if (all.size() > 1)
+	{
+		gp::LocomotorChoice choice = gp::MakeLocomotorChoice(all);
+		const auto *layer = world.Get<gp::SurfaceLayer>(unit);
+		const auto *transform = world.Get<gp::Transform>(unit);
+		if (transform != nullptr)
+		{
+			const std::uint8_t legal = gp::SurfacesForCell(
+				gp::CellTypeAt(world.Resource<gp::NavigationGrid>(), layer != nullptr ? layer->layer : std::uint8_t{0}, transform->position.XY()));
+			for (std::uint8_t index = 0; index < choice.count; ++index)
+				if ((choice.options[index].surfaces & legal) != 0)
+				{
+					choice.current = index;
+					fresh.locomotor = choice.options[index];
+					break;
+				}
+		}
+		surfaces = gp::SetSurfaces(choice);
+		if (!world.Has<gp::LocomotorChoice>(unit))
+			world.Add<gp::LocomotorChoice>(unit);
+		*world.Get<gp::LocomotorChoice>(unit) = choice;
+	}
+	else if (world.Has<gp::LocomotorChoice>(unit))
+		world.Remove<gp::LocomotorChoice>(unit);
+	*world.Get<gp::Locomotion>(unit) = fresh;
+	if (auto *agent = world.Get<gp::NavigationAgent>(unit); agent != nullptr && surfaces != 0 && (surfaces & gp::locomotor_surface::Air) == 0)
+		agent->surfaces = surfaces;
 	return true;
 }
 

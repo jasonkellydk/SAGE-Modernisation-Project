@@ -177,6 +177,7 @@ engine_add_module_library(engine_gameplay_movement
 	MODULES
 		rts/movement/definitions/locomotor.cppm
 		rts/movement/components/locomotion.cppm
+		rts/movement/components/locomotor_choice.cppm
 		rts/movement/components/move_order.cppm
 		rts/movement/components/path_completed.cppm
 		rts/movement/components/move_ended.cppm
@@ -188,6 +189,7 @@ engine_add_module_library(engine_gameplay_movement
 		rts/movement/systems/route_request_system.cppm
 		rts/movement/resources/movement_penalty.cppm
 		rts/movement/systems/locomotor_damage_system.cppm
+		rts/movement/systems/locomotor_choice_system.cppm
 		rts/movement/components/wanderer.cppm
 		rts/movement/components/wander_anchor.cppm
 		rts/movement/components/face_target.cppm

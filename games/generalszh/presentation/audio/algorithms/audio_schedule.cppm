@@ -31,6 +31,7 @@ void RegisterSoundComponents(ecs::World &world)
 	world.RegisterComponent<UplinkSounds>();
 	world.RegisterComponent<TrainSoundLoop>();
 	world.RegisterComponent<FireSoundLoop>();
+	world.RegisterComponent<SpeakingVoice>();
 	world.RegisterComponent<PrepSoundLoop>();
 	world.RegisterComponent<BattlePlanSound>();
 	world.RegisterComponent<DoorIdleSound>();

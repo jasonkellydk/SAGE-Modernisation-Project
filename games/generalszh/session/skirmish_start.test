@@ -586,6 +586,78 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
 	BOOST_TEST(money.Balance(gla) - before == 83);
 }
 
+// Issue #51 (SupplyTruckAIUpdate / WorkerAIUpdate's supply states, DockUpdate's approach queue: a SupplyDock is a
+// boneless dock any number may approach (NumberApproachPositions -1), the GLA Supply Stash queues on its 5 approach
+// bones): eight workers sent to one dock (aiDock, the player's order) all keep harvesting; one that stops (its queue
+// lost, left waiting for good) is the bug the issue reports.
+BOOST_AUTO_TEST_CASE(gla_workers_sent_together_all_keep_harvesting)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 99;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionGLA");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{5, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t team = *game.Teams().FindTeam(skirmish.players[0].team);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	game.Place("GLASupplyStash", at(0, -180), {}, team);
+	const ecs::Entity dock = game.Place("SupplyDock", at(-200, -180), {}, team);
+	std::vector<ecs::Entity> workers;
+	for (int index = 0; index < 8; ++index)
+		workers.push_back(game.Place("GLAInfantryWorker", at(-140 + 20 * (index % 4), -100 - 20 * (index / 4)), {}, team));
+	game.Tick();
+	auto send = commands::Encode(commands::Dock{workers, dock});
+	send.player = 0;
+	game.Tick(std::span(&send, 1));
+	std::vector<int> deposits(workers.size(), 0);
+	std::vector<std::uint32_t> carried(workers.size(), 0);
+	for (int tick = 0; tick < 30 * 240; ++tick)
+	{
+		game.Tick();
+		for (std::size_t index = 0; index < workers.size(); ++index)
+		{
+			const auto *harvester = world.Get<engine::gameplay::Harvester>(workers[index]);
+			BOOST_TEST_REQUIRE(harvester != nullptr);
+			if (carried[index] > 0 && harvester->boxes == 0)
+				++deposits[index];
+			carried[index] = harvester->boxes;
+		}
+	}
+	std::string line;
+	for (const int count : deposits)
+		line += " " + std::to_string(count);
+	BOOST_TEST_MESSAGE("deposits per worker in 4 minutes:" << line);
+	for (std::size_t index = 0; index < workers.size(); ++index)
+		BOOST_TEST(deposits[index] >= 4, "worker " << index << " made " << deposits[index] << " deliveries");
+}
+
 // ChinookAIUpdate is a SupplyTruckAIUpdate that flies: told to harvest, a supply Chinook brings its full load to its
 // supply centre at ValuePerSupplyBox (75) each, and its UpgradedSupplyBoost more once its player has Supply Lines.
 // The supply centre itself shows the docking (DockUpdate onEnterReached / onDockReached / onExitReached on `me`): DOCKING
@@ -1448,6 +1520,78 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_builds_its_teams)
 		restored->Tick();
 	}
 	BOOST_TEST(restored->StateHash() == again.StateHash());
+}
+
+// Issue #49 (AIPlayer / AISkirmishPlayer: the skirmish scripts' production teams, built at the player's factories): each
+// side as a medium computer player on Tournament Continent, at the standard 10000 starting cash, has fielded fighting
+// units (not structures, workers, dozers or harvesters) within six minutes.
+BOOST_AUTO_TEST_CASE(computer_players_of_every_side_field_an_army)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
+	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	for (const std::string_view side : {"FactionAmerica", "FactionChina", "FactionGLA"})
+	{
+		session::setup::GameSetup setup;
+		setup.seed = 7;
+		setup.startingCash = 10000;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+		setup.slots[0].playerTemplate = templateOf("FactionGLA");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::MediumAI);
+		setup.slots[1].playerTemplate = templateOf(side);
+		setup.slots[1].startPos = 2;
+		const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4, &*file);
+		session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		session::Session game(skirmish.level, shell.game, options);
+		const std::uint32_t ai = *game.Teams().FindPlayer("player1");
+		const auto army = [&] {
+			std::map<std::string, int> counts;
+			game.Visible().ForEach([&](const engine::gameplay::VisibleObject &object) {
+				const auto *owner = game.World().Get<engine::gameplay::Owner>(object.entity);
+				const auto *ref = game.World().Get<engine::gameplay::DefinitionRef>(object.entity);
+				if (owner == nullptr || ref == nullptr || owner->player != ai)
+					return;
+				const auto *definition = shell.game.objects.Find(game.DefinitionName(ref->index));
+				if (definition == nullptr || definition->Is("STRUCTURE") || definition->Is("DOZER") || definition->Is("HARVESTER") ||
+					definition->Is("PROJECTILE") || definition->Is("MINE"))
+					return;
+				++counts[std::string(game.DefinitionName(ref->index))];
+			});
+			return counts;
+		};
+		int units = 0;
+		for (int second = 1; second <= 360; ++second)
+		{
+			for (int tick = 0; tick < 30; ++tick)
+				game.Tick();
+			if (second % 60 == 0)
+			{
+				std::string line;
+				units = 0;
+				for (const auto &[name, count] : army())
+				{
+					line += " " + name + "x" + std::to_string(count);
+					units += count;
+				}
+				BOOST_TEST_MESSAGE(side << " " << second << "s: $" << game.World().Resource<engine::gameplay::PlayerMoney>().Balance(ai) << line);
+			}
+		}
+		BOOST_TEST(units >= 3, side << " fielded " << units << " fighting units in six minutes");
+	}
 }
 
 // AISkirmishPlayer::buildAIBaseDefense / buildAIBaseDefenseStructure: front defences go on the circle of the base's reach

@@ -71,6 +71,7 @@ struct Airfield
 		world.RegisterComponent<SightLooker>();
 		world.RegisterComponent<Slaved>();
 		world.RegisterComponent<SurfaceLayer>();
+		world.RegisterComponent<ContainedDefinitions>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
 		world.RegisterComponent<MoveEnded>();

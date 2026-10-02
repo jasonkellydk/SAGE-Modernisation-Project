@@ -313,6 +313,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_attached_systems_stop_under_the_shroud_and_go
 	EffectsContent effects;
 	effects.particles.Define("Smoke");
 	engine::effects::ParticleSystemDefinition spark;
+	// Never culled as invisible (Particle::isInvisible: ALPHA_TEST); the default black additive particle dies at once.
+	spark.shader = engine::effects::ParticleShader::AlphaTest;
 	spark.name = "Spark";
 	spark.burstCount = {1, 1};
 	spark.lifetime = {100, 100};

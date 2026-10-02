@@ -462,6 +462,19 @@ BOOST_AUTO_TEST_CASE(a_restored_checkpoint_continues_exactly)
 	{
 		original.Tick();
 		restored->Tick();
+		if (restored->StateHash() != original.StateHash())
+		{
+			// What differs: the world (by component) or the resources.
+			const auto mine = original.World().ComponentHashes(), theirs = restored->World().ComponentHashes();
+			std::string differs;
+			for (const auto &[name, hash] : mine)
+			{
+				const auto found = std::ranges::find_if(theirs, [&](const auto &entry) { return entry.first == name; });
+				if (found == theirs.end() || found->second != hash)
+					differs += name + " ";
+			}
+			BOOST_TEST_MESSAGE("components differing: " << differs << (mine.size() != theirs.size() ? "(component sets differ)" : ""));
+		}
 		BOOST_TEST_REQUIRE(restored->StateHash() == original.StateHash(), "diverged " << tick << " ticks after restoring");
 	}
 	BOOST_TEST(restored->PlayerObjectCount("Paradrops", "AmericaInfantryRanger") ==

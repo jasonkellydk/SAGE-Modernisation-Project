@@ -62,6 +62,7 @@ struct SoundRequest
 	std::uint32_t owner{NoOwner}; // the player it is for (AudioEventRTS::setPlayerIndex); none: nobody's
 	bool positioned{true};        // false: heard without a position (a script's PLAY_SOUND_EFFECT)
 	std::optional<float> volume;  // AudioEventRTS::setVolume (none: its own)
+	ecs::Entity object;           // AudioEventRTS::setObjectID: whose voice it is (a voice event: one at a time)
 };
 
 struct ShakeRequest

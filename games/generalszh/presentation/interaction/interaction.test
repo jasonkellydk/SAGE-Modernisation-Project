@@ -51,6 +51,7 @@ import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.common.physics.resources.physics_settings;
 import games.generalszh.gameplay.crates.components.pilot_seeker;
 import games.generalszh.gameplay.upgrades.components.command_set_override;
+import engine.gameplay.common.identity.components.object_id;
 
 using namespace generalszh::presentation;
 
@@ -243,6 +244,7 @@ struct Field
 		world.RegisterComponent<gp::Locomotion>();
 		world.RegisterComponent<generalszh::gameplay::PilotSeeker>();
 		world.RegisterComponent<generalszh::gameplay::CommandSetOverride>();
+		world.RegisterComponent<gp::ObjectId>();
 		world.RegisterComponent<Selected>();
 		world.FinalizeComponents();
 		world.EmplaceResource<gp::CargoManifest>();

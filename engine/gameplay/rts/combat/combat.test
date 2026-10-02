@@ -149,6 +149,7 @@ struct Battle
 		world.RegisterComponent<Slaved>();
 		world.RegisterComponent<BlockedState>();
 		world.RegisterComponent<SurfaceLayer>();
+		world.RegisterComponent<ContainedDefinitions>();
 		world.RegisterComponent<AttackApproach>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();

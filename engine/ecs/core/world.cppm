@@ -205,6 +205,10 @@ public:
 	// cannot be hashed (see ComponentInfo::hashState).
 	StateHashValue StateHash() const;
 
+	// StateHash split by component (stable name, hash of that component's values in canonical order), for finding what
+	// two worlds that hash differently disagree on (a desync, a checkpoint that leaves something out).
+	std::vector<std::pair<std::string, StateHashValue>> ComponentHashes() const;
+
 	// Everything StateHash covers, as bytes: the entity allocator, and every
 	// archetype's chunks, rows and Serializable values in their exact layout,
 	// so a world loaded from it iterates, allocates and hashes as this one
@@ -459,6 +463,37 @@ StateHashValue World::StateHash() const
 		}
 	}
 	return hasher.Value();
+}
+
+std::vector<std::pair<std::string, StateHashValue>> World::ComponentHashes() const
+{
+	RequireComponentsFinalized();
+	std::map<std::string, StateHasher> hashers;
+	for (const Archetype *archetype : m_archetypes.GetArchetypes())
+	{
+		if (archetype->EntityCount() == 0)
+			continue;
+		const auto &columns = archetype->Layout().Columns();
+		for (const auto &chunk : archetype->Chunks())
+		{
+			if (chunk->Size() == 0)
+				continue;
+			for (std::size_t column = 0; column < columns.size(); ++column)
+			{
+				const ComponentInfo &info = m_components.Get(columns[column].component);
+				if (info.hashState == nullptr)
+					continue;
+				StateHasher &hasher = hashers[std::string(info.stableName)];
+				for (std::size_t row = 0; row < chunk->Size(); ++row)
+					hasher.AppendU64((static_cast<std::uint64_t>(chunk->Entities()[row].index) << 32) | chunk->Entities()[row].generation);
+				info.hashState(chunk->ComponentData(column), chunk->Size(), hasher);
+			}
+		}
+	}
+	std::vector<std::pair<std::string, StateHashValue>> result;
+	for (const auto &[name, hasher] : hashers)
+		result.emplace_back(name, hasher.Value());
+	return result;
 }
 
 bool World::IsAlive(Entity entity) const noexcept

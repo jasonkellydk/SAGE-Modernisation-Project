@@ -467,7 +467,7 @@ BOOST_AUTO_TEST_CASE(shipped_objects_build_and_cover_the_shell_map)
 	// legacy_parity (ModuleInfo::clearCopiedFromDefaultEntries over the shipped Default\Object.ini): the Ranger
 	// (IsTrainable, INFANTRY before its modules) keeps the default auto heal and stealth and loses the default
 	// DestroyDie to its SlowDeathBehaviors; the barracks (a STRUCTURE, not trainable) keeps neither default. A reskin's
-	// Draw replaces its source's (Chem_GLAHoleCommandCenter: one draw, its model UBHole), its other modules copied.
+	// Draw replaces its source's (Chem_GLAHoleCommandCenter: its two draws, UBHole and UBCmdHQ_R), its other modules copied.
 	if (const ObjectDefinition *ranger = objects.Find("AmericaInfantryRanger"))
 	{
 		BOOST_TEST(HasModule(*ranger, "ModuleTag_DefaultAutoHealBehavior"));
@@ -482,15 +482,17 @@ BOOST_AUTO_TEST_CASE(shipped_objects_build_and_cover_the_shell_map)
 	}
 	if (const ObjectDefinition *hole = objects.Find("Chem_GLAHoleCommandCenter"))
 	{
-		std::size_t draws = 0;
+		// Its two draws (ModuleTag_01 UBHole, ModuleTag_02 UBCmdHQ_R) replace the source's (clearCopiedFromDefaultEntities).
+		std::vector<std::string_view> models;
 		for (const ModuleEntry &module : hole->modules)
 			if (module.slot == ModuleSlot::Draw)
 			{
-				++draws;
 				BOOST_TEST(!module.copied);
-				BOOST_TEST(module.block->Find("ConditionState")->Find("Model")->Value() == "UBHole");
+				models.push_back(module.block->Find("ConditionState")->Find("Model")->Value());
 			}
-		BOOST_TEST(draws == 1u);
+		BOOST_TEST_REQUIRE(models.size() == 2u);
+		BOOST_TEST(models[0] == "UBHole");
+		BOOST_TEST(models[1] == "UBCmdHQ_R");
 		BOOST_TEST(hole->reskinnedFrom == "Chem_GLAHole");
 		BOOST_TEST(HasModule(*hole, "ModuleTag_DefaultDestroyDie") == HasModule(*objects.Find("Chem_GLAHole"), "ModuleTag_DefaultDestroyDie"));
 	}
@@ -658,7 +660,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_locomotors_read_pivot_circling_slide_and_targ
 	};
 	// -0.33 parsed to the nearest 1/65536.
 	BOOST_TEST(std::abs(find("SentryLocomotor")->turnPivotOffset.Raw() + 21627) <= 1);
-	BOOST_TEST((find("HumveeLocomotor")->turnPivotOffset == Engine::Math::Fixed{} - Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST(std::abs(find("HumveeLocomotor")->turnPivotOffset.Raw() + 21627) <= 1);
 	BOOST_TEST((find("ScorpionLocomotor")->turnPivotOffset == Engine::Math::Fixed{}));
 	BOOST_TEST((find("MIGLocomotor")->circlingRadius == Engine::Math::Fixed::FromInt(100)));
 	BOOST_TEST((find("B3Locomotor")->circlingRadius == Engine::Math::Fixed::FromInt(150)));

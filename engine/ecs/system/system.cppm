@@ -736,12 +736,14 @@ void SystemRegistry::ResolveAccess(SystemAccess &access, const ComponentRegistry
 		}
 	if constexpr (requires { typename T::Lookup; })
 	{
+		std::size_t entry = 0;
 		for (const AccessDescriptor descriptor : T::Lookup::ResolveAccesses(components))
 		{
 			if (descriptor.component == InvalidComponentId)
 				throw std::logic_error("ECS system '" + std::string(SystemTraits<T>::StableName) +
-					"' declares a Lookup of an unregistered component");
+					"' declares a Lookup of an unregistered component (entry " + std::to_string(entry) + ")");
 			access.Add(descriptor);
+			++entry;
 		}
 	}
 	if constexpr (requires { typename T::Resources; })
