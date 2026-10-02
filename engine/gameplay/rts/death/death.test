@@ -1,6 +1,7 @@
 #define BOOST_TEST_MODULE EngineGameplayDeath
 #include <boost/test/included/unit_test.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -187,6 +188,7 @@ struct Pipeline
 		target.RegisterComponent<AttackTarget>();
 		target.RegisterComponent<Aggression>();
 		target.RegisterComponent<Transport>();
+		target.RegisterComponent<BlockedState>();
 		target.RegisterComponent<Passenger>();
 		target.RegisterComponent<Boarding>();
 		target.RegisterComponent<ExitIntent>();
@@ -416,6 +418,35 @@ BOOST_AUTO_TEST_CASE(legacy_parity_die_modules_filter_by_required_and_exempt_sta
 	BOOST_TEST(pipeline.Played(15) == 1u);
 	BOOST_TEST(pipeline.Played(10) + pipeline.Played(11) == 0u);
 	BOOST_TEST(pipeline.Played(20) == 1u); // the terrorist's bomb only
+}
+
+// DieModule.cpp, DieMuxData::isDieApplicable (getStatusBits, which holds OBJECT_STATUS_UNDER_CONSTRUCTION while it is
+// being built) with CreateObjectDie::onDie (CreationList): a structure's debris (CreateObjectDie ExemptStatus
+// UNDER_CONSTRUCTION, as the shipped buildings) comes only from a finished one; one destroyed while being built (its
+// UnderConstruction, the game's UNDER_CONSTRUCTION bit) runs only what requires that status (DestroyDie / InstantDeath
+// RequiredStatus UNDER_CONSTRUCTION).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_built_leaves_no_debris)
+{
+	constexpr std::uint64_t Building = std::uint64_t{1} << 3;
+	DeathDefinition structure;
+	structure.atDeath.push_back({{AllDeathTypes, AllVeterancyLevels, Building, 0}, DeathEffectKind::Objects, {30}}); // its debris
+	structure.atDeath.push_back({{AllDeathTypes, AllVeterancyLevels, 0, Building}, DeathEffectKind::Effect, {31}});  // unfinished only
+	Pipeline pipeline(2);
+	pipeline.catalog.underConstructionStatus = Building;
+	const std::uint32_t death = pipeline.catalog.Add(structure);
+	const ecs::Entity finished = pipeline.Make(1, "Finished");
+	*pipeline.world.Get<Mortality>(finished) = {death};
+	const ecs::Entity unfinished = pipeline.Make(2, "Unfinished");
+	*pipeline.world.Get<Mortality>(unfinished) = {death};
+	pipeline.world.Add<UnderConstruction>(unfinished);
+	pipeline.Hit(finished, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST(pipeline.Played(30) == 1u);
+	BOOST_TEST(pipeline.Played(31) == 0u);
+	pipeline.Hit(unfinished, Fixed::FromInt(500), Normal);
+	pipeline.Step();
+	BOOST_TEST(pipeline.Played(30) == 1u); // still only the finished one's
+	BOOST_TEST(pipeline.Played(31) == 1u);
 }
 
 // OpenContain::onDie: a truck taking all of its riders' health with it (DamagePercentToUnits 100%) kills its rider,
@@ -1397,6 +1428,73 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_bomb_dies_at_its_height_above_the_ground)
 	BOOST_TEST((world.Get<Transform>(hover)->position.z == Fixed{}));
 	tick(7);
 	BOOST_TEST(kills.size() == 2u); // once only
+}
+
+// legacy_parity: HeightDieUpdate::update with TargetHeightIncludesStructures (GeneralsMD/Code/GameEngine/Source/GameLogic/
+// Object/Update/HeightDieUpdate.cpp; TerrainLogic::getHighestLayerForDestination, getLayerHeight): over a bridge deck 40
+// above flat ground, the deck it is above (at or over) is its ground. TargetHeight 1: at 50 all live; at 40.5 the one
+// over the deck dies (below 41), left where it is (not below its ground), and a SnapToGroundOnDeath one is put on the
+// deck (40); one without TargetHeightIncludesStructures, and one beside the deck, live on (above 1). One fallen from 50
+// to 30 (below the deck: getHighestLayerForDestination takes only a deck it is above) lives: its ground is the
+// terrain.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bomb_counts_a_bridge_under_it_as_its_ground)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<HeightDie>();
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<OffMap>();
+	world.RegisterComponent<BodyExtent>();
+	world.FinalizeComponents();
+	engine::level::Heightfield flat;
+	flat.width = flat.height = 4;
+	flat.cellSize = Fixed::FromInt(10);
+	flat.heights.assign(16, Fixed{});
+	world.EmplaceResource<GroundHeight>(flat);
+	world.EmplaceResource<DeckSurfaces>();
+	const Fixed deckZ = Fixed::FromInt(40);
+	world.Resource<DeckSurfaces>().decks.push_back({{Fixed{}, Fixed::FromInt(15), deckZ}, {Fixed::FromInt(15), Fixed::FromInt(15), deckZ},
+		{Fixed{}, Fixed{}, deckZ}, {Fixed{}, Fixed::FromInt(30), deckZ}, {Fixed::FromInt(15), Fixed{}, deckZ}, {Fixed::FromInt(15), Fixed::FromInt(30), deckZ}});
+	world.EmplaceResource<KillRequests>();
+	world.EmplaceResource<ParticleClears>();
+	world.EmplaceResource<SpatialIndex>();
+	const auto make = [&](Fixed x, bool structures, bool snap) {
+		const ecs::Entity entity = world.Create();
+		world.Add<HeightDie>(entity);
+		world.Add<Transform>(entity);
+		HeightDie &die = *world.Get<HeightDie>(entity);
+		die.targetHeight = Fixed::One();
+		die.includeStructures = structures ? 1 : 0;
+		die.snapToGround = snap ? 1 : 0;
+		world.Get<Transform>(entity)->position = {x, Fixed::FromInt(10), Fixed::FromInt(50)};
+		return entity;
+	};
+	const ecs::Entity over = make(Fixed::FromInt(10), true, false);
+	const ecs::Entity snapped = make(Fixed::FromInt(10), true, true);
+	const ecs::Entity plain = make(Fixed::FromInt(10), false, false);
+	const ecs::Entity beside = make(Fixed::FromInt(25), true, false);
+	const ecs::Entity under = make(Fixed::FromInt(10), true, false);
+	HeightDieSystem heights;
+	ecs::SystemRegistry registry;
+	registry.Register(heights);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	auto &kills = world.Resource<KillRequests>().entities;
+	const auto tick = [&](std::uint64_t at) { scheduler.Execute(engine::time::SimulationTime{at, engine::time::FixedStep{30}}); };
+	tick(1);
+	BOOST_TEST(kills.empty());
+	for (const ecs::Entity entity : {over, snapped, plain, beside})
+		world.Get<Transform>(entity)->position.z = Fixed::FromInt(81) / Fixed::FromInt(2);
+	world.Get<Transform>(under)->position.z = Fixed::FromInt(30);
+	tick(2);
+	BOOST_TEST_REQUIRE(kills.size() == 2u);
+	BOOST_TEST((std::ranges::find(kills, over) != kills.end()));
+	BOOST_TEST((std::ranges::find(kills, snapped) != kills.end()));
+	BOOST_TEST((world.Get<Transform>(over)->position.z == Fixed::FromInt(81) / Fixed::FromInt(2)));
+	BOOST_TEST((world.Get<Transform>(snapped)->position.z == deckZ));
+	BOOST_TEST(world.Get<HeightDie>(plain)->died == 0u);
+	BOOST_TEST(world.Get<HeightDie>(beside)->died == 0u);
+	BOOST_TEST(world.Get<HeightDie>(under)->died == 0u);
 }
 
 // HelicopterSlowDeathBehavior::beginSlowDeath / update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/

@@ -213,11 +213,35 @@ inline void StepTurret(Turret &turret, const Transform &transform, const Spatial
 	turret.rotating = turret.angle != before || turret.pitch != pitchBefore;
 }
 
+// What the turret of an attack's current weapon aims at (TurretAI's goal object): its victim, or during the attack's
+// first approach (or its chase's) the temporary target its AI gave it (AIAttackApproachTargetState::update,
+// AIAttackPursueTargetState::update: setTurretTargetObject). A
+// temporary target is aimed at only from the tick it is given (setTurretTargetObject: to AIM) while the turret stays on
+// it: gone, unattackable or (not the victim itself) out of the weapon's reach (TurretAIAimTurretState::update's
+// !isPrimaryEnemy && nothingInRange) the aim fails (HOLD) until it is given one again. `onTemporary`: aiming at it.
+inline const SpatialEntry *TurretGoal(const SpatialIndex &spatial, const AttackTarget &attack, const Turret &turret, bool currentWeaponOnTurret,
+	Engine::Math::FixedVector2 self, Engine::Math::Fixed selfRadius, Engine::Math::Fixed range, std::uint64_t tick, SpatialEntry &point, bool &onTemporary)
+{
+	onTemporary = false;
+	// (Both first approaches over: the approach's and the chase's, AIAttackPursueTargetState::update's own.)
+	if ((attack.approached != 0 && attack.chased != 0) || attack.temporary == ecs::Entity{} || !currentWeaponOnTurret)
+		return AttackGoal(spatial, attack, point);
+	if (turret.state != TurretState::Aim && attack.temporaryTick != tick)
+		return nullptr;
+	const SpatialEntry *temporary = spatial.Find(attack.temporary);
+	if (temporary == nullptr || (temporary->classes & target_class::Unattackable) != 0)
+		return nullptr;
+	if (attack.temporary != attack.target && !WithinAttackRange(range, self, selfRadius, *temporary))
+		return nullptr;
+	onTemporary = true;
+	return temporary;
+}
+
 // Off the map, only a turret its carrier lets fire (a mounted portable structure) turns.
 struct TurretSystem
 {
 	using Query = ecs::Query<ecs::Write<Turret>, ecs::Read<Transform>, ecs::Read<AttackTarget>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
-		ecs::Optional<Armament>, ecs::Optional<WeaponSlots>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<BodyExtent>>;
+		ecs::Optional<Armament>, ecs::Optional<WeaponSlots>, ecs::Optional<WeaponBonusConditions>, ecs::Optional<BodyExtent>, ecs::Optional<Targetable>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<RandomSeed>, ecs::Read<WeaponCatalog>>;
 
 	// What the turret on `row` aims with this tick.
@@ -263,8 +287,14 @@ struct TurretSystem
 			if (!offMap.empty() && !offMap[row].armed)
 				continue;
 			SpatialEntry point;
-			StepTurret(turrets[row], transforms[row], AttackGoal(spatial, targets[row], point), tick, seed,
-				entities[row], AimOf(chunk, row, weapons, tick));
+			const TurretAim with = AimOf(chunk, row, weapons, tick);
+			const auto armaments = chunk.template Get<Armament>();
+			const auto targetables = chunk.template Get<Targetable>();
+			bool onTemporary = false;
+			const SpatialEntry *goal = TurretGoal(spatial, targets[row], turrets[row], !armaments.empty() && armaments[row].turret,
+				transforms[row].position.XY(), targetables.empty() ? Engine::Math::Fixed{} : targetables[row].radius, with.range, tick, point, onTemporary);
+			StepTurret(turrets[row], transforms[row], goal, tick, seed, entities[row], with);
+			turrets[row].onTemporary = onTemporary && goal != nullptr;
 		}
 	}
 };

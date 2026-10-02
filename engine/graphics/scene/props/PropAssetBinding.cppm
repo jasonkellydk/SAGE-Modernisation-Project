@@ -27,8 +27,11 @@ public:
     }
     // `base_override`: a texture drawn on every part in place of its own base map (the original's tree buffer draws each
     // tree type with its TextureName); none: as authored.
+    // `base_replacements`: base maps swapped by name for this binding (the original's replacePrototypeTexture: each
+    // pair's first, wherever a part uses it, drawn as its second).
     bool Load(Device& device,PropRenderer& renderer,Assets::AssetCache& assets,
-        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={}) {
+        Assets::ModelAssetHandle model_handle,std::string& error,Assets::TextureAssetHandle base_override={},
+        std::span<const std::pair<Assets::TextureAssetHandle,Assets::TextureAssetHandle>> base_replacements={}) {
         const auto* model=assets.Try_Get_Model(model_handle);
         if(!model) { error="model asset is not ready"; return false; }
         std::vector<PropAssetPart> geometry;
@@ -51,7 +54,9 @@ public:
                 part.bone=attached->first; part.lod=attached->second;
             }
             part.style.depth_write=material->Depth_Write();
-            const auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
+            auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
+            for(const auto& [original,replacement]:base_replacements)
+                if(!base_override.Is_Valid() && original==base && replacement.Is_Valid()) { base=replacement; break; }
             part.textured=material->Texturing() && base.Is_Valid();
             if(!next.Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
             if(material->Secondary_Texture().Is_Valid()) { error="secondary stage requires an explicit stage binding"; return false; }
@@ -82,13 +87,19 @@ public:
         error.clear(); return true;
     }
     std::size_t Part_Count() const noexcept { return m_parts.size(); }
+    // Every part's textures sampled clamped at their edges (a sky box's faces meet without seams).
+    void Clamp_Texture_Addressing() noexcept {
+        for(auto& part:m_parts)
+            for(auto& sampler:part.style.samplers) sampler.address.fill(RHISamplerAddress::Clamp);
+    }
     std::size_t Texture_Count() const noexcept { return m_textures.size(); }
     std::string_view Part_Name(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].name : std::string_view{}; }
     // The bone a part hangs on (Invalid_Bone_Index when it has none).
     std::uint32_t Part_Bone(std::size_t part) const noexcept { return part<m_parts.size() ? m_parts[part].bone : Invalid_Bone_Index; }
     // `shroud`: the viewer's shroud image in the shroud slot (parameters.shroud on: the part multiplied by it).
+    // `stencil`: written (or tested) as it says while the part draws (none: as authored, no stencil).
     bool Draw_Part(CommandList& commands,std::size_t index,PropParameters parameters,
-        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={}) const {
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={},const RHIStencilDescription* stencil=nullptr) const {
         if(!m_renderer || index>=m_parts.size()) return false;
         const auto& part=m_parts[index];
         if(part.lod!=lod) return true;
@@ -98,12 +109,17 @@ public:
         Prepare(part,parameters);
         MeshVersion mesh{m_renderer,part.mesh,false};
         if(!Mesh_For_Pose(part,pose,mesh)) return false;
+        if(stencil) {
+            PropStyle style=part.style;
+            style.stencil=*stencil;
+            return m_renderer->Draw(commands,mesh.handle,style,parameters,Textures(part,shroud));
+        }
         return m_renderer->Draw(commands,mesh.handle,part.style,parameters,Textures(part,shroud));
     }
     // A part seen through at `opacity` (the original's opacity override, MeshClass alpha override): as Draw_Part, but
     // an opaque part blends source alpha over what is behind it and drops texels under 96 x opacity (alpha test).
     bool Draw_Part_Translucent(CommandList& commands,std::size_t index,PropParameters parameters,float opacity,
-        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={}) const {
+        const ModelAssetPose* pose=nullptr,std::uint32_t lod=0,RHITextureHandle shroud={},const RHIStencilDescription* stencil=nullptr) const {
         if(!m_renderer || index>=m_parts.size()) return false;
         const auto& part=m_parts[index];
         if(part.lod!=lod) return true;
@@ -117,6 +133,7 @@ public:
             style.destination_blend=RHIBlendFactor::InverseSourceAlpha;
         }
         parameters.alpha_cutoff=std::max(parameters.alpha_cutoff,static_cast<float>(static_cast<unsigned>(96*opacity))/255.0f);
+        if(stencil) style.stencil=*stencil;
         MeshVersion mesh{m_renderer,part.mesh,false};
         if(!Mesh_For_Pose(part,pose,mesh)) return false;
         return m_renderer->Draw(commands,mesh.handle,style,parameters,Textures(part,shroud));

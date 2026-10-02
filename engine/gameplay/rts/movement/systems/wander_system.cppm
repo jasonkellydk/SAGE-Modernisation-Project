@@ -35,7 +35,7 @@ struct WanderSystem
 			const auto dx = Engine::Math::UniformInt(random, 5, 50);
 			const auto dy = Engine::Math::UniformInt(random, 5, 50);
 			const auto &at = transforms[row].position;
-			orders[row] = MoveToPoint({at.x + Engine::Math::Fixed::FromInt(dx), at.y + Engine::Math::Fixed::FromInt(dy)});
+			orders[row] = Replanned(MoveToPoint({at.x + Engine::Math::Fixed::FromInt(dx), at.y + Engine::Math::Fixed::FromInt(dy)}));
 		}
 	}
 };

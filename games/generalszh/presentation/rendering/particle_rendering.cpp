@@ -7,6 +7,7 @@ module;
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <tuple>
@@ -16,6 +17,7 @@ module games.generalszh.presentation.rendering.particle_rendering;
 
 import Graphics.Scene.Particles.Renderer;
 import games.generalszh.presentation.effects.heat_haze;
+import games.generalszh.presentation.effects.particle_drawing;
 import Graphics.Scene.Beams;
 import Graphics.Frame.SceneRenderers;
 import Graphics.Scene.Views.View;
@@ -61,11 +63,17 @@ struct ParticleRendering::State
 	std::vector<Graphics::ParticleEmitterFlags> flagColumn;
 	std::vector<Graphics::PipelineHandle> pipelineColumn;
 	std::size_t drawn{0};
+	std::size_t field{0};                  // the frame's on-screen ground-aligned AREA_EFFECT particles
+	std::vector<float> firstSize;          // by system: its first particle's size (a volume system's layer shift)
 	// Streaks (Type = STREAK): a ribbon of beam segments through each system's particles, oldest first.
 	std::map<std::string, Graphics::MaterialHandle> beamMaterials;
 	std::vector<std::pair<Graphics::TextureHandle, Graphics::MaterialHandle>> ownedBeams;
 	std::vector<Graphics::BeamHandle> streakBeams;
 	std::vector<std::pair<std::uint32_t, std::uint32_t>> streakParticles; // (system, particle)
+	// The snow's emitter (made for its texture and point sprite mode, made again when either changes).
+	Graphics::ParticleEmitterHandle snowEmitter;
+	Graphics::ParticleEmitterFlags snowFlags{};
+	std::string snowTexture;
 
 	// The texture's pixels for a renderer, or none.
 	template<typename Renderer>
@@ -123,6 +131,8 @@ struct ParticleRendering::State
 			return;
 		for (auto &[key, group] : groups)
 			renderer.Destroy_Emitter(group.emitter);
+		if (snowEmitter.Is_Valid())
+			renderer.Destroy_Emitter(snowEmitter);
 		for (const auto &[texture, material] : owned)
 		{
 			renderer.Destroy_Material(material);
@@ -190,29 +200,73 @@ ParticleRendering::ParticleRendering() : m_state(std::make_unique<State>()) {}
 ParticleRendering::~ParticleRendering() = default;
 
 std::size_t ParticleRendering::DrawnParticles() const noexcept { return m_state->drawn; }
+std::size_t ParticleRendering::FieldParticles() const noexcept { return m_state->field; }
 std::size_t ParticleRendering::DrawnStreakSegments() const noexcept { return m_state->streakBeams.size(); }
 
 void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::ParticleWorld &particles, const std::array<float, 16> &view,
-	const std::array<float, 16> &projection, const std::array<float, 3> &eye, float alpha, std::span<const BeamSegment> lasers)
+	const std::array<float, 16> &projection, const std::array<float, 3> &eye, float alpha, std::span<const BeamSegment> lasers,
+	const SnowFlakes *snow, float terrainLowest)
 {
 	auto &renderer = Graphics::GetParticleRenderer();
 	State &state = *m_state;
 	state.drawn = 0;
+	state.field = 0;
 	if (!renderer.Is_Initialized())
 		return;
 	renderer.Reset_Particles();
 	for (auto &[key, group] : state.groups)
 		group.particles.clear();
 
+	// W3DParticleSystemManager::doParticles' cull: the box around the terrain the camera can see
+	// (getMaximumVisibleBox: the frustum down to the map's lowest height); a particle further from it than its size is
+	// not drawn. The drawn particles of ground-aligned AREA_EFFECT systems are its field count, handed to the particle
+	// world for its MaxFieldParticleCount. Without terrain (no lowest height): all are drawn, the frustum counts.
+	std::array<float, 16> viewProjection{};
+	for (std::size_t row = 0; row < 4; ++row)
+		for (std::size_t column = 0; column < 4; ++column)
+			for (std::size_t k = 0; k < 4; ++k)
+				viewProjection[row * 4 + column] += projection[row * 4 + k] * view[k * 4 + column];
+	std::optional<VisibleBox> visibleBox;
+	if (!std::isnan(terrainLowest))
+		if (const auto corners = FrustumCorners(viewProjection))
+			visibleBox = MaximumVisibleBox(*corners, terrainLowest);
+	Graphics::Matrix4x4 cullViewMatrix, cullProjectionMatrix;
+	cullViewMatrix.values = view;
+	cullProjectionMatrix.values = projection;
+	const Graphics::View cullView(cullViewMatrix, cullProjectionMatrix, {eye[0], eye[1], eye[2]}, Graphics::Viewport{0, 0, 1, 1, 0, 1});
+	const auto inView = [&](float x, float y, float z, float radius) {
+		if (visibleBox)
+			return InVisibleBox(*visibleBox, {x, y, z}, radius);
+		for (const Graphics::FrustumPlane *plane : {&cullView.frustum.left, &cullView.frustum.right, &cullView.frustum.bottom, &cullView.frustum.top,
+				 &cullView.frustum.near_plane, &cullView.frustum.far_plane})
+			if (plane->normal.x * x + plane->normal.y * y + plane->normal.z * z + plane->distance < -radius)
+				return false;
+		return true;
+	};
+	const auto systemOf = particles.Systems();
+	state.firstSize.clear();
+
 	// Sort this frame's particles by texture and blend.
 	for (std::size_t index = 0; index < particles.ParticleCount(); ++index)
 	{
 		const auto &definition = particles.DefinitionOf(index);
-		// Drawables and streaks draw elsewhere, smudge systems as heat haze (or not at all); the INI's SMUDGE type
-		// draws as particles, as the original never reads it.
-		if (definition.kind == engine::effects::ParticleKind::Drawable || definition.kind == engine::effects::ParticleKind::Streak ||
-			IsHeatHaze(definition))
+		// Only the original's point-group systems draw here (DrawingOf): drawables never, streaks and heat haze elsewhere;
+		// the INI's SMUDGE type draws as particles, as the original never reads it.
+		if (DrawingOf(definition) != ParticleDrawing::Quads)
 			continue;
+		const bool seen = inView(particles.X()[index], particles.Y()[index], particles.Z()[index], particles.Size()[index]);
+		if (visibleBox && !seen)
+			continue;
+		if (CountsAsFieldParticle(definition) && seen)
+			++state.field;
+		if (VolumeLayers(definition) > 1)
+		{
+			const std::uint32_t system = systemOf[index];
+			if (state.firstSize.size() <= system)
+				state.firstSize.resize(system + 1, -1.0f);
+			if (state.firstSize[system] < 0.0f)
+				state.firstSize[system] = particles.Size()[index];
+		}
 		const Graphics::ParticleEmitterFlags flags = FlagsFor(definition);
 		auto [it, inserted] = state.groups.try_emplace({definition.texture, static_cast<std::uint32_t>(flags)});
 		State::Group &group = it->second;
@@ -232,7 +286,9 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 
 	for (auto &[key, group] : state.groups)
 	{
-		const std::size_t count = group.particles.size();
+		std::size_t count = 0;
+		for (const std::uint32_t i : group.particles)
+			count += VolumeLayers(particles.DefinitionOf(i));
 		if (count == 0 || !group.emitter.Is_Valid())
 			continue;
 		for (auto *column : {&state.x, &state.y, &state.z, &state.zero, &state.ones, &state.size, &state.r, &state.g, &state.b, &state.a, &state.angle})
@@ -241,21 +297,31 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 		state.flagColumn.assign(count, group.flags);
 		state.pipelineColumn.assign(count, renderer.Pipeline_For_Flags(group.flags));
 		const bool billboard = Graphics::Has_Particle_Emitter_Flag(group.flags, Graphics::ParticleEmitterFlags::Billboard);
-		for (std::size_t row = 0; row < count; ++row)
+		std::size_t row = 0;
+		for (const std::uint32_t i : group.particles)
 		{
-			const std::uint32_t i = group.particles[row];
-			state.x[row] = particles.X()[i] + particles.MotionX()[i] * alpha;
-			state.y[row] = particles.Y()[i] + particles.MotionY()[i] * alpha;
-			state.z[row] = particles.Z()[i] + particles.MotionZ()[i] * alpha;
-			state.zero[row] = 0.0f;
-			state.ones[row] = 1.0f;
-			// Authored billboard sizes are full widths; ground-aligned ones half extents.
-			state.size[row] = billboard ? particles.Size()[i] * 0.5f : particles.Size()[i];
-			state.r[row] = particles.Red()[i];
-			state.g[row] = particles.Green()[i];
-			state.b[row] = particles.Blue()[i];
-			state.a[row] = particles.Alpha()[i];
-			state.angle[row] = particles.Angle()[i];
+			const std::array<float, 3> at{particles.X()[i] + particles.MotionX()[i] * alpha, particles.Y()[i] + particles.MotionY()[i] * alpha,
+				particles.Z()[i] + particles.MotionZ()[i] * alpha};
+			// PointGroupClass::RenderVolumeParticle: a VOLUME_PARTICLE system draws each particle once per layer, each layer
+			// nearer the camera (VolumeLayerPosition).
+			const std::uint32_t layers = VolumeLayers(particles.DefinitionOf(i));
+			const float firstSize = layers > 1 ? state.firstSize[systemOf[i]] : 0.0f;
+			for (std::uint32_t layer = 0; layer < layers; ++layer, ++row)
+			{
+				const std::array<float, 3> placed = VolumeLayerPosition(at, eye, firstSize, layers, layer, billboard);
+				state.x[row] = placed[0];
+				state.y[row] = placed[1];
+				state.z[row] = placed[2];
+				state.zero[row] = 0.0f;
+				state.ones[row] = 1.0f;
+				// Authored billboard sizes are full widths; ground-aligned ones half extents.
+				state.size[row] = billboard ? particles.Size()[i] * 0.5f : particles.Size()[i];
+				state.r[row] = particles.Red()[i];
+				state.g[row] = particles.Green()[i];
+				state.b[row] = particles.Blue()[i];
+				state.a[row] = particles.Alpha()[i];
+				state.angle[row] = particles.Angle()[i];
+			}
 		}
 		const Graphics::ParticleData data{std::span<const float>(state.x), std::span<const float>(state.y), std::span<const float>(state.z),
 			std::span<const float>(state.zero), std::span<const float>(state.zero), std::span<const float>(state.zero),
@@ -266,6 +332,48 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 			std::span<const Graphics::PipelineHandle>(state.pipelineColumn)};
 		if (renderer.Append_Particles(group.emitter, data))
 			state.drawn += count;
+	}
+	// The weather's flakes after the particle systems (W3DParticleSystemManager::doParticles: TheSnowManager->render):
+	// _PresetAlphaShader, opaque white, each its own size (pixels for point sprites, a quad's half width otherwise).
+	if (snow != nullptr && snow->Size() != 0)
+	{
+		using Flags = Graphics::ParticleEmitterFlags;
+		const Flags flags = Flags::Enabled | Flags::Billboard | (snow->pointSprites ? Flags::PointSprite : Flags::None);
+		if (!state.snowEmitter.Is_Valid() || state.snowFlags != flags || state.snowTexture != snow->texture)
+		{
+			if (state.snowEmitter.Is_Valid())
+				renderer.Destroy_Emitter(state.snowEmitter);
+			Graphics::ParticleEmitter emitter;
+			emitter.material = state.MaterialFor(snow->texture);
+			emitter.flags = flags;
+			emitter.pipeline = renderer.Pipeline_For_Flags(flags);
+			emitter.max_particles = 65536;
+			state.snowEmitter = renderer.Create_Emitter(emitter);
+			state.snowFlags = flags;
+			state.snowTexture = snow->texture;
+		}
+		const std::size_t count = snow->Size();
+		if (state.snowEmitter.Is_Valid())
+		{
+			for (auto *column : {&state.zero, &state.ones, &state.r, &state.g, &state.b, &state.a, &state.angle})
+				column->resize(count);
+			std::fill(state.zero.begin(), state.zero.end(), 0.0f);
+			std::fill(state.angle.begin(), state.angle.end(), 0.0f);
+			for (auto *column : {&state.ones, &state.r, &state.g, &state.b, &state.a})
+				std::fill(column->begin(), column->end(), 1.0f);
+			state.materialColumn.assign(count, state.MaterialFor(snow->texture));
+			state.flagColumn.assign(count, flags);
+			state.pipelineColumn.assign(count, renderer.Pipeline_For_Flags(flags));
+			const Graphics::ParticleData data{std::span<const float>(snow->x), std::span<const float>(snow->y), std::span<const float>(snow->z),
+				std::span<const float>(state.zero), std::span<const float>(state.zero), std::span<const float>(state.zero),
+				std::span<const float>(state.ones), std::span<const float>(snow->size), std::span<const float>(state.r),
+				std::span<const float>(state.g), std::span<const float>(state.b), std::span<const float>(state.a),
+				std::span<const float>(state.angle), std::span<const Graphics::MaterialHandle>(state.materialColumn),
+				std::span<const Graphics::ParticleEmitterFlags>(state.flagColumn), {},
+				std::span<const Graphics::PipelineHandle>(state.pipelineColumn)};
+			if (renderer.Append_Particles(state.snowEmitter, data))
+				state.drawn += count;
+		}
 	}
 	auto &swapChain = device.Get_Swap_Chain();
 	const auto target = swapChain.Backbuffer();
@@ -301,16 +409,14 @@ void ParticleRendering::Draw(Graphics::Device &device, const engine::effects::Pa
 		beam.uv_scale = laser.uvScale;
 		beam.uv_offset = laser.uvOffset;
 		beam.material = state.BeamMaterialFor(std::string(laser.texture));
-		beam.flags = Graphics::BeamFlags::Enabled | (laser.additive ? Graphics::BeamFlags::Additive : Graphics::BeamFlags::None);
+		beam.flags = Graphics::BeamFlags::Enabled | (laser.additive ? Graphics::BeamFlags::Additive : Graphics::BeamFlags::None) |
+			(laser.depthTest ? Graphics::BeamFlags::None : Graphics::BeamFlags::NoDepthTest);
 		beam.pipeline = beams.Pipeline_For_Flags(beam.flags);
 		if (const Graphics::BeamHandle handle = beams.Create(beam); handle.Is_Valid())
 			state.streakBeams.push_back(handle);
 	}
-	const auto systems = particles.Systems();
-	for (std::size_t index = 0; index < particles.ParticleCount(); ++index)
-		if (particles.DefinitionOf(index).kind == engine::effects::ParticleKind::Streak && !IsHeatHaze(particles.DefinitionOf(index)))
-			state.streakParticles.emplace_back(systems[index], static_cast<std::uint32_t>(index));
-	std::stable_sort(state.streakParticles.begin(), state.streakParticles.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+	// doParticles: a streak runs through its system's particles that pass the visible-box cull (StreakParticles).
+	state.streakParticles = StreakParticles(particles, visibleBox);
 	const auto at = [&](std::uint32_t i) {
 		return Graphics::Vec3{particles.X()[i] + particles.MotionX()[i] * alpha, particles.Y()[i] + particles.MotionY()[i] * alpha,
 			particles.Z()[i] + particles.MotionZ()[i] * alpha};

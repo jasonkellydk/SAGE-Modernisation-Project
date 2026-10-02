@@ -195,4 +195,55 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_shortcut_bar_fires_the_most_ready_power)
 	BOOST_TEST(repair->image == "SSRepair2");
 }
 
+// ControlBar::processCommandUI's GUI_COMMAND_SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT (Command_SneakAttackFromShortcut): the
+// player's most ready object with its power (findMostReadyShortcutSpecialPowerOfType) places its Object as a build
+// (placeBuildAvailable with that object), noting the button (setSpecialPowerConstructionCommandButton): no order yet,
+// no target waited for.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sneak_attack_from_the_shortcut_bar_places_its_tunnel)
+{
+	content::CommandButtonContent sneak;
+	sneak.name = "Command_SneakAttackFromShortcut";
+	sneak.command = content::ButtonCommand::SpecialPower;
+	sneak.commandName = "SPECIAL_POWER_CONSTRUCT_FROM_SHORTCUT";
+	sneak.specialPower = "SuperweaponSneakAttack";
+	sneak.object = "GLASneakAttackTunnelNetwork";
+	sneak.options = content::button_option::NeedScience;
+	ecs::Entity centre;
+	centre.index = 9;
+	centre.generation = 1;
+	std::vector<commands::GameCommand> sent;
+	bool waited = false;
+	struct Placed
+	{
+		std::string structure;
+		ecs::Entity source;
+		std::string power;
+		std::uint32_t options{0};
+	};
+	std::vector<Placed> placed;
+	hud::ShortcutBarViewModel bar([&](commands::GameCommand command) { sent.push_back(std::move(command)); },
+		[&](std::string, ecs::Entity) { waited = true; }, [](std::vector<ecs::Entity>) {},
+		[&](const content::CommandButtonContent &) {
+			hud::ShortcutSources found;
+			found.power = centre;
+			return found;
+		});
+	bar.SetPlace([&](std::string structure, ecs::Entity source, std::string power, std::uint32_t options) {
+		placed.push_back({std::move(structure), source, std::move(power), options});
+	});
+	hud::ShortcutBarState state;
+	state.hasPlayer = true;
+	state.canShow = true;
+	state.slots[0] = {&sneak, true, true, false, 1000, "SUSneakAttack", {}};
+	bar.Apply(state);
+	BOOST_TEST(bar.clicked[0].Execute());
+	BOOST_TEST(sent.empty());
+	BOOST_TEST(!waited);
+	BOOST_TEST_REQUIRE(placed.size() == 1u);
+	BOOST_TEST(placed[0].structure == "GLASneakAttackTunnelNetwork");
+	BOOST_TEST((placed[0].source == centre));
+	BOOST_TEST(placed[0].power == "SuperweaponSneakAttack");
+	BOOST_TEST(placed[0].options == content::button_option::NeedScience);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

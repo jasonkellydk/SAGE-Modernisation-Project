@@ -40,11 +40,18 @@ inline VideoCatalog BindVideos(const engine::config::Document &document)
 	{
 		if (root.key != "Video" || root.values.empty())
 			continue;
+		// INI::parseVideoDefinition: the block's name is its internal name, unless an InternalName field (parsed after it)
+		// renames it; addVideo replaces one of the same internal name. (Comment is WorldBuilder's: EditParameter only.)
 		std::string file;
+		std::string name(root.values.front());
 		for (const engine::config::Node &field : root.children)
+		{
 			if (field.key == "Filename" && !field.values.empty())
 				file = std::string(field.values.front());
-		catalog.files.insert_or_assign(std::string(root.values.front()), std::move(file));
+			else if (field.key == "InternalName" && !field.values.empty())
+				name = std::string(field.values.front());
+		}
+		catalog.files.insert_or_assign(std::move(name), std::move(file));
 	}
 	return catalog;
 }

@@ -86,6 +86,22 @@ struct ResourceTraits<generalszh::gameplay::AppearanceSettings>
 };
 }
 
+// The model condition bits the system sets by name, worked out at compile time (ModelConditionBit is a search of the
+// names: never in the row loop). Door n's bits are door 1's, 4 apart (model_condition::DoorOpening).
+namespace generalszh::gameplay::appearance_bits
+{
+inline constexpr std::uint32_t ContinuousFireMean = content::ModelConditionBit("CONTINUOUS_FIRE_MEAN");
+inline constexpr std::uint32_t ContinuousFireFast = content::ModelConditionBit("CONTINUOUS_FIRE_FAST");
+inline constexpr std::uint32_t ContinuousFireSlow = content::ModelConditionBit("CONTINUOUS_FIRE_SLOW");
+inline constexpr std::uint32_t Door1Opening = content::ModelConditionBit("DOOR_1_OPENING");
+inline constexpr std::uint32_t Door1Closing = content::ModelConditionBit("DOOR_1_CLOSING");
+inline constexpr std::uint32_t Door1WaitingOpen = content::ModelConditionBit("DOOR_1_WAITING_OPEN");
+inline constexpr std::uint32_t Door1WaitingToClose = content::ModelConditionBit("DOOR_1_WAITING_TO_CLOSE");
+inline constexpr std::uint32_t EnemyNearLook = content::ModelConditionBit("ENEMYNEAR");
+inline constexpr std::uint32_t JetAfterburner = content::ModelConditionBit("JETAFTERBURNER");
+inline constexpr std::uint32_t ParachutingLook = content::ModelConditionBit("PARACHUTING");
+}
+
 export namespace generalszh::gameplay
 {
 struct AppearanceSystem
@@ -188,19 +204,19 @@ struct AppearanceSystem
 			// FiringTracker::speedUp / coolDown: CONTINUOUS_FIRE_MEAN or _FAST while firing faster, _SLOW spinning down.
 			if (!trackers.empty())
 			{
-				look.Set(content::ModelConditionBit("CONTINUOUS_FIRE_MEAN"), trackers[row].level == 1);
-				look.Set(content::ModelConditionBit("CONTINUOUS_FIRE_FAST"), trackers[row].level == 2);
-				look.Set(content::ModelConditionBit("CONTINUOUS_FIRE_SLOW"), trackers[row].slow != 0);
+				look.Set(appearance_bits::ContinuousFireMean, trackers[row].level == 1);
+				look.Set(appearance_bits::ContinuousFireFast, trackers[row].level == 2);
+				look.Set(appearance_bits::ContinuousFireSlow, trackers[row].slow != 0);
 			}
 			// CheckpointUpdate: its gate DOOR_1_OPENING or DOOR_1_CLOSING (clearAndSetModelConditionState), neither at first.
 			if (!checkpoints.empty() && checkpoints[row].gate != CheckpointGate::None)
 			{
-				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), checkpoints[row].gate == CheckpointGate::Opening);
-				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), checkpoints[row].gate == CheckpointGate::Closing);
+				look.Set(appearance_bits::Door1Opening, checkpoints[row].gate == CheckpointGate::Opening);
+				look.Set(appearance_bits::Door1Closing, checkpoints[row].gate == CheckpointGate::Closing);
 			}
 			// EnemyNearUpdate: ENEMYNEAR while an enemy was near at its last look.
 			if (!enemyNears.empty())
-				look.Set(content::ModelConditionBit("ENEMYNEAR"), enemyNears[row].near != 0);
+				look.Set(appearance_bits::EnemyNearLook, enemyNears[row].near != 0);
 			// Object::adjustModelConditionForWeaponStatus: PREATTACK while it winds up (Weapon::getStatus PRE_ATTACK).
 			look.Set(mc::PreattackA, !armaments.empty() && armaments[row].preAttackUntil != 0 && tick < armaments[row].preAttackUntil);
 			look.Set(mc::UsingWeaponA, attacking || firing);
@@ -265,8 +281,8 @@ struct AppearanceSystem
 			if (!transports.empty() && transports[row].doorOpenedTick != 0 && transports[row].definition.doorOpenTicks > 0)
 			{
 				const bool open = tick < transports[row].doorOpenedTick + transports[row].definition.doorOpenTicks;
-				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), open);
-				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), !open);
+				look.Set(appearance_bits::Door1Opening, open);
+				look.Set(appearance_bits::Door1Closing, !open);
 			}
 			// A disguiser never looks stealthed (calcStealthedStatusForPlayer: STEALTHLOOK_DISGUISED_ENEMY or NONE); disguised it
 			// shows MODELCONDITION_DISGUISED (changeVisualDisguise).
@@ -298,19 +314,19 @@ struct AppearanceSystem
 			if (!launchers.empty())
 			{
 				const LauncherDoorState state = launchers[row].state;
-				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), state == LauncherDoorState::Opening);
-				look.Set(content::ModelConditionBit("DOOR_1_WAITING_OPEN"), state == LauncherDoorState::Open);
-				look.Set(content::ModelConditionBit("DOOR_1_WAITING_TO_CLOSE"), state == LauncherDoorState::WaitingToClose);
-				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), state == LauncherDoorState::Closing);
+				look.Set(appearance_bits::Door1Opening, state == LauncherDoorState::Opening);
+				look.Set(appearance_bits::Door1WaitingOpen, state == LauncherDoorState::Open);
+				look.Set(appearance_bits::Door1WaitingToClose, state == LauncherDoorState::WaitingToClose);
+				look.Set(appearance_bits::Door1Closing, state == LauncherDoorState::Closing);
 			}
 			// SpectreGunshipUpdate: coming in and leaving DOOR_1_CLOSING with its afterburners (JETAFTERBURNER); circling
 			// DOOR_1_OPENING.
 			if (!gunships.empty() && gunships[row].status != GunshipStatus::Idle)
 			{
 				const GunshipStatus status = gunships[row].status;
-				look.Set(content::ModelConditionBit("DOOR_1_OPENING"), status == GunshipStatus::Orbiting);
-				look.Set(content::ModelConditionBit("DOOR_1_CLOSING"), status != GunshipStatus::Orbiting);
-				look.Set(content::ModelConditionBit("JETAFTERBURNER"), status != GunshipStatus::Orbiting);
+				look.Set(appearance_bits::Door1Opening, status == GunshipStatus::Orbiting);
+				look.Set(appearance_bits::Door1Closing, status != GunshipStatus::Orbiting);
+				look.Set(appearance_bits::JetAfterburner, status != GunshipStatus::Orbiting);
 			}
 			// ParticleUplinkCannonUpdate::setLogicalStatus: UNPACKING raising its antenna, DEPLOYED almost ready, ready and
 			// firing (kept after the beam), PACKING packing up; none idle (charging keeps what it had).
@@ -390,9 +406,9 @@ struct AppearanceSystem
 				for (std::uint32_t door = 0; door < doors.count && door < gameplay::ProductionDoors::MaxDoors; ++door)
 				{
 					const gameplay::ProductionDoor &state = doors.doors[door];
-					look.Set(mc::DoorOpening(door), state.opening != 0);
-					look.Set(mc::DoorWaitingOpen(door), state.open != 0);
-					look.Set(mc::DoorClosing(door), state.closing != 0);
+					look.Set(appearance_bits::Door1Opening + 4 * door, state.opening != 0);
+					look.Set(appearance_bits::Door1WaitingOpen + 4 * door, state.open != 0);
+					look.Set(appearance_bits::Door1Closing + 4 * door, state.closing != 0);
 				}
 			}
 			const bool dying = !dyings.empty() && !definitions.empty() && templates.HasAI(definitions[row].index);
@@ -404,7 +420,7 @@ struct AppearanceSystem
 			look.Set(mc::ExplodedFlailing, flung && !snagged && dyings[row].landed == 0);
 			look.Set(mc::ExplodedBouncing, flung && !snagged && dyings[row].landed != 0);
 			if (snagged)
-				look.Set(content::ModelConditionBit("PARACHUTING"), true);
+				look.Set(appearance_bits::ParachutingLook, true);
 			// Crushed to death (CrushDie): its front, its back, or both.
 			look.Set(mc::FrontCrushed, !dyings.empty() && (dyings[row].crushed & 1u) != 0);
 			look.Set(mc::BackCrushed, !dyings.empty() && (dyings[row].crushed & 2u) != 0);

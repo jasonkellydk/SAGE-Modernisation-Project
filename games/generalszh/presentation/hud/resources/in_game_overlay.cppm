@@ -25,6 +25,33 @@ struct OverlayText
 	std::u16string text;
 	float x{0}, y{0};
 	std::array<float, 4> color{1, 1, 1, 1};
+	// A drawable's caption (drawConstructPercent's string): in the drawable caption font (InGameUI's DrawableCaption*,
+	// Language.ini's DrawableCaptionFont), not the display string font.
+	bool caption{false};
+};
+
+// A drawable's caption (Drawable::drawCaption: a beacon's text): its text, the screen point of the drawable's centre
+// (the text goes half its width left of it, its top there), over a translucent black box a pixel larger with a dark
+// outline; DrawableCaptionColor with a black drop shadow, in the drawable caption font.
+struct OverlayDrawableCaption
+{
+	std::u16string text;
+	std::int32_t x{0};
+	std::int32_t y{0};
+	std::array<float, 4> color{1, 1, 1, 1};
+};
+
+// A selected unit's control group number (Drawable::drawUIText): the numeral NUMBER:<group> at (x, y), its colour, its
+// drop shadow's colour and offset (DrawGroupInfo), in DrawGroupInfo's font.
+struct OverlayGroupNumber
+{
+	std::int32_t group{0};
+	std::int32_t x{0};
+	std::int32_t y{0};
+	std::array<float, 4> color{1, 1, 1, 1};
+	std::array<float, 4> dropColor{0, 0, 0, 1};
+	std::int32_t dropX{0};
+	std::int32_t dropY{0};
 };
 
 // A world animation's image this frame (InGameUI::updateAndDrawWorldAnimations): its mapped image, centred on
@@ -43,6 +70,7 @@ struct OverlayImage
 		Icon,
 		Veterancy,
 		AmmoPip, // Drawable::drawAmmo's `pip`th pip, placed by PlaceAmmoPip once its image's size is known
+		ContainerPip, // Drawable::drawContained's `pip`th pip (`pipFull`), placed by PlaceContainerPip
 	};
 	Placement placement{Placement::Centred};
 	ObjectIcon icon{ObjectIcon::Disabled};
@@ -54,6 +82,9 @@ struct OverlayImage
 	int pipCenterY{0};
 	float pipOffset{0};
 	float pipBounding{0};
+	bool pipFull{false};
+	// The colour it is drawn in (drawImage's colour: a full container pip green for infantry, blue for others).
+	std::array<float, 3> tint{1, 1, 1};
 };
 
 // The messages at the top of the screen (InGameUI::postDraw): oldest first, each line under the last from `messageAt`
@@ -94,6 +125,8 @@ struct InGameOverlay
 	std::array<float, 4> box{};
 	std::vector<SelectedMarker> selected;
 	std::vector<OverlayText> texts;
+	std::vector<OverlayDrawableCaption> captions;
+	std::vector<OverlayGroupNumber> groupNumbers;
 	std::vector<OverlayImage> images;
 	// The superweapon countdowns (none while a script hides them), from their position (a share of the screen).
 	std::vector<OverlaySuperweapon> superweapons;
@@ -112,6 +145,9 @@ struct InGameOverlay
 	// The screen fade (ScriptEngine's m_fade as W3DStatusCircle draws it): none, add, subtract, saturate, multiply; value.
 	std::uint8_t fade{0};
 	float fadeValue{0.0f};
+	// The right-button scroll's anchor while it scrolls, with DrawRMBScrollAnchor (LookAtTranslator::getRMBScrollAnchor).
+	bool rmbAnchorShown{false};
+	std::array<int, 2> rmbAnchor{};
 };
 }
 

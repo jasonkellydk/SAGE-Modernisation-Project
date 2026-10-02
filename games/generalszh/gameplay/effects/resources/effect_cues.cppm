@@ -19,6 +19,10 @@ struct EffectCue
 	bool particleSystem{false};
 	// A scorch mark of this radius left at `at` (GameClient::addScorch, SCORCH_1); 0: none. `effect` may then be empty.
 	Engine::Math::Fixed scorch;
+	// Drawable::fadeIn / fadeOut on `on` over `fadeTicks` (1 in, 2 out; 0: none); `effect` then names the sound played on
+	// the source (`at`), none when empty.
+	std::uint8_t fade{0};
+	std::uint64_t fadeTicks{0};
 };
 
 struct EffectCues

@@ -171,6 +171,7 @@ struct SpectreGunshipSystem
 						const gp::Armament *gun = lookup.IsAlive(ship.gattling) ? lookup.Get<gp::Armament>(ship.gattling) : nullptr;
 						if (gun != nullptr && gun->firedTick != 0 && now - gun->firedTick <= 4)
 						{
+							ship.strafedTick = now;
 							const FixedVector3 delta = ship.shootAt - ship.gattlingTarget;
 							const Fixed distance = Engine::Math::Length(delta);
 							if (distance < config->strafingIncrement)

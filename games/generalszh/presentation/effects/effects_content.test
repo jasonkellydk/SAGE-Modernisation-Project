@@ -18,6 +18,7 @@
 import games.generalszh.presentation.effects.fx_playback;
 import games.generalszh.presentation.effects.damage_effects;
 import games.generalszh.presentation.effects.heat_haze;
+import games.generalszh.presentation.effects.particle_drawing;
 import games.generalszh.content.death.death_content;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -423,4 +424,459 @@ BOOST_AUTO_TEST_CASE(legacy_parity_smudge_textured_particles_become_heat_haze)
 		BOOST_TEST(std::fabs(haze.offsetX[smudge]) <= 0.06f);
 		BOOST_TEST(std::fabs(haze.offsetY[smudge]) <= 0.03f);
 	}
+}
+
+namespace
+{
+const presentation::ParticleNugget *ParticleNuggetIn(const presentation::EffectsContent &effects, std::string_view list, std::string_view system)
+{
+	const presentation::FxList *fx = effects.fx.Find(list);
+	if (fx == nullptr)
+		return nullptr;
+	for (const auto &entry : fx->nuggets)
+		if (const auto *particles = std::get_if<presentation::ParticleNugget>(&entry); particles != nullptr && particles->system == system)
+			return particles;
+	return nullptr;
+}
+
+bool Near(const std::array<float, 12> &got, const std::array<float, 12> &want)
+{
+	for (std::size_t index = 0; index < got.size(); ++index)
+		if (std::fabs(got[index] - want[index]) > 1e-5f)
+			return false;
+	return true;
+}
+}
+
+// Legacy parity (FXList.cpp, ParticleSystemFXNugget::reallyDoFX / doFXObj; ParticleSys.cpp rotateLocalTransformX/Y/Z,
+// LegacyTransformMath.h Legacy_Rotate_*; ParticleSys.h setInitialDelay). Shipped nuggets:
+// - WeaponFX_GenericTankGun's TankMuzzleFlashSmoke (OrientToObject, RotateY 90) fired from a barrel turned 90 degrees:
+//   its local transform is the barrel's times a turn of 90 degrees about its own y: rows (0 -1 0) (0 0 1) (-1 0 0), at
+//   the barrel (1e-5: the float cos of 90 degrees);
+// - FX_DamageTankStruck's TankStruckSmoke (Height 10, OrientToObject, Ricochet) on a tank facing 1 radian, hit by a dealer
+//   to its south: it faces away from the dealer (north, a turn of 90 degrees), 10 up; with no dealer it takes the tank's
+//   facing; at a spot (doFXPos) Ricochet does nothing;
+// - FX_ChinaVehicleNukeCannonDeathExplosion: NukeCannonFlare's Offset Z:40 lands 40 up; turned by a transform lying on its
+//   side (90 degrees about y) an offset X:10 lands 10 down (adjustVector); InitialDelay 0 / 200 / 2000 ms replace the
+//   systems' own delays with 0 / 6 / 60 frames (ceil(ms x 0.03f)), NukeCannonRing (none) keeps its own;
+//   ScudStormMissileDetonation's ScudMissleExplosionTrailArms 100 ms is 3 frames; 167 and 667 ms are 6 and 21;
+// - an attached system (AttachToObject on an object) sits at the object's origin whatever its offset, radius and height,
+//   turned only by its own RotateZ; CreateAtGroundHeight asks the layer height at the spot plus the offset's height.
+BOOST_AUTO_TEST_CASE(legacy_parity_particle_nuggets_place_turn_and_delay_their_systems)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	std::mt19937 random(11);
+	const float quarter = 1.5707963f;
+
+	const presentation::ParticleNugget *muzzle = ParticleNuggetIn(effects, "WeaponFX_GenericTankGun", "TankMuzzleFlashSmoke");
+	BOOST_TEST_REQUIRE(muzzle != nullptr);
+	BOOST_TEST(muzzle->orientToObject);
+	BOOST_TEST(muzzle->rotate[1] == quarter, boost::test_tools::tolerance(1e-6f));
+	presentation::FxRequest barrel{"WeaponFX_GenericTankGun", {50, 60, 7}, quarter};
+	auto start = presentation::PlaceParticles(*muzzle, barrel, random, {});
+	BOOST_TEST(Near(start.transform.m, {0, -1, 0, 50, 0, 0, 1, 60, -1, 0, 0, 7}));
+	BOOST_TEST(!start.delayFrames.has_value());
+	BOOST_TEST(!start.attached);
+
+	const presentation::ParticleNugget *struck = ParticleNuggetIn(effects, "FX_DamageTankStruck", "TankStruckSmoke");
+	BOOST_TEST_REQUIRE(struck != nullptr);
+	BOOST_TEST(struck->ricochet);
+	presentation::FxRequest hit{"FX_DamageTankStruck", {100, 100, 0}, 1.0f, 0.0f, ecs::Entity{3, 1}};
+	hit.hasSecondary = true;
+	hit.secondary = {100, 90, 0};
+	start = presentation::PlaceParticles(*struck, hit, random, {});
+	BOOST_TEST(Near(start.transform.m, {0, -1, 0, 100, 1, 0, 0, 100, 0, 0, 1, 10}));
+	hit.hasSecondary = false;
+	start = presentation::PlaceParticles(*struck, hit, random, {});
+	const float c = std::cos(1.0f), s = std::sin(1.0f);
+	BOOST_TEST(Near(start.transform.m, {c, -s, 0, 100, s, c, 0, 100, 0, 0, 1, 10}));
+	presentation::FxRequest spot{"FX_DamageTankStruck", {100, 100, 0}, 1.0f};
+	spot.hasSecondary = true;
+	spot.secondary = {100, 90, 0};
+	start = presentation::PlaceParticles(*struck, spot, random, {});
+	BOOST_TEST(Near(start.transform.m, {c, -s, 0, 100, s, c, 0, 100, 0, 0, 1, 10}));
+
+	const presentation::ParticleNugget *flare = ParticleNuggetIn(effects, "FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonFlare");
+	BOOST_TEST_REQUIRE(flare != nullptr);
+	start = presentation::PlaceParticles(*flare, {"", {10, 20, 5}}, random, {});
+	BOOST_TEST(start.transform.Position()[2] == 45.0f);
+	BOOST_TEST((start.delayFrames == std::optional<std::uint32_t>{0u}));
+	presentation::ParticleNugget sideways;
+	sideways.offset = {10, 0, 0};
+	presentation::FxRequest lying{"", {10, 20, 5}};
+	lying.transform = std::array<float, 12>{0, 0, 1, 10, 0, 1, 0, 20, -1, 0, 0, 5};
+	start = presentation::PlaceParticles(sideways, lying, random, {});
+	BOOST_TEST(start.transform.Position()[0] == 10.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(start.transform.Position()[2] == -5.0f, boost::test_tools::tolerance(1e-5f));
+	const auto delayOf = [&](std::string_view list, std::string_view system) -> std::optional<std::uint32_t> {
+		const presentation::ParticleNugget *nugget = ParticleNuggetIn(effects, list, system);
+		if (nugget == nullptr)
+			return std::uint32_t{999};
+		return presentation::PlaceParticles(*nugget, {"", {}}, random, {}).delayFrames;
+	};
+	BOOST_TEST((delayOf("FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonMushroomExplosion") == std::optional<std::uint32_t>{6u}));
+	BOOST_TEST((delayOf("FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonMushroomCloudRing") == std::optional<std::uint32_t>{60u}));
+	BOOST_TEST(!delayOf("FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonRing").has_value());
+	BOOST_TEST((delayOf("ScudStormMissileDetonation", "ScudMissleExplosionTrailArms") == std::optional<std::uint32_t>{3u}));
+	presentation::ParticleNugget timed;
+	timed.delayMs = {167, 167};
+	BOOST_TEST((presentation::PlaceParticles(timed, {}, random, {}).delayFrames == std::optional<std::uint32_t>{6u}));
+	timed.delayMs = {667, 667};
+	BOOST_TEST((presentation::PlaceParticles(timed, {}, random, {}).delayFrames == std::optional<std::uint32_t>{21u}));
+
+	presentation::ParticleNugget riding;
+	riding.attachToObject = true;
+	riding.offset = {5, 0, 0};
+	riding.radius = {3, 3};
+	riding.height = {4, 4};
+	riding.rotate[2] = 0.5f;
+	presentation::FxRequest on{"", {30, 40, 2}, 1.0f, 0.0f, ecs::Entity{4, 1}};
+	start = presentation::PlaceParticles(riding, on, random, {});
+	BOOST_TEST(start.attached);
+	BOOST_TEST(start.attachedYaw == 0.5f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST((start.transform.Position() == std::array<float, 3>{30, 40, 2}));
+	BOOST_TEST(!presentation::PlaceParticles(riding, {"", {30, 40, 2}}, random, {}).attached); // at a spot: placed there
+
+	presentation::ParticleNugget grounded;
+	grounded.atGroundHeight = true;
+	grounded.offset = {0, 0, 12};
+	grounded.height = {50, 50};
+	std::array<float, 3> asked{};
+	presentation::FxSurroundings around;
+	around.layerHeight = [&](float x, float y, float z) {
+		asked = {x, y, z};
+		return 33.0f;
+	};
+	start = presentation::PlaceParticles(grounded, {"", {7, 8, 9}}, random, [](float, float) { return 1.0f; }, &around);
+	BOOST_TEST((asked == std::array<float, 3>{7, 8, 21}));
+	BOOST_TEST(start.transform.Position()[2] == 33.0f);
+	BOOST_TEST(presentation::PlaceParticles(grounded, {"", {7, 8, 9}}, random, [](float, float) { return 1.0f; }).transform.Position()[2] == 1.0f);
+}
+
+// Legacy parity (FXList.cpp ParticleSystemFXNugget::reallyDoFX: for i < m_count; ParticleSys.cpp ParticleSystem::update:
+// m_delayLeft counts down first). FX_ChinaVehicleNukeCannonDeathExplosion played on frame 0: NukeCannonFlare (0 ms) and
+// NukeCannonRing (its own 0) emit on the 1st frame, NukeCannonMushroomExplosion (200 ms) on the 7th,
+// NukeCannonMushroomCloudRing (2000 ms) on the 61st. A system with its own InitialDelay 10 started with InitialDelay 0
+// emits at once (replaced, not added); left alone, on the 11th. Count 0 starts nothing, Count 3 three systems.
+BOOST_AUTO_TEST_CASE(legacy_parity_fx_initial_delays_replace_the_systems_own_frame_by_frame)
+{
+	presentation::EffectsContent own;
+	engine::effects::ParticleSystemDefinition late;
+	late.name = "Late";
+	late.initialDelay = {10, 10};
+	late.burstCount = {1, 1};
+	late.lifetime = {100, 100};
+	own.particles.Define("Late") = late;
+	presentation::FxList now;
+	presentation::ParticleNugget at;
+	at.system = "Late";
+	at.delayMs = {0, 0};
+	now.nuggets.push_back(at);
+	own.fx.Define("FX_Now") = now;
+	presentation::FxList later;
+	at.delayMs = {-1, -1};
+	later.nuggets.push_back(at);
+	own.fx.Define("FX_Later") = later;
+	presentation::FxList none;
+	at.count = 0;
+	none.nuggets.push_back(at);
+	own.fx.Define("FX_None") = none;
+	presentation::FxList three;
+	at.count = 3;
+	three.nuggets.push_back(at);
+	own.fx.Define("FX_Three") = three;
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	std::mt19937 random(5);
+	const auto firstFrame = [&](const presentation::EffectsContent &content, std::string_view list, std::string_view system) {
+		engine::effects::ParticleWorld world([&](std::string_view name) { return content.particles.Find(name); });
+		presentation::PlayFx(content, world, random, {}, {std::string(list), {10, 10, 10}}, sounds, shakes);
+		for (int frame = 1; frame <= 90; ++frame)
+		{
+			world.Step();
+			for (std::size_t particle = 0; particle < world.ParticleCount(); ++particle)
+				if (world.DefinitionOf(particle).name == system)
+					return frame;
+		}
+		return 0;
+	};
+	BOOST_TEST(firstFrame(own, "FX_Now", "Late") == 1);
+	BOOST_TEST(firstFrame(own, "FX_Later", "Late") == 11);
+	{
+		engine::effects::ParticleWorld world([&](std::string_view name) { return own.particles.Find(name); });
+		presentation::PlayFx(own, world, random, {}, {"FX_None", {}}, sounds, shakes);
+		BOOST_TEST(world.SystemCount() == 0u);
+		presentation::PlayFx(own, world, random, {}, {"FX_Three", {}}, sounds, shakes);
+		BOOST_TEST(world.SystemCount() == 3u);
+	}
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	BOOST_TEST(firstFrame(effects, "FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonFlare") == 1);
+	BOOST_TEST(firstFrame(effects, "FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonRing") == 1);
+	BOOST_TEST(firstFrame(effects, "FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonMushroomExplosion") == 7);
+	BOOST_TEST(firstFrame(effects, "FX_ChinaVehicleNukeCannonDeathExplosion", "NukeCannonMushroomCloudRing") == 61);
+}
+
+// Legacy parity (FXList.cpp FXListAtBonePosFXNugget::doFXObj / doFxAtBones, FXList::doFXPos; SoundFXNugget::doFXObj).
+// Played on an object, the nugget asks for the bare bone name, then name01, name02, ...; each found bone plays its list
+// there with the bone's transform and no object: an OrientToObject system's Offset turns like the bone, its sound is
+// nobody's, nothing rides on the object; the outer list's own sound is for the object's owner. At a spot (doFXPos) the
+// nugget plays nothing. Shipped: FX_FlashBangGarrisonBuildingHit (a Ranger's flash-bang clearing a building) plays
+// FX_FlashBangBuilding at FIREPOINT.
+BOOST_AUTO_TEST_CASE(legacy_parity_fx_list_at_bone_pos_plays_at_each_bone)
+{
+	presentation::EffectsContent own;
+	engine::effects::ParticleSystemDefinition spark;
+	spark.name = "Spark";
+	spark.burstCount = {1, 1};
+	spark.lifetime = {10, 10};
+	spark.systemLifetime = 1;
+	own.particles.Define("Spark") = spark;
+	presentation::FxList inner;
+	presentation::ParticleNugget sparks;
+	sparks.system = "Spark";
+	sparks.orientToObject = true;
+	sparks.attachToObject = true; // no object at a bone: placed, not attached
+	sparks.offset = {2, 0, 0};
+	inner.nuggets.push_back(sparks);
+	inner.nuggets.push_back(presentation::SoundNugget{"Crack"});
+	own.fx.Define("FX_Inner") = inner;
+	presentation::FxList outer;
+	outer.nuggets.push_back(presentation::SoundNugget{"Boom"});
+	outer.nuggets.push_back(presentation::NestedFxNugget{"FX_Inner", "FIREPOINT", true});
+	own.fx.Define("FX_Outer") = outer;
+
+	std::vector<std::pair<std::string, int>> asked;
+	presentation::FxSurroundings around;
+	around.bones = [&](ecs::Entity, std::string_view bone, int start) {
+		asked.emplace_back(std::string(bone), start);
+		if (start == 0)
+			return std::vector<std::array<float, 12>>{};
+		// FIREPOINT01 facing +y at (110, 200, 20); FIREPOINT02 facing -x at (90, 200, 20).
+		return std::vector<std::array<float, 12>>{{0, -1, 0, 110, 1, 0, 0, 200, 0, 0, 1, 20}, {-1, 0, 0, 90, 0, -1, 0, 200, 0, 0, 1, 20}};
+	};
+	engine::effects::ParticleWorld world([&](std::string_view name) { return own.particles.Find(name); });
+	std::vector<presentation::SoundRequest> sounds;
+	std::vector<presentation::ShakeRequest> shakes;
+	std::vector<presentation::FxAttachment> attached;
+	std::mt19937 random(3);
+	presentation::FxRequest building{"FX_Outer", {100, 200, 0}, 0.0f, 0.0f, ecs::Entity{9, 1}};
+	building.owner = 2;
+	BOOST_TEST(presentation::PlayFx(own, world, random, {}, building, sounds, shakes, &attached, nullptr, 0, nullptr, nullptr, &around));
+	BOOST_TEST((asked == std::vector<std::pair<std::string, int>>{{"FIREPOINT", 0}, {"FIREPOINT", 1}}));
+	BOOST_TEST(attached.empty());
+	BOOST_TEST_REQUIRE(sounds.size() == 3u);
+	BOOST_TEST(sounds[0].sound == "Boom");
+	BOOST_TEST(sounds[0].owner == 2u);
+	BOOST_TEST(sounds[1].sound == "Crack");
+	BOOST_TEST(sounds[1].owner == presentation::SoundRequest::NoOwner);
+	BOOST_TEST((sounds[1].at == std::array<float, 3>{110, 200, 20}));
+	BOOST_TEST((sounds[2].at == std::array<float, 3>{90, 200, 20}));
+	world.Step();
+	BOOST_TEST_REQUIRE(world.ParticleCount() == 2u);
+	// The offset X:2 turned with each bone: (0, 2, 0) and (-2, 0, 0).
+	BOOST_TEST(world.X()[0] == 110.0f);
+	BOOST_TEST(world.Y()[0] == 202.0f);
+	BOOST_TEST(world.X()[1] == 88.0f);
+	BOOST_TEST(world.Y()[1] == 200.0f);
+	BOOST_TEST(world.Z()[1] == 20.0f);
+
+	asked.clear();
+	sounds.clear();
+	BOOST_TEST(presentation::PlayFx(own, world, random, {}, {"FX_Outer", {100, 200, 0}}, sounds, shakes, &attached, nullptr, 0, nullptr, nullptr, &around));
+	BOOST_TEST(asked.empty());
+	BOOST_TEST(sounds.size() == 1u);
+
+	Install &install = Data();
+	if (!install.effects)
+		return;
+	const presentation::FxList *shipped = install.effects->fx.Find("FX_FlashBangGarrisonBuildingHit");
+	BOOST_TEST_REQUIRE(shipped != nullptr);
+	const presentation::NestedFxNugget *atBones = nullptr;
+	for (const auto &entry : shipped->nuggets)
+		if (const auto *nested = std::get_if<presentation::NestedFxNugget>(&entry))
+			atBones = nested;
+	BOOST_TEST_REQUIRE(atBones != nullptr);
+	BOOST_TEST(atBones->fx == "FX_FlashBangBuilding");
+	BOOST_TEST(atBones->bone == "FIREPOINT");
+}
+
+// Legacy parity (ParticleSys.cpp ParticleSystemTemplate::m_fieldParseTable and ParticleSystem's constructor:
+// m_colorScale.setRange(low / 255, high / 255); RandomValue.cpp: a backwards range picks its high value). Shipped:
+// BuggyExplosionAirDeathAirPart's ColorScale -5 -3 is -5/255 .. -3/255 a frame; FerrySmoke's 1 -1 always -1/255;
+// BlackNapalm's PingPong wind swings from 0 .. 0.261799 to 5.497787 .. 6.283185, turning 0.069813 .. 0.139626.
+// The emission velocity and volume unions (see below). TowMissileExhaust's slave TowMissleLenzflare (SystemLifetime 1) runs out before the exhaust's first burst: in 30
+// frames of the exhaust no lens flare particle is ever made.
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_particle_systems_read_colour_scale_wind_and_slaves_as_the_original)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	const auto *buggy = effects.particles.Find("BuggyExplosionAirDeathAirPart");
+	BOOST_TEST_REQUIRE(buggy != nullptr);
+	BOOST_TEST(buggy->colorScale.min == -5.0f / 255.0f);
+	BOOST_TEST(buggy->colorScale.max == -3.0f / 255.0f);
+	const auto *ferry = effects.particles.Find("FerrySmoke");
+	BOOST_TEST_REQUIRE(ferry != nullptr);
+	BOOST_TEST(ferry->colorScale.min == 1.0f / 255.0f);
+	BOOST_TEST(ferry->colorScale.max == -1.0f / 255.0f);
+	const auto *napalm = effects.particles.Find("BlackNapalm");
+	BOOST_TEST_REQUIRE(napalm != nullptr);
+	BOOST_TEST((napalm->wind == engine::effects::WindMotion::PingPong));
+	BOOST_TEST(napalm->windStartAngle.min == 0.0f);
+	BOOST_TEST(napalm->windStartAngle.max == 0.261799f);
+	BOOST_TEST(napalm->windEndAngle.min == 5.497787f);
+	BOOST_TEST(napalm->windEndAngle.max == 6.283185f);
+	BOOST_TEST(napalm->windAngleChangeMin == 0.069813f);
+	BOOST_TEST(napalm->windAngleChangeMax == 0.139626f);
+
+	// The emission unions: AvengerDestroySmoke's VelHemispherical 0.5 1 is the speed its HEMISPHERICAL velocity reads
+	// (spherical.speed); SmallTankStruckSmoke's VolCylinderRadius 10 is also its sphere radius and line start x.
+	const auto *avenger = effects.particles.Find("AvengerDestroySmoke");
+	BOOST_TEST_REQUIRE(avenger != nullptr);
+	BOOST_TEST((avenger->velocityType == engine::effects::EmissionVelocity::Hemispherical));
+	BOOST_TEST(avenger->velocityHemispherical.min == 0.5f);
+	BOOST_TEST(avenger->velocityHemispherical.max == 1.0f);
+	BOOST_TEST(avenger->velocitySpherical.max == 1.0f);
+	const auto *struck = effects.particles.Find("SmallTankStruckSmoke");
+	BOOST_TEST_REQUIRE(struck != nullptr);
+	BOOST_TEST(struck->cylinderRadius == 10.0f);
+	BOOST_TEST(struck->sphereRadius == 10.0f);
+	BOOST_TEST(struck->lineStart[0] == 10.0f);
+	BOOST_TEST(struck->cylinderLength == 0.0f);
+
+	const auto *exhaust = effects.particles.Find("TowMissileExhaust");
+	BOOST_TEST_REQUIRE(exhaust != nullptr);
+	BOOST_TEST(exhaust->slaveSystem == "TowMissleLenzflare");
+	engine::effects::ParticleWorld world([&](std::string_view name) { return effects.particles.Find(name); });
+	world.Create(*exhaust, engine::effects::EmitterTransform::At(50, 50, 20));
+	std::size_t exhaustParticles = 0;
+	for (int frame = 1; frame <= 30; ++frame)
+	{
+		world.Step();
+		for (std::size_t particle = 0; particle < world.ParticleCount(); ++particle)
+		{
+			BOOST_TEST(world.DefinitionOf(particle).name != "TowMissleLenzflare");
+			exhaustParticles += world.DefinitionOf(particle).name == "TowMissileExhaust" ? 1u : 0u;
+		}
+	}
+	BOOST_TEST(exhaustParticles > 0u);
+	BOOST_TEST(world.SystemCount() == 1u);
+}
+
+// Legacy parity (W3DParticleSys.cpp W3DParticleSystemManager::doParticles: isUsingDrawables skipped, the SMUD texture
+// test, streaks, m_fieldParticleCount; EA ParticleSys.h getVolumeParticleDepth: OPTIMUM_VOLUME_PARTICLE_DEPTH 6;
+// pointgr.cpp PointGroupClass::RenderVolumeParticle: shiftInc = t x *current_size x 0.1 / depth towards the camera,
+// billboards only). Shipped: CarCrushGlassDebris (DRAWABLE) is never drawn; MicrowaveEmitter is heat haze;
+// JetContrailThin a streak; GiantLenzflareMonkey (VOLUME_PARTICLE) draws 6 layers, layer 3 of a particle 100 below the
+// camera whose system's first particle is 30 big moved 1.5 towards it (layer 0 unmoved, ground-aligned never);
+// ToxinPuddle (AREA_EFFECT, ground aligned) counts as a field particle.
+BOOST_AUTO_TEST_CASE(legacy_parity_particle_systems_draw_as_the_original_draws_them)
+{
+	const std::array<float, 3> point{10, 20, 0}, camera{10, 20, 100};
+	const std::array<float, 3> layered = presentation::VolumeLayerPosition(point, camera, 30.0f, 6, 3, true);
+	BOOST_TEST(layered[0] == 10.0f);
+	BOOST_TEST(layered[1] == 20.0f);
+	BOOST_TEST(std::fabs(layered[2] - 1.5f) < 1e-5f); // 0.1f / 6 in float
+	BOOST_TEST((presentation::VolumeLayerPosition(point, camera, 30.0f, 6, 0, true) == point));
+	BOOST_TEST((presentation::VolumeLayerPosition(point, camera, 30.0f, 6, 3, false) == point));
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto &effects = *install.effects;
+	const auto drawing = [&](std::string_view name) {
+		const auto *definition = effects.particles.Find(name);
+		BOOST_TEST_REQUIRE(definition != nullptr);
+		return presentation::DrawingOf(*definition);
+	};
+	BOOST_TEST((drawing("CarCrushGlassDebris") == presentation::ParticleDrawing::None));
+	BOOST_TEST((drawing("MicrowaveEmitter") == presentation::ParticleDrawing::HeatHaze));
+	BOOST_TEST((drawing("JetContrailThin") == presentation::ParticleDrawing::Streak));
+	BOOST_TEST((drawing("GiantLenzflareMonkey") == presentation::ParticleDrawing::Quads));
+	BOOST_TEST(presentation::VolumeLayers(*effects.particles.Find("GiantLenzflareMonkey")) == 6u);
+	BOOST_TEST(presentation::VolumeLayers(*effects.particles.Find("NukeCannonFlare")) == 1u);
+	BOOST_TEST(presentation::CountsAsFieldParticle(*effects.particles.Find("ToxinPuddle")));
+	BOOST_TEST(!presentation::CountsAsFieldParticle(*effects.particles.Find("NukeCannonFlare")));
+}
+
+// Legacy parity (BaseHeightMap.cpp BaseHeightMapRenderObjClass::getMaximumVisibleBox; W3DParticleSys.cpp doParticles'
+// cull). A frustum whose near corners are at height 100 and whose far corners lie at -100 (each edge dropping 200) is cut
+// where its edges meet the map's lowest height 0: the far corners come halfway along, and the box spans the near
+// corners and those. A particle further from the box's centre than its half size plus the particle's size on any axis is
+// culled (not drawn, not counted). With an identity view-projection the frustum is the unit box from depth 0 to 1.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_visible_terrain_box_culls_particles)
+{
+	const std::array<std::array<float, 3>, 8> corners{{{-10, -10, 100}, {10, -10, 100}, {10, 10, 100}, {-10, 10, 100},
+		{-300, -300, -100}, {300, -300, -100}, {300, 300, -100}, {-300, 300, -100}}};
+	const presentation::VisibleBox box = presentation::MaximumVisibleBox(corners, 0.0f);
+	// Far corners halfway: (-155, -155, 0) .. (155, 155, 0); with the near ones: -155 .. 155 across, 0 .. 100 up.
+	BOOST_TEST(box.centre[0] == 0.0f);
+	BOOST_TEST(box.centre[2] == 50.0f);
+	BOOST_TEST(box.extent[0] == 155.0f);
+	BOOST_TEST(box.extent[2] == 50.0f);
+	BOOST_TEST(presentation::InVisibleBox(box, {150, 0, 10}, 1.0f));
+	BOOST_TEST(!presentation::InVisibleBox(box, {160, 0, 10}, 1.0f));
+	BOOST_TEST(presentation::InVisibleBox(box, {160, 0, 10}, 5.0f));
+	BOOST_TEST(!presentation::InVisibleBox(box, {0, 0, -3}, 2.0f)); // under the lowest ground
+	// A lowest height the edges never reach (below their far ends): nothing is cut.
+	const presentation::VisibleBox whole = presentation::MaximumVisibleBox(corners, -500.0f);
+	BOOST_TEST(whole.extent[0] == 300.0f);
+	BOOST_TEST(whole.centre[2] == 0.0f);
+	std::array<float, 16> identity{};
+	for (std::size_t index = 0; index < 4; ++index)
+		identity[index * 5] = 1.0f;
+	const auto unit = presentation::FrustumCorners(identity);
+	BOOST_TEST_REQUIRE(unit.has_value());
+	BOOST_TEST(((*unit)[0] == std::array<float, 3>{-1, -1, 0}));
+	BOOST_TEST(((*unit)[6] == std::array<float, 3>{1, 1, 1}));
+}
+
+// Legacy parity (W3DParticleSys.cpp doParticles: the per-particle cull runs before a system is drawn as a streak, so
+// m_streakLine->Set_LocsWidthsColors gets only the particles inside the visible box). A STREAK system of three particles
+// at x 0, 10 and 500 with a box reaching x 100: its streak runs through the first two only; with no box (no terrain),
+// through all three; a quad system's particles are never streak points.
+BOOST_AUTO_TEST_CASE(legacy_parity_streaks_run_only_through_particles_inside_the_visible_box)
+{
+	presentation::EffectsContent own;
+	engine::effects::ParticleSystemDefinition trail;
+	trail.name = "Trail";
+	trail.kind = engine::effects::ParticleKind::Streak;
+	trail.burstCount = {1, 1};
+	trail.lifetime = {100, 100};
+	trail.systemLifetime = 1;
+	trail.color[0] = {{1, 1, 1}, 0}; // additive and white: not invisible
+	own.particles.Define("Trail") = trail;
+	engine::effects::ParticleSystemDefinition puff = trail;
+	puff.name = "Puff";
+	puff.kind = engine::effects::ParticleKind::Particle;
+	engine::effects::ParticleWorld world([&](std::string_view name) { return own.particles.Find(name); });
+	for (const float x : {0.0f, 10.0f, 500.0f})
+		world.Create(trail, engine::effects::EmitterTransform::At(x, 0, 0));
+	world.Create(puff, engine::effects::EmitterTransform::At(5, 0, 0));
+	world.Step();
+	BOOST_TEST_REQUIRE(world.ParticleCount() == 4u);
+	const presentation::VisibleBox box{{0, 0, 0}, {100, 100, 100}};
+	const auto culled = presentation::StreakParticles(world, box);
+	BOOST_TEST_REQUIRE(culled.size() == 2u);
+	BOOST_TEST(world.X()[culled[0].second] == 0.0f);
+	BOOST_TEST(world.X()[culled[1].second] == 10.0f);
+	BOOST_TEST(presentation::StreakParticles(world, std::nullopt).size() == 3u);
 }

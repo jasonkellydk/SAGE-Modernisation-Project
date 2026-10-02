@@ -43,6 +43,7 @@ import engine.gameplay.common.health.components.health;
 import engine.gameplay.common.physics.components.physics_body;
 import engine.gameplay.rts.navigation.components.navigation;
 import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.blocking.components.blocked_state;
 import games.generalszh.gameplay.containment.algorithms.garrisons;
 import games.generalszh.hud.control_bar_view_model;
 import games.generalszh.gameplay.orders.algorithms.command_application;
@@ -52,6 +53,7 @@ import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.common.identity.resources.relationships;
 import engine.gameplay.rts.containment.components.cargo_size;
 import engine.gameplay.rts.containment.resources.cargo_manifest;
+import games.generalszh.gameplay.containment.algorithms.transport_riders;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 
 // GarrisonContain's evacuation sides (GarrisonContain.cpp: exitObjectViaDoor) on the shipped Alpine Assault, and the
@@ -712,6 +714,106 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_tunnel_lets_a_rider_out_where_it_is_selecte
 	const auto at = world.Get<gp::Transform>(rebel)->position.XY();
 	BOOST_TEST((Engine::Math::DistanceSquared(at, world.Get<gp::Transform>(far)->position.XY()) <
 		Engine::Math::DistanceSquared(at, world.Get<gp::Transform>(near)->position.XY())));
+}
+
+// Legacy parity (OpenContain::exitObjectViaDoor with NumberOfExitPaths, m_whichExitPath; Object::
+// getSingleLogicalBonePosition): an America Humvee (NumberOfExitPaths 3) lets its three riders out at its ExitStart01,
+// ExitStart02 and ExitStart03 bones in turn (where they rest in its model, turned and moved with it), each facing the
+// Humvee's way, walking to the matching ExitEnd bone and ignoring collisions for a second (setIgnoreCollisionTime 30).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_humvees_riders_leave_by_its_exit_paths_in_turn)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto paths = shell.game.transportExitPaths.find("AmericaVehicleHumvee");
+	BOOST_TEST_REQUIRE((paths != shell.game.transportExitPaths.end()));
+	BOOST_TEST_REQUIRE(paths->second.starts.size() == 3u);
+	BOOST_TEST((paths->second.starts[0] != paths->second.starts[1] && paths->second.starts[1] != paths->second.starts[2]));
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-200), Fixed::FromInt(-250)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, Engine::Math::TurnFromDegrees(30), america);
+	std::array<ecs::Entity, 3> rangers{};
+	for (auto &ranger : rangers)
+	{
+		ranger = game.Place("GLAInfantryRebel", site, {}, america);
+		gameplay::PutInside(game.Game(), humvee, ranger);
+	}
+	game.Tick();
+	const std::uint32_t player = world.Get<gp::Owner>(humvee)->player;
+	gameplay::ApplyCommand(game.Game(), player, commands::Evacuate{{humvee}});
+	const auto frame = *world.Get<gp::Transform>(humvee);
+	const Fixed c = Engine::Math::Cos(frame.facing), s = Engine::Math::Sin(frame.facing);
+	const auto inWorld = [&](const Engine::Math::FixedVector3 &bone) {
+		return frame.position + Engine::Math::FixedVector3{bone.x * c - bone.y * s, bone.x * s + bone.y * c, bone.z};
+	};
+	std::vector<ecs::Entity> order;
+	for (int tick = 0; tick < 300 && order.size() < 3; ++tick)
+	{
+		game.Tick();
+		for (const ecs::Entity ranger : rangers)
+			if (!world.Has<gp::Passenger>(ranger) && std::ranges::find(order, ranger) == order.end())
+			{
+				const std::size_t path = order.size();
+				order.push_back(ranger);
+				const auto &at = *world.Get<gp::Transform>(ranger);
+				BOOST_TEST((at.position.XY() == inWorld(paths->second.starts[path]).XY()));
+				BOOST_TEST((at.facing.units == frame.facing.units));
+				BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->destination == inWorld(paths->second.ends[path]).XY()));
+				if (const auto *blocked = world.Get<gp::BlockedState>(ranger))
+					BOOST_TEST(blocked->ignoreUntil == game.CurrentTick() + 30);
+			}
+	}
+	BOOST_TEST(order.size() == 3u);
+}
+
+// Legacy parity (TransportContain::onRemoving with ResetMoodCheckTimeOnExit (default Yes) -> AIUpdateInterface::
+// wakeUpAndAttemptToTarget: m_nextMoodCheckTime = now, m_randomlyOffsetMoodCheck = TRUE; getNextMoodTarget: the look
+// after that MoodAttackCheckRate on, moved by GameLogicRandomValue(-rate / 2, rate / 2) once, the flag then cleared): an
+// idle Ranger leaving a Humvee looks for a target on the next targeting pass, and its look after is the check rate on,
+// offset by at most half of it; the one after that exactly the rate.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_rider_out_of_a_transport_looks_at_once_then_randomly_offset)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const auto america = *game.Teams().FindTeam(match->skirmish.players[0].team);
+	const Engine::Math::FixedVector2 site = match->start + Engine::Math::FixedVector2{Fixed::FromInt(-300), Fixed::FromInt(-200)};
+	const ecs::Entity humvee = game.Place("AmericaVehicleHumvee", site, {}, america);
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", site + Engine::Math::FixedVector2{Fixed::FromInt(60), Fixed{}}, {}, america);
+	BOOST_TEST_REQUIRE(world.Get<gp::Transport>(humvee)->definition.resetMoodOnExit);
+	for (int tick = 0; tick < 60; ++tick) // settled idle: its idle entry's offset look long done
+		game.Tick();
+	BOOST_TEST_REQUIRE((world.Get<gp::Aggression>(ranger)->moodFlags & gp::mood_flag::OffsetNext) == 0);
+	// It gets out (onRemoving), idle where it stands.
+	game.Game().manifest.Board(humvee, ranger, true);
+	game.Game().manifest.ClearChanges();
+	BOOST_TEST_REQUIRE((game.Game().manifest.Take(humvee, ranger) == ranger));
+	const std::uint64_t out = game.Game().tick;
+	gameplay::ApplyTransportRiders(game.Game());
+	game.Game().manifest.ClearChanges();
+	const gp::Aggression &aggression = *world.Get<gp::Aggression>(ranger);
+	BOOST_TEST(aggression.nextScan == out);
+	BOOST_TEST((aggression.moodFlags & gp::mood_flag::OffsetNext) != 0);
+	const std::uint64_t rate = aggression.scanInterval;
+	const std::uint64_t half = rate >> 1;
+	game.Tick(); // its look: the next targeting pass
+	const std::uint64_t looked = game.CurrentTick();
+	BOOST_TEST(aggression.nextScan >= looked + rate - half);
+	BOOST_TEST(aggression.nextScan <= looked + rate + half);
+	BOOST_TEST((aggression.moodFlags & gp::mood_flag::OffsetNext) == 0);
+	const std::uint64_t offset = aggression.nextScan;
+	while (game.CurrentTick() < offset)
+		game.Tick();
+	BOOST_TEST(aggression.nextScan == offset + rate);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

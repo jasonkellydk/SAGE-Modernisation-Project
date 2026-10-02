@@ -44,6 +44,7 @@ import games.generalszh.gameplay.orders.algorithms.repair_orders;
 import games.generalszh.gameplay.production.algorithms.unit_queue;
 import engine.gameplay.rts.production.components.production_exit_gate;
 import engine.gameplay.rts.slaves.components.spawner;
+import engine.gameplay.rts.stealth.components.stealth;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import engine.gameplay.rts.death.components.dying;
@@ -887,6 +888,43 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_angry_mob_follows_its_nexus_and_dies_with_
 		game.Tick();
 	for (const ecs::Entity member : mob)
 		BOOST_TEST((!world.IsAlive(member) || world.Has<gp::Dying>(member)));
+}
+
+// StealthUpgrade::upgradeImplementation: setStatus(OBJECT_STATUS_CAN_STEALTH) and, on a KINDOF_SPAWNS_ARE_THE_WEAPONS
+// object, SpawnBehavior::giveSlavesStealthUpgrade(TRUE): each spawn it has gets OBJECT_STATUS_CAN_STEALTH as well.
+// GLAStingerSite (SpawnNumber 3 GLAInfantryStingerSoldier, StealthUpgrade TriggeredBy Upgrade_GLACamoNetting) given the
+// upgrade as its own (so its soldiers' own StealthUpgrade modules do not trigger): it and its three soldiers may
+// stealth from the next tick's upgrade pass.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_stinger_sites_camo_netting_lets_its_soldiers_stealth)
+{
+	ShellContent &shell = Content();
+	if (!shell.map)
+		return;
+	namespace gp = engine::gameplay;
+	session::Session game(shell.map->level, shell.game, {42, 0, {}});
+	game.Tick();
+	const auto gla = *game.Teams().FindTeam("teamPlyrGLA");
+	const auto [low, high] = game.Game().ground.Extent();
+	(void)high;
+	const ecs::Entity site = game.Place("GLAStingerSite", low + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed::FromInt(300)}, {}, gla);
+	BOOST_TEST_REQUIRE(game.World().Has<gp::Spawner>(site));
+	BOOST_TEST(game.World().Get<gp::Spawner>(site)->spawnsAreWeapons);
+	for (int tick = 0; tick < 300 && game.World().Get<gp::Spawner>(site)->spawnedCount < 3u; ++tick)
+		game.Tick();
+	const gp::Spawner spawner = *game.World().Get<gp::Spawner>(site);
+	BOOST_TEST_REQUIRE(spawner.spawnedCount == 3u);
+	const auto canStealth = [&](ecs::Entity entity) {
+		const gp::Stealth *stealth = game.World().Get<gp::Stealth>(entity);
+		return stealth != nullptr && stealth->Has(gp::stealth_flag::CanStealth);
+	};
+	BOOST_TEST(!canStealth(site));
+	for (std::size_t index = 0; index < spawner.spawnedCount; ++index)
+		BOOST_TEST(!canStealth(spawner.spawned[index]));
+	BOOST_TEST_REQUIRE(gameplay::GiveObjectUpgrade(game.Game(), site, "Upgrade_GLACamoNetting"));
+	game.Tick();
+	BOOST_TEST(canStealth(site));
+	for (std::size_t index = 0; index < spawner.spawnedCount; ++index)
+		BOOST_TEST(canStealth(spawner.spawned[index]));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

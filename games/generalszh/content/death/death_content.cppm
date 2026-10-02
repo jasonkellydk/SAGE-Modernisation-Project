@@ -309,8 +309,10 @@ engine::gameplay::DeathDefinition ReadObjectDeath(const ObjectDefinition &object
 			death.atDeath.push_back(std::move(effect));
 			continue;
 		}
-		// FXListDie is an UpgradeMux too: with TriggeredBy it plays only once upgraded (isUpgradeActive); without, it
-		// is switched on as the object is made; either way not with a conflicting upgrade (object's or player's).
+		// FXListDie is an UpgradeMux too: it plays only while upgraded (isUpgradeActive), and the FXListDie constructor
+		// gives itself the upgrade when StartsActive (m_initiallyActive, which defaults to Yes whether or not there is
+		// a TriggeredBy); otherwise only a TriggeredBy upgrade switches it on; either way not with a conflicting
+		// upgrade (object's or player's).
 		if (type == "FXListDie")
 		{
 			if (const Node *fx = block.Find("DeathFX"); fx != nullptr && !fx->Value().empty() && !Same(fx->Value(), "None"))
@@ -319,7 +321,7 @@ engine::gameplay::DeathDefinition ReadObjectDeath(const ObjectDefinition &object
 				if (const Node *orient = block.Find("OrientToObject"))
 					effect.orient = engine::config::values::ParseBool(orient->Value()).value_or(true);
 				effect.gate = gateOf(block);
-				if (block.Find("TriggeredBy") == nullptr)
+				if (block.Find("StartsActive") == nullptr)
 					effect.gate.startsActive = true;
 				death.atDeath.push_back(std::move(effect));
 			}
@@ -440,7 +442,7 @@ engine::gameplay::DeathDefinition ReadObjectDeath(const ObjectDefinition &object
 				else if (Same(key, "StructuralDecay"))
 					how.decay = topple::FromFixed(engine::config::ReadFixed(child, bind).value_or(Engine::Math::Fixed{}));
 				else if (Same(key, "DamageFXTypes"))
-					how.damageFxTypes = ParseDamageTypeFlags(child, how.damageFxTypes);
+					how.damageFxTypes = ParseDamageTypeFlags(child);
 				else if (Same(key, "ToppleStartFX"))
 					how.startEffect = effect(child);
 				else if (Same(key, "ToppleDelayFX"))

@@ -25,6 +25,18 @@ import games.generalszh.gameplay.ai.components.guard;
 import games.generalszh.gameplay.ai.components.mob_member;
 import games.generalszh.gameplay.ai.components.repulsion;
 import games.generalszh.gameplay.ai.components.tunnel_guard;
+import games.generalszh.gameplay.ai.components.team_path_follow;
+import games.generalszh.gameplay.ai.systems.team_path_follow_system;
+import games.generalszh.gameplay.ai.components.exact_path_follow;
+import games.generalszh.gameplay.ai.systems.exact_path_follow_system;
+import engine.gameplay.rts.movement.systems.movement_system;
+import engine.gameplay.common.status.systems.disable_systems;
+import engine.gameplay.rts.death.systems.death_system;
+import engine.gameplay.rts.death.systems.height_die_system;
+import engine.gameplay.rts.death.systems.slow_death_system;
+import engine.gameplay.rts.death.systems.structure_topple_system;
+import engine.gameplay.rts.lifecycle.systems.removal_system;
+import engine.gameplay.rts.parachute.systems.parachute_systems;
 
 // The ai domain's simulation components, registered with the world (the session's composition: which data
 // the world holds; the domain's systems and their order follow).
@@ -36,6 +48,8 @@ inline void EmplaceAiResources(ecs::World &world, [[maybe_unused]] const Simulat
 {
 	world.EmplaceResource<generalszh::gameplay::RetaliationModes>();
 	world.EmplaceResource<generalszh::gameplay::MobEvents>();
+	world.EmplaceResource<generalszh::gameplay::TeamWaypoints>();
+	world.EmplaceResource<generalszh::gameplay::TeamPathEvents>();
 }
 
 inline void RegisterAiComponents(ecs::World &world)
@@ -46,6 +60,8 @@ inline void RegisterAiComponents(ecs::World &world)
 	world.RegisterComponent<generalszh::gameplay::RepulsorMark>();
 	world.RegisterComponent<generalszh::gameplay::AttackSquad>();
 	world.RegisterComponent<generalszh::gameplay::MobMember>();
+	world.RegisterComponent<generalszh::gameplay::TeamPathFollow>();
+	world.RegisterComponent<generalszh::gameplay::ExactPathFollow>();
 }
 
 // The ai domain's systems, registered with the simulation schedule (stateless: one shared instance
@@ -62,6 +78,10 @@ inline void RegisterAiSystems(ecs::SystemRegistry &registry)
 	registry.Register(attackSquads);
 	static generalszh::gameplay::MobMemberSystem mobMembers;
 	registry.Register(mobMembers);
+	static generalszh::gameplay::TeamPathFollowSystem teamPathFollows;
+	registry.Register(teamPathFollows);
+	static generalszh::gameplay::ExactPathFollowSystem exactPathFollows;
+	registry.Register(exactPathFollows);
 }
 
 // What the ai domain's systems run after (and the few they must precede), within the tick.
@@ -86,5 +106,19 @@ inline void OrderAiSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<gameplay::SpatialIndexSystem, domain::GuardSystem>();
 	registry.OrderBefore<domain::GuardSystem, domain::AttackSquadSystem>();
 	registry.OrderBefore<domain::ScriptedEvacuationSystem, domain::RepulsionSystem>();
+	// Followers look once the tick's deaths, removals, falls and disablings are done (PostSimulation).
+	registry.OrderBefore<gameplay::DisableExpirySystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::DisableApplySystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::DeathSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::HeightDieSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::SlowDeathSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::StructureToppleSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::RemovalSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::ParachuteSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::ParachuteLandingSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::ParachuteLossSystem, domain::TeamPathFollowSystem>();
+	registry.OrderBefore<gameplay::FreeFallSystem, domain::TeamPathFollowSystem>();
+	// An exact team follow's next waypoint is offset once movement has moved it on.
+	registry.OrderBefore<gameplay::MovementSystem, domain::ExactPathFollowSystem>();
 }
 }

@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 import games.generalszh.session.session;
 import games.generalszh.session.setup.skirmish_level;
@@ -31,7 +32,10 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 	content::ContentLoader loader(files, content::ZeroHourIniGrammar(grammarDiagnostics));
 	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
 	const auto scb = files.Read("Data/Scripts/SkirmishScripts.scb");
-	const auto map = files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	// SOAK_MAP=<name>: the map (Tournament Continent unless set); SOAK_PLAYERS=<n>: hard computer players (4 unless set).
+	const std::string mapName = std::getenv("SOAK_MAP") != nullptr ? std::string(std::getenv("SOAK_MAP")) : std::string("Tournament Continent");
+	const int players = std::getenv("SOAK_PLAYERS") != nullptr ? std::clamp(std::atoi(std::getenv("SOAK_PLAYERS")), 1, 4) : 4;
+	const auto map = files.Read("Maps/" + mapName + "/" + mapName + ".map");
 	BOOST_TEST_REQUIRE((scb.has_value() && map.has_value()));
 	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
 	auto read = engine::level::generals_map::Read(*map);
@@ -45,13 +49,16 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 	setup.seed = 11;
 	setup.startingCash = 10000;
 	const char *factions[] = {"FactionAmerica", "FactionChina", "FactionGLA", "FactionAmericaAirForceGeneral"};
-	for (int slot = 0; slot < 4; ++slot)
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	for (int slot = 0; slot < players; ++slot)
 	{
 		setup.slots[slot].SetState(session::setup::SlotState::HardAI);
 		setup.slots[slot].playerTemplate = templateOf(factions[slot]);
 		setup.slots[slot].startPos = slot;
 	}
-	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, game.playerTemplates, 4, &*file);
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, game.playerTemplates, std::getenv("SOAK_MAP") != nullptr ? std::max(spots, players) : 4, &*file);
 	const int ticks = std::getenv("SOAK_TICKS") != nullptr ? std::atoi(std::getenv("SOAK_TICKS")) : 9000;
 	const int workers = std::getenv("SOAK_WORKERS") != nullptr ? std::atoi(std::getenv("SOAK_WORKERS")) : 1;
 	session::SessionOptions options{11, static_cast<std::size_t>(workers), {}, {}};
@@ -60,6 +67,8 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
 	session::Session session(skirmish.level, game, options);
 	double windowMax = 0.0, windowTotal = 0.0, overallMax = 0.0, profiled = 0.0;
+	std::vector<double> tickMs;
+	tickMs.reserve(static_cast<std::size_t>(ticks));
 	const int profileFrom = ticks - 900;
 	// SOAK_SPIKES=<ms>: every tick over that many milliseconds is broken down (its parts, its costliest systems).
 	const double spikeMs = std::getenv("SOAK_SPIKES") != nullptr ? std::atof(std::getenv("SOAK_SPIKES")) : 0.0;
@@ -88,6 +97,7 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 					line += " [" + std::string(systemsAfter[system].name) + " " + std::to_string((systemsAfter[system].cpuNanos - systemsBefore[system].cpuNanos) / 1000) + "us]";
 			BOOST_TEST_MESSAGE(line);
 		}
+		tickMs.push_back(ms);
 		windowMax = std::max(windowMax, ms);
 		overallMax = std::max(overallMax, ms);
 		windowTotal += ms;
@@ -95,7 +105,8 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 			profiled += ms;
 		if (tick % 900 == 0)
 		{
-			BOOST_TEST_MESSAGE("tick " << tick << " entities " << session.EntityCount() << " avg " << windowTotal / 900.0 << " ms max " << windowMax << " ms");
+			BOOST_TEST_MESSAGE("tick " << tick << " entities " << session.EntityCount() << " avg " << windowTotal / 900.0 << " ms max " << windowMax << " ms hash "
+				<< std::hex << session.StateHash() << std::dec);
 			windowMax = windowTotal = 0.0;
 		}
 	}
@@ -148,7 +159,121 @@ BOOST_AUTO_TEST_CASE(four_hard_computer_players)
 		}
 		BOOST_TEST_MESSAGE("archetypes " << session.World().ArchetypeCount() << " (" << archetypesInUse << " in use), chunks " << chunks << " (" << nonEmpty << " in use)");
 	}
+	if (!tickMs.empty())
+	{
+		double sum = 0.0;
+		for (const double ms : tickMs)
+			sum += ms;
+		std::sort(tickMs.begin(), tickMs.end());
+		const auto at = [&](double fraction) { return tickMs[std::min(tickMs.size() - 1, static_cast<std::size_t>(fraction * static_cast<double>(tickMs.size())))]; };
+		BOOST_TEST_MESSAGE("ticks " << tickMs.size() << ": mean " << sum / static_cast<double>(tickMs.size()) << " ms p50 " << at(0.5) << " p99 " << at(0.99) << " p99.9 " << at(0.999)
+			<< " max " << tickMs.back() << " ms; final hash " << std::hex << session.StateHash() << std::dec);
+	}
 	BOOST_TEST_MESSAGE("max tick " << overallMax << " ms; unported: " << session.UnportedSummary());
+}
+
+// A benchmark (reports, never fails): the sim tick budget (engine/docs/performance-oracle.md: 0.25 ms worst case) under a
+// large fight on shipped data. Two computer players' armies of 150 each (America: Crusaders, Humvees, Rangers and Missile
+// Defenders, whose attacks need a line of sight; China: Battlemasters, which crush infantry, Gattling tanks, Red Guards and
+// Tank Hunters) set 600 apart on Tournament Continent, left to find, approach, chase and crush each other (no AI player
+// orders: only their own looks, attack paths and chases) for 900 ticks, at 1 and 4 workers. Each run reports its worst,
+// p99 and mean tick and the systems costliest in its worst tick. FIGHT_TICKS=<n> runs n ticks instead.
+BOOST_AUTO_TEST_CASE(a_large_fight_against_the_tick_budget)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	content::MountInstall(files, install);
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+	const content::GameContent game = content::LoadGameContent(loader, engine::time::FixedStep{30});
+	const auto map = files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(map.has_value());
+	auto read = engine::level::generals_map::Read(*map);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < game.playerTemplates.templates.size(); ++index)
+			if (game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 5;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"West");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"East");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, game.playerTemplates, 4);
+	Engine::Math::FixedVector2 middle;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_1_Start")
+			middle = marker.position.XY();
+	const int ticks = std::getenv("FIGHT_TICKS") != nullptr ? std::atoi(std::getenv("FIGHT_TICKS")) : 900;
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::SessionOptions options{5, workers, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		session::Session session(skirmish.level, game, options);
+		// Both armies a computer player's (Player::getPlayerType: PLAYER_COMPUTER), without its AI's orders.
+		for (const char *name : {"player0", "player1"})
+			session.Game().roster.PlayerAt(*session.Teams().FindPlayer(name)).human = false;
+		const std::uint32_t west = *session.Teams().FindTeam(skirmish.players[0].team);
+		const std::uint32_t east = *session.Teams().FindTeam(skirmish.players[1].team);
+		const char *westKinds[] = {"AmericaTankCrusader", "AmericaVehicleHumvee", "AmericaInfantryRanger", "AmericaInfantryMissileDefender"};
+		const char *eastKinds[] = {"ChinaTankBattleMaster", "ChinaTankGattling", "ChinaInfantryRedguard", "ChinaInfantryTankHunter"};
+		for (int row = 0; row < 15; ++row)
+			for (int column = 0; column < 10; ++column)
+			{
+				const Engine::Math::FixedVector2 offset{Engine::Math::Fixed::FromInt(column * 25), Engine::Math::Fixed::FromInt((row - 7) * 25)};
+				session.Place(westKinds[(row + column) % 4], middle - Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(550), Engine::Math::Fixed{}} + offset,
+					{}, west);
+				session.Place(eastKinds[(row + column) % 4], middle + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(300), Engine::Math::Fixed{}} + offset,
+					Engine::Math::TurnFromDegrees(180), east);
+			}
+		session.EnableProfiling(true);
+		std::vector<double> tickMs;
+		tickMs.reserve(static_cast<std::size_t>(ticks));
+		double worst = 0.0;
+		int worstTick = 0;
+		std::vector<std::pair<std::string, double>> worstSystems;
+		for (int tick = 1; tick <= ticks; ++tick)
+		{
+			const auto systemsBefore = session.Profile();
+			const auto begin = std::chrono::steady_clock::now();
+			session.Tick();
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+			tickMs.push_back(ms);
+			if (ms > worst)
+			{
+				worst = ms;
+				worstTick = tick;
+				worstSystems.clear();
+				const auto systemsAfter = session.Profile();
+				for (std::size_t system = 0; system < systemsAfter.size() && system < systemsBefore.size(); ++system)
+					worstSystems.emplace_back(std::string(systemsAfter[system].name), (systemsAfter[system].cpuNanos - systemsBefore[system].cpuNanos) / 1e6);
+				std::sort(worstSystems.begin(), worstSystems.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+			}
+		}
+		double sum = 0.0;
+		for (const double ms : tickMs)
+			sum += ms;
+		std::sort(tickMs.begin(), tickMs.end());
+		const double p99 = tickMs[(std::min)(tickMs.size() - 1, static_cast<std::size_t>(0.99 * static_cast<double>(tickMs.size())))];
+		BOOST_TEST_MESSAGE("fight, " << workers << " worker(s): " << ticks << " ticks, entities " << session.EntityCount() << ", mean " << sum / static_cast<double>(tickMs.size())
+			<< " ms, p99 " << p99 << " ms, worst " << worst << " ms at tick " << worstTick << " (budget 0.25 ms)");
+		for (std::size_t index = 0; index < worstSystems.size() && index < 12; ++index)
+			BOOST_TEST_MESSAGE("  worst tick: " << worstSystems[index].first << " " << worstSystems[index].second << " ms");
+		auto totals = session.Profile();
+		std::sort(totals.begin(), totals.end(), [](const auto &a, const auto &b) { return a.cpuNanos > b.cpuNanos; });
+		for (std::size_t index = 0; index < totals.size() && index < 12; ++index)
+			BOOST_TEST_MESSAGE("  over the run: " << totals[index].name << " " << totals[index].cpuNanos / 1e6 << " ms (" << totals[index].runs << ")");
+		BOOST_WARN(worst <= 0.25);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

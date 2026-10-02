@@ -18,13 +18,21 @@ import games.generalszh.presentation.rendering.particle_rendering;
 export import games.generalszh.presentation.effects.light_pulses;
 export import games.generalszh.presentation.effects.scorch_marks;
 export import games.generalszh.presentation.objects.resources.radius_cursor;
+export import games.generalszh.presentation.objects.resources.bridge_art;
+export import games.generalszh.presentation.roads.resources.road_geometry;
 export import games.generalszh.presentation.effects.tracers;
+export import games.generalszh.presentation.effects.snow;
+export import games.generalszh.presentation.camera.resources.view_filter;
 export import games.generalszh.presentation.rendering.shroud_pixels;
 export import games.generalszh.presentation.objects.components.track_marks;
 export import games.generalszh.presentation.objects.algorithms.object_icon_layout;
 export import games.generalszh.presentation.hud.resources.in_game_overlay;
 export import games.generalszh.presentation.hud.resources.cinematic_text;
 export import games.generalszh.presentation.hud.resources.popup_message;
+export import games.generalszh.presentation.interaction.resources.mouse_tooltip;
+export import games.generalszh.presentation.interaction.algorithms.hotkey_teams;
+export import games.generalszh.presentation.interaction.algorithms.unit_voices;
+export import games.generalszh.content.global.draw_group_info;
 import Graphics.Scene.Views.CameraState;
 
 // The client side of a running map (any map: the shell map is just one its
@@ -74,6 +82,9 @@ struct PointerState
 	std::uint8_t arrows{0}; // arrow keys held: 1 up, 2 down, 4 left, 8 right
 	float wheel{0};         // wheel notches turned since the last frame
 	bool overInterface{false}; // over the in-game interface (the control bar): the world takes no clicks
+	std::optional<std::pair<std::u16string, int>> windowTooltip; // the tooltip of the window under it (text, delay)
+	bool overRadar{false}; // over the radar (LeftHUDInput: the world's hints go on behind it)
+	bool hasRadar{false};  // the local player has a radar (localPlayerHasRadar)
 };
 
 // What the presentation draws over the world this frame (presentation/hud: in_game_overlay).
@@ -83,6 +94,8 @@ using presentation::OverlayImage;
 using presentation::OverlayMessage;
 using presentation::OverlaySuperweapon;
 using presentation::OverlayCaption;
+using presentation::OverlayDrawableCaption;
+using presentation::OverlayGroupNumber;
 using presentation::InGameOverlay;
 
 // A replay to play back (RecorderClass::playbackFile): its recorded ticks and the seat it was recorded from (whose
@@ -128,6 +141,17 @@ public:
 	const presentation::ShroudCells *Shroud();
 	// InGameUI::message: a line of text among the in-game messages (the replay's CRC mismatch).
 	void ShowMessage(const std::u16string &text);
+	// InGameUI::messageColor: a message in its own colour (0xAARRGGBB; a chat line in its sender's).
+	void ShowMessage(const std::u16string &text, std::uint32_t argb);
+	// The in-game chat lines the command stream brought since the last call (ConnectionManager::processChat's input):
+	// each its sender's player, its text (UTF-8) and the game slots it is for.
+	struct ChatArrived
+	{
+		std::uint32_t player{0};
+		std::string text;
+		std::uint32_t slots{0};
+	};
+	std::vector<ChatArrived> TakeChat();
 	// The local player's skill points now (Player::getSkillPoints: what the campaign carries on); 0 with none.
 	std::int32_t LocalSkillPoints() const;
 	// The match's state now (a saved game's); empty with no match.
@@ -153,17 +177,34 @@ public:
 	std::optional<std::array<std::array<float, 2>, 4>> ViewCornersAtZ(float z) const;
 	// The player looks at a map point (a radar click).
 	void UserLookAt(float x, float y);
+	// A CommandMap.ini meta-event the game client answers (camera keys, reset, tracking, view bookmarks, the last radar
+	// event, STOP); false when it is not one of those.
+	bool MetaEvent(std::string_view meta);
 	float GameSpeed() const noexcept;
 	double TicksPerSecond() const noexcept;
 	// The mouse cursor the match asks for (InGameUI::setMouseCursor): its Mouse::MouseCursor (content::MouseCursorKind)
 	// and direction; none with no match.
 	std::optional<std::array<std::uint8_t, 2>> MouseCursor() const;
+	// The mouse's tooltip and cursor text as the match keeps them (W3DMouse::draw draws them: mouse_tooltip_view), their
+	// look, and whether a script fade runs (Mouse::drawTooltip draws none then); null with no match.
+	struct MouseTooltipFrame
+	{
+		presentation::MouseTooltip *tooltip{nullptr};
+		const presentation::MouseTooltipSettings *settings{nullptr};
+		bool scriptFade{false};
+	};
+	MouseTooltipFrame MouseTooltips();
 	// Starts waiting for the target of `button` (a control bar command button of `source`: InGameUI::setGUICommand).
 	// `shortcutType`: a general's powers shortcut's power type (its source then found anew each frame).
 	void BeginTargeting(ecs::Entity source, std::string_view button, std::string_view shortcutType = {});
 	// The PLACE_BEACON and DELETE_BEACON keys (CommandMap.ini: Ctrl+B, Del).
 	void PlaceBeaconKey();
 	void RemoveBeaconKey();
+	// The control group keys (CommandMap.ini CREATE_TEAMn / SELECT_TEAMn / ADD_TEAMn / VIEW_TEAMn: Ctrl / none / Shift / Alt
+	// + 0..9): SelectionTranslator's handling (ApplyTeamMeta), its CreateTeam submitted, the view moved to a group.
+	void TeamKey(presentation::TeamMeta meta, std::int32_t group);
+	// DrawGroupInfo.ini with Language.ini's DrawGroupInfoFont (GameClient::init), for the group numerals' font.
+	const content::DrawGroupInfoContent &GroupNumberLook() const;
 
 	// One logic tick: the session, then the camera commands its scripts queued.
 	void Tick();
@@ -183,6 +224,9 @@ public:
 
 	void ApplyView(Graphics::CameraState &camera) const;
 	std::array<float, 3> Eye() const;
+	// The view's look-at point and the one it last moved from (W3DView m_pos, m_previousLookAtPosition: calcDeltaScroll).
+	std::array<float, 3> LookAtPosition() const;
+	std::array<float, 3> PreviousLookAtPosition() const;
 	std::span<const ObjectInstance> Objects() const noexcept;
 	// The looks' models (the world's model library); none before a match.
 	presentation::ModelLibrary *Models() const noexcept;
@@ -217,6 +261,16 @@ public:
 	void PlayInterfaceSound(std::string_view event);
 	// A front-end voice in place of the last one (empty: the last one stops).
 	void PlayInterfaceVoice(std::string_view event);
+	// A sound the host's load screens play at once, outside any match's world (TheAudio->addAudioEvent during
+	// LoadScreen::init, while GameEngine::update is suspended): it outlives the world a match start replaces, until
+	// stopped (StopHostSound) or done. 0: it does not play.
+	std::uint64_t PlayHostSound(std::string_view event);
+	// removeAudioEvent on it: stopped at once, or faded over the music's fade time (AHSV_StopTheMusicFade).
+	void StopHostSound(std::uint64_t sound, bool fade = false);
+	// TheAudio->update while the load holds the game loop: the host's sounds sequenced (loops go on).
+	void UpdateHostSounds();
+	// removeAudioEvent(AHSV_StopTheMusicFade): the music playing fades out now.
+	void FadeOutMusicNow();
 	// A shell interaction the map's scripts may wait on (signalUIInteract), onto the command bus.
 	void SignalUiInteraction(std::string_view hook);
 	// A menu's music (the credits'), faded in over what plays; RestoreMusic brings back what played.
@@ -243,6 +297,9 @@ public:
 	std::string EffectsSummary() const;
 	// The effects' particles, and how far (0..1) the frame is past their last step.
 	const engine::effects::ParticleWorld *Particles() const noexcept;
+	// The renderer's last count of on-screen ground-aligned AREA_EFFECT particles (W3DParticleSystemManager's
+	// m_fieldParticleCount), which the particle world's MaxFieldParticleCount limit reads.
+	void SetFieldParticleCount(std::size_t count) noexcept;
 	// This frame's laser beams.
 	std::vector<presentation::BeamSegment> Lasers() const;
 	// This frame's dynamic lights (light pulses, police light bars).
@@ -255,6 +312,23 @@ public:
 	const presentation::RadiusDecalViews *RadiusDecals() const;
 	// The tracers flying this frame (none: no match).
 	const presentation::Tracers *TracerEffects() const;
+	// The map-drawn bridges as drawn this frame, and their models and textures (none: no match).
+	const presentation::BridgeViews *Bridges() const;
+	const presentation::BridgeArt *BridgeModels() const;
+	// The map's roads as drawn (none: no match).
+	const presentation::RoadGeometry *Roads() const;
+	// The map's weather (Weather.ini and its map.ini override): applied to the snow now and whenever the presentation
+	// is bound again (a new match, a restore), as SnowManager::updateIniSettings when Weather is parsed.
+	void SetWeather(const presentation::WeatherSetting &weather);
+	// The next match's map.ini (kept by `loader`; none: no map overrides): its blocks override the game's content for
+	// that match (content::WithMapOverrides; its sounds and particle systems too), as GameLogic::startNewGame's override
+	// load.
+	void UseMapObjects(const engine::config::Document *mapIni, content::ContentLoader *loader);
+	// The snow (none: no match) and whether the scripts show the weather (SHOW_WEATHER, SnowManager::setVisible).
+	const presentation::SnowField *Snow() const;
+	bool WeatherShown() const;
+	// The view's screen filter as the scripts set it (W3DView m_viewFilter: grey, motion blur; none: no match).
+	presentation::ViewFilter *ScreenFilter();
 	float ParticleAlpha() const noexcept;
 	std::size_t EntityCount() const;
 	std::size_t WorkerCount() const;
@@ -267,9 +341,16 @@ public:
 	// A new selection of these (GUI_COMMAND_SELECT_ALL_UNITS_OF_TYPE: deselectAllDrawables, then each selected).
 	void SelectOnly(const std::vector<ecs::Entity> &entities);
 	std::optional<std::uint32_t> LocalPlayer() const;
+	// Player::isPlayerObserver for the local player (its PlayerTemplate's IsObserver); no local player: true.
+	bool LocalPlayerObserver() const;
 	void Submit(const commands::GameCommand &command);
+	// pickAndPlayUnitVoiceResponse for what the host's own controls told the selection (the control bar's, the radar's,
+	// the idle worker button's selection): answered by the unit voice system next frame.
+	void CueVoice(const presentation::UnitVoiceCue &cue);
 	// Starts placing `structure` for `builder` (the control bar's DOZER_CONSTRUCT: InGameUI::placeBuildAvailable).
-	void BeginPlacement(ecs::Entity builder, std::string_view structure);
+	// With `specialPower`: placed for a SPECIAL_POWER_CONSTRUCT button (the sneak attack), the power fires there with
+	// `options` (setSpecialPowerConstructionCommandButton).
+	void BeginPlacement(ecs::Entity builder, std::string_view structure, std::string_view specialPower = {}, std::uint32_t options = 0);
 	// The local player's own match scripts (the original's MultiplayerScripts.scb, added in a game of more than one
 	// team): they run after each tick on this machine only, answering for the local player (their victory, defeat,
 	// side), and play and show what they declare. Never part of the lockstep game. Each list runs as its own player's

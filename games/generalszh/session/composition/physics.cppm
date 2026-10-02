@@ -35,6 +35,9 @@ inline void EmplacePhysicsResources(ecs::World &world, [[maybe_unused]] const Si
 	world.EmplaceResource<engine::gameplay::FallDamage>();
 	world.EmplaceResource<engine::gameplay::ShockWaves>();
 	world.EmplaceResource<engine::gameplay::Landings>();
+	// Landings and hard falls of flyers, whose locomotor steps their bodies (the movement).
+	world.EmplaceResource<engine::gameplay::LocomotorFalls>();
+	world.EmplaceResource<engine::gameplay::LocomotorLandings>();
 }
 
 inline void RegisterPhysicsComponents(ecs::World &world)

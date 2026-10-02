@@ -63,6 +63,8 @@ inline void ResetForNewMatch(ScriptedPresentation &settings) noexcept
 	settings.radarForced = false;
 	settings.localDefeatSeen = false;
 	settings.borderShroudDisabled = false;
+	// SnowManager::reset (GameClient::reset): the map's weather shows again.
+	settings.weatherShown = true;
 }
 
 // Its part of a saved game (the scripts' settings for the player's presentation), in order.

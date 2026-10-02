@@ -3,6 +3,7 @@ import std;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 export import games.generalszh.gameplay.abilities.components.special_abilities;
+export import games.generalszh.gameplay.abilities.components.ability_laser;
 export import games.generalszh.gameplay.abilities.systems.special_ability_system;
 import games.generalszh.gameplay.powers.algorithms.power_trigger;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
@@ -33,6 +34,7 @@ import engine.gameplay.rts.navigation.components.navigation;
 export import games.generalszh.gameplay.abilities.algorithms.special_objects;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 import games.generalszh.gameplay.stealth.algorithms.disguises;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // SpecialAbilityUpdate's ends outside its system (SpecialAbilitySystem steps the abilities): starting one (its
 // SpecialAbility module's initiateIntentToDoSpecialPower, an order's entry point), and, once the systems have run, what
@@ -94,6 +96,15 @@ inline std::optional<std::uint8_t> SlotOfPower(const GameWorld &game, ecs::Entit
 // off holds the effect till its blast has landed (the next tick): then it goes on unless the unit or the target is dead
 // ("Whoops, it was mined").
 // Object::getRelationship == ALLIES (the teams' overrides, then the players').
+// GeometryInfo::getFootprintArea: a circle of its radius (sphere, cylinder) or its box.
+inline Engine::Math::Fixed FootprintArea(const content::Geometry &geometry)
+{
+	using Engine::Math::Fixed;
+	if (geometry.shape == content::GeometryShape::Box)
+		return Fixed::FromInt(4) * geometry.majorRadius * geometry.minorRadius;
+	return Fixed::FromRatio(355, 113) * geometry.majorRadius * geometry.majorRadius; // PI (within 3e-7)
+}
+
 inline bool AlliedTo(GameWorld &game, ecs::Entity unit, ecs::Entity other)
 {
 	const auto team = [&](ecs::Entity entity) {
@@ -252,6 +263,22 @@ inline void ApplyAbilityEvents(GameWorld &game)
 					if (auto *timer = timers->Find(event.power))
 						gp::StartPowerRecharge(*timer, ClockFor(game, OwnerPlayer(game, event.unit)));
 			break;
+		// initLaser: from the unit (its SpecialObjectAttachToBone, drawn) to the target's centre (getCenterPosition: half
+		// its height up, a sphere's own position), fixed there.
+		case AbilityEvent::Kind::Laser:
+			if (const auto slot = ability_detail::SlotOfPower(game, event.unit, event.power); slot && unitAlive && game.world.IsAlive(event.target))
+			{
+				const ecs::Entity laser = CreateSpecialObject(game, event.unit, *slot);
+				if (!game.world.IsAlive(laser))
+					break;
+				Engine::Math::FixedVector3 end = game.world.Get<gp::Transform>(event.target)->position;
+				if (const auto *ref = game.world.Get<gp::DefinitionRef>(event.target))
+					if (const content::Geometry &shape = game.templates.DefinitionAt(ref->index).geometry; shape.shape != content::GeometryShape::Sphere)
+						end.z = end.z + shape.height / Engine::Math::Fixed::FromInt(2);
+				game.world.Add<AbilityLaser>(laser);
+				*game.world.Get<AbilityLaser>(laser) = AbilityLaser{event.unit, end, event.power, 0};
+			}
+			break;
 		case AbilityEvent::Kind::KillObjects:
 			if (const auto slot = ability_detail::SlotOfPower(game, event.unit, event.power))
 				KillSpecialObjects(game, event.unit, *slot);
@@ -307,10 +334,28 @@ inline void ApplyAbilityEvents(GameWorld &game)
 			// DISABLED_HACKED for EffectDuration (setDisabledUntil). SPECIAL_BLACKLOTUS_STEAL_CASH_HACK: EffectValue (retail:
 			// 1000, as every shipped one) or what its player has goes to the unit's (addMoneyEarned), floating over both;
 			// the victim's EVA says so.
+			// Its DisableFXParticleSystem over the target for the effect's time, every other hack of a small building (one
+			// with a footprint under 300) for twice that (m_doDisableFXParticles toggled).
 			if (event.ability == AbilityKind::HackerDisableBuilding || event.ability == AbilityKind::BlackLotusDisableVehicle)
 			{
 				if (game.world.IsAlive(target) && !ability_detail::AlliedTo(game, event.unit, target))
-					DisableHacked(game, target, game.tick + game.world.Get<SpecialAbilities>(event.unit)->slots[*slot].effectTicks);
+				{
+					AbilitySlot &own = game.world.Get<SpecialAbilities>(event.unit)->slots[*slot];
+					DisableHacked(game, target, game.tick + own.effectTicks);
+					std::uint64_t interleave = 1;
+					if (const auto *ref = game.world.Get<gp::DefinitionRef>(target))
+					{
+						const content::ObjectDefinition &victim = game.templates.DefinitionAt(ref->index);
+						if (victim.Is("STRUCTURE") && ability_detail::FootprintArea(victim.geometry) < Engine::Math::Fixed::FromInt(300))
+						{
+							own.Set(ability_flag::NoDisableFx, !own.Has(ability_flag::NoDisableFx));
+							interleave = 2;
+						}
+					}
+					if (!own.Has(ability_flag::NoDisableFx))
+						if (auto *notices = game.world.FindResource<AbilityNotices>())
+							notices->disableFx.push_back({event.unit, target, own.power, own.effectTicks * interleave});
+				}
 				break;
 			}
 			if (event.ability == AbilityKind::BlackLotusStealCash)
@@ -353,6 +398,8 @@ inline void ApplyAbilityEvents(GameWorld &game)
 				if (auto *timers = game.world.Get<gp::SpecialPowerTimers>(event.unit))
 					if (auto *timer = timers->Find(event.power))
 						gp::StartPowerRecharge(*timer, ClockFor(game, player));
+			// The capturer's player's academy records a structure captured (recordBuildingCapture).
+			RecordAcademy(game, player, AcademyCount::BuildingCapture);
 			break;
 		}
 		case AbilityEvent::Kind::Award:

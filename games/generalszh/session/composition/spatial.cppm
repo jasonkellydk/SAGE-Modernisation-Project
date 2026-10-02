@@ -19,6 +19,7 @@ import engine.gameplay.common.spatial.systems.dynamic_geometry_system;
 import engine.gameplay.common.spatial.systems.snapshot_system;
 import engine.gameplay.common.spatial.systems.spatial_index_system;
 import engine.gameplay.common.spatial.components.attitude;
+import engine.gameplay.common.spatial.components.airborne_target;
 import engine.gameplay.common.spatial.components.body_extent;
 import engine.gameplay.common.spatial.components.bounding_volume;
 import engine.gameplay.common.spatial.components.carried;
@@ -53,6 +54,7 @@ inline void RegisterSpatialComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::Carried>();
 	world.RegisterComponent<engine::gameplay::BoundingVolume>();
 	world.RegisterComponent<engine::gameplay::Attitude>();
+	world.RegisterComponent<engine::gameplay::AirborneTarget>();
 }
 
 // The spatial domain's systems, registered with the simulation schedule (stateless: one shared instance

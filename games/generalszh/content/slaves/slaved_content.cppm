@@ -95,7 +95,8 @@ inline std::optional<SlavedWelding> ReadSlavedWelding(const ObjectDefinition &ob
 // (ms, whole frames rounded up), one batch only (OneShot), its spawns dying with it (SpawnedRequireSpawner),
 // InitialBurst (a produced spawner makes its first spawns at once), ExitByBudding (out of the spawn nearest it),
 // AggregateHealth (its health its spawns'). Not bound: CanReclaimOrphans (never set in the shipped data),
-// PropagateDamageTypesToSlavesWhenExisting (parsed but unused by the original), SlavesHaveFreeWill.
+// PropagateDamageTypesToSlavesWhenExisting (parsed but unused by the original). SlavesHaveFreeWill (default No): its
+// spawns stay out of its player's group attacks.
 struct SpawnerContent
 {
 	std::int64_t number{0};
@@ -105,6 +106,7 @@ struct SpawnerContent
 	std::int64_t initialBurst{0};
 	bool budding{false};
 	bool aggregateHealth{false};
+	bool freeWill{false};
 	std::vector<std::string> templates;
 };
 
@@ -134,6 +136,8 @@ inline std::optional<SpawnerContent> ReadObjectSpawner(const ObjectDefinition &o
 				spawner.budding = flag();
 			else if (field.key == "AggregateHealth")
 				spawner.aggregateHealth = flag();
+			else if (field.key == "SlavesHaveFreeWill")
+				spawner.freeWill = flag();
 			else if (field.key == "InitialBurst")
 				spawner.initialBurst = integer();
 			else if (field.key == "SpawnTemplateName")

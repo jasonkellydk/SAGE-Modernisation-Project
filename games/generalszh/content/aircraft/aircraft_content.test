@@ -1,0 +1,60 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdlib>
+#include <filesystem>
+
+import games.generalszh.content.aircraft.aircraft_content;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(aircraft_content)
+
+// Legacy parity (ParkingPlaceBehavior.h field table, ParkingPlaceBehavior::buildInfo, calcPPInfo and getExitPosition):
+// the America and China airfields (FactionBuilding.ini) park four jets (NumRows 2 x NumCols 2) by two runways, come in
+// at ApproachHeight 50 and make helicopters on their HeliPark01 bone. The China airfield's ParkInHangars parks each jet
+// in its hangar (parkingSpace = hangarStart, facing its turn); the America airfield's on its apron (RunwayNParkingM).
+BOOST_AUTO_TEST_CASE(legacy_parity_airfields_park_in_hangars_or_on_the_apron)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	ModelRigs rigs(files);
+	for (const char *name : {"AmericaAirfield", "ChinaAirfield"})
+	{
+		BOOST_TEST_CONTEXT(name)
+		{
+			const ObjectDefinition *airfield = objects.Find(name);
+			BOOST_TEST_REQUIRE(airfield != nullptr);
+			const auto layout = ReadParkingLayout(*airfield, rigs);
+			BOOST_TEST_REQUIRE(layout.has_value());
+			BOOST_TEST(layout->spaces.size() == 4u);
+			BOOST_TEST(layout->runways.size() == 2u);
+			BOOST_TEST((layout->approachHeight == Fixed::FromInt(50)));
+			BOOST_TEST(layout->helipad.has_value());
+			const bool hangars = std::string_view(name) == "ChinaAirfield";
+			BOOST_TEST(layout->parkInHangars == hangars);
+			for (const auto &space : layout->spaces)
+			{
+				const bool same = space.parking.position.x == space.hangar.position.x && space.parking.position.y == space.hangar.position.y &&
+					space.parking.facing.units == space.hangar.facing.units;
+				BOOST_TEST(same == hangars);
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()

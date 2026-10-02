@@ -110,7 +110,7 @@ inline void DeliverViaModuleData(GameWorld &game, ecs::Entity carrier, const con
 	if (!world.Has<gameplay::Delivery>(carrier))
 		world.Add<gameplay::Delivery>(carrier);
 	*world.Get<gameplay::Delivery>(carrier) = delivery;
-	*world.Get<gameplay::MoveOrder>(carrier) = gameplay::MoveToPoint(destination);
+	*world.Get<gameplay::MoveOrder>(carrier) = gameplay::Replanned(gameplay::MoveToPoint(destination));
 	// deliverPayload: its module's DeliveryDecal on the destination, until it heads off the map.
 	LayRadiusDecal(game, carrier, data.deliveryDecal, data.deliveryDecalRadius, {destination.x, destination.y, game.ground.At(destination)}, RadiusDecalUntil::HeadsOffMap);
 }
@@ -132,7 +132,7 @@ inline void MoveToAndEvacuate(GameWorld &game, ecs::Entity transport, FixedVecto
 	if (!world.Has<ScriptedEvacuation>(transport))
 		world.Add<ScriptedEvacuation>(transport);
 	*world.Get<ScriptedEvacuation>(transport) = evacuation;
-	*world.Get<gameplay::MoveOrder>(transport) = gameplay::MoveToPoint(destination);
+	*world.Get<gameplay::MoveOrder>(transport) = gameplay::Replanned(gameplay::MoveToPoint(destination));
 	if (auto *attack = world.Get<gameplay::AttackTarget>(transport))
 		*attack = {};
 	detail::EndStance(game, transport);

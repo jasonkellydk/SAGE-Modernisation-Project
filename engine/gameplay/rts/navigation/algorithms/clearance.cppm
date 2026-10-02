@@ -53,6 +53,13 @@ inline void BuildClearance(const NavigationGrid &grid, ClearancePlane &plane, st
 	plane.zonesStale = true;
 }
 
+// Whether a deck cell of this type is one movers of these surfaces walk (Pathfinder::validLocomotorSurfacesForCellType,
+// flying aside): a clear cell for ground movers, a cliff cell (the wall's edge) for cliff climbers.
+inline bool DeckCellUsable(PathfindCellType type, std::uint8_t surfaces) noexcept
+{
+	return (SurfacesFor(type) & surfaces & ~locomotor_surface::Air) != 0;
+}
+
 // A deck's room over a plane (PathfindLayer's cells for this plane's surfaces): as the ground's, within its cells.
 inline void BuildDeckClearance(const NavigationGrid &grid, ClearancePlane &plane, std::uint8_t layer)
 {
@@ -61,11 +68,10 @@ inline void BuildDeckClearance(const NavigationGrid &grid, ClearancePlane &plane
 		plane.deckRoom.resize(grid.Decks().size());
 	std::vector<std::uint8_t> &room = plane.deckRoom[layer - 1];
 	room.assign(deck.type.size(), 0);
-	const bool walks = (plane.surfaces & SurfacesFor(PathfindCellType::Clear) & ~locomotor_surface::Air) != 0;
 	for (std::size_t index = 0; index < deck.type.size(); ++index)
 	{
 		const PathfindCellType type = deck.type[index];
-		room[index] = (type == PathfindCellType::Clear && walks) || type == PathfindCellType::Impassable ? MaxClearance : 0;
+		room[index] = DeckCellUsable(type, plane.surfaces) || type == PathfindCellType::Impassable ? MaxClearance : 0;
 	}
 	// Beyond its bounds takes no room.
 	const auto at = [&](std::int32_t x, std::int32_t y) -> std::int32_t { return deck.Contains(x, y) ? room[deck.Index(x, y)] : MaxClearance; };
@@ -99,7 +105,7 @@ inline bool DeckPassable(const NavigationGrid &grid, const ClearancePlane &plane
 	if (!deck.Contains(x, y))
 		return false;
 	const std::size_t index = deck.Index(x, y);
-	return deck.type[index] == PathfindCellType::Clear && plane.deckRoom[layer - 1].size() == deck.type.size() && plane.deckRoom[layer - 1][index] > radius;
+	return DeckCellUsable(deck.type[index], plane.surfaces) && plane.deckRoom[layer - 1].size() == deck.type.size() && plane.deckRoom[layer - 1][index] > radius;
 }
 
 namespace clearance_detail
@@ -107,8 +113,8 @@ namespace clearance_detail
 // The ground's zones from a table of its usable cells (row-major, `zones` already all 0): each row's usable cells form
 // runs; a run joins the runs of the row above it overlaps (four ways: sharing a column), by union-find. The flood fill
 // numbers each zone when its first cell in index order is met, so numbering the components in the order their first
-// run comes (rows top to bottom, runs left to right) gives the same numbers.
-inline void LabelRuns(const std::vector<std::uint8_t> &open, std::size_t width, std::size_t height, std::vector<std::uint32_t> &zones)
+// run comes (rows top to bottom, runs left to right) gives the same numbers. Returns how many zones it numbered.
+inline std::uint32_t LabelRuns(const std::vector<std::uint8_t> &open, std::size_t width, std::size_t height, std::vector<std::uint32_t> &zones)
 {
 	struct Run
 	{
@@ -179,6 +185,113 @@ inline void LabelRuns(const std::vector<std::uint8_t> &open, std::size_t width, 
 			number = ++zone;
 		std::fill(zones.begin() + runs[run].start, zones.begin() + runs[run].end, number);
 	}
+	return zone;
+}
+
+// The zones of a grid with decks, exactly as FloodZones floods them, without a cell-by-cell flood of the ground: the
+// ground's usable cells (`open`) are first labelled by runs (LabelRuns: components four ways within the ground, numbered
+// by their first cell). A flood that reaches any cell of such a component fills all of it, so FloodZones' flood is
+// the same over the components and the deck cells, following its links exactly: a ground cell leads to the deck its
+// DeckLink names, where that deck's cell over it leads to the ground; a deck cell leads to its four neighbours on the
+// deck and, where it leads to the ground, to the ground cell under it. FloodZones starts a zone at each cell not yet
+// reached, in index order. A component's first cell comes before any of its other cells and every ground cell comes
+// before every deck cell, so starting from the components in their order, then from the deck cells in index order,
+// numbers the same zones the same.
+template<typename DeckUsable>
+void LinkDeckZones(const NavigationGrid &grid, const std::vector<std::uint8_t> &open, std::vector<std::uint32_t> &zones, DeckUsable &&deckUsable)
+{
+	const std::size_t width = static_cast<std::size_t>(grid.Width()), height = static_cast<std::size_t>(grid.Height());
+	const std::size_t groundCells = width * height;
+	zones.assign(grid.CellCount(), 0);
+	// The ground's components first (their ids in the ground's part of `zones`, renumbered as zones at the end).
+	const std::uint32_t components = LabelRuns(open, width, height, zones);
+	std::vector<std::uint32_t> componentZone(static_cast<std::size_t>(components) + 1, 0);
+	// The ground-to-deck links, by component: from each deck's cells leading to the ground, those whose ground cell's
+	// DeckLink names that deck (a usable ground cell: in a component).
+	std::vector<std::pair<std::uint32_t, std::size_t>> links; // (component, deck cell index)
+	for (std::uint8_t layer = 1; layer <= grid.Decks().size(); ++layer)
+	{
+		const DeckLayer &deck = grid.Decks()[layer - 1];
+		const std::size_t offset = grid.DeckOffset(layer);
+		for (std::int32_t y = deck.y0; y < deck.y0 + deck.height; ++y)
+			for (std::int32_t x = deck.x0; x < deck.x0 + deck.width; ++x)
+			{
+				const std::size_t local = deck.Index(x, y);
+				if (deck.toGround[local] == 0 || !grid.Contains(x, y) || grid.DeckLink(x, y) != layer)
+					continue;
+				if (const std::uint32_t component = zones[grid.Index(x, y)]; component != 0)
+					links.emplace_back(component, offset + local);
+			}
+	}
+	std::sort(links.begin(), links.end());
+	std::vector<std::size_t> offsets;
+	for (std::uint8_t layer = 1; layer <= grid.Decks().size(); ++layer)
+		offsets.push_back(grid.DeckOffset(layer));
+	// The flood's stack: a component (its id, with the top bit set) or a deck cell (its index).
+	constexpr std::size_t ComponentBit = std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
+	std::vector<std::size_t> stack;
+	const auto reachDeck = [&](std::size_t index, std::uint32_t zone) {
+		if (index < zones.size() && zones[index] == 0 && deckUsable(index))
+		{
+			zones[index] = zone;
+			stack.push_back(index);
+		}
+	};
+	const auto reachGround = [&](std::size_t index, std::uint32_t zone) {
+		const std::uint32_t component = zones[index];
+		if (component != 0 && componentZone[component] == 0)
+		{
+			componentZone[component] = zone;
+			stack.push_back(ComponentBit | component);
+		}
+	};
+	const auto flood = [&](std::uint32_t zone) {
+		while (!stack.empty())
+		{
+			const std::size_t node = stack.back();
+			stack.pop_back();
+			if ((node & ComponentBit) != 0)
+			{
+				const auto component = static_cast<std::uint32_t>(node & ~ComponentBit);
+				for (auto link = std::lower_bound(links.begin(), links.end(), std::pair<std::uint32_t, std::size_t>{component, 0});
+					 link != links.end() && link->first == component; ++link)
+					reachDeck(link->second, zone);
+				continue;
+			}
+			std::uint8_t layer = static_cast<std::uint8_t>(offsets.size());
+			while (layer > 1 && node < offsets[layer - 1])
+				--layer;
+			const DeckLayer &deck = grid.Decks()[layer - 1];
+			const std::size_t local = node - offsets[layer - 1];
+			const std::int32_t x = deck.x0 + static_cast<std::int32_t>(local % static_cast<std::size_t>(deck.width));
+			const std::int32_t y = deck.y0 + static_cast<std::int32_t>(local / static_cast<std::size_t>(deck.width));
+			const std::int32_t around[4][2] = {{x + 1, y}, {x - 1, y}, {x, y + 1}, {x, y - 1}};
+			for (const auto &[nx, ny] : around)
+				if (deck.Contains(nx, ny))
+					reachDeck(offsets[layer - 1] + deck.Index(nx, ny), zone);
+			if (deck.toGround[local] != 0 && grid.Contains(x, y))
+				reachGround(grid.Index(x, y), zone);
+		}
+	};
+	std::uint32_t next = 0;
+	for (std::uint32_t component = 1; component <= components; ++component)
+		if (componentZone[component] == 0)
+		{
+			const std::uint32_t zone = ++next;
+			componentZone[component] = zone;
+			stack.push_back(ComponentBit | component);
+			flood(zone);
+		}
+	for (std::size_t index = groundCells; index < zones.size(); ++index)
+		if (zones[index] == 0 && deckUsable(index))
+		{
+			const std::uint32_t zone = ++next;
+			zones[index] = zone;
+			stack.push_back(index);
+			flood(zone);
+		}
+	for (std::size_t index = 0; index < groundCells; ++index)
+		zones[index] = componentZone[zones[index]];
 }
 
 // Every cell the routes know (the ground's, then each deck's: NavigationGrid::CellCount) flood-filled where `usable`,
@@ -271,13 +384,31 @@ inline void BuildZones(const NavigationGrid &grid, ClearancePlane &plane)
 		const std::size_t local = index - offsets[layer - 1];
 		const DeckLayer &deck = grid.Decks()[layer - 1];
 		return layer <= plane.deckRoom.size() && local < plane.deckRoom[layer - 1].size() && plane.deckRoom[layer - 1][local] != 0 &&
-			deck.type[local] == PathfindCellType::Clear;
+			DeckCellUsable(deck.type[local], plane.surfaces);
 	};
 	// Row-major, as Index: the ground's types in index order.
 	const std::span<const PathfindCellType> types = grid.Types();
 	const auto groundType = [&](std::size_t index) { return types[index]; };
-	// Without decks: both zone maps' usable cells in one pass (the tests below, cell by cell, into buffers kept with
-	// the plane), then labelled by runs.
+	// Both zone maps' usable ground cells in one pass (the tests below, cell by cell, into buffers kept with the plane),
+	// then labelled by runs; with decks, the decks joined on by LinkDeckZones (the same zones as FloodZones).
+	if (!grid.Decks().empty() && groundCells == types.size() && groundCells == static_cast<std::size_t>(width) * static_cast<std::size_t>(grid.Height()))
+	{
+		std::vector<std::uint8_t> &open = plane.zoneOpen, &terrain = plane.terrainOpen;
+		open.resize(groundCells);
+		terrain.resize(groundCells);
+		const std::uint8_t *const room = plane.room.data();
+		for (std::size_t index = 0; index < groundCells; ++index)
+		{
+			const PathfindCellType type = types[index];
+			const bool usable = room[index] != 0 && type != PathfindCellType::BridgeImpassable;
+			open[index] = usable ? 1 : 0;
+			terrain[index] = usable || type == PathfindCellType::Obstacle ? 1 : 0;
+		}
+		clearance_detail::LinkDeckZones(grid, open, plane.zones, deckUsable);
+		clearance_detail::LinkDeckZones(grid, terrain, plane.terrainZones, deckUsable);
+		plane.zonesStale = false;
+		return;
+	}
 	if (grid.Decks().empty() && groundCells == types.size() && grid.CellCount() == groundCells)
 	{
 		std::vector<std::uint8_t> &open = plane.zoneOpen, &terrain = plane.terrainOpen;

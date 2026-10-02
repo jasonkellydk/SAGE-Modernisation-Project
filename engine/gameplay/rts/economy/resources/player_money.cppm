@@ -6,20 +6,39 @@ import engine.ecs.system.system;
 
 // Each player's money (whole credits, as the original), by player index, and how much of what came in it earned
 // (harvested, crates, bounties, hacks: the original's ScoreKeeper::addMoneyEarned) as against given back or set.
-// Simulation state: checkpointed and hashed with the session's resources.
+// Simulation state: checkpointed and hashed with the session's resources; this tick's transactions (what the
+// presentation rings) are not.
 export namespace engine::gameplay
 {
+// A deposit or withdrawal its player hears (MiscAudio MoneyDepositSound / MoneyWithdrawSound, for that player).
+struct MoneyTransaction
+{
+	enum class Kind : std::uint8_t
+	{
+		Deposit,
+		Withdraw,
+	};
+	std::uint32_t player{0};
+	Kind kind{Kind::Deposit};
+};
+
 class PlayerMoney
 {
 public:
 	void Resize(std::size_t players) { m_amounts.resize(players, 0); }
 	std::int64_t Balance(std::uint32_t player) const noexcept { return player < m_amounts.size() ? m_amounts[player] : 0; }
 
-	void Deposit(std::uint32_t player, std::int64_t amount)
+	// Money::deposit: `amount` in; one that is not nothing rings its player's deposit sound unless `sound` is off
+	// (starting cash, a script setting the cash).
+	void Deposit(std::uint32_t player, std::int64_t amount, bool sound = true)
 	{
 		if (player >= m_amounts.size())
 			m_amounts.resize(player + 1, 0);
 		m_amounts[player] += amount;
+		if (sound && amount != 0)
+			m_transactions.push_back({player, MoneyTransaction::Kind::Deposit});
+		if (amount > 0)
+			m_incomes.push_back(player);
 	}
 
 	// Money earned: deposited and counted as earned.
@@ -37,14 +56,35 @@ public:
 	}
 	std::int64_t Earned(std::uint32_t player) const noexcept { return player < m_earned.size() ? m_earned[player] : 0; }
 
-	// Takes `amount` if the player has it.
-	bool Withdraw(std::uint32_t player, std::int64_t amount)
+	// Takes `amount` if the player has it (Money::withdraw after canAfford): one that is not nothing rings its player's
+	// withdrawal sound.
+	bool Withdraw(std::uint32_t player, std::int64_t amount, bool sound = true)
 	{
 		if (Balance(player) < amount)
 			return false;
 		m_amounts[player] -= amount;
+		if (sound && amount != 0)
+			m_transactions.push_back({player, MoneyTransaction::Kind::Withdraw});
 		return true;
 	}
+
+	// Money::withdraw as such: as much of `amount` as the player has (never into debt); what it took.
+	std::int64_t WithdrawUpTo(std::uint32_t player, std::int64_t amount, bool sound = true)
+	{
+		const std::int64_t taken = std::clamp<std::int64_t>(amount, 0, Balance(player));
+		if (taken != 0)
+			Withdraw(player, taken, sound);
+		return taken;
+	}
+
+	// This tick's sounding deposits and withdrawals, in order (Money::triggerAudioEvent): per tick, cleared as a tick
+	// begins; neither saved nor hashed.
+	std::span<const MoneyTransaction> Transactions() const noexcept { return m_transactions; }
+	void ClearTransactions() noexcept { m_transactions.clear(); }
+	// The players of each deposit of more than nothing since its reader last took them, in order (Money::deposit's
+	// income, sounding or not: the game's per-player records read them once a tick); neither saved nor hashed.
+	std::span<const std::uint32_t> Incomes() const noexcept { return m_incomes; }
+	void ClearIncomes() noexcept { m_incomes.clear(); }
 
 	void Save(engine::core::serialization::ByteWriter &writer) const
 	{
@@ -88,6 +128,8 @@ public:
 private:
 	std::vector<std::int64_t> m_amounts;
 	std::vector<std::int64_t> m_earned;
+	std::vector<MoneyTransaction> m_transactions;
+	std::vector<std::uint32_t> m_incomes;
 };
 }
 

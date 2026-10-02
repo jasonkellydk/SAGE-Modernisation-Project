@@ -504,4 +504,95 @@ BOOST_AUTO_TEST_CASE(legacy_parity_full_fade_type_text_and_text_on_frame)
 	BOOST_TEST(std::count(stage.sounds.begin(), stage.sounds.end(), "GUITypeText") == 7);
 }
 
+namespace
+{
+// A leaf window with more fields (TOOLTIPTEXT and the like).
+std::string With(std::string window, std::string_view fields)
+{
+	return window.substr(0, window.size() - 4) + std::string(fields) + "END\n";
+}
+
+NodeIndex Find_Node(const WNDDocument &document, std::string_view name)
+{
+	for (NodeIndex index = 0; index < document.Size(); ++index)
+		if (document.Windows()[index].name == name)
+			return index;
+	return Invalid_Node;
+}
+}
+
+// GameWindowManagerScript.cpp parseTooltipText / parseTooltipDelay / parseTooltipCallback (WinInstanceData's -1 delay;
+// "[None]": no callback) and GameWindowManager::winProcessMouseEvent / findWindowUnderMouse with GameWindow::
+// winPointInAnyChild and winPointInChild: the window whose tooltip shows is the deepest one under the pointer with a
+// tooltip (text or callback), disabled or taking no input or not, though never a hidden one; else the window holding the
+// pointer (a disabled button's parent, a hidden one's parent; a window taking no input: none, but a combo box's text
+// entry gives it to its box, whose callback then shows). A combo box's drop-down button (its right 21 pixels) has only
+// the box's text. A modal window takes the pointer without the search.
+BOOST_AUTO_TEST_CASE(legacy_parity_window_tooltips_follow_the_window_manager)
+{
+	const std::string children = "  CHILD\n" +
+		With(Window("PUSHBUTTON", "T.wnd:Campaign", "ENABLED", 100, 100, 300, 150), "  TOOLTIPTEXT = \"TOOLTIP:Campaign1\";\n  TOOLTIPDELAY = 10;\n  TOOLTIPCALLBACK = \"[None]\";\n") +
+		"  CHILD\n" + With(Window("PUSHBUTTON", "T.wnd:Plain", "ENABLED", 100, 200, 300, 250), "  TOOLTIPTEXT = \"\";\n  TOOLTIPDELAY = -1;\n") +
+		"  CHILD\n" + With(Window("STATICTEXT", "T.wnd:Label", "ENABLED+NOINPUT", 400, 100, 600, 150), "  TOOLTIPTEXT = \"TOOLTIP:Label\";\n") +
+		"  CHILD\n" + With(Window("PUSHBUTTON", "T.wnd:Dim", "", 400, 200, 600, 250), "  TOOLTIPTEXT = \"TOOLTIP:Dim\";\n  TOOLTIPCALLBACK = \"GameWinDefaultTooltip\";\n") +
+		"  CHILD\n" + With(Window("PUSHBUTTON", "T.wnd:Hid", "ENABLED+HIDDEN", 100, 300, 300, 350), "  TOOLTIPTEXT = \"TOOLTIP:Hid\";\n") +
+		"  CHILD\n" + With(Window("USER", "T.wnd:Quiet", "ENABLED+NOINPUT", 100, 400, 300, 450), "") +
+		"  CHILD\n" + Combo("T.wnd:Faction", 400, 300, 600, 320);
+	WNDDocument document;
+	BOOST_REQUIRE(document.Parse(Window("USER", "T.wnd:Parent", "ENABLED", 0, 0, 800, 600, children)));
+	document.Localize([](std::string_view label) { return label == "TOOLTIP:Campaign1" ? std::u16string(u"Play a campaign") : std::u16string(label.begin(), label.end()); });
+	const auto window = [&](std::string_view name) -> const WNDWindow & { return document.Windows()[Find_Node(document, name)]; };
+	BOOST_TEST((window("T.wnd:Campaign").tooltip == u"Play a campaign"));
+	BOOST_TEST(window("T.wnd:Campaign").tooltip_delay == 10);
+	BOOST_TEST(window("T.wnd:Campaign").tooltip_callback.empty());
+	BOOST_TEST(window("T.wnd:Plain").tooltip.empty());
+	BOOST_TEST(window("T.wnd:Plain").tooltip_delay == -1);
+	BOOST_TEST(window("T.wnd:Label").tooltip_delay == -1);
+	BOOST_TEST(window("T.wnd:Dim").tooltip_callback == "GameWinDefaultTooltip");
+
+	const NodeIndex faction = Find_Node(document, "T.wnd:Faction");
+	const auto noCallback = [](NodeIndex, WNDTooltipPart) { return false; };
+	const auto factionCallback = [&](NodeIndex node, WNDTooltipPart part) { return node == faction && part == WNDTooltipPart::Window; };
+	const auto at = [&](float x, float y, bool modal = false) { return Tooltip_Target(document, x, y, modal, factionCallback); };
+	BOOST_TEST(at(200, 125).window == Find_Node(document, "T.wnd:Campaign"));
+	BOOST_TEST(at(300, 150).window == Find_Node(document, "T.wnd:Campaign")); // its edges are inside
+	BOOST_TEST(at(200, 225).window == Find_Node(document, "T.wnd:Plain"));    // no tooltip: the window holding the pointer
+	BOOST_TEST(at(500, 125).window == Find_Node(document, "T.wnd:Label"));    // takes no input, has a tooltip
+	BOOST_TEST(at(500, 225).window == Find_Node(document, "T.wnd:Dim"));      // disabled, has a tooltip
+	BOOST_TEST(at(200, 325).window == Find_Node(document, "T.wnd:Parent"));   // hidden: its parent holds the pointer
+	BOOST_TEST(!at(200, 425).Found());                                    // takes no input, no tooltip: none
+	const WNDTooltipTarget entry = at(450, 310);
+	BOOST_TEST(entry.window == faction);
+	BOOST_TEST((entry.part == WNDTooltipPart::Window)); // the entry takes no input: the box, with its callback
+	const WNDTooltipTarget button = at(590, 310);
+	BOOST_TEST(button.window == faction);
+	BOOST_TEST((button.part == WNDTooltipPart::ComboButton));
+	// No callback anywhere: the entry gives the box the pointer all the same.
+	BOOST_TEST((Tooltip_Target(document, 450, 310, false, noCallback).part == WNDTooltipPart::Window));
+	// Modal: no search for a tooltip (the label taking no input gives none).
+	BOOST_TEST(!at(500, 125, true).Found());
+	BOOST_TEST(at(200, 125, true).window == Find_Node(document, "T.wnd:Campaign"));
+}
+
+// GadgetListBox.cpp getListboxEntryBasedOnCoord (GadgetListBoxGetEntryBasedOnXY): rows by their bottoms from under the
+// title against the pointer's height plus the scrolled height (a point above the rows is the first row; past the last
+// row none), columns by their shares of the width (70 / 30 of 300: 210 pixels for the first).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_list_cell_is_found_as_the_list_box_finds_it)
+{
+	WNDDocument document;
+	BOOST_REQUIRE(document.Parse(List("L.wnd:List", 400, 300, 700, 360)));
+	WNDWindow &list = document.Mutable_Windows()[0];
+	list.entries = {u"a", u"b", u"c"};
+	BOOST_TEST(List_Cell_At(list, 400, 300).row == 0);
+	BOOST_TEST(List_Cell_At(list, 400, 310).row == 0);
+	BOOST_TEST(List_Cell_At(list, 400, 311).row == 1);
+	BOOST_TEST(List_Cell_At(list, 400, 295).row == 0); // above the rows: the first
+	BOOST_TEST(List_Cell_At(list, 400, 333).row == -1); // under the last
+	BOOST_TEST(List_Cell_At(list, 400, 333).column == -1);
+	BOOST_TEST(List_Cell_At(list, 609, 300).column == 0);
+	BOOST_TEST(List_Cell_At(list, 610, 300).column == 1);
+	list.list_top = 1; // scrolled a row
+	BOOST_TEST(List_Cell_At(list, 400, 300).row == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

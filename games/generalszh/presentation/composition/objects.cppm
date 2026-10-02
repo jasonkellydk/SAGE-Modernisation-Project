@@ -19,12 +19,14 @@ import games.generalszh.presentation.objects.resources.radius_cursor;
 import games.generalszh.presentation.objects.components.effect_attachments;
 import games.generalszh.presentation.objects.components.beacon_look;
 import games.generalszh.presentation.objects.components.uplink_effects;
+import games.generalszh.presentation.objects.components.wave_guide_effects;
 import games.generalszh.presentation.objects.components.vehicle_motion;
 import games.generalszh.presentation.objects.algorithms.vehicle_motion_setup;
 import games.generalszh.presentation.objects.algorithms.look_setup;
 import games.generalszh.presentation.objects.systems.rope_view_systems;
 import games.generalszh.presentation.objects.systems.radius_decal_view_system;
 import games.generalszh.presentation.objects.systems.tracer_systems;
+import games.generalszh.presentation.objects.systems.snow_system;
 import games.generalszh.presentation.objects.systems.cloud_drift_system;
 import games.generalszh.presentation.effects.scorch_marks;
 import games.generalszh.presentation.effects.tracers;
@@ -35,6 +37,9 @@ import games.generalszh.presentation.models.fire_fx_bone_system;
 import games.generalszh.presentation.models.scenery_clearing_system;
 import games.generalszh.presentation.objects.systems.scenery_systems;
 import games.generalszh.presentation.objects.resources.scenery;
+export import games.generalszh.presentation.objects.resources.bridge_art;
+export import games.generalszh.presentation.roads.resources.road_geometry;
+import games.generalszh.presentation.objects.systems.bridge_look_system;
 
 // The objects domain of the presentation: how the simulation's objects are drawn, animated and dressed in effects
 // (the presentation's composition: which resources it keeps in the simulation's world, what goes with an object, and
@@ -52,6 +57,8 @@ struct ObjectSetup
 	BonePoses bones;
 	std::u16string addCash{u"$%d"};   // GUI:AddCash
 	std::u16string loseCash{u"-$%d"}; // GUI:LoseCash
+	const BridgeArt *bridgeArt{nullptr}; // the map-drawn bridges' models and textures (none: no bridges drawn)
+	const RoadGeometry *roads{nullptr};  // the map's roads as the road buffer draws them (none: no roads)
 };
 
 inline void EmplaceObjectResources(ecs::World &world, session::SessionView &game, const ObjectSetup &setup)
@@ -99,42 +106,64 @@ inline void EmplaceObjectResources(ecs::World &world, session::SessionView &game
 	world.EmplaceResource<RadiusDecalViews>();
 	world.EmplaceResource<RopeViews>();
 	world.EmplaceResource<Tracers>();
+	world.EmplaceResource<SnowField>();
 	world.EmplaceResource<Scenery>();
+	world.EmplaceResource<BridgeArt>(setup.bridgeArt != nullptr ? *setup.bridgeArt : BridgeArt{});
+	world.EmplaceResource<BridgeViews>();
+	world.EmplaceResource<RoadGeometry>(setup.roads != nullptr ? *setup.roads : RoadGeometry{});
+	world.EmplaceResource<WaveGuideCuesPlayed>();
 }
 
-// What goes with an object that goes: the particle systems riding it (stopped, so what is out lives on, or destroyed
-// with it, as each effect's own drawable does).
+// What goes with an object that goes: the particle systems riding it are destroyed as the original's (ParticleSystem::destroy,
+// through destroyParticleSystemByID or a system losing its object): they emit no more and what is out lives on.
 inline void BindObjectEffectReleases(ecs::World &world, engine::effects::ParticleWorld *particles)
 {
 	world.Side<DamageEmission>().OnRemove([particles](ecs::Entity, DamageEmission &emission) {
 		for (const auto &attached : emission.systems)
 			particles->Stop(attached.id);
 	});
-	// An object that goes takes its riding effects at once.
+	// An object that goes stops its riding effects (~W3DModelDraw: stopClientParticleSystems; ParticleSystem::update: destroy()).
 	world.Side<ConditionEmission>().OnRemove([particles](ecs::Entity, ConditionEmission &emission) {
 		for (const auto &attached : emission.systems)
-			particles->Destroy(attached.id);
+			particles->Stop(attached.id);
 	});
 	world.Side<FxEmission>().OnRemove([particles](ecs::Entity, FxEmission &riding) {
 		for (const auto &attached : riding.systems)
-			particles->Destroy(attached.id);
+			particles->Stop(attached.id);
 	});
 	world.Side<CrashTrailEmission>().OnRemove([particles](ecs::Entity, CrashTrailEmission &trail) {
 		for (const auto &attached : trail.systems)
-			particles->Destroy(attached.id);
+			particles->Stop(attached.id);
+	});
+	// A stealth grantor that goes takes its radius system (~GrantStealthBehavior: destroyParticleSystemByID).
+	world.Side<GrantStealthView>().OnRemove([particles](ecs::Entity, GrantStealthView &view) {
+		if (view.system != 0)
+			particles->Stop(view.system);
+	});
+	// A laser special object that goes takes its flares (~LaserUpdate: destroyParticleSystemByID).
+	world.Side<AbilityLaserView>().OnRemove([particles](ecs::Entity, AbilityLaserView &view) {
+		for (const auto system : {view.muzzle, view.impact})
+			if (system != 0)
+				particles->Stop(system);
 	});
 	// A beacon that goes takes its smoke (its drawable gone, the system destroys itself).
 	world.Side<BeaconLook>().OnRemove([particles](ecs::Entity, BeaconLook &look) {
 		if (look.smoke != 0)
-			particles->Destroy(look.smoke);
+			particles->Stop(look.smoke);
 	});
 	// An uplink that goes takes its effects (killEverything).
 	world.Side<UplinkEffects>().OnRemove([particles](ecs::Entity, UplinkEffects &effects) {
 		for (const auto system : effects.systems)
-			particles->Destroy(system);
+			particles->Stop(system);
 		for (const auto system : effects.orbitSystems)
 			if (system != 0)
-				particles->Destroy(system);
+				particles->Stop(system);
+	});
+	// A flood wave that goes stops its riding systems; what is out lives on (ParticleSystem::update: destroy()).
+	world.Side<WaveGuideEffects>().OnRemove([particles](ecs::Entity, WaveGuideEffects &effects) {
+		for (const std::uint64_t system : effects.systems)
+			if (particles != nullptr)
+				particles->Stop(system);
 	});
 	// A vehicle that goes stops its emitters; what is out lives on.
 	world.Side<MotionEmission>().OnRemove([particles](ecs::Entity, MotionEmission &emission) {
@@ -144,7 +173,8 @@ inline void BindObjectEffectReleases(ecs::World &world, engine::effects::Particl
 }
 
 // The objects' own frame systems (stateless: one shared instance each): the models' library, where fire effects
-// leave the drawn bones, the hanging and falling ropes, the decals of radii, spectre and grid, tracers, the clouds.
+// leave the drawn bones, the hanging and falling ropes, the decals of radii, spectre and grid, tracers, the clouds, the
+// map-drawn bridges.
 inline void RegisterObjectFrameSystems(ecs::SystemRegistry &registry)
 {
 	static ModelLibrarySystem modelLibrary;
@@ -163,6 +193,8 @@ inline void RegisterObjectFrameSystems(ecs::SystemRegistry &registry)
 	registry.Register(spectreDecalViews);
 	registry.Register(gridDecalViews);
 	registry.Register(tracers);
+	static SnowSystem snow;
+	registry.Register(snow);
 	static SceneryClearingSystem sceneryClearing;
 	// The structures' clearings take the scenery under them before it is drawn; the drawn scenery's models then load.
 	registry.Register(sceneryClearing);
@@ -173,5 +205,8 @@ inline void RegisterObjectFrameSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<SceneryClearingSystem, ModelLibrarySystem>();
 	registry.Register(fireFxBones);
 	registry.Register(cloudDrift);
+	// The map-drawn bridges as the bridge buffer draws them, by their damage state.
+	static BridgeLookSystem bridgeLooks;
+	registry.Register(bridgeLooks);
 }
 }

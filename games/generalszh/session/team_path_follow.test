@@ -1,0 +1,504 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.movement.components.desired_speed;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.rts.movement.components.path_completed;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
+import games.generalszh.gameplay.ai.algorithms.team_path_follows;
+import games.generalszh.gameplay.teams.algorithms.team_actions;
+import games.generalszh.gameplay.orders.algorithms.unit_orders;
+import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.rts.combat.components.attack_move_resume;
+import engine.gameplay.common.weapons.components.armament;
+
+// Teams following a waypoint path as a team (AIFollowWaypointPathState with m_moveAsGroup), on Twilight Flame.
+using namespace generalszh;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+namespace gp = engine::gameplay;
+}
+
+BOOST_AUTO_TEST_SUITE(team_path_follow)
+
+// Legacy parity (ScriptActions.cpp doTeamFollowSkirmishApproachPath; AIGroup.cpp groupFollowWaypointPathAsTeam,
+// getCenter, recompute; AIStates.cpp AIFollowWaypointPathState::onEnter, update, computeGoal, getNextWaypoint,
+// hasNextWaypoint; AIUpdate.cpp setDesiredSpeed; AIData SkirmishGroupFudgeDistance 5.0): on Twilight Flame a GLA hard
+// computer player's raid team (two Rebels, a Technical and a Scorpion) follows its "Center" approach path to the American
+// start as a team. Each member takes the waypoint closest to the team's centre, its offset from the group's centre (the
+// members' positions averaged), its goal the waypoint plus that offset, and the group's speed: the slowest current
+// locomotor speed (a Rebel's); the Technical never goes faster. The team shares its waypoint: it moves on on the tick a
+// member's move to its goal had ended or (a skirmish player's) the team's centre came within 5 x its count of a member's
+// goal, and every member heads for the new one (plus its own offset) by its next update. At the path's
+// end each member completes it (PathCompleted: the last waypoint), goes idle and leaves the group's speed. A member
+// given another order (stopped) leaves the team's path at once. One worker or four, and a checkpoint, agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_skirmish_raid_team_keeps_together_along_its_approach_path)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::SessionOptions fourOptions = options;
+	fourOptions.workers = 4;
+	session::Session game(skirmish.level, shell.game, options);
+	session::Session four(skirmish.level, shell.game, fourOptions);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_2_Start")
+			start = marker.position.XY();
+	const std::vector<std::pair<std::string, FixedVector2>> raiders{{"GLAInfantryRebel", {Fixed::FromInt(160), Fixed::FromInt(0)}},
+		{"GLAInfantryRebel", {Fixed::FromInt(170), Fixed::FromInt(20)}}, {"GLAVehicleTechnical", {Fixed::FromInt(140), Fixed::FromInt(-40)}},
+		{"GLATankScorpion", {Fixed::FromInt(190), Fixed::FromInt(-30)}}};
+	std::uint32_t team = 0;
+	std::vector<ecs::Entity> units;
+	for (session::Session *each : {&game, &four})
+	{
+		gp::Team raid;
+		raid.name = "Test GLA Raid";
+		raid.owner = gla;
+		raid.created = true;
+		team = each->Game().roster.AddTeam(raid);
+		std::vector<ecs::Entity> made;
+		for (const auto &[type, offset] : raiders)
+			made.push_back(each->Place(type, start + offset, {}, team));
+		if (each == &game)
+			units = made;
+		each->Tick();
+	}
+	const auto &waypoints = game.Game().waypoints;
+	// The team's centre (doTeamFollowSkirmishApproachPath) and the path's waypoint closest to it.
+	FixedVector2 centre;
+	for (const ecs::Entity unit : units)
+		centre = centre + game.TransformOf(unit)->position.XY();
+	centre = {centre.x / Fixed::FromInt(4), centre.y / Fixed::FromInt(4)};
+	const std::uint32_t first = waypoints.ClosestOnPath(centre, "Center1");
+	BOOST_TEST_REQUIRE(first != gp::WaypointGraph::None);
+	for (session::Session *each : {&game, &four})
+		gameplay::TeamFollowApproachPath(each->Game(), "Test GLA Raid", "Center", 0, true);
+
+	// The group's speed: the slowest current locomotor speed.
+	std::optional<Fixed> slowest;
+	for (const ecs::Entity unit : units)
+	{
+		const Fixed speed = game.World().Get<gp::Locomotion>(unit)->locomotor.maxSpeed;
+		slowest = slowest ? std::min(*slowest, speed) : speed;
+	}
+	const auto &teamWaypoints = game.World().Resource<gameplay::TeamWaypoints>();
+	BOOST_TEST(teamWaypoints.Of(team) == first);
+	std::vector<FixedVector2> offsets;
+	for (const ecs::Entity unit : units)
+	{
+		const auto *follow = game.World().Get<gameplay::TeamPathFollow>(unit);
+		BOOST_TEST_REQUIRE(follow != nullptr);
+		const FixedVector2 offset = game.TransformOf(unit)->position.XY() - centre;
+		BOOST_TEST((follow->offset == offset));
+		BOOST_TEST((follow->goal == waypoints.Position(first).XY() + offset));
+		BOOST_TEST(follow->skirmish == 1);
+		BOOST_TEST((game.World().Get<gp::MoveOrder>(unit)->mode == gp::MoveMode::Point));
+		BOOST_TEST((game.World().Get<gp::MoveOrder>(unit)->destination == follow->goal));
+		BOOST_TEST_REQUIRE(game.World().Has<gp::DesiredSpeed>(unit));
+		BOOST_TEST((game.World().Get<gp::DesiredSpeed>(unit)->speed == *slowest));
+		offsets.push_back(offset);
+	}
+	const ecs::Entity technical = units[2];
+	const ecs::Entity stopped = units[3];
+
+	std::vector<std::uint32_t> visited{first};
+	int advances = 0;
+	bool finished = false;
+	std::vector<FixedVector2> goals(units.size());
+	std::optional<std::uint32_t> switched;
+	for (int tick = 0; tick < 9000 && !finished; ++tick)
+	{
+		const std::uint32_t before = teamWaypoints.Of(team);
+		for (std::size_t index = 0; index < units.size(); ++index)
+			if (const auto *follow = game.World().Get<gameplay::TeamPathFollow>(units[index]))
+				goals[index] = follow->goal;
+		// The Scorpion is called off after a second (a player's stop): it leaves the team's path.
+		if (tick == 30)
+			for (session::Session *each : {&game, &four})
+				gameplay::OrderStop(each->Game(), stopped, true);
+		if (tick == 30)
+		{
+			BOOST_TEST(!game.World().Has<gameplay::TeamPathFollow>(stopped));
+			BOOST_TEST(!game.World().Has<gp::DesiredSpeed>(stopped));
+		}
+		game.Tick();
+		four.Tick();
+		if (tick == 300)
+		{
+			BOOST_TEST((four.StateHash() == game.StateHash()));
+			const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+			BOOST_TEST_REQUIRE(restored != nullptr);
+			BOOST_TEST((restored->StateHash() == game.StateHash()));
+		}
+		// The group's speed holds the Technical back.
+		if (game.World().Has<gp::DesiredSpeed>(technical))
+			BOOST_TEST((game.World().Get<gp::Locomotion>(technical)->speed <= *slowest));
+		const std::uint32_t after = teamWaypoints.Of(team);
+		if (after != before)
+		{
+			++advances;
+			visited.push_back(after);
+			// Why it moved on this tick: a member's move to its goal ended, or the team's centre (its members still on the
+			// path: the group) came within 5 x its count of a member's goal.
+			FixedVector2 total;
+			std::int64_t count = 0;
+			for (const ecs::Entity unit : game.Teams().TeamAt(team).members)
+				if (game.World().IsAlive(unit))
+				{
+					total = total + game.TransformOf(unit)->position.XY();
+					++count;
+				}
+			const FixedVector2 teamCentre{total.x / Fixed::FromInt(count), total.y / Fixed::FromInt(count)};
+			const Fixed reach = Fixed::FromInt(count) * Fixed::FromInt(5);
+			bool cause = false;
+			for (std::size_t index = 0; index + 1 < units.size(); ++index)
+			{
+				const Fixed apart = Engine::Math::Distance(game.TransformOf(units[index])->position.XY(), goals[index]);
+				cause = cause || apart <= Fixed::FromInt(20) || Engine::Math::Distance(teamCentre, goals[index]) <= reach;
+			}
+			BOOST_TEST(cause);
+			switched = after;
+		}
+		else if (switched)
+		{
+			// By the tick after, every member still on the path heads for the new waypoint, each off it by its own offset
+			// (a member updated before the one that got there sees the change on its next update).
+			for (std::size_t index = 0; index + 1 < units.size(); ++index)
+				if (const auto *follow = game.World().Get<gameplay::TeamPathFollow>(units[index]))
+				{
+					BOOST_TEST(follow->waypoint == *switched);
+					BOOST_TEST((follow->offset == offsets[index]));
+					BOOST_TEST((follow->goal == waypoints.Position(*switched).XY() + offsets[index]));
+				}
+			switched.reset();
+		}
+		finished = std::none_of(units.begin(), units.end() - 1, [&](ecs::Entity unit) { return game.World().Has<gameplay::TeamPathFollow>(unit); });
+	}
+	BOOST_TEST_MESSAGE("waypoints visited " << visited.size() << ", team moved on " << advances << " times, done by tick " << game.CurrentTick());
+	BOOST_TEST_REQUIRE(finished);
+	BOOST_TEST(advances >= 1);
+	// The path's last waypoint: no link but back.
+	const std::uint32_t last = visited.back();
+	for (std::size_t index = 0; index + 1 < units.size(); ++index)
+	{
+		const auto *completed = game.World().Get<gp::PathCompleted>(units[index]);
+		BOOST_TEST_REQUIRE(completed != nullptr);
+		BOOST_TEST(completed->waypoint == last);
+		BOOST_TEST(!game.World().Has<gp::DesiredSpeed>(units[index]));
+		BOOST_TEST((game.World().Get<gp::MoveOrder>(units[index])->mode == gp::MoveMode::Idle));
+	}
+	BOOST_TEST((four.StateHash() == game.StateHash()));
+	const auto restored = session::Session::Restore(skirmish.level, shell.game, options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == game.StateHash()));
+}
+
+// Legacy parity (ScriptActions.cpp doTeamFollowWaypointsExact with asTeam; AIGroup::groupFollowWaypointPathAsTeamExact;
+// AIStates.cpp AIFollowWaypointPathExactState::onEnter: the group's speed (AIGroup::getSpeed) and each member's offset
+// from the group's centre (AIGroup::getCenter); AIUpdate.cpp setPathFromWaypoint: every waypoint of the path, each next
+// one along its first link, moved by that offset): on Twilight Flame the same GLA raid team follows "Center1" exactly as
+// a team: each member heads for the closest waypoint plus its own offset, at the slowest member's speed, and once it
+// reaches a waypoint for the next one (its first link) plus the same offset.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_team_follows_a_path_exactly_keeping_its_offsets)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+	FixedVector2 start;
+	for (const auto &marker : skirmish.level.markers)
+		if (marker.name == "Player_2_Start")
+			start = marker.position.XY();
+	gp::Team raid;
+	raid.name = "Test GLA Exact";
+	raid.owner = gla;
+	raid.created = true;
+	const std::uint32_t team = game.Game().roster.AddTeam(raid);
+	std::vector<ecs::Entity> units;
+	for (const auto &[type, offset] : std::vector<std::pair<std::string, FixedVector2>>{{"GLAInfantryRebel", {Fixed::FromInt(160), Fixed::FromInt(0)}},
+			 {"GLAVehicleTechnical", {Fixed::FromInt(140), Fixed::FromInt(-40)}}, {"GLATankScorpion", {Fixed::FromInt(190), Fixed::FromInt(-30)}}})
+		units.push_back(game.Place(type, start + offset, {}, team));
+	game.Tick();
+	FixedVector2 centre;
+	for (const ecs::Entity unit : units)
+		centre = centre + game.TransformOf(unit)->position.XY();
+	centre = {centre.x / Fixed::FromInt(3), centre.y / Fixed::FromInt(3)};
+	const auto &waypoints = game.Game().waypoints;
+	const std::uint32_t first = waypoints.ClosestOnPath(centre, "Center1");
+	BOOST_TEST_REQUIRE(first != gp::WaypointGraph::None);
+	gameplay::TeamFollowWaypoints(game.Game(), "Test GLA Exact", "Center1", true, true);
+	std::optional<Fixed> slowest;
+	for (const ecs::Entity unit : units)
+	{
+		const Fixed speed = game.World().Get<gp::Locomotion>(unit)->locomotor.maxSpeed;
+		slowest = slowest ? (std::min)(*slowest, speed) : speed;
+	}
+	std::vector<FixedVector2> offsets;
+	for (const ecs::Entity unit : units)
+	{
+		const FixedVector2 offset = game.TransformOf(unit)->position.XY() - centre;
+		offsets.push_back(offset);
+		const auto &order = *game.World().Get<gp::MoveOrder>(unit);
+		BOOST_TEST((order.mode == gp::MoveMode::PathExact));
+		BOOST_TEST(order.waypoint == first);
+		BOOST_TEST((order.destination == waypoints.Position(first).XY() + offset));
+		BOOST_TEST_REQUIRE(game.World().Has<gp::DesiredSpeed>(unit));
+		BOOST_TEST((game.World().Get<gp::DesiredSpeed>(unit)->speed == *slowest));
+	}
+	// The first to reach its waypoint heads for the next one (its first link) plus its offset.
+	const auto links = waypoints.Links(first);
+	BOOST_TEST_REQUIRE(!links.empty());
+	bool movedOn = false;
+	for (int tick = 0; tick < 1800 && !movedOn; ++tick)
+	{
+		game.Tick();
+		for (std::size_t index = 0; index < units.size(); ++index)
+		{
+			const auto &order = *game.World().Get<gp::MoveOrder>(units[index]);
+			if (order.mode == gp::MoveMode::PathExact && order.waypoint == links.front())
+			{
+				BOOST_TEST((order.destination == waypoints.Position(links.front()).XY() + offsets[index]));
+				movedOn = true;
+			}
+		}
+	}
+	BOOST_TEST(movedOn);
+}
+
+// Legacy parity (AIStates.cpp AIFollowWaypointPathState::update: getMoodMatrixActionAdjustment(MM_Action_Move) &
+// MAA_Action_To_AttackMove -> aiAttackFollowWaypointPathAsTeam(m_currentWaypoint, NO_MAX_SHOTS_LIMIT, CMD_FROM_AI);
+// AIUpdate.cpp getMoodMatrixActionAdjustment (an AI-controlled unit at AI_AGGRESSIVE: MAA_Action_To_AttackMove);
+// AIAttackFollowWaypointPathState::update: getNextMoodTarget while it goes, AI_ATTACK_OBJECT, then, its attack machine
+// idle again, computeGoal + computePath from its current waypoint). On Twilight Flame a GLA computer player's team (a
+// Scorpion and a Technical) set aggressive (TEAM_SET_ATTITUDE 2) and sent along "Center1" as a team attack-follows it from
+// its first update: each member keeps its team path state (waypoint, offset, goal) and attack-moves. An unarmed American dozer
+// standing at the path's first waypoint is taken on as they come across it; while a member fights its team path is left
+// alone (no move-on, no "replaced"), and on the tick its fight is over it heads for its goal at its waypoint again,
+// still following the team's path. The same team at the normal attitude only follows the path.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_aggressive_team_attack_follows_its_path)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto bytes = shell.files.Read("Maps/Twilight Flame/Twilight Flame.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	int spots = 0;
+	for (const auto &marker : read->level.markers)
+		spots += marker.name.starts_with("Player_") && marker.name.ends_with("_Start") ? 1 : 0;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::HardAI);
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 1;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, spots);
+	const auto run = [&](bool aggressive) {
+		session::SessionOptions options{7, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		session::Session game(skirmish.level, shell.game, options);
+		auto &world = game.World();
+		const std::uint32_t gla = *game.Teams().FindPlayer("player1");
+		const std::uint32_t usa = *game.Teams().FindPlayer("player0");
+		FixedVector2 start;
+		for (const auto &marker : skirmish.level.markers)
+			if (marker.name == "Player_2_Start")
+				start = marker.position.XY();
+		gp::Team raid;
+		raid.name = "Test GLA Attack Follow";
+		raid.owner = gla;
+		raid.created = true;
+		const std::uint32_t team = game.Game().roster.AddTeam(raid);
+		std::vector<ecs::Entity> units;
+		units.push_back(game.Place("GLATankScorpion", start + FixedVector2{Fixed::FromInt(160), Fixed::FromInt(0)}, {}, team));
+		units.push_back(game.Place("GLAVehicleTechnical", start + FixedVector2{Fixed::FromInt(140), Fixed::FromInt(-40)}, {}, team));
+		game.Tick();
+		FixedVector2 centre;
+		for (const ecs::Entity unit : units)
+			centre = centre + game.TransformOf(unit)->position.XY();
+		centre = {centre.x / Fixed::FromInt(2), centre.y / Fixed::FromInt(2)};
+		const auto &waypoints = game.Game().waypoints;
+		const std::uint32_t first = waypoints.ClosestOnPath(centre, "Center1");
+		BOOST_TEST_REQUIRE(first != gp::WaypointGraph::None);
+		const auto home = game.Game().roster.DefaultTeam(usa);
+		BOOST_TEST_REQUIRE(home.has_value());
+		const ecs::Entity dozer = game.Place("AmericaVehicleDozer", waypoints.Position(first).XY(), {}, *home);
+		if (aggressive)
+			gameplay::TeamSetAttitude(game.Game(), "Test GLA Attack Follow", 2);
+		gameplay::TeamFollowWaypoints(game.Game(), "Test GLA Attack Follow", "Center1", true);
+		for (const ecs::Entity unit : units)
+		{
+			BOOST_TEST_REQUIRE(world.Has<gameplay::TeamPathFollow>(unit));
+			BOOST_TEST(world.Has<gp::AttackMove>(unit) == aggressive);
+			BOOST_TEST(world.Has<gp::AttackMoveResume>(unit) == aggressive);
+			if (aggressive)
+			{
+				BOOST_TEST(world.Get<gp::AttackMoveResume>(unit)->team == 1u);
+				BOOST_TEST((world.Get<gp::AttackMoveResume>(unit)->order.destination == world.Get<gameplay::TeamPathFollow>(unit)->goal));
+			}
+		}
+		// Who took on the dozer; while a member fights its team path is left alone, and on the tick its fight is over it
+		// heads for its goal at its team's waypoint again.
+		bool fought = false, kept = true;
+		int resumed = 0;
+		std::vector<bool> fighting(units.size(), false);
+		for (int tick = 0; tick < 1800 && (resumed == 0 || std::find(fighting.begin(), fighting.end(), true) != fighting.end()); ++tick)
+		{
+			game.Tick();
+			for (std::size_t index = 0; index < units.size(); ++index)
+			{
+				if (!world.IsAlive(units[index]))
+				{
+					fighting[index] = false;
+					continue;
+				}
+				const auto *attack = world.Get<gp::AttackTarget>(units[index]);
+				const bool now = attack != nullptr && attack->target == dozer;
+				if (now)
+				{
+					fought = true;
+					kept = kept && world.Has<gameplay::TeamPathFollow>(units[index]);
+				}
+				else if (fighting[index])
+				{
+					++resumed;
+					BOOST_TEST_REQUIRE(world.Has<gameplay::TeamPathFollow>(units[index]));
+					const auto &order = *world.Get<gp::MoveOrder>(units[index]);
+					BOOST_TEST((order.mode == gp::MoveMode::Point));
+					BOOST_TEST((order.destination == world.Get<gameplay::TeamPathFollow>(units[index])->goal));
+				}
+				fighting[index] = now;
+			}
+			if (!aggressive && tick >= 900)
+				break;
+		}
+		BOOST_TEST(fought == aggressive);
+		if (aggressive)
+		{
+			BOOST_TEST(kept);
+			BOOST_TEST(resumed > 0);
+		}
+	};
+	run(false);
+	run(true);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -152,6 +152,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_losing_power_is_heard_once)
 	catalog.buildingReenabledSound = "BuildingPowerUp";
 	catalog.vehicleReenabledSound = "VehiclePowerUp";
 	world.EmplaceResource<SoundRequests>();
+	world.EmplaceResource<generalszh::gameplay::UnmannedNotices>();
 	const auto make = [&](std::uint32_t definition) {
 		const ecs::Entity entity = world.Create();
 		world.Add<gp::Transform>(entity);
@@ -202,6 +203,72 @@ BOOST_AUTO_TEST_CASE(legacy_parity_losing_power_is_heard_once)
 	BOOST_TEST(again[0] == "BuildingPowerDown");
 }
 
+// Object::setDisabledUntil(DISABLED_UNMANNED) (Object.cpp) on anything not a DRONE: MiscAudio's SplatterVehiclePilotsBrain
+// where it is, for each call (ActiveBody::attemptDamage's KILL_PILOT, NeutronBlastBehavior, a script's SET_UNMANNED), a
+// vehicle already unmanned set so again too (a second neutron shell over it); a drone left unmanned splatters nothing;
+// losing a pilot is not losing power (no BuildingDisabled / VehicleDisabled).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sniped_pilot_splatters_where_his_vehicle_is)
+{
+	namespace gp = engine::gameplay;
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Disabled>();
+	world.RegisterComponent<DisableHeard>();
+	world.FinalizeComponents();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(2);
+	catalog.known.assign(2, 1);
+	catalog.byDefinition[0].vehicle = true;
+	catalog.byDefinition[1].vehicle = true;
+	catalog.byDefinition[1].drone = true;
+	catalog.pilotSplatterSound = "VehicleSnipeVictim";
+	catalog.vehicleDisabledSound = "BuildingDisabled";
+	world.EmplaceResource<SoundRequests>();
+	auto &notices = world.EmplaceResource<generalszh::gameplay::UnmannedNotices>().list;
+	const auto make = [&](std::uint32_t definition, int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Transform>(entity);
+		world.Get<gp::Transform>(entity)->position = {Engine::Math::Fixed::FromInt(x), Engine::Math::Fixed::FromInt(5), Engine::Math::Fixed::FromInt(1)};
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		world.Add<gp::Disabled>(entity);
+		return entity;
+	};
+	const ecs::Entity tank = make(0, 40), drone = make(1, 80);
+	DisabledSoundSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 0;
+	auto &heard = world.Resource<SoundRequests>().pending;
+	const auto step = [&] {
+		heard.clear();
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		notices.clear(); // the simulation's, cleared as the next tick begins
+	};
+	step();
+	BOOST_TEST(heard.empty());
+	world.Get<gp::Disabled>(tank)->mask |= gp::disabled_type::Unmanned;
+	world.Get<gp::Disabled>(drone)->mask |= gp::disabled_type::Unmanned;
+	notices = {{tank, 0}, {drone, 1}};
+	step();
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "VehicleSnipeVictim");
+	BOOST_TEST(heard[0].at[0] == 40.0f);
+	BOOST_TEST(heard[0].at[1] == 5.0f);
+	BOOST_TEST(heard[0].at[2] == 1.0f);
+	BOOST_TEST(heard[0].positioned);
+	step();
+	BOOST_TEST(heard.empty()); // unmanned it stays; nothing set it so again
+	notices = {{tank, 0}}; // a second neutron shell over it: setDisabled(DISABLED_UNMANNED) again
+	step();
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "VehicleSnipeVictim");
+}
+
 // EMPUpdate::doDisableAttack on a victim (a 20 by 10 box, 12 high: 15 emitters at the default density): each of its
 // sparks rides on it (attachToObject), starts 1 to 100 frames on (setInitialDelay) and runs for the disable less 30
 // frames (900: 870, setSystemLifetime, past the shipped EMPSparks' own SystemLifetime 150): all still running 800
@@ -239,6 +306,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_emp_victims_crackle_for_their_disable)
 		return entity;
 	};
 	const ecs::Entity pulse = make(0), victim = make(1);
+	world.EmplaceResource<generalszh::gameplay::AbilityNotices>();
 	world.EmplaceResource<gp::EmpStrikes>().list.push_back({victim, pulse, 900});
 	EmpSparkSystem system;
 	ecs::SystemRegistry registry;

@@ -47,7 +47,7 @@ std::optional<ObjectTopple> ReadObjectTopple(const ObjectDefinition &object)
 			return node != nullptr ? std::string(node->Value()) : std::string{};
 		};
 		topple.flags = (yes("KillWhenStartToppling", false) ? flag::KillWhenStarting : 0u) | (yes("KillWhenFinishedToppling", true) ? flag::KillWhenDown : 0u) |
-			(yes("ToppleLeftOrRightOnly", false) ? flag::LeftOrRightOnly : 0u);
+			(yes("ToppleLeftOrRightOnly", false) ? flag::LeftOrRightOnly : 0u) | (yes("ReorientToppledRubble", false) ? flag::ReorientRubble : 0u);
 		topple.initialVelocity = share("InitialVelocityPercent", topple.initialVelocity);
 		topple.initialAcceleration = share("InitialAccelPercent", topple.initialAcceleration);
 		topple.bounceVelocity = share("BounceVelocityPercent", topple.bounceVelocity);

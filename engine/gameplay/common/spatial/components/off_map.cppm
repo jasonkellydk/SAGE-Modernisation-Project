@@ -11,6 +11,17 @@ export import engine.ecs.core.entity;
 // victims from where it rides, and its shots never run into that carrier.
 export namespace engine::gameplay
 {
+// Why it is off the map. A Stationed rider is the exception: held by a container that does not enclose it
+// (isEnclosingContainerFor false: a fire base), it stays in the world (OpenContain::addToContain leaves it in the
+// partition and drawn) at its station, so it is found and targeted there.
+namespace off_map_reason
+{
+inline constexpr std::uint8_t Contained = 1;
+inline constexpr std::uint8_t Mounted = 2;
+inline constexpr std::uint8_t Hijacking = 3;
+inline constexpr std::uint8_t Stationed = 4;
+}
+
 struct OffMap
 {
 	std::uint8_t reason{0};

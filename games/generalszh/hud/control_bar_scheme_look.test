@@ -1,0 +1,215 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.hud.control_bar_scheme_look;
+import games.generalszh.hud.control_bar_view_model;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+
+using namespace generalszh;
+
+namespace
+{
+const hud::SchemeWindowLook *Find(const std::vector<hud::SchemeWindowLook> &looks, std::string_view window)
+{
+	for (const hud::SchemeWindowLook &look : looks)
+		if (look.window == window)
+			return &look;
+	return nullptr;
+}
+
+// A scheme laid out at 800 x 600 with one sliding part: SLIDE_RIGHT from x 100 to 140 over 4 frames, on layer 1.
+content::ControlBarSchemeContent SlidingScheme()
+{
+	content::ControlBarSchemeContent scheme;
+	scheme.name = "Test";
+	scheme.side = "Test";
+	scheme.width = 800;
+	scheme.height = 600;
+	scheme.images.push_back({0, 450, 800, 150, "Backdrop", 5});
+	scheme.images.push_back({10, 460, 20, 20, "Front", 0});
+	scheme.images.push_back({100, 500, 10, 10, "Slider", 1});
+	content::SchemeAnimation slide;
+	slide.name = "Slide";
+	slide.type = content::SchemeAnimation::SlideRight;
+	slide.durationFrames = 4;
+	slide.finalX = 140;
+	slide.finalY = 500;
+	slide.image = 2;
+	slide.hasImage = true;
+	scheme.animations.push_back(slide);
+	return scheme;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(control_bar_scheme_look)
+
+// legacy_parity: ControlBarScheme.cpp animSlideRight, once per ControlBarScheme::update: from x 100 to FinalPos 140 over a
+// Duration of 4 frames the image is at 110, 120, 130, 140 on updates 1..4, back at 100 on update 5 (frame 0 again), then
+// 110 on update 6. Its y never changes. A Duration of 0 or no image: nothing moves.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_animating_part_slides_right_and_starts_over)
+{
+	const content::ControlBarSchemeContent scheme = SlidingScheme();
+	std::vector<hud::SchemeAnimationState> states = hud::StartSchemeAnimations(scheme);
+	BOOST_TEST_REQUIRE(states.size() == 1u);
+	BOOST_TEST(states[0].x == 100);
+	const std::vector<int> expected{110, 120, 130, 140, 100, 110};
+	for (const int x : expected)
+	{
+		hud::StepSchemeAnimations(scheme, states);
+		BOOST_TEST(states[0].x == x);
+		BOOST_TEST(states[0].y == 500);
+	}
+	content::ControlBarSchemeContent still = scheme;
+	still.animations[0].durationFrames = 0;
+	std::vector<hud::SchemeAnimationState> idle = hud::StartSchemeAnimations(still);
+	hud::StepSchemeAnimations(still, idle);
+	BOOST_TEST(idle[0].x == 100);
+}
+
+// legacy_parity: ControlBarScheme::drawBackground / drawForeground with the manager's multiplier (display / ScreenCreationRes)
+// and the markers' offset: layers 5..3 behind, 2..0 in front, each at position * multiplier + offset, truncated. At 1024 x
+// 768 (1.28 x 1.28) the backdrop (0, 450, 800 x 150) is (0, 576)-(1024, 768); in front the slider (layer 1) before the
+// front part (layer 0): the slider at its animated x 120 after two updates: (153, 640)-(166, 652); with an offset of
+// (5, -3) everything moves by it. A part without an image is not drawn. The view model steps once per 1/30 s.
+BOOST_AUTO_TEST_CASE(legacy_parity_scheme_art_is_drawn_by_layer_at_the_display_scale)
+{
+	content::ControlBarSchemes schemes;
+	schemes.schemes.push_back(SlidingScheme());
+	schemes.schemes.front().images.push_back({0, 0, 5, 5, "", 2});
+	hud::ControlBarSchemeLook look(schemes);
+	BOOST_TEST_REQUIRE(look.Select("Test") != nullptr);
+	const auto behind = look.Art(false, 1024, 768, 0, 0);
+	BOOST_TEST_REQUIRE(behind.size() == 1u);
+	BOOST_TEST((behind[0] == hud::SchemeArtQuad{"Backdrop", 0, 576, 1024, 768}));
+	look.Update(0.05); // one update (1/30 s), the rest kept
+	look.Update(0.02); // with it, the second
+	BOOST_TEST(look.States()[0].x == 120);
+	const auto front = look.Art(true, 1024, 768, 0, 0);
+	BOOST_TEST_REQUIRE(front.size() == 2u);
+	BOOST_TEST((front[0] == hud::SchemeArtQuad{"Slider", 153, 640, 166, 652}));
+	BOOST_TEST((front[1] == hud::SchemeArtQuad{"Front", 12, 588, 38, 614}));
+	const auto moved = look.Art(true, 1024, 768, 5, -3);
+	BOOST_TEST((moved[1] == hud::SchemeArtQuad{"Front", 17, 585, 43, 611}));
+}
+
+// legacy_parity: ControlBar::setCommandBarBorder with ControlBarScheme::init's updateCommanBarBorderColors: a command
+// button's border is its ButtonBorderType's colour (BUILD, UPGRADE, ACTION, SYSTEM); NONE or none: no border.
+BOOST_AUTO_TEST_CASE(legacy_parity_command_buttons_take_their_kinds_border_colour)
+{
+	hud::ControlBarViewModel bar([](commands::GameCommand) {}, [](std::int64_t) { return std::u16string{}; });
+	bar.SetBorderColors(0xFF5B92FFu, 0xFFD06C00u, 0xFF00DE01u, 0xFFFFF005u);
+	BOOST_TEST(bar.CommandBorderColor("BUILD") == 0xFF5B92FFu);
+	BOOST_TEST(bar.CommandBorderColor("UPGRADE") == 0xFFD06C00u);
+	BOOST_TEST(bar.CommandBorderColor("ACTION") == 0xFF00DE01u);
+	BOOST_TEST(bar.CommandBorderColor("SYSTEM") == 0xFFFFF005u);
+	BOOST_TEST(bar.CommandBorderColor("NONE") == 0u);
+	BOOST_TEST(bar.CommandBorderColor("") == 0u);
+
+	// ControlBar::updateSlotExitImage: the exit buttons' own art becomes the scheme's CommandMarkerImage; a slot showing its
+	// rider keeps the rider; other buttons keep theirs.
+	content::CommandButtonContent exit;
+	exit.name = "Command_TransportExit";
+	exit.buttonImage = "SSExitTransport";
+	content::CommandButtonContent stop;
+	stop.name = "Command_Stop";
+	stop.buttonImage = "SSStop";
+	hud::CommandSlot empty;
+	empty.button = &exit;
+	empty.image = "SSExitTransport";
+	hud::CommandSlot rider = empty;
+	rider.image = "SARanger";
+	hud::CommandSlot other;
+	other.button = &stop;
+	other.image = "SSStop";
+	BOOST_TEST(bar.ButtonArt(empty) == "SSExitTransport"); // no exit image yet
+	bar.SetSlotExitImage("SAEmptyFrame");
+	BOOST_TEST(bar.ButtonArt(empty) == "SAEmptyFrame");
+	BOOST_TEST(bar.ButtonArt(rider) == "SARanger");
+	BOOST_TEST(bar.ButtonArt(other) == "SSStop");
+}
+
+// legacy_parity: ControlBarSchemeManager::setControlBarSchemeByPlayer and ControlBarScheme::init over the installed
+// ControlBarScheme.ini (the Control Bar Pro HD schemes, laid out at 3840 x 2160): America's scheme for "America", the
+// Boss's for "Boss", Observer's for no side, "Default" for a side with none. On a 1920 x 1080 display (multiplier 0.5)
+// America's options button goes to (609, 925) sized 54 x 35 and its money to (894, 879) 132 x 25; on 800 x 600 (0.2083,
+// 0.2778, truncated) the options button to (253, 513) 22 x 19. Its buttons take the scheme's art (enabled, highlighted,
+// pushed, disabled); WinUAttack its UAttackButtonEnable and, disabled, UAttackButtonHightlited. Its colours read as
+// GameMakeColor(R, G, B, A). Its backdrop (layer 4) covers (0, 568)-(1920, 1080) behind the bar.
+BOOST_AUTO_TEST_CASE(legacy_parity_each_side_has_its_schemes_windows_and_art)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	content::MountInstall(files, install);
+	engine::config::Diagnostics grammarDiagnostics;
+	content::ContentLoader loader(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+	const content::ControlBarSchemes schemes =
+		content::BindControlBarSchemes(loader.Load({"Data/INI/Default/ControlBarScheme", "Data/INI/ControlBarScheme"}));
+	hud::ControlBarSchemeLook look(schemes);
+	const content::ControlBarSchemeContent *america = look.Select("America");
+	BOOST_TEST_REQUIRE(america != nullptr);
+	BOOST_TEST(america->name == "America8x6");
+	BOOST_TEST(america->width == 3840);
+	BOOST_TEST(look.Select("Boss")->name == "ChinaBossGeneral8x6");
+	BOOST_TEST(look.Select("")->name == "Observer8x6");
+	BOOST_TEST(look.Select("Nobody")->name == "Default");
+
+	const auto windows = hud::SchemeWindows(*america, 1920, 1080, {}, {});
+	const hud::SchemeWindowLook *options = Find(windows, "ControlBar.wnd:ButtonOptions");
+	BOOST_TEST_REQUIRE(options != nullptr);
+	BOOST_TEST(options->screenX == 609);
+	BOOST_TEST(options->screenY == 925);
+	BOOST_TEST(options->width == 54);
+	BOOST_TEST(options->height == 35);
+	BOOST_TEST(options->buttonImages);
+	BOOST_TEST(options->enabled == "AmericaProOptions");
+	BOOST_TEST(options->hilite == "AmericaProOptionsH");
+	BOOST_TEST(options->hiliteSelected == "AmericaProOptionsP");
+	BOOST_TEST(options->disabled == "AmericaProOptionsI");
+	const hud::SchemeWindowLook *money = Find(windows, "ControlBar.wnd:MoneyDisplay");
+	BOOST_TEST_REQUIRE(money != nullptr);
+	BOOST_TEST(money->screenX == 894);
+	BOOST_TEST(money->screenY == 879);
+	BOOST_TEST(money->width == 132);
+	BOOST_TEST(money->height == 25);
+	BOOST_TEST(!money->buttonImages);
+	const hud::SchemeWindowLook *attack = Find(windows, "ControlBar.wnd:WinUAttack");
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	BOOST_TEST(attack->cellImages);
+	BOOST_TEST(attack->enabled == "BlankTexture");
+	BOOST_TEST(attack->disabled == "AmericaProUAttackH");
+
+	const auto small = hud::SchemeWindows(*america, 800, 600, {}, {});
+	const hud::SchemeWindowLook *smallOptions = Find(small, "ControlBar.wnd:ButtonOptions");
+	BOOST_TEST_REQUIRE(smallOptions != nullptr);
+	BOOST_TEST(smallOptions->screenX == 253);
+	BOOST_TEST(smallOptions->screenY == 513);
+	BOOST_TEST(smallOptions->width == 22);
+	BOOST_TEST(smallOptions->height == 19);
+
+	BOOST_TEST(america->borderBuild == 0xFF5B92FFu);
+	BOOST_TEST(america->borderAction == 0xFF00DE01u);
+	BOOST_TEST(america->borderUpgrade == 0xFFD06C00u);
+	BOOST_TEST(america->borderSystem == 0xFFFFF005u);
+	BOOST_TEST(america->commandBarBorder == 0xFF2C8B65u);
+
+	look.Select("America");
+	const auto behind = look.Art(false, 1920, 1080, 0, 0);
+	BOOST_TEST_REQUIRE(behind.size() == 1u);
+	BOOST_TEST((behind[0] == hud::SchemeArtQuad{"AmericaProCommandBar", 0, 568, 1920, 1080}));
+	BOOST_TEST(look.Art(true, 1920, 1080, 0, 0).empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

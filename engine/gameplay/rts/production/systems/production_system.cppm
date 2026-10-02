@@ -10,10 +10,11 @@ export import engine.gameplay.rts.economy.resources.player_energy;
 export import engine.gameplay.common.identity.components.owner;
 export import engine.gameplay.common.status.components.disabled;
 
-// Factories build, in parallel per chunk: the front of each queue advances a
-// tick's work, less when its player is short of power (as the original:
-// down to the settings' least speed; a player with no power at all builds
-// at that least speed); when its build time is up and its factory's door
+// Factories build, in parallel per chunk: the front of each queue counts a
+// production update; it is done once that count reaches its build time as
+// its player's power stands this update (calcTimeToBuild: stretched when
+// short, down to the settings' least speed; a player with no power at all
+// builds at that least speed); when its build time is up and its factory's door
 // is open (see ProductionDoors) it is done (reported, per chunk, for the
 // game to bring the units out through the factory's exit) and the next one
 // starts. Nothing is spent here: units are paid for when queued.
@@ -113,13 +114,17 @@ struct ProductionSystem
 			if (doors != nullptr)
 				UpdateDoors(*doors, tick);
 			ProductionQueue &queue = queues[row];
-			if (queue.count == 0)
+			if (queue.count == 0 || (queue.spentTick != 0 && queue.spentTick == tick))
 				continue;
 			ProductionEntry &front = queue.entries[0];
 			// Research takes its time whatever the power (UpgradeTemplate::calcTimeToBuild) and comes out of no door.
 			const bool research = front.kind == ProductionKind::Upgrade;
-			front.progress += owners.empty() || research ? Engine::Math::Fixed::One() : settings.ProductionSpeed(energy.SupplyRatio(owners[row].player));
-			if (front.progress < Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(front.ticksTotal)))
+			// ProductionUpdate::update: m_framesUnderConstruction++, then done once at least calcTimeToBuild (a unit's
+			// stretched by its player's power as it stands this update).
+			++front.frames;
+			front.ticksNow = owners.empty() || research ? front.ticksTotal
+				: EnergySettings::FramesAtSpeed(front.ticksTotal, settings.ProductionSpeed(energy.SupplyRatio(owners[row].player)));
+			if (front.frames < front.ticksNow)
 				continue;
 			if (!research && doors != nullptr && !ThroughDoor(*doors, tick))
 				continue; // waiting for the door to open

@@ -1,0 +1,132 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.presentation.objects.systems.wave_guide_effect_system;
+import games.generalszh.presentation.objects.algorithms.wave_sprays;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import engine.effects.particles.simulation.particle_world;
+import Engine.Core.Math.FixedPresentation;
+
+// A flood wave's particle systems (WaveGuideUpdate, GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/
+// WaveGuideUpdate.cpp: initWaveGuide, doShapeEffects, doShoreEffects, doDamage).
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+
+BOOST_AUTO_TEST_SUITE(wave_guide_effects)
+
+// initWaveGuide: for each of the shipped front's 44 points WaveSpray01 then WaveSpray02 at the point in the wave's frame,
+// and WaveSpray03 at every fifth (points 0, 5, ..., 40: 9 of them): 97 systems. doShapeEffects: a spray's local height
+// becomes the ground under it when that is below PreferredHeight, else it stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_sprays_layout)
+{
+	const auto sprays = WaveSprayLayout(generalszh::gameplay::WaveShapePoints(Fixed::FromInt(650), Fixed::FromInt(15), Fixed::FromInt(500)));
+	BOOST_TEST(sprays.size() == 97u);
+	BOOST_TEST(sprays[0].system == "WaveSpray01");
+	BOOST_TEST(sprays[1].system == "WaveSpray02");
+	BOOST_TEST(sprays[2].system == "WaveSpray03");
+	BOOST_TEST(sprays[3].system == "WaveSpray01");
+	BOOST_TEST(sprays[0].local[0] == -211.25f);
+	BOOST_TEST(sprays[0].local[1] == -325.0f);
+	BOOST_TEST(sprays[0].local[2] == 0.0f);
+	BOOST_TEST(std::count_if(sprays.begin(), sprays.end(), [](const WaveSpray &spray) { return spray.system == "WaveSpray03"; }) == 9);
+	BOOST_TEST(SprayHeight(0.0f, 20.0f, 37.3f) == 20.0f);
+	BOOST_TEST(SprayHeight(20.0f, 50.0f, 37.3f) == 20.0f);
+	BOOST_TEST(SprayHeight(0.0f, 37.3f, 37.3f) == 0.0f);
+	const auto placed = WavePlace({100.0f, 200.0f, 10.0f}, 1.5707963f, {-1.0f, 5.0f, 3.0f});
+	BOOST_TEST(std::abs(placed[0] - 95.0f) < 1e-4f);
+	BOOST_TEST(std::abs(placed[1] - 199.0f) < 1e-4f);
+	BOOST_TEST(placed[2] == 13.0f);
+}
+
+// The effects on a wave set off at (1000, 1000, 10) facing east over ground 20 south of y 1000 and 50 from it
+// (PreferredHeight 37.3; no WaveSpray03 or WaveSplash01 ships): its 88 sprays start riding on it, those over the low
+// ground (the 22 points south of it) at 10 + 20, the rest at the wave's own 10. The tick's cues play once however many
+// frames show the tick: WaveSplashLeft01 and WaveSplashRight01 at their points, WaveHit01 riding on the wave at (-0.2,
+// -10) in its frame at the victim's height 5 (999.8, 990, 15), the wave's BridgeParticle; WaveSplash01 nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_wave_effects_ride_and_splash)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<generalszh::gameplay::WaveGuide>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<WaveGuideEffects>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>(); // WaveGuideEffectSystem's shroud lookups
+	world.FinalizeComponents();
+	EffectsContent effects;
+	for (const std::string_view name : {"WaveSpray01", "WaveSpray02", "WaveSplashLeft01", "WaveSplashRight01", "WaveHit01", "WaveHitBridge01"})
+	{
+		auto &system = effects.particles.Define(std::string(name));
+		system.burstCount = {1, 1};
+		system.systemLifetime = 1;
+		system.lifetime = {100, 100};
+		system.size = {1, 1};
+		system.shader = engine::effects::ParticleShader::Alpha;
+		system.alpha[0] = {{1, 1}, 0};
+	}
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	world.EmplaceResource<ParticleWorldHandle>() = ParticleWorldHandle{&particles, &effects};
+	world.EmplaceResource<TerrainHeightHandle>().at = [](float, float y) { return y < 1000.0f ? 20.0f : 50.0f; };
+	auto &frame = world.EmplaceResource<PresentationFrame>();
+	auto &cues = world.EmplaceResource<generalszh::gameplay::WaveGuideCues>();
+	world.EmplaceResource<WaveGuideCuesPlayed>();
+	auto &catalog = world.EmplaceResource<LookCatalog>();
+	catalog.byDefinition.resize(1);
+	catalog.known.assign(1, 1);
+	catalog.byDefinition[0].waveBridgeParticle = "WaveHitBridge01";
+	const ecs::Entity wave = world.Create();
+	world.Add<generalszh::gameplay::WaveGuide>(wave);
+	world.Add<engine::gameplay::Transform>(wave);
+	auto &guide = *world.Get<generalszh::gameplay::WaveGuide>(wave);
+	guide.ySize = Fixed::FromInt(650);
+	guide.spacing = Fixed::FromInt(15);
+	guide.bend = Fixed::FromInt(500);
+	guide.preferredHeight = *Fixed::ParseDecimal("37.3");
+	guide.initialized = 1;
+	world.Get<engine::gameplay::Transform>(wave)->position = {Fixed::FromInt(1000), Fixed::FromInt(1000), Fixed::FromInt(10)};
+	WaveGuideEffectSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t frames = 0;
+	const auto show = [&] { scheduler.Execute(engine::time::SimulationTime{++frames, engine::time::FixedStep{30}}); };
+	show();
+	BOOST_TEST(particles.SystemCount() == 88u);
+	particles.Step();
+	BOOST_TEST_REQUIRE(particles.ParticleCount() == 88u);
+	const auto at = [&](float z) { return std::count_if(particles.Z().begin(), particles.Z().end(), [&](float each) { return std::abs(each - z) < 1e-3f; }); };
+	BOOST_TEST(at(30.0f) == 44);
+	BOOST_TEST(at(10.0f) == 44);
+	frame.tick = 1;
+	const Engine::Math::FixedVector3 shore{Fixed::FromInt(995), Fixed::FromInt(1100), Fixed::FromInt(10)};
+	cues.list.push_back({generalszh::gameplay::WaveGuideCue::Kind::ShoreLeft, wave, 0, shore});
+	cues.list.push_back({generalszh::gameplay::WaveGuideCue::Kind::ShoreRight, wave, 0, shore});
+	generalszh::gameplay::WaveGuideCue hit{generalszh::gameplay::WaveGuideCue::Kind::Hit, wave, 0, world.Get<engine::gameplay::Transform>(wave)->position};
+	hit.local = {Fixed::FromInt(-100) / Fixed::FromInt(500), Fixed::FromInt(-10), Fixed::FromInt(5)};
+	cues.list.push_back(hit);
+	cues.list.push_back({generalszh::gameplay::WaveGuideCue::Kind::Bridge, wave, 0, shore});
+	cues.list.push_back({generalszh::gameplay::WaveGuideCue::Kind::End, wave, 0, shore});
+	show();
+	BOOST_TEST(particles.SystemCount() == 92u);
+	show();
+	BOOST_TEST(particles.SystemCount() == 92u);
+	BOOST_TEST(world.Side<WaveGuideEffects>().Get(wave)->systems.size() == 89u);
+	particles.Step();
+	BOOST_TEST_REQUIRE(particles.ParticleCount() == 92u);
+	bool found = false;
+	for (std::size_t index = 0; index < particles.ParticleCount(); ++index)
+		found = found || (std::abs(particles.X()[index] - 999.8f) < 1e-3f && std::abs(particles.Y()[index] - 990.0f) < 1e-3f &&
+							 std::abs(particles.Z()[index] - 15.0f) < 1e-3f);
+	BOOST_TEST(found);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

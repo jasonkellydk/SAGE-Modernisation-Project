@@ -1,0 +1,228 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
+
+import games.generalszh.presentation.objects.systems.bridge_look_system;
+import games.generalszh.presentation.objects.algorithms.bridge_geometry;
+import engine.ecs.core.world;
+import engine.ecs.scheduler.scheduler;
+import engine.jobs.job_system;
+import engine.time.simulation_time;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+
+namespace
+{
+// A box of a mesh from x0 to x1, y -5 to 5, z 0 to 2 (eight corners, normals straight up, two triangles).
+BridgeMesh Box(float x0, float x1)
+{
+	BridgeMesh mesh;
+	for (const float z : {0.0f, 2.0f})
+		for (const float y : {-5.0f, 5.0f})
+			for (const float x : {x0, x1})
+			{
+				mesh.positions.push_back({x, y, z});
+				mesh.normals.push_back({0.0f, 0.0f, 1.0f});
+				mesh.uvs.push_back({x, y});
+			}
+	mesh.triangles = {{0, 1, 2}, {1, 3, 2}};
+	return mesh;
+}
+
+// The vertices' least and greatest x.
+std::array<float, 2> SpanX(const BridgeGeometry &geometry)
+{
+	std::array<float, 2> span{1e9f, -1e9f};
+	for (const BridgeVertex &vertex : geometry.vertices)
+	{
+		span[0] = (std::min)(span[0], vertex.position[0]);
+		span[1] = (std::max)(span[1], vertex.position[0]);
+	}
+	return span;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(bridge_looks)
+
+// W3DBridge::load and getIndicesNVertices / getModelVertices on a sectional model: BRIDGE_LEFT from x -10 to 0, BRIDGE_SPAN
+// 0 to 20, BRIDGE_RIGHT 20 to 30 (its length 40, the span 20). A bridge 100 long lays floor((100 - 20 + 10) / 20) = 4
+// spans and is exactly as long as its model then (40 + 3 * 20): the left end starts at the bridge's start, the spans
+// at 10, 30, 50 and 70 along, the right end ends at its end; across it is the model's y times BridgeScale (0.5), up its
+// z times the scale. One 95 long lays 4 spans too, all squeezed by 95 / 100. Indices follow each piece's vertices.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_sectional_bridge_lays_its_spans)
+{
+	BridgeModel model;
+	model.loaded = true;
+	model.left = Box(-10.0f, 0.0f);
+	model.span = Box(0.0f, 20.0f);
+	model.right = Box(20.0f, 30.0f);
+	const BridgeShape shape = MeasureBridge(model);
+	BOOST_TEST(shape.sectional);
+	BOOST_TEST(shape.length == 40.0f);
+	BOOST_TEST(shape.minY == -5.0f);
+	BOOST_TEST(shape.maxY == 5.0f);
+	BOOST_TEST(BridgeSpans(shape, {0, 0, 0}, {100, 0, 0}) == 4);
+	BOOST_TEST(BridgeSpans(shape, {0, 0, 0}, {95, 0, 0}) == 4);
+	BOOST_TEST(BridgeSpans(shape, {0, 0, 0}, {69, 0, 0}) == 2);  // floor((69 - 20 + 10) / 20)
+	BOOST_TEST(BridgeSpans(shape, {0, 0, 0}, {10, 0, 0}) == 0);  // floor((10 - 20 + 10) / 20): none
+	BridgeLighting lighting;
+	lighting.ambient = {1, 1, 1};
+	BridgeGeometry geometry;
+	BuildBridgeGeometry(model, shape, 0.5f, {0, 0, 0}, {100, 0, 0}, lighting, geometry);
+	BOOST_TEST_REQUIRE(geometry.vertices.size() == 8u * 6u); // left, 4 spans, right
+	BOOST_TEST(geometry.indices.size() == 6u * 6u);
+	BOOST_TEST(geometry.indices[6] == 8u); // the first span's first triangle, after the left end's vertices
+	BOOST_TEST(geometry.vertices[0].position[0] == 0.0f);   // left end, x -10
+	BOOST_TEST(geometry.vertices[1].position[0] == 10.0f);  // left end, x 0
+	BOOST_TEST(geometry.vertices[8].position[0] == 10.0f);  // first span, x 0
+	BOOST_TEST(geometry.vertices[32].position[0] == 70.0f); // fourth span, x 0
+	BOOST_TEST(geometry.vertices[41].position[0] == 100.0f); // right end, x 30
+	BOOST_TEST(geometry.vertices[0].position[1] == -2.5f);
+	BOOST_TEST(geometry.vertices[2].position[1] == 2.5f);
+	BOOST_TEST(geometry.vertices[4].position[2] == 1.0f);
+	BOOST_TEST(geometry.vertices[0].uv[0] == -10.0f);
+	BOOST_TEST(geometry.vertices[0].color == 0xFFFFFFFFu);
+	BridgeGeometry shorter;
+	BuildBridgeGeometry(model, shape, 0.5f, {0, 0, 0}, {95, 0, 0}, lighting, shorter);
+	BOOST_TEST(shorter.vertices.size() == 48u);
+	const auto span = SpanX(shorter);
+	BOOST_TEST(span[0] == 0.0f);
+	BOOST_TEST(span[1] == 95.0f, boost::test_tools::tolerance(1e-4f)); // float: 100 x (95 / 100)
+	BOOST_TEST(shorter.vertices[8].position[0] == 9.5f, boost::test_tools::tolerance(1e-5f));
+}
+
+// W3DBridge::load / getModelVerticesFixed: a model without BRIDGE_SPAN is fixed, its sections' extents all BRIDGE_LEFT's
+// right end, and its BRIDGE_LEFT (x -10 to 30, length 40) stretched from the bridge's start to its end whatever its
+// length; a rise of 30 over 40 along x tips its up to (-0.6, 0, 0.8) times the scale. A model whose sections overlap
+// (BRIDGE_LEFT ends at 5, BRIDGE_SPAN starts at 0: beyond 5% of its length 40) is fixed too: one span, the bridge the
+// model's length stretched to its own.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fixed_bridge_stretches_its_left_end)
+{
+	BridgeModel model;
+	model.loaded = true;
+	model.left = Box(-10.0f, 30.0f);
+	const BridgeShape shape = MeasureBridge(model);
+	BOOST_TEST(!shape.sectional);
+	BOOST_TEST(shape.sectionMinX == 30.0f);
+	BOOST_TEST(shape.rightMaxX == 30.0f);
+	BOOST_TEST(shape.length == 40.0f);
+	BridgeLighting lighting;
+	BridgeGeometry geometry;
+	BuildBridgeGeometry(model, shape, 1.0f, {0, 0, 0}, {40, 0, 30}, lighting, geometry);
+	BOOST_TEST_REQUIRE(geometry.vertices.size() == 8u);
+	BOOST_TEST(geometry.vertices[0].position[0] == 0.0f);
+	BOOST_TEST(geometry.vertices[1].position[0] == 40.0f);
+	BOOST_TEST(geometry.vertices[1].position[2] == 30.0f);
+	// The top corner at x -10 (z 2): up (-0.6, 0, 0.8) x 2 (float sqrt: within 1e-5).
+	BOOST_TEST(geometry.vertices[4].position[0] == -1.2f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(geometry.vertices[4].position[2] == 1.6f, boost::test_tools::tolerance(1e-5f));
+
+	BridgeModel misaligned;
+	misaligned.loaded = true;
+	misaligned.left = Box(-10.0f, 5.0f);
+	misaligned.span = Box(0.0f, 20.0f);
+	misaligned.right = Box(20.0f, 30.0f);
+	const BridgeShape crooked = MeasureBridge(misaligned);
+	BOOST_TEST(!crooked.sectional);
+	BOOST_TEST(BridgeSpans(crooked, {0, 0, 0}, {200, 0, 0}) == 1);
+	BridgeGeometry laid;
+	BuildBridgeGeometry(misaligned, crooked, 1.0f, {0, 0, 0}, {200, 0, 0}, lighting, laid);
+	BOOST_TEST(laid.vertices.size() == 24u); // left, one span, right
+	const auto span = SpanX(laid);
+	BOOST_TEST(span[0] == 0.0f);
+	BOOST_TEST(span[1] == 200.0f); // squeezed to the model's length (40), stretched to the bridge's
+}
+
+// BaseHeightMapRenderObjClass::computeVertexLighting (no dynamic lights): ambient 0.2 plus a light straight down
+// (diffuse 0.5, 0.4, 0.3) on a normal straight up: 0.7, 0.6, 0.5 x 255 truncated (178, 153, 127), opaque; facing away
+// from the light only the ambient (51).
+BOOST_AUTO_TEST_CASE(legacy_parity_bridge_vertices_are_lit_as_terrain)
+{
+	BridgeLighting lighting;
+	lighting.ambient = {0.2f, 0.2f, 0.2f};
+	lighting.lights[0] = {{0.0f, 0.0f, -1.0f}, {0.5f, 0.4f, 0.3f}};
+	lighting.count = 1;
+	BOOST_TEST(BridgeVertexLighting(lighting, {0.0f, 0.0f, 1.0f}) == 0xFFB2997Fu);
+	BOOST_TEST(BridgeVertexLighting(lighting, {0.0f, 0.0f, -1.0f}) == 0xFF333333u);
+}
+
+// W3DBridgeBuffer::addBridge / drawBridges on the bridges the terrain logic holds: a map-drawn bridge shows its pristine
+// model; landmark bridges are not the buffer's. When its recorded damage state changes it loads the new state's model;
+// a state whose model cannot load (here RUBBLE) puts back the model of the state it showed (REALLYDAMAGED's), though it
+// now counts as showing the new one; from there a change to DAMAGED loads DAMAGED's. The views' version moves on only
+// when what is drawn changes.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_bridge_shows_its_damage_state_model)
+{
+	BridgeKind kind;
+	kind.scale = 0.85f;
+	for (std::size_t state = 0; state < 3; ++state)
+	{
+		kind.states[state].loaded = true;
+		kind.states[state].left = Box(-10.0f, 30.0f);
+	}
+	BOOST_TEST(BridgeModelAfterChange(kind, 0, 3) == 0);
+	BOOST_TEST(BridgeModelAfterChange(kind, 2, 1) == 1);
+	BridgeKind none;
+	BOOST_TEST(BridgeModelAfterChange(none, 0, 1) == NoBridgeModel);
+
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gameplay::Bridge>();
+	world.RegisterComponent<BridgeLook>();
+	world.FinalizeComponents();
+	world.EmplaceResource<BridgeArt>().kinds.push_back(kind);
+	BridgeViews &views = world.EmplaceResource<BridgeViews>();
+	const ecs::Entity mapBridge = world.Create();
+	world.Add<gameplay::Bridge>(mapBridge);
+	gameplay::Bridge &bridge = *world.Get<gameplay::Bridge>(mapBridge);
+	bridge.bridgeTemplate = 0;
+	bridge.from = {Fixed::FromInt(100), Fixed::FromInt(50), Fixed::FromRatio(1, 4)};
+	bridge.to = {Fixed::FromInt(300), Fixed::FromInt(50), Fixed::FromRatio(1, 4)};
+	const ecs::Entity landmark = world.Create();
+	world.Add<gameplay::Bridge>(landmark);
+	world.Get<gameplay::Bridge>(landmark)->landmark = 1;
+	world.Get<gameplay::Bridge>(landmark)->bridgeTemplate = 0;
+	BridgeLookSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t serial = 0;
+	const auto run = [&] { scheduler.Execute(engine::time::SimulationTime{++serial, engine::time::FixedStep{30}}); };
+	const auto state = [&](std::uint8_t damage) { world.Get<gameplay::Bridge>(mapBridge)->curDamageState = damage; };
+
+	run();
+	BOOST_TEST_REQUIRE(views.bridges.size() == 1u);
+	BOOST_TEST(views.bridges[0].model == 0);
+	BOOST_TEST(views.bridges[0].from[0] == 100.0f);
+	BOOST_TEST(views.bridges[0].to[2] == 0.25f);
+	BOOST_TEST(views.bridges[0].scale == 0.85f);
+	BOOST_TEST(views.version == 1u);
+	BOOST_TEST(world.Side<BridgeLook>().Get(mapBridge) != nullptr);
+	BOOST_TEST(world.Side<BridgeLook>().Get(landmark) == nullptr);
+	run();
+	BOOST_TEST(views.version == 1u); // nothing changed: nothing rebuilt
+
+	state(gameplay::body_state::ReallyDamaged);
+	run();
+	BOOST_TEST(views.bridges[0].model == 2);
+	BOOST_TEST(views.version == 2u);
+	state(gameplay::body_state::Rubble);
+	run();
+	BOOST_TEST(views.bridges[0].model == 2); // RUBBLE's cannot load: REALLYDAMAGED's back
+	BOOST_TEST(world.Side<BridgeLook>().Get(mapBridge)->shown == gameplay::body_state::Rubble);
+	BOOST_TEST(views.version == 2u);
+	state(gameplay::body_state::Damaged);
+	run();
+	BOOST_TEST(views.bridges[0].model == 1);
+	BOOST_TEST(views.version == 3u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

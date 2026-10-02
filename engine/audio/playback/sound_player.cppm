@@ -32,8 +32,8 @@ public:
 	virtual ~SoundLibrary() = default;
 	// A sound of a list ("vgenlo2a"): decoded once and shared; null if missing.
 	virtual std::shared_ptr<const PcmBuffer> Sound(std::string_view name) = 0;
-	// A file to stream (music, speech); null if missing.
-	virtual std::shared_ptr<StreamFeed> Stream(std::string_view filename) = 0;
+	// A file to stream (music on the Music bus, speech otherwise: the game picks the folder by it); null if missing.
+	virtual std::shared_ptr<StreamFeed> Stream(std::string_view filename, Bus bus) = 0;
 };
 
 // How many flat (2D) and world (3D) sounds may play at once; streams (music, speech) apart. 0: no limit.
@@ -43,10 +43,39 @@ struct SampleLimits
 	std::uint32_t positional{0};
 };
 
+// The original's culling of quiet sounds and its Global sounds' range (AudioSettings MinSampleVolume, GlobalMinRange,
+// GlobalMaxRange). A global max range of 0: Global sounds keep their own minimum range and are heard at any distance.
+struct CullSettings
+{
+	float minSampleVolume{0.0f};
+	float globalMinRange{0.0f};
+	float globalMaxRange{0.0f};
+};
+
+// MilesAudioManager::getEffectiveVolume's distance scale: 1 within the minimum range, min / distance beyond it
+// (0 for a minimum range of 0), nothing from the maximum range on.
+inline float EffectiveDistanceScale(float distance, float minRange, float maxRange) noexcept
+{
+	float scale = 1.0f;
+	if (distance > minRange)
+		scale = minRange > 0.0f ? minRange / distance : 0.0f;
+	if (distance >= maxRange)
+		scale = 0.0f;
+	return scale;
+}
+
 class SoundPlayer
 {
 public:
 	void SetSampleLimits(SampleLimits limits) noexcept { m_limits = limits; }
+	void SetCullSettings(CullSettings cull) noexcept { m_cull = cull; }
+	// Where the microphone is (AudioManager::setListenerPosition): world sounds out of their range are not started and
+	// world sounds too quiet there are culled (CullQuiet). Until it is first set nothing is culled for distance.
+	void SetListenerPosition(Vec3 position) noexcept
+	{
+		m_listener = position;
+		m_listenerPlaced = true;
+	}
 
 	SoundPlayer(Mixer &mixer, SoundLibrary &library, std::uint64_t seed = 0x50D) : m_mixer(mixer), m_library(library), m_random(seed) {}
 
@@ -55,6 +84,14 @@ public:
 	// does not play (unknown files, too quiet, over its limit).
 	SoundHandle Play(const SoundEventDefinition &sound, std::optional<Vec3> position = std::nullopt, std::optional<float> volume = std::nullopt)
 	{
+		// AudioManager::addAudioEvent: an event whose volume (a script's override, else its own) is below
+		// MinSampleVolume is culled as muted.
+		if ((volume ? *volume : sound.volume) < m_cull.minSampleVolume)
+			return 0;
+		// SoundManager::canPlayNow: a world sound at or beyond its maximum range from the microphone does not start,
+		// unless it is Global or Critical.
+		if (sound.Positional() && position && m_listenerPlaced && !Unculled(sound) && Distance(*position) >= sound.maxRange)
+			return 0;
 		auto &playing = m_byName[sound.name];
 		std::erase_if(playing, [&](SoundHandle handle) { return !m_instances.contains(handle); });
 		if (sound.limit != 0 && playing.size() >= sound.limit)
@@ -73,7 +110,9 @@ public:
 		instance.position = position;
 		instance.streamed = streamed;
 		instance.positional = positional;
-		instance.volume = (volume ? *volume : sound.volume) * (1.0f - Uniform(0.0f, sound.volumeShift));
+		// AudioEventRTS::generatePlayInfo: the volume shift is GameAudioRandomValueReal(1 + VolumeShift, 1) (VolumeShift is
+		// negative, e.g. -10%: a factor between 0.9 and 1); a low end not below 1 gives the high end, 1.
+		instance.volume = (volume ? *volume : sound.volume) * VolumeShiftFactor(sound.volumeShift);
 		if (instance.volume <= 0.0f || instance.volume < sound.minVolume)
 			return 0;
 		instance.loopsLeft = sound.loopCount;
@@ -106,6 +145,17 @@ public:
 		m_instances.erase(found);
 	}
 
+	// StopAll but for `keep` (sounds whose owner outlives what stops the rest).
+	void StopAllExcept(std::span<const SoundHandle> keep)
+	{
+		std::vector<SoundHandle> stopping;
+		for (const auto &[handle, instance] : m_instances)
+			if (std::ranges::find(keep, handle) == keep.end())
+				stopping.push_back(handle);
+		for (const SoundHandle handle : stopping)
+			Stop(handle, false);
+	}
+
 	void StopAll()
 	{
 		m_mixer.StopAll();
@@ -123,6 +173,48 @@ public:
 		found->second.position = position;
 		if (found->second.voice != 0)
 			m_mixer.SetPosition(found->second.voice, position);
+	}
+
+	// Stops a sound now, fading it out linearly over `mixerFrames` of output (MilesAudioManager::processFadingList: the
+	// music faded over TimeToFadeAudio); it no longer counts as playing.
+	void FadeOut(SoundHandle handle, std::uint32_t mixerFrames)
+	{
+		const auto found = m_instances.find(handle);
+		if (found == m_instances.end())
+			return;
+		if (found->second.voice != 0)
+		{
+			m_mixer.Stop(found->second.voice, std::max<std::uint32_t>(mixerFrames, 1));
+			m_voiceOwner.erase(found->second.voice);
+		}
+		m_instances.erase(found);
+	}
+
+	// MilesAudioManager::processPlayingList, each frame: a world sound playing at a position whose effective volume at
+	// the microphone (its volume and shift, times `positionalLevel`, times EffectiveDistanceScale) over the flat
+	// sounds' level (`flatLevel`; the original divides by the 2D level whenever the 3D one is above 0) is below
+	// MinSampleVolume is stopped at once, unless it is Global or Critical. Nothing before the listener is placed.
+	void CullQuiet(float positionalLevel, float flatLevel)
+	{
+		if (!m_listenerPlaced)
+			return;
+		std::vector<SoundHandle> quiet;
+		for (const auto &[handle, instance] : m_instances)
+		{
+			if (!instance.positional || !instance.position || Unculled(*instance.definition))
+				continue;
+			const SoundEventDefinition &sound = *instance.definition;
+			float volume = instance.volume * positionalLevel * EffectiveDistanceScale(Distance(*instance.position), sound.minRange, sound.maxRange);
+			const float divisor = positionalLevel > 0.0f ? flatLevel : 1.0f;
+			if (divisor <= 0.0f)
+				continue; // x / 0: never below
+			volume /= divisor;
+			if (volume < m_cull.minSampleVolume)
+				quiet.push_back(handle);
+		}
+		std::ranges::sort(quiet);
+		for (const SoundHandle handle : quiet)
+			Stop(handle, false);
 	}
 
 	// Every playing instance of the event `name` at `volume` from now.
@@ -252,6 +344,24 @@ private:
 		return true;
 	}
 
+	// Global and Critical sounds are never culled for distance or quietness.
+	static bool Unculled(const SoundEventDefinition &sound) noexcept
+	{
+		return (sound.type & sound_type::Global) != 0 || sound.priority == SoundPriority::Critical;
+	}
+
+	float Distance(Vec3 position) const noexcept
+	{
+		const float dx = m_listener.x - position.x, dy = m_listener.y - position.y, dz = m_listener.z - position.z;
+		return std::sqrt(dx * dx + dy * dy + dz * dz);
+	}
+
+	float VolumeShiftFactor(float volumeShift)
+	{
+		const float low = 1.0f + volumeShift;
+		return low >= 1.0f ? 1.0f : Uniform(low, 1.0f);
+	}
+
 	float Uniform(float low, float high)
 	{
 		if (high <= low)
@@ -299,13 +409,24 @@ private:
 		if (start.positional)
 			start.position = *instance.position;
 		start.minRange = sound.minRange;
-		start.maxRange = (sound.type & sound_type::Global) != 0 ? 1.0e9f : sound.maxRange;
+		start.maxRange = sound.maxRange;
+		if ((sound.type & sound_type::Global) != 0)
+		{
+			// MilesAudioManager::playSample3D: Global sounds take AudioSettings' global ranges.
+			if (m_cull.globalMaxRange > 0.0f)
+			{
+				start.minRange = m_cull.globalMinRange;
+				start.maxRange = m_cull.globalMaxRange;
+			}
+			else
+				start.maxRange = 1.0e9f;
+		}
 		if (withDelay && sound.delayMaxMs > 0)
 			start.delayFrames = static_cast<std::uint32_t>(Uniform(static_cast<float>(sound.delayMinMs), static_cast<float>(sound.delayMaxMs)) *
 				static_cast<float>(m_mixer.SampleRate()) / 1000.0f);
 		if (!sound.filename.empty() && instance.phase == Phase::Body)
 		{
-			std::shared_ptr<StreamFeed> feed = m_library.Stream(sound.filename);
+			std::shared_ptr<StreamFeed> feed = m_library.Stream(sound.filename, sound.bus);
 			if (feed == nullptr)
 				return false;
 			feed->Pump();
@@ -363,6 +484,9 @@ private:
 	Mixer &m_mixer;
 	SoundLibrary &m_library;
 	SampleLimits m_limits;
+	CullSettings m_cull;
+	Vec3 m_listener;
+	bool m_listenerPlaced{false};
 	std::mt19937_64 m_random;
 	SoundHandle m_nextHandle{0};
 	std::unordered_map<SoundHandle, Instance> m_instances;

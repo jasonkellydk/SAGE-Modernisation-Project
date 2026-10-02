@@ -6,6 +6,7 @@ import Graphics.Renderer2D;
 import Assets.Cache;
 import Assets.Runtime;
 import games.generalszh.hosts.game.game_client;
+import games.generalszh.presentation.hud.algorithms.in_game_ui_layout;
 export import games.generalszh.content.global.language_fonts;
 
 // Draws the named timers (InGameUI::postDraw): from their position (a share of the screen) each line one up from the
@@ -28,9 +29,11 @@ public:
 		if (!m_normal || !m_ready || lines.empty())
 			return true;
 		m_list.Clear();
-		const bool fromRight = at[0] >= 0.5f;
-		const float x = std::floor(at[0] * width);
-		float y = std::floor(at[1] * height);
+		// InGameUI::postDraw: NamedTimerCountdownPosition's share of the display, cut to whole pixels; from the right at 0.5 on.
+		const presentation::NamedTimerStart start = presentation::NamedTimerOrigin(at[0], at[1], static_cast<int>(width), static_cast<int>(height));
+		const bool fromRight = start.fromRight;
+		const float x = static_cast<float>(start.x);
+		float y = static_cast<float>(start.y);
 		for (const InGameOverlay::NamedTimerLine &line : lines)
 		{
 			const Engine::UI::WND::FontFace &font = line.ready ? *m_ready : *m_normal;

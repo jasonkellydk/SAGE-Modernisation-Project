@@ -16,9 +16,14 @@ import games.generalszh.gameplay.appearance.systems.steering_look_system;
 import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.common.appearance.components.debris_look;
 import engine.gameplay.common.appearance.components.draw_offset;
+import engine.gameplay.common.appearance.components.draw_hidden;
+import engine.gameplay.common.appearance.components.occlusion_safe;
 import engine.gameplay.common.appearance.components.indicator_color;
 import engine.gameplay.common.appearance.components.model_override;
 import engine.gameplay.common.appearance.components.part_overrides;
+import engine.gameplay.common.appearance.components.special_model_state;
+import engine.gameplay.common.appearance.systems.special_model_state_system;
+import engine.gameplay.rts.containment.systems.garrison_station_system;
 import games.generalszh.gameplay.appearance.components.building_extensions;
 import games.generalszh.gameplay.appearance.components.steering_look;
 
@@ -41,9 +46,12 @@ inline void RegisterAppearanceComponents(ecs::World &world)
 	world.RegisterComponent<generalszh::gameplay::ControlRods>();
 	world.RegisterComponent<engine::gameplay::Appearance>();
 	world.RegisterComponent<engine::gameplay::DrawOffset>();
+	world.RegisterComponent<engine::gameplay::DrawHidden>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
 	world.RegisterComponent<engine::gameplay::ModelOverride>();
 	world.RegisterComponent<engine::gameplay::DebrisLook>();
 	world.RegisterComponent<engine::gameplay::PartOverrides>();
+	world.RegisterComponent<engine::gameplay::SpecialModelState>();
 }
 
 // The appearance domain's systems, registered with the simulation schedule (stateless: one shared instance
@@ -58,6 +66,8 @@ inline void RegisterAppearanceSystems(ecs::SystemRegistry &registry)
 	registry.Register(extensionLooks);
 	static generalszh::gameplay::PanicLookSystem panicLooks;
 	registry.Register(panicLooks);
+	static engine::gameplay::SpecialModelStateSystem specialModelStates;
+	registry.Register(specialModelStates);
 }
 
 // What the appearance domain's systems run after (and the few they must precede), within the tick.
@@ -78,5 +88,7 @@ inline void OrderAppearanceSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<domain::SteeringLookSystem, domain::ExtensionLookSystem>();
 	registry.OrderBefore<domain::SteeringLookSystem, domain::PanicLookSystem>();
 	registry.OrderBefore<domain::PanicLookSystem, domain::ExtensionLookSystem>();
+	// A special model state (a cheer) runs out as the tick begins, before the garrison reads the looks.
+	registry.OrderBefore<gameplay::SpecialModelStateSystem, gameplay::GarrisonStationSystem>();
 }
 }

@@ -23,6 +23,23 @@ struct DrawBoneSearch
 	double clock{0.0};                      // the presentation clock (the extras' animation times)
 };
 
+// W3DModelDraw::doDrawModule with AttachToBoneInAnotherModule: the draw takes the bone's world transform (the object's
+// world times the bone's transform in its model) in place of its own; row-major 4x4.
+inline std::array<float, 16> AttachedDrawWorld(const std::array<float, 16> &world, const std::array<float, 12> &bone) noexcept
+{
+	std::array<float, 16> result{};
+	for (std::size_t row = 0; row < 3; ++row)
+		for (std::size_t column = 0; column < 4; ++column)
+		{
+			float value = column == 3 ? world[row * 4 + 3] : 0.0f;
+			for (std::size_t k = 0; k < 3; ++k)
+				value += world[row * 4 + k] * bone[k * 4 + column];
+			result[row * 4 + column] = value;
+		}
+	result[15] = 1.0f;
+	return result;
+}
+
 inline BoneLookup FindDrawBone(const DrawBoneSearch &search, std::string_view bone, bool current)
 {
 	const BonePoses &poses = search.poses;

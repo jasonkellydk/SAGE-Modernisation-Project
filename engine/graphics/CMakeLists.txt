@@ -153,6 +153,7 @@ target_sources(generals_graphics
             scene/particles/ParticleRenderer.cppm
             scene/weather/WeatherParticles.cppm
             scene/screen/ScreenDistortion.cppm
+            scene/screen/ScreenFilterPass.cppm
             scene/screen/FullscreenOverlay.cppm
             scene/ring/Ring.cppm
             scene/ring/RingRuntime.cppm

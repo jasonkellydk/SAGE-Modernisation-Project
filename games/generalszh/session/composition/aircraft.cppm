@@ -23,6 +23,13 @@ import games.generalszh.gameplay.combat.systems.cooldown_creation_system;
 import games.generalszh.gameplay.crates.systems.crate_touch_system;
 import games.generalszh.gameplay.flight_deck.systems.flight_deck_systems;
 import engine.gameplay.rts.aircraft.systems.jet_system;
+import engine.gameplay.rts.aircraft.systems.jet_touchdown_system;
+import engine.gameplay.rts.aircraft.resources.jet_touchdowns;
+import engine.gameplay.rts.aircraft.components.touchdown;
+import engine.gameplay.rts.death.systems.height_die_system;
+import engine.gameplay.rts.death.systems.slow_death_system;
+import engine.gameplay.rts.death.systems.structure_topple_system;
+import engine.gameplay.rts.loadout.systems.loadout_system;
 import games.generalszh.gameplay.aircraft.systems.airfield_heal_system;
 import engine.gameplay.rts.aircraft.components.airfield;
 import engine.gameplay.rts.aircraft.components.jet;
@@ -37,6 +44,7 @@ export namespace generalszh::session::composition
 inline void EmplaceAircraftResources(ecs::World &world, [[maybe_unused]] const SimulationSetup &setup)
 {
 	world.EmplaceResource<engine::gameplay::JetDamage>();
+	world.EmplaceResource<engine::gameplay::JetTouchdowns>();
 	world.EmplaceResource<generalszh::gameplay::AirfieldHeals>();
 }
 
@@ -45,6 +53,7 @@ inline void RegisterAircraftComponents(ecs::World &world)
 	world.RegisterComponent<generalszh::gameplay::AirfieldHealing>();
 	world.RegisterComponent<engine::gameplay::Airfield>();
 	world.RegisterComponent<engine::gameplay::Jet>();
+	world.RegisterComponent<engine::gameplay::Touchdown>();
 }
 
 // The aircraft domain's systems, registered with the simulation schedule (stateless: one shared instance
@@ -57,6 +66,8 @@ inline void RegisterAircraftSystems(ecs::SystemRegistry &registry)
 	registry.Register(airfieldHeals);
 	static engine::gameplay::JetSystem jets;
 	registry.Register(jets);
+	static engine::gameplay::JetTouchdownSystem jetTouchdowns;
+	registry.Register(jetTouchdowns);
 }
 
 // What the aircraft domain's systems run after (and the few they must precede), within the tick.
@@ -86,5 +97,10 @@ inline void OrderAircraftSystems(ecs::SystemRegistry &registry)
 	// Jets circling a dead airfield hurt after the jets' step and the tick's impacts, before falls.
 	registry.OrderBefore<gameplay::JetSystem, gameplay::JetDamageSystem>();
 	registry.OrderBefore<gameplay::ImpactSystem, gameplay::JetDamageSystem>();
+	// Touchdowns as the tick ends, on where everything that moves things this tick left the jets.
+	registry.OrderBefore<gameplay::HeightDieSystem, gameplay::JetTouchdownSystem>();
+	registry.OrderBefore<gameplay::SlowDeathSystem, gameplay::JetTouchdownSystem>();
+	registry.OrderBefore<gameplay::StructureToppleSystem, gameplay::JetTouchdownSystem>();
+	registry.OrderBefore<gameplay::LoadoutSystem, gameplay::JetTouchdownSystem>();
 }
 }

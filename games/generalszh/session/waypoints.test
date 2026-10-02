@@ -1,0 +1,254 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.commands.game_commands;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import games.generalszh.gameplay.hacking.components.internet_hack;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.rts.movement.components.move_order;
+import engine.gameplay.rts.movement.components.move_path;
+import engine.gameplay.rts.movement.algorithms.move_paths;
+
+// Waypoint orders (MSG_ADD_WAYPOINT) and the Hack Internet button's order (MSG_INTERNET_HACK) on real data
+// (Core/GameEngine/Source/GameLogic/System/GameLogicDispatch.cpp, AIGroup.cpp, AIUpdate.cpp).
+using namespace generalszh;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector2;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	FixedVector2 start;
+
+	std::uint32_t Team(const session::Session &game, std::size_t player) const { return *game.Teams().FindTeam(skirmish.players[player].team); }
+	FixedVector2 At(int dx, int dy) const { return {start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; }
+
+	session::SessionOptions Options() const
+	{
+		session::SessionOptions options{11, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+std::optional<Match> Prepare(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return std::nullopt;
+	Match match;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return std::nullopt;
+	match.read = std::move(*read);
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 7;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionChina");
+	setup.slots[1].startPos = 2;
+	match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+	for (const auto &marker : match.read->level.markers)
+		if (marker.name == "Player_1_Start")
+			match.start = marker.position.XY();
+	return match;
+}
+
+// One tick with the player's order.
+void Order(session::Session &game, const commands::GameCommand &command, std::uint32_t player = 0)
+{
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(command)};
+	orders.front().player = player;
+	game.Tick(std::span(orders));
+}
+}
+
+BOOST_AUTO_TEST_SUITE(waypoints)
+
+// AIUpdateInterface::privateFollowPathAppend through AIGroup::groupMoveToPosition(addWaypoint): an idle Ranger given a
+// waypoint moves to it (privateFollowPath of that point alone); given another while it moves, its path becomes its goal
+// then the new point (AI_FOLLOW_PATH, the first leg keeping no goal); a third goes on the path's end (addToGoalPath); it
+// walks them in order and is idle, its path done, at the last. A waypoint order from the other player moves nothing of
+// America's.
+BOOST_AUTO_TEST_CASE(legacy_parity_waypoints_queue_up_a_path)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	game.Tick();
+	const FixedVector2 first = match->At(0, -380), second = match->At(80, -380), third = match->At(80, -460);
+	Order(game, commands::AddWaypoint{{ranger}, first}, 1);
+	BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->mode == gp::MoveMode::Idle)); // not the sender's
+	Order(game, commands::AddWaypoint{{ranger}, first});
+	const gp::MoveOrder &order = *world.Get<gp::MoveOrder>(ranger);
+	BOOST_TEST((order.mode != gp::MoveMode::Idle));
+	BOOST_TEST((Engine::Math::Length(order.destination - first) <= Fixed::FromInt(20))); // the spot, adjusted onto the grid
+	BOOST_TEST(!world.Has<gp::MovePath>(ranger));
+	const FixedVector2 goal = order.destination;
+	Order(game, commands::AddWaypoint{{ranger}, second});
+	BOOST_TEST_REQUIRE(world.Has<gp::MovePath>(ranger));
+	{
+		const gp::MovePath &path = *world.Get<gp::MovePath>(ranger);
+		BOOST_TEST(path.count == 2u);
+		BOOST_TEST(path.next == 1u);
+		BOOST_TEST((path.kind == gp::MovePathKind::Follow));
+		BOOST_TEST((gp::MovePathPoint(world.Resource<gp::PathPoints>(), path, 0) == goal));
+		BOOST_TEST((gp::MovePathPoint(world.Resource<gp::PathPoints>(), path, 1) == second));
+		BOOST_TEST((world.Get<gp::MoveOrder>(ranger)->claim == gp::GoalClaim::None)); // a leg before the last
+	}
+	Order(game, commands::AddWaypoint{{ranger}, third});
+	{
+		const gp::MovePath &path = *world.Get<gp::MovePath>(ranger);
+		BOOST_TEST(path.count == 3u);
+		BOOST_TEST((gp::MovePathPoint(world.Resource<gp::PathPoints>(), path, 2) == third));
+	}
+	int ticks = 0;
+	while ((world.Has<gp::MovePath>(ranger) || world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle) && ticks < 3000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(ticks < 3000);
+	BOOST_TEST((Engine::Math::Length(world.Get<gp::Transform>(ranger)->position.XY() - third) <= Fixed::FromInt(20)));
+}
+
+// AIUpdateInterface::aiFollowPathAppend -> AIStateMachine::addToGoalPath (AIStateMachine.cpp): the goal path is a vector
+// with no limit; a Ranger given 24 waypoints (the old port held 16) keeps every one, in order, and walks them to the last.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_waypoint_path_has_no_point_limit)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	game.Tick();
+	std::vector<FixedVector2> spots;
+	for (int index = 0; index < 24; ++index)
+		spots.push_back(match->At((index % 4) * 40, -340 - (index / 4) * 30)); // a zigzag over the ground the test above walks
+	for (const FixedVector2 &spot : spots)
+		Order(game, commands::AddWaypoint{{ranger}, spot});
+	BOOST_TEST_REQUIRE(world.Has<gp::MovePath>(ranger));
+	const gp::MovePath &path = *world.Get<gp::MovePath>(ranger);
+	BOOST_TEST(path.count == 24u);
+	for (std::uint32_t index = 1; index < 24; ++index)
+		BOOST_TEST((gp::MovePathPoint(world.Resource<gp::PathPoints>(), path, index) == spots[index]));
+	int ticks = 0;
+	while ((world.Has<gp::MovePath>(ranger) || world.Get<gp::MoveOrder>(ranger)->mode != gp::MoveMode::Idle) && ticks < 6000)
+	{
+		game.Tick();
+		++ticks;
+	}
+	BOOST_TEST_REQUIRE(ticks < 6000);
+	BOOST_TEST((Engine::Math::Length(world.Get<gp::Transform>(ranger)->position.XY() - spots.back()) <= Fixed::FromInt(20)));
+}
+
+// AIGroup::groupMoveToPosition(addWaypoint) for two: no columns nor tightening; each to the spot offset as it stands
+// from the one nearest the spot (computeIndividualDestination, within six bounding radii): the second Ranger, 30 east
+// of the first, heads 30 east of the spot.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_group_waypoint_keeps_the_groups_spacing)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity nearer = game.Place("AmericaInfantryRanger", match->At(0, -300), {}, match->Team(game, 0));
+	const ecs::Entity east = game.Place("AmericaInfantryRanger", match->At(30, -300), {}, match->Team(game, 0));
+	game.Tick();
+	const auto offset = world.Get<gp::Transform>(east)->position.XY() - world.Get<gp::Transform>(nearer)->position.XY();
+	const FixedVector2 spot = match->At(0, -420);
+	Order(game, commands::AddWaypoint{{east, nearer}, spot});
+	BOOST_TEST((Engine::Math::Length(world.Get<gp::MoveOrder>(nearer)->destination - spot) <= Fixed::FromInt(20)));
+	BOOST_TEST((Engine::Math::Length(world.Get<gp::MoveOrder>(east)->destination - (spot + offset)) <= Fixed::FromInt(20)));
+}
+
+// GameLogic::onInternetHack -> AIGroup::groupHackInternet (CMD_FROM_PLAYER): the Hack Internet button's order sets the
+// sender's selected Hacker unpacking (HackInternetAIUpdate: UnpackingState) that tick; the other player's order for it
+// does nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_hack_internet_order_starts_the_hack)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	game.Tick();
+	const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(0, -300), {}, match->Team(game, 1));
+	game.Tick();
+	BOOST_TEST_REQUIRE(world.Get<generalszh::gameplay::InternetHack>(hacker) != nullptr);
+	Order(game, commands::HackInternet{{hacker}}, 0);
+	BOOST_TEST((world.Get<generalszh::gameplay::InternetHack>(hacker)->stage == generalszh::gameplay::HackStage::Idle));
+	Order(game, commands::HackInternet{{hacker}}, 1);
+	BOOST_TEST((world.Get<generalszh::gameplay::InternetHack>(hacker)->stage == generalszh::gameplay::HackStage::Unpacking));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

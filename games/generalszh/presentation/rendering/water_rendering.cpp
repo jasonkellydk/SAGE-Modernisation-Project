@@ -18,6 +18,7 @@ module games.generalszh.presentation.rendering.water_rendering;
 import engine.level.presentation.water_mesh;
 import engine.config.binding.schema;
 import games.generalszh.content.water.water_settings;
+import games.generalszh.presentation.rendering.standing_water;
 import Engine.Core.Math.FixedPresentation;
 import games.generalszh.presentation.rendering.texture_files;
 import Graphics.Scene.Water.Renderer;
@@ -205,13 +206,18 @@ bool WaterRendering::Load(Graphics::Device &device, const engine::filesystem::Vi
 	const content::WaterTransparencyDefinition &transparency = settings.transparency;
 	m_state->radarWaterColor = {transparency.radarWaterColor.r, transparency.radarWaterColor.g, transparency.radarWaterColor.b};
 
-	const Image water = LoadTexture(files, look.waterTexture);
-	if (water.width == 0)
+	// Standing water and rivers are textured with StandingWaterTexture (W3DWater m_riverTexture, set up by
+	// setupFlatWaterShader for drawTrapezoidWater and by drawRiverWater); the WaterSet's WaterTexture is only the
+	// vertex water grid's, and here only its width scales the scrolling (loadSetting: skyTexelsPerUnit / its width).
+	const Image standing = LoadTexture(files, transparency.standingWaterTexture);
+	if (standing.width == 0)
 	{
-		error = "cannot load water texture " + look.waterTexture;
+		error = "cannot load standing water texture " + transparency.standingWaterTexture;
 		return false;
 	}
-	state.waterTexture = Upload(device, water);
+	state.waterTexture = Upload(device, standing);
+	const Image water = LoadTexture(files, look.waterTexture);
+	const std::uint32_t waterWidth = water.width != 0 ? water.width : standing.width;
 	const Image sky = LoadTexture(files, look.skyTexture);
 	if (sky.width == 0)
 		std::fprintf(stderr, "water: cannot load sky texture %s\n", look.skyTexture.c_str());
@@ -227,13 +233,15 @@ bool WaterRendering::Load(Graphics::Device &device, const engine::filesystem::Vi
 
 	// The standing-water surface colour: the time of day's diffuse colour at
 	// the transparent-water opacity (the original's surface diffuse).
-	const auto diffuse = ToColor(look.diffuse);
+	// The colour is drawTrapezoidWater's prelit diffuse: StandingWaterColor, or the terrain's lighting times the
+	// time of day's DiffuseColor when that is left white (PickStandingWaterDiffuse).
+	const StandingWaterDiffuse diffuse = PickStandingWaterDiffuse(transparency, look, CurrentTerrainLights(level.lighting));
 	const auto transparent = ToColor(look.transparentDiffuse);
-	state.tint = {diffuse[0], diffuse[1], diffuse[2], transparent[3]};
+	state.tint = {diffuse.r / 255.0f, diffuse.g / 255.0f, diffuse.b / 255.0f, transparent[3]};
 	state.additive = transparency.additiveBlending;
 	state.transparentDepth = Engine::Math::ToFloat(transparency.transparentWaterDepth);
 	state.minOpacity = Engine::Math::ToFloat(transparency.minWaterOpacity);
-	const float texelsPerUnit = Engine::Math::ToFloat(look.skyTexelsPerUnit) / static_cast<float>(water.width);
+	const float texelsPerUnit = Engine::Math::ToFloat(look.skyTexelsPerUnit) / static_cast<float>(waterWidth);
 	state.scrollPerSecond = {1000.0f * Engine::Math::ToFloat(look.uScrollPerMs) * texelsPerUnit,
 		1000.0f * Engine::Math::ToFloat(look.vScrollPerMs) * texelsPerUnit};
 

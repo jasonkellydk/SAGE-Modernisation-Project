@@ -1,0 +1,365 @@
+#define BOOST_TEST_MODULE GeneralsZhRoads
+#include <boost/test/included/unit_test.hpp>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+import games.generalszh.presentation.roads.algorithms.road_network;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import Engine.Core.Math.FixedPresentation;
+
+// The map's roads as W3DRoadBuffer builds them: Roads.ini's Road blocks, the pieces loadRoads makes of the map's road
+// points (segments, curves, joins) and the geometry loadFloat4PtSection lays over the terrain.
+using namespace generalszh;
+using namespace generalszh::presentation;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+// A flat height map (`width` x `width` samples 10 apart, no border) with Roads.ini's TwoLane (id 1, 35 wide, 0.9 of its
+// texture) as the only road.
+engine::level::Level Flat(std::uint32_t width)
+{
+	engine::level::Level level;
+	level.terrain.width = level.terrain.height = width;
+	level.terrain.cellSize = Fixed::FromInt(10);
+	level.terrain.heights.assign(static_cast<std::size_t>(width) * width, Fixed{});
+	return level;
+}
+
+content::RoadCatalog TwoLane()
+{
+	content::RoadCatalog catalog;
+	catalog.roads.push_back({"TwoLane", 1, "TRTwoLane.tga", "35.0", "0.9"});
+	return catalog;
+}
+
+void AddRoad(engine::level::Level &level, std::array<float, 2> from, std::array<float, 2> to, std::uint32_t flags1 = 0, std::uint32_t flags2 = 0)
+{
+	const auto at = [](std::array<float, 2> p) { return Engine::Math::FixedVector3{Fixed::FromInt(static_cast<std::int32_t>(p[0])), Fixed::FromInt(static_cast<std::int32_t>(p[1])), {}}; };
+	level.placements.push_back({"TwoLane", at(from), {}, 0x02u | flags1, {}});
+	level.placements.push_back({"TwoLane", at(to), {}, 0x04u | flags2, {}});
+}
+
+std::size_t CountPieces(const RoadNetwork &network, RoadPiece piece)
+{
+	return static_cast<std::size_t>(std::count_if(network.roads.begin(), network.roads.end(), [&](const RoadSegment &road) { return road.type == piece; }));
+}
+
+bool Near(float a, float b, float tolerance = 1e-3f) { return std::fabs(a - b) <= tolerance; }
+}
+
+BOOST_AUTO_TEST_SUITE(roads)
+
+// TerrainRoads.cpp / INITerrainRoad.cpp on the shipped Roads.ini: TerrainRoadCollection's ids count every new Road and
+// Bridge block from 1 (TwoLane 1, GrassStripSnow 13, the 27 bridges 14..40, Sidewalk 41, CobbleStones 90: 63 roads);
+// each road's Texture, RoadWidth and RoadWidthInTexture (parseReal: floats). newRoad: a road after a DefaultRoad starts
+// from its texture and widths.
+BOOST_AUTO_TEST_CASE(legacy_parity_roads_ini_road_types)
+{
+	using engine::config::Node;
+	engine::config::Document document;
+	const auto block = [](std::string_view key, std::string_view name, std::vector<std::pair<std::string_view, std::string_view>> fields) {
+		Node node;
+		node.key = key;
+		node.values = {name};
+		node.block = true;
+		for (const auto &[field, value] : fields)
+		{
+			Node child;
+			child.key = field;
+			child.values = {value};
+			node.children.push_back(std::move(child));
+		}
+		return node;
+	};
+	document.Roots().push_back(block("Road", "DefaultRoad", {{"Texture", "Def.tga"}, {"RoadWidth", "48.0"}, {"RoadWidthInTexture", "0.5"}}));
+	document.Roots().push_back(block("Bridge", "SomeBridge", {}));
+	document.Roots().push_back(block("Road", "Lane", {{"RoadWidth", "20"}}));
+	const content::RoadCatalog catalog = content::BindRoads(document);
+	BOOST_TEST_REQUIRE(catalog.roads.size() == 2u);
+	const content::RoadContent *lane = catalog.Find("Lane");
+	BOOST_TEST_REQUIRE(lane != nullptr);
+	BOOST_TEST(lane->id == 3u);
+	BOOST_TEST(lane->texture == "Def.tga");
+	BOOST_TEST(RoadReal(lane->widthText) == 20.0f);
+	BOOST_TEST(RoadReal(lane->widthInTextureText) == 0.5f);
+	BOOST_TEST(catalog.Find("lane") == nullptr); // findRoad compares names exactly
+
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const content::RoadCatalog &roads = shell.game.roads;
+	BOOST_TEST(roads.roads.size() == 63u);
+	const content::RoadContent *twoLane = roads.Find("TwoLane");
+	BOOST_TEST_REQUIRE(twoLane != nullptr);
+	BOOST_TEST(twoLane->id == 1u);
+	BOOST_TEST(twoLane->texture == "TRTwoLane.tga");
+	BOOST_TEST(RoadReal(twoLane->widthText) == 35.0f);
+	BOOST_TEST(RoadReal(twoLane->widthInTextureText) == 0.9f);
+	BOOST_TEST(roads.Find("GrassStripSnow")->id == 13u);
+	BOOST_TEST(roads.Find("Sidewalk")->id == 41u);
+	BOOST_TEST(roads.Find("CobbleStones")->id == 90u);
+	BOOST_TEST(shell.game.gameData.maxRoadSegments == 4000u);
+	BOOST_TEST(shell.game.gameData.maxRoadTypes == 100u);
+	// allocateRoadBuffers: the road types from the list's head, the last defined first.
+	const RoadNetwork none = BuildRoadNetwork({}, roads, 4000, 100);
+	BOOST_TEST_REQUIRE(none.types.size() == 63u);
+	BOOST_TEST(none.types.front().uniqueID == 90);
+	BOOST_TEST(none.types.back().uniqueID == 1);
+}
+
+// W3DRoadBuffer::addMapObjects / preloadRoadSegment / loadFloat4PtSection on flat ground: a TwoLane from (100, 100) to
+// (200, 100) is one segment, its edges 0.9 x 35 / 2 = 15.75 either side; laid in 11 columns 10 apart of which on flat
+// ground the middle nine are skipped (each within MAP_HEIGHT_SCALE * 1.1 of its neighbours' line), so 4 vertices at
+// MAP_HEIGHT_SCALE / 8 (0.078125) over the ground and two triangles; u 0 at its start and 100 / (35 x 4) at its end, v
+// 85/512 on its centre line and 15.75 / 140 off it (+ below, - above); lit from height map vertex (10, 8). A bump
+// across the road 10 high (byte 10) at x 150 keeps the columns at 130, 140, 150 and 160: 12 vertices, 30 indices.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_straight_road_lies_over_the_terrain)
+{
+	engine::level::Level level = Flat(32);
+	AddRoad(level, {100, 100}, {200, 100});
+	const RoadNetwork network = BuildRoadNetwork(level.placements, TwoLane(), 4000, 100);
+	BOOST_TEST_REQUIRE(network.roads.size() == 1u);
+	const RoadSegment &road = network.roads[0];
+	BOOST_TEST((road.type == RoadPiece::Segment));
+	BOOST_TEST(road.uniqueID == 1);
+	BOOST_TEST(road.pt1.top.y == 115.75f);
+	BOOST_TEST(road.pt1.bottom.y == 84.25f);
+	const RoadGeometry flat = BuildRoadGeometry(network, level.terrain);
+	BOOST_TEST_REQUIRE(flat.meshes.size() == 1u);
+	const RoadMesh &mesh = flat.meshes[0];
+	BOOST_TEST(mesh.texture == "TRTwoLane.tga");
+	BOOST_TEST_REQUIRE(mesh.vertices.size() == 4u);
+	BOOST_TEST((mesh.indices == std::vector<std::uint32_t>{1, 0, 2, 1, 2, 3}));
+	const RoadVertex &start = mesh.vertices[0];
+	BOOST_TEST(start.position[0] == 100.0f);
+	BOOST_TEST(start.position[1] == 84.25f);
+	BOOST_TEST(start.position[2] == 0.078125f);
+	BOOST_TEST(Near(start.uv[0], 0.0f, 1e-6f));
+	BOOST_TEST(Near(start.uv[1], 85.0f / 512.0f + 15.75f / 140.0f, 1e-6f));
+	BOOST_TEST((start.lightCell == std::array<std::int32_t, 2>{10, 8}));
+	BOOST_TEST(Near(mesh.vertices[1].position[1], 115.75f));
+	BOOST_TEST(Near(mesh.vertices[1].uv[1], 85.0f / 512.0f - 15.75f / 140.0f, 1e-6f));
+	BOOST_TEST(Near(mesh.vertices[2].position[0], 200.0f));
+	BOOST_TEST(Near(mesh.vertices[2].uv[0], 100.0f / 140.0f, 1e-6f));
+
+	// The bump: height map column 15 at 6.25 (10 x MAP_HEIGHT_SCALE).
+	for (std::uint32_t y = 0; y < 32; ++y)
+		level.terrain.heights[static_cast<std::size_t>(y) * 32 + 15] = Fixed::FromRatio(25, 4);
+	const RoadGeometry bumped = BuildRoadGeometry(network, level.terrain);
+	BOOST_TEST_REQUIRE(bumped.meshes.size() == 1u);
+	const RoadMesh &over = bumped.meshes[0];
+	BOOST_TEST_REQUIRE(over.vertices.size() == 12u);
+	BOOST_TEST(over.indices.size() == 30u);
+	const std::array<float, 6> columns{100, 130, 140, 150, 160, 200};
+	const std::array<float, 6> heights{0.078125f, 0.078125f, 6.328125f, 6.328125f, 0.078125f, 0.078125f};
+	for (std::size_t column = 0; column < columns.size(); ++column)
+	{
+		BOOST_TEST(Near(over.vertices[column * 2].position[0], columns[column]));
+		BOOST_TEST(over.vertices[column * 2].position[2] == heights[column]);
+		BOOST_TEST(over.vertices[column * 2 + 1].position[2] == heights[column]);
+	}
+}
+
+// W3DRoadBuffer::insertCurveSegments / insertCurveSegmentAt (rotateAbout, Vector2::Rotate, Vector3::Rotate_Z) on two
+// TwoLanes meeting square at (300, 100): chained (the second first), the corner rounded on a CORNER_RADIUS x 35 = 52.5
+// circle about (247.5, 152.5): the first segment ends where it meets it, (247.5, 100), the second starts at (300, 152.5)
+// with its edges recomputed there (15.75 either side); acos(0) / (PI / 6) is exactly 3 in floats, so three 30 degree
+// curve pieces start at -30, -60 and -90 degrees round the circle; on flat ground each piece and segment is 4 vertices.
+// With the first point's corner angled (FLAG_ROAD_CORNER_ANGLED) the corner is mitred instead: no curves, the edges
+// meeting at (284.25, 115.75) and (315.75, 84.25).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_square_corner_curves_in_three_pieces)
+{
+	engine::level::Level level = Flat(64);
+	AddRoad(level, {100, 100}, {300, 100});
+	AddRoad(level, {300, 100}, {300, 300});
+	const RoadNetwork network = BuildRoadNetwork(level.placements, TwoLane(), 4000, 100);
+	BOOST_TEST_REQUIRE(network.roads.size() == 5u);
+	BOOST_TEST(CountPieces(network, RoadPiece::Segment) == 2u);
+	BOOST_TEST(CountPieces(network, RoadPiece::Curve) == 3u);
+	const RoadSegment &up = network.roads[0]; // (300, 100) -> (300, 300), chained before the other
+	const RoadSegment &along = network.roads[1];
+	BOOST_TEST(Near(up.pt1.loc.x, 300.0f));
+	BOOST_TEST(Near(up.pt1.loc.y, 152.5f));
+	BOOST_TEST(Near(along.pt2.loc.x, 247.5f));
+	BOOST_TEST(Near(along.pt2.loc.y, 100.0f));
+	BOOST_TEST(Near(up.pt1.top.x, 284.25f));
+	BOOST_TEST(Near(up.pt1.bottom.x, 315.75f));
+	const std::array<float, 3> angles{-30.0f, -60.0f, -90.0f};
+	for (std::size_t piece = 0; piece < 3; ++piece)
+	{
+		const RoadSegment &curve = network.roads[2 + piece];
+		BOOST_TEST((curve.type == RoadPiece::Curve));
+		BOOST_TEST(curve.curveRadius == 1.5f);
+		const float radians = angles[piece] * 3.14159265f / 180.0f;
+		BOOST_TEST(Near(curve.pt1.loc.x, 247.5f + 52.5f * std::cos(radians)));
+		BOOST_TEST(Near(curve.pt1.loc.y, 152.5f + 52.5f * std::sin(radians)));
+	}
+	const RoadGeometry geometry = BuildRoadGeometry(network, level.terrain);
+	BOOST_TEST_REQUIRE(geometry.meshes.size() == 1u);
+	BOOST_TEST(geometry.meshes[0].vertices.size() == 20u);
+	BOOST_TEST(geometry.meshes[0].indices.size() == 30u);
+
+	engine::level::Level angled = Flat(64);
+	AddRoad(angled, {100, 100}, {300, 100});
+	AddRoad(angled, {300, 100}, {300, 300}, 0x08u);
+	const RoadNetwork mitred = BuildRoadNetwork(angled.placements, TwoLane(), 4000, 100);
+	BOOST_TEST_REQUIRE(mitred.roads.size() == 2u);
+	BOOST_TEST(Near(mitred.roads[0].pt1.top.x, 284.25f));
+	BOOST_TEST(Near(mitred.roads[0].pt1.top.y, 115.75f));
+	BOOST_TEST(Near(mitred.roads[0].pt1.bottom.x, 315.75f));
+	BOOST_TEST(Near(mitred.roads[0].pt1.bottom.y, 84.25f));
+	BOOST_TEST((mitred.roads[1].pt2.top == mitred.roads[0].pt1.top));
+}
+
+// W3DRoadBuffer::insertTeeIntersections / insertTee / insertY / insert4Way: three TwoLanes from (300, 300) east, west
+// and north make a square tee (the east-west pair most opposite; the arm square to it), one TEE piece at the centre
+// pointing up the arm half a road width (17.5), the three ends pulled back to its sides; three at 120 degrees make a Y;
+// four make a FOUR_WAY (width in texture TEE_WIDTH_ADJUSTMENT, pointing right). A segment given twice is dropped.
+BOOST_AUTO_TEST_CASE(legacy_parity_meeting_roads_make_tees_ys_and_four_ways)
+{
+	engine::level::Level tee = Flat(64);
+	AddRoad(tee, {300, 300}, {500, 300});
+	AddRoad(tee, {300, 300}, {100, 300});
+	AddRoad(tee, {300, 300}, {300, 500});
+	AddRoad(tee, {300, 300}, {500, 300}); // the same again
+	const RoadNetwork tees = BuildRoadNetwork(tee.placements, TwoLane(), 4000, 100);
+	BOOST_TEST(CountPieces(tees, RoadPiece::Segment) == 3u);
+	BOOST_TEST_REQUIRE(CountPieces(tees, RoadPiece::Tee) == 1u);
+	const auto joint = std::find_if(tees.roads.begin(), tees.roads.end(), [](const RoadSegment &road) { return road.type == RoadPiece::Tee; });
+	BOOST_TEST(Near(joint->pt1.loc.x, 300.0f));
+	BOOST_TEST(Near(joint->pt1.loc.y, 300.0f));
+	BOOST_TEST(Near(joint->pt2.loc.x, 300.0f));
+	BOOST_TEST(Near(joint->pt2.loc.y, 317.5f));
+	BOOST_TEST(joint->pt1.count == -3);
+
+	engine::level::Level y = Flat(64);
+	AddRoad(y, {300, 300}, {300, 500});
+	AddRoad(y, {300, 300}, {127, 200});
+	AddRoad(y, {300, 300}, {473, 200});
+	const RoadNetwork ys = BuildRoadNetwork(y.placements, TwoLane(), 4000, 100);
+	BOOST_TEST(CountPieces(ys, RoadPiece::ThreeWayY) == 1u);
+
+	engine::level::Level cross = Flat(64);
+	AddRoad(cross, {300, 300}, {500, 300});
+	AddRoad(cross, {300, 300}, {100, 300});
+	AddRoad(cross, {300, 300}, {300, 500});
+	AddRoad(cross, {300, 300}, {300, 100});
+	const RoadNetwork crossing = BuildRoadNetwork(cross.placements, TwoLane(), 4000, 100);
+	BOOST_TEST_REQUIRE(CountPieces(crossing, RoadPiece::FourWay) == 1u);
+	const auto four = std::find_if(crossing.roads.begin(), crossing.roads.end(), [](const RoadSegment &road) { return road.type == RoadPiece::FourWay; });
+	BOOST_TEST(four->widthInTexture == 1.03f);
+	BOOST_TEST(four->pt2.loc.x > four->pt1.loc.x);
+}
+
+// W3DRoadBuffer::loadRoads on shipped maps (the first of these with road points): every pair of road points makes a
+// segment but for repeats; each road's mesh is its Roads.ini road's texture; every vertex lies MAP_HEIGHT_SCALE / 8 over
+// the highest of its cell's corners or higher (its column takes the highest along it).
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_map_roads)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	bool tested = false;
+	for (const char *name : {"Twilight Flame", "Tournament City", "Tournament Desert", "Winding River", "Tournament Continent", "Flash Fire"})
+	{
+		const std::string path = std::string("Maps/") + name + "/" + name + ".map";
+		const auto bytes = shell.files.Read(path);
+		if (!bytes)
+			continue;
+		const auto read = engine::level::generals_map::Read(*bytes);
+		if (!read)
+			continue;
+		const engine::level::Level &level = read->level;
+		std::set<std::pair<std::pair<std::int64_t, std::int64_t>, std::pair<std::int64_t, std::int64_t>>> pairs;
+		for (std::size_t index = 0; index + 1 < level.placements.size(); ++index)
+			if ((level.placements[index].flags & 0x02u) != 0 && (level.placements[index + 1].flags & 0x04u) != 0)
+			{
+				auto a = std::pair{level.placements[index].position.x.Raw(), level.placements[index].position.y.Raw()};
+				auto b = std::pair{level.placements[index + 1].position.x.Raw(), level.placements[index + 1].position.y.Raw()};
+				if (b < a)
+					std::swap(a, b);
+				pairs.insert({a, b});
+				++index;
+			}
+		if (pairs.empty())
+			continue;
+		tested = true;
+		BOOST_TEST_MESSAGE(name << ": " << pairs.size() << " road segments");
+		const RoadNetwork network = BuildRoadNetwork(level.placements, shell.game.roads, shell.game.gameData.maxRoadSegments, shell.game.gameData.maxRoadTypes);
+		BOOST_TEST(CountPieces(network, RoadPiece::Segment) == pairs.size());
+		const RoadGeometry geometry = BuildRoadGeometry(network, level.terrain);
+		BOOST_TEST_REQUIRE(!geometry.meshes.empty());
+		const auto &terrain = level.terrain;
+		const auto maxCell = [&](float x, float wy) {
+			int ix = static_cast<int>(x / 10.0f) + static_cast<int>(terrain.border);
+			int iy = static_cast<int>(wy / 10.0f) + static_cast<int>(terrain.border);
+			ix = std::clamp(ix, 0, static_cast<int>(terrain.width) - 2);
+			iy = std::clamp(iy, 0, static_cast<int>(terrain.height) - 2);
+			float high = -1e9f;
+			for (const auto &[dx, dy] : {std::pair{0, 0}, std::pair{1, 0}, std::pair{0, 1}, std::pair{1, 1}})
+				high = (std::max)(high,Engine::Math::ToFloat(terrain.At(static_cast<std::uint32_t>(ix + dx), static_cast<std::uint32_t>(iy + dy))));
+			return high;
+		};
+		for (const RoadMesh &mesh : geometry.meshes)
+		{
+			const auto kind = std::find_if(shell.game.roads.roads.begin(), shell.game.roads.roads.end(), [&](const content::RoadContent &road) { return road.id == mesh.id; });
+			BOOST_TEST_REQUIRE((kind != shell.game.roads.roads.end()));
+			BOOST_TEST(mesh.texture == kind->texture);
+			BOOST_TEST(mesh.indices.size() % 3 == 0u);
+			for (const std::uint32_t index : mesh.indices)
+				BOOST_TEST(index < mesh.vertices.size());
+			for (const RoadVertex &vertex : mesh.vertices)
+				BOOST_TEST(vertex.position[2] - 0.078125f >= maxCell(vertex.position[0], vertex.position[1]) - 1e-4f);
+		}
+		break;
+	}
+	BOOST_TEST(tested);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

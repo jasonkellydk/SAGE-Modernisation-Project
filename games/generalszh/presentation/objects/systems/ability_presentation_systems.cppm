@@ -6,6 +6,9 @@ export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.identity.components.owner;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.rts.stealth.components.undetected_defector;
+export import engine.gameplay.rts.stealth.components.stealth;
+export import engine.gameplay.rts.stealth.components.grant_stealth;
+export import engine.gameplay.rts.stealth.resources.detections;
 export import games.generalszh.gameplay.abilities.components.special_abilities;
 export import games.generalszh.gameplay.abilities.resources.ability_notices;
 export import games.generalszh.gameplay.objects.resources.object_templates;
@@ -20,7 +23,7 @@ import Engine.Core.Math.FixedPresentation;
 // Abilities, powers and defections seen and heard, once a tick after the simulation:
 //   sounds where the unit is (SpecialAbilityUpdate: UnpackSound, PackSound, TriggerSound; packing after its effect, its
 //   task-complete voice: the Black Lotus' capture, vehicle hack and cash hack their own; PrepSoundLoop from its
-//   preparation to its end), a power's InitiateSound on its source and InitiateAtLocationSound where it lands
+//   preparation to its end, left to PrepSoundSystem as a PrepSoundCue), a power's InitiateSound on its source and InitiateAtLocationSound where it lands
 //   (SpecialPowerModule::aboutToDoSpecialPower), a defector's VoiceDefect, flash and timer tick (Object::defect);
 //   a capture's flashes (SpecialAbilityUpdate::continuePreparation, DoCaptureFX): while it prepares its phase grows by a
 //   third of how far along it is, and each time it leaves an odd whole number the target flashes in the capturer's colour
@@ -37,6 +40,22 @@ namespace gp = engine::gameplay;
 inline std::array<float, 3> At(const gp::Transform &transform)
 {
 	return {Engine::Math::ToFloat(transform.position.x), Engine::Math::ToFloat(transform.position.y), Engine::Math::ToFloat(transform.position.z)};
+}
+
+// SpecialPowerModule::aboutToDoSpecialPower's sounds: its InitiateSound on the source (where it is, for its owner; none
+// when the source is gone), then, when the power has a location, its InitiateAtLocationSound there for the firing player
+// (setPlayerIndex); an empty or NoSound event plays nothing.
+inline std::vector<SoundRequest> PowerInitiateSounds(const content::SpecialPowerTemplate &kind, const std::optional<std::array<float, 3>> &source,
+	std::uint32_t sourceOwner, const std::optional<Engine::Math::FixedVector3> &location, std::uint32_t player)
+{
+	std::vector<SoundRequest> out;
+	const auto plays = [](const std::string &sound) { return !sound.empty() && sound != "NoSound"; };
+	if (source && plays(kind.initiateSound))
+		out.push_back({kind.initiateSound, *source, sourceOwner});
+	if (location && plays(kind.initiateAtLocationSound))
+		out.push_back({kind.initiateAtLocationSound, {Engine::Math::ToFloat(location->x), Engine::Math::ToFloat(location->y), Engine::Math::ToFloat(location->z)},
+			player});
+	return out;
 }
 
 // Drawable::saturateRGB.
@@ -74,12 +93,63 @@ inline std::array<float, 3> OwnFlashColor(const LookCatalog &catalog, std::uint3
 }
 }
 
+// GrantStealthBehavior, once a tick: a grantor's RadiusParticleSystemName put where it stands at its first update
+// (createEmitters; it goes with the grantor), and each thing it grants stealth to this tick (grantStealthToObject: one
+// with a StealthUpdate) flashes as selected (flashAsSelected: its player's colour or white, saturated).
+struct StealthGrantPresentationSystem
+{
+	using Query = ecs::Query<ecs::Read<engine::gameplay::GrantStealth>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Stealth>>;
+	using SideTables = ecs::SideTables<ecs::Write<GrantStealthView>, ecs::Write<SelectionFlash>>;
+	using Resources = ecs::Resources<ecs::Read<engine::gameplay::StealthGrants>, ecs::Read<LookCatalog>, ecs::Write<ParticleWorldHandle>>;
+
+	void Execute(Query &query, ecs::SystemContext &context) const
+	{
+		using namespace ability_presentation_detail;
+		const auto lookup = context.Lookup<Lookup>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		ParticleWorldHandle &particles = context.Write<ParticleWorldHandle>();
+		auto &views = context.Side<SideTables, GrantStealthView>();
+		auto &flashes = context.Side<SideTables, SelectionFlash>();
+		query.ForEachChunk([&](auto chunk) {
+			const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < transforms.size(); ++row)
+			{
+				if (views.Get(entities[row]) != nullptr)
+					continue;
+				GrantStealthView &view = *views.Emplace(entities[row]);
+				const DefinitionLooks *looks = catalog.Of(definitions[row].index);
+				if (looks == nullptr || looks->grantStealthSystem.empty() || particles.world == nullptr || particles.content == nullptr)
+					continue;
+				if (const auto *definition = particles.content->particles.Find(looks->grantStealthSystem))
+				{
+					const auto &at = transforms[row].position;
+					view.system = particles.world->Create(*definition,
+						engine::effects::EmitterTransform::At(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z), 0.0f));
+				}
+			}
+		});
+		std::vector<std::pair<ecs::Entity, SelectionFlash>> added;
+		for (const ecs::Entity granted : context.Read<engine::gameplay::StealthGrants>().Entities())
+		{
+			if (!lookup.IsAlive(granted) || lookup.Get<engine::gameplay::Stealth>(granted) == nullptr)
+				continue;
+			const auto *owner = lookup.Get<engine::gameplay::Owner>(granted);
+			Flash(flashes, added, granted, OwnFlashColor(catalog, owner != nullptr ? owner->player : 0u));
+		}
+		for (auto &[entity, flash] : added)
+			context.Commands().Add<SelectionFlash>(entity, flash);
+	}
+};
+
 struct AbilityFeedbackSystem
 {
 	using Query = ecs::Query<ecs::Read<generalszh::gameplay::SpecialAbilities>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::Owner>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::DefinitionRef>,
 		ecs::Read<engine::gameplay::UndetectedDefector>>;
-	using SideTables = ecs::SideTables<ecs::Write<SelectionFlash>, ecs::Write<CaptureFlash>, ecs::Write<DefectorFlash>>;
+	using SideTables = ecs::SideTables<ecs::Write<SelectionFlash>, ecs::Write<CaptureFlash>, ecs::Write<DefectorFlash>, ecs::Write<PrepSoundCue>>;
 	using Resources = ecs::Resources<ecs::Read<generalszh::gameplay::AbilityNotices>, ecs::Read<generalszh::gameplay::ObjectTemplates>, ecs::Read<LookCatalog>,
 		ecs::Write<SoundRequests>>;
 
@@ -96,6 +166,7 @@ struct AbilityFeedbackSystem
 		auto &flashes = context.Side<SideTables, SelectionFlash>();
 		auto &captures = context.Side<SideTables, CaptureFlash>();
 		auto &defectors = context.Side<SideTables, DefectorFlash>();
+		auto &prepCues = context.Side<SideTables, PrepSoundCue>();
 		auto &commands = context.Commands();
 		const std::uint64_t tick = context.Tick();
 		std::vector<std::pair<ecs::Entity, SelectionFlash>> added;
@@ -119,8 +190,21 @@ struct AbilityFeedbackSystem
 		};
 		for (const ga::AbilityNotice &notice : notices.abilities)
 		{
-			if (notice.cue == ga::AbilityCue::PreparationStart || notice.cue == ga::AbilityCue::PreparationEnd)
-				continue; // PrepSoundLoop: no ported ability has one yet
+			// PrepSoundLoop: added as its preparation starts (afresh each time), removed as it ends.
+			if (notice.cue == ga::AbilityCue::PreparationStart)
+			{
+				PrepSoundCue *cue = prepCues.Get(notice.unit);
+				if (cue == nullptr)
+					cue = prepCues.Emplace(notice.unit);
+				*cue = PrepSoundCue{tick, notice.power, 1u};
+				continue;
+			}
+			if (notice.cue == ga::AbilityCue::PreparationEnd)
+			{
+				if (PrepSoundCue *cue = prepCues.Get(notice.unit))
+					cue->want = 0;
+				continue;
+			}
 			const auto module = moduleOf(notice.unit, notice.power);
 			if (!module)
 				continue;
@@ -150,11 +234,14 @@ struct AbilityFeedbackSystem
 		{
 			if (power.power >= content.powers.templates.size())
 				continue;
-			const content::SpecialPowerTemplate &kind = content.powers.templates[power.power];
-			play(kind.initiateSound, power.source);
-			if (power.at && !kind.initiateAtLocationSound.empty() && kind.initiateAtLocationSound != "NoSound")
-				sounds.push_back({kind.initiateAtLocationSound, {Engine::Math::ToFloat(power.at->x), Engine::Math::ToFloat(power.at->y), Engine::Math::ToFloat(power.at->z)},
-					power.player});
+			const auto *at = lookup.IsAlive(power.source) ? lookup.Get<gp::Transform>(power.source) : nullptr;
+			const auto *owner = at != nullptr ? lookup.Get<gp::Owner>(power.source) : nullptr;
+			std::optional<std::array<float, 3>> source;
+			if (at != nullptr)
+				source = At(*at);
+			for (SoundRequest &request : PowerInitiateSounds(content.powers.templates[power.power], source,
+					 owner != nullptr ? owner->player : SoundRequest::NoOwner, power.at, power.player))
+				sounds.push_back(std::move(request));
 		}
 		// ConvertToHijackedVehicleCrateCollide: HijackDriver on the hijacker.
 		for (const ecs::Entity hijacker : notices.hijacks)
@@ -254,6 +341,15 @@ struct AbilityFeedbackSystem
 
 export namespace ecs
 {
+template<>
+struct SystemTraits<generalszh::presentation::StealthGrantPresentationSystem>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.stealth_grants";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
 template<>
 struct SystemTraits<generalszh::presentation::AbilityFeedbackSystem>
 {

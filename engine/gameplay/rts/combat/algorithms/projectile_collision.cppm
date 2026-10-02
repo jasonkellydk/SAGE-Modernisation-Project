@@ -11,7 +11,8 @@ export import engine.gameplay.common.weapons.definitions.weapon;
 // it touches (across both radii, from the thing's feet to twice its radius
 // up), its intended victim always, never its launcher or itself; otherwise by
 // the weapon's ProjectileCollidesWith: allies or enemies, structures (its own
-// player's are "controlled"), projectiles and missiles.
+// player's are "controlled"), projectiles and missiles. A thing its attackers miss for now (getSneakyTargetingOffset:
+// `sneaky`) is never run into but as the intended victim.
 export namespace engine::gameplay
 {
 inline bool CollidesWith(const WeaponDefinition &weapon, const Shot &shot, ecs::Entity self, const SpatialEntry &other,
@@ -41,8 +42,9 @@ inline bool CollidesWith(const WeaponDefinition &weapon, const Shot &shot, ecs::
 }
 
 // The first thing (in the index's order) the projectile at `at` with `radius` runs into, or none.
+template<typename Sneaky>
 inline const SpatialEntry *ProjectileCollision(const WeaponDefinition &weapon, const Shot &shot, ecs::Entity self, const Engine::Math::FixedVector3 &at,
-	Engine::Math::Fixed radius, const SpatialIndex &spatial, const Relationships &relationships) noexcept
+	Engine::Math::Fixed radius, const SpatialIndex &spatial, const Relationships &relationships, Sneaky &&sneaky) noexcept
 {
 	const SpatialEntry *hit = nullptr;
 	const SpatialEntry *launcher = spatial.Find(shot.source);
@@ -51,6 +53,8 @@ inline const SpatialEntry *ProjectileCollision(const WeaponDefinition &weapon, c
 		if (hit != nullptr)
 			return;
 		if (at.z < other.position.z - radius || at.z > other.position.z + other.radius * Engine::Math::Fixed::FromInt(2) + radius)
+			return;
+		if (other.entity != shot.target && sneaky(other.entity))
 			return;
 		if (CollidesWith(weapon, shot, self, other, relationships, sourceTeam))
 			hit = &other;

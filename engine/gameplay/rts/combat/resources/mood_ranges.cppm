@@ -23,6 +23,10 @@ struct MoodRanges
 	// TAiData::m_forceIdleFramesCount (ForceIdleMSEC): an idle unit's first look comes this many ticks after it went idle
 	// (AIUpdateInterface::resetNextMoodCheckTime from AIIdleState::onEnter).
 	std::uint64_t forceIdleTicks{1};
+	// TAiData::m_attackIgnoreInsignificantBuildings (AttackIgnoreInsignificantBuildings): a mood look
+	// (getNextMoodTarget) passes over structures of no faction that are empty or non-garrison containers
+	// (target_class::Insignificant).
+	bool ignoreInsignificantBuildings{false};
 };
 
 // AI::getAdjustedVisionRangeForObject (AI_VISIONFACTOR_OWNERTYPE | MOOD | GUARDINNER or GUARDOUTER): a unit's vision

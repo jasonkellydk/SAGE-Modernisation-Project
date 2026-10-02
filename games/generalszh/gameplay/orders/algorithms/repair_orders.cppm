@@ -22,6 +22,13 @@ import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.common.healing.components.healing;
 import engine.gameplay.common.spatial.components.off_map;
 import games.generalszh.gameplay.construction.algorithms.building;
+import games.generalszh.gameplay.combat_drop.algorithms.combat_drop_orders;
+import games.generalszh.gameplay.aircraft.algorithms.airfields;
+import engine.gameplay.rts.aircraft.components.jet;
+import engine.gameplay.rts.aircraft.components.airfield;
+import engine.gameplay.common.spatial.algorithms.find_position;
+import engine.gameplay.common.spatial.resources.spatial_index;
+import Engine.Core.Math.FixedRandom;
 
 // Sending vehicles to be repaired (AIUpdateInterface::privateGetRepaired: canGetRepairedAt, then aiDock), infantry to
 // be healed (privateGetHealed: canGetHealedAt, then aiEnter), and dozers to resume a structure's construction or repair
@@ -153,12 +160,62 @@ inline bool OrderRepair(GameWorld &game, ecs::Entity dozer, ecs::Entity structur
 	return true;
 }
 
+// JetAIUpdate::doLandingCommand at `airfield`: a helicopter (PRODUCED_AT_HELIPAD) picks its landing spot by it
+// (findPositionAround the airfield's position, a random start angle, out to ten times its bounding circle; none: the
+// airfield's position), a jet reserves a space there (its own, or a free one: none, nothing happens); either takes the
+// airfield as its producer and turns back to land (RETURNING_FOR_LANDING: Jet::Recall).
+inline void DoLandingCommand(GameWorld &game, ecs::Entity unit, ecs::Entity airfield)
+{
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	auto &world = game.world;
+	gp::Jet *jet = world.Get<gp::Jet>(unit);
+	const auto *at = world.Get<gp::Transform>(airfield);
+	if (jet == nullptr || at == nullptr || !world.Has<gp::Airfield>(airfield))
+		return;
+	if (jet->helicopter != 0)
+	{
+		const Engine::Math::TurnAngle start{static_cast<std::uint32_t>(Engine::Math::UniformInt(game.random, 0, 0xFFFFFFFFll))};
+		const gp::SpatialEntry *self = world.Resource<gp::SpatialIndex>().Find(airfield);
+		const Fixed radius = self != nullptr ? self->radius : Fixed{};
+		const auto spot = gp::FindPositionAround(at->position.XY(), Fixed{}, radius * Fixed::FromInt(10), start, SpotLegal(game)).value_or(at->position.XY());
+		jet->landingSpot = {spot.x, spot.y, game.ground.At(spot)};
+		jet->airfield = airfield;
+		if (jet->state == gp::JetState::HeliReturning)
+			jet->goal = spot; // RETURNING_FOR_LANDING afresh
+		jet->order = gp::Jet::Recall;
+		return;
+	}
+	if (jet->airfield != airfield || jet->space == gp::Jet::NoSpace)
+	{
+		const auto space = FreeSpace(game, airfield);
+		if (!space)
+			return;
+		jet->airfield = airfield;
+		jet->space = *space;
+	}
+	jet->order = gp::Jet::Recall;
+}
+
 // privateGetRepaired: if it may, it docks with the pad (aiDock: its action delay none, not being a supply truck at
 // a supply dock). An aircraft's repairs at an airfield are its parking place's (JetAIUpdate), not a dock's.
 inline void OrderGetRepaired(GameWorld &game, ecs::Entity unit, ecs::Entity depot, bool fromPlayer)
 {
 	namespace gp = engine::gameplay;
 	auto &world = game.world;
+	// JetAIUpdate::privateGetRepaired: ignored while landing (LANDING_IN_PROGRESS); else, canGetRepairedAt letting it, it
+	// lands at the airfield (doLandingCommand).
+	if (const gp::Jet *jet = world.Get<gp::Jet>(unit))
+	{
+		const bool landing = jet->state == gp::JetState::Landing || jet->state == gp::JetState::TaxiToParking || jet->state == gp::JetState::OrientForParking ||
+			jet->state == gp::JetState::HeliLanding;
+		if (!landing && CanGetRepairedAt(game, unit, depot, fromPlayer))
+		{
+			Commanded(game, unit);
+			DoLandingCommand(game, unit, depot);
+		}
+		return;
+	}
 	if (!CanGetRepairedAt(game, unit, depot, fromPlayer) || !world.Has<gp::RepairDock>(depot) || !world.Has<gp::Dock>(depot))
 		return;
 	auto *docking = world.Get<gp::Docking>(unit);

@@ -80,4 +80,45 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_refresh_draws_the_water_as_it_is_now)
 	BOOST_TEST(std::abs(red(BuildRadarTerrain(source)) - 200) <= 1);
 }
 
+// legacy_parity: W3DRadar::buildTerrainTexture over a bridge (TerrainLogic::findBridgeAt at the cell's point, its object's
+// body not RUBBLE: workingBridge): the cell is not water even over water; every sample takes the bridge template's
+// RadarColor (Roads.ini R:192 G:192 B:192: 192 / 255) shaded for the bridge's height (the average of its corners' z,
+// here 0 on flat ground: unchanged; float truncation to bytes may lose one step). A cell whose own point is off the
+// bridge is drawn as before even with a neighbour on it (water: 140 -> 56). A broken bridge (rubble) is not drawn.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_standing_bridge_shows_its_radar_colour)
+{
+	Heightfield field;
+	field.width = field.height = 13;
+	field.cellSize = Engine::Math::Fixed::FromInt(10);
+	field.heights.assign(13 * 13, Engine::Math::Fixed{});
+	field.playableExtents = {{12, 12}};
+	TerrainSurface surface;
+	surface.tiles.assign(13 * 13, 4);
+	const std::vector<std::array<std::uint8_t, 3>> colors{{0, 0, 0}, {200, 100, 50}};
+	bool broken = false;
+	RadarTerrainSource source;
+	source.terrain = &field;
+	source.surface = &surface;
+	source.tileColors = &colors;
+	source.ground = [](float, float) { return 0.0f; };
+	source.water = [](float x, float) { return x < 60.0f ? std::optional<float>(5.0f) : std::nullopt; };
+	source.bridge = [&broken](float x, float) -> std::optional<RadarDeck> {
+		if (broken || x < 40.0f || x > 80.0f)
+			return std::nullopt;
+		return RadarDeck{{192.0f / 255.0f, 192.0f / 255.0f, 192.0f / 255.0f}, 0.0f};
+	};
+	const auto pixel = [](const RadarTerrain &radar, std::uint32_t x, std::uint32_t y) {
+		const std::size_t at = (static_cast<std::size_t>(y) * RadarCells + x) * 4;
+		return std::array<int, 3>{radar.pixels[at], radar.pixels[at + 1], radar.pixels[at + 2]};
+	};
+	const RadarTerrain radar = BuildRadarTerrain(source);
+	for (const int channel : pixel(radar, 50, 64)) // world x 46.875, over the water
+		BOOST_TEST(std::abs(channel - 192) <= 1);
+	for (const int channel : pixel(radar, 70, 64)) // world x 65.625, over land
+		BOOST_TEST(std::abs(channel - 192) <= 1);
+	BOOST_TEST(std::abs(pixel(radar, 42, 64)[0] - 56) <= 1); // world x 39.375: off it, its neighbour on it
+	broken = true;
+	BOOST_TEST(std::abs(pixel(BuildRadarTerrain(source), 50, 64)[0] - 56) <= 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

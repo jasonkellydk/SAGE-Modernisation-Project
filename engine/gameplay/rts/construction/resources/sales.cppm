@@ -9,7 +9,8 @@ import engine.ecs.system.system;
 // `scaffoldTicks` before the structure starts coming down, then its
 // construction falls by `perTick` a tick; at `donePercent` it is gone. And
 // the structures whose sale finished this tick, for the game to pay for and
-// remove; and those built this tick (by whom), for the game to finish.
+// remove; and those built this tick (by whom), for the game to finish; and
+// the structures a builder at work found whole this tick (its repair done).
 export namespace engine::gameplay
 {
 struct SaleSettings
@@ -31,9 +32,17 @@ struct ConstructionDone
 	bool rebuild{false}; // finished by a rebuild (onStructureConstructionComplete's isRebuild)
 };
 
+// DozerActionDoActionState, DOZER_TASK_REPAIR: the builder at its dock finds its structure whole (repair complete).
+struct RepairDone
+{
+	ecs::Entity structure;
+	ecs::Entity builder;
+};
+
 struct ConstructionsDone
 {
 	std::vector<ConstructionDone> list;
+	std::vector<RepairDone> repairs;
 };
 }
 

@@ -29,31 +29,50 @@ struct Anim2DTemplate
 	std::uint32_t framesPerImage{1};
 	bool randomStart{false};
 
-	// The image showing `frames` logic frames after it started (from `start`).
-	std::size_t ImageAt(std::uint64_t frames, std::size_t start = 0) const noexcept
+	// The image showing `frames` logic frames after it started on its first (Anim2D::reset: the first image, the last
+	// for the backwards modes).
+	std::size_t ImageAt(std::uint64_t frames) const noexcept
+	{
+		const bool backwards = mode == Anim2DMode::OnceBackwards || mode == Anim2DMode::LoopBackwards || mode == Anim2DMode::PingPongBackwards;
+		return ImageFrom(frames, backwards && !images.empty() ? images.size() - 1 : 0);
+	}
+
+	// The image it starts on (Anim2D::Anim2D): with RandomizeStartFrame randomizeCurrentFrame's
+	// GameClientRandomValue(0, images - 1) from the client random draw `roll` (GetGameClientRandomValue: roll % (hi - lo +
+	// 1) + lo, hi when lo >= hi), else reset's.
+	std::size_t StartImage(std::uint32_t roll) const noexcept
+	{
+		if (!randomStart || images.empty())
+			return ImageAt(0);
+		return images.size() <= 1 ? images.size() - 1 : static_cast<std::size_t>(roll % static_cast<std::uint32_t>(images.size()));
+	}
+
+	// The image showing `frames` logic frames after it started on image `first` (Anim2D::tryNextFrame: one image on per
+	// AnimationDelay; the ping-pongs, either way, first go up, as their reversed status starts clear).
+	std::size_t ImageFrom(std::uint64_t frames, std::size_t first) const noexcept
 	{
 		const std::size_t count = images.size();
 		if (count == 0)
 			return 0;
-		const std::uint64_t step = frames / std::max<std::uint32_t>(framesPerImage, 1) + start;
 		const std::size_t last = count - 1;
+		first = std::min(first, last);
+		const std::uint64_t step = frames / std::max<std::uint32_t>(framesPerImage, 1);
 		switch (mode)
 		{
 		case Anim2DMode::Once:
-			return static_cast<std::size_t>(std::min<std::uint64_t>(step, last));
+			return static_cast<std::size_t>(std::min<std::uint64_t>(first + step, last));
 		case Anim2DMode::OnceBackwards:
-			return step >= last ? 0 : last - static_cast<std::size_t>(step);
+			return step >= first ? 0 : first - static_cast<std::size_t>(step);
 		case Anim2DMode::Loop:
-			return static_cast<std::size_t>(step % count);
+			return static_cast<std::size_t>((first + step) % count);
 		case Anim2DMode::LoopBackwards:
-			return last - static_cast<std::size_t>(step % count);
+			return static_cast<std::size_t>((first + count - step % count) % count);
 		case Anim2DMode::PingPong:
 		case Anim2DMode::PingPongBackwards: {
 			if (last == 0)
 				return 0;
-			const std::uint64_t phase = step % (2 * last);
-			const std::size_t forward = static_cast<std::size_t>(phase <= last ? phase : 2 * last - phase);
-			return mode == Anim2DMode::PingPong ? forward : last - forward;
+			const std::uint64_t phase = (first + step) % (2 * last);
+			return static_cast<std::size_t>(phase <= last ? phase : 2 * last - phase);
 		}
 		case Anim2DMode::None:
 			break;

@@ -101,6 +101,8 @@ inline HoverLocomotors ReadHoverLocomotors(const engine::config::Document &docum
 				hover.airborneFriction = engine::config::ReadBool(field, bind).value_or(false);
 			else if (Same(key, "CloseEnoughDist3D"))
 				hover.closeEnough3D = engine::config::ReadBool(field, bind).value_or(false);
+			else if (Same(key, "LocomotorWorksWhenDead"))
+				hover.worksWhenDead = engine::config::ReadBool(field, bind).value_or(false);
 		}
 		// LocomotorTemplate::validate: unset damaged values are the whole ones.
 		if (!accelerationDamaged)

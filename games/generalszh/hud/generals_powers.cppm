@@ -8,6 +8,7 @@ import engine.gameplay.rts.sciences.resources.player_ranks;
 import engine.gameplay.rts.sciences.resources.player_sciences;
 import engine.gameplay.rts.sciences.definitions.rank_rules;
 import games.generalszh.gameplay.orders.resources.command_bar_overrides;
+import games.generalszh.hud.hot_keys;
 
 // The General's Powers screen (the original's ControlBar::populatePurchaseScience / updateContextPurchaseScience /
 // show/hide/togglePurchaseScience, GUI_COMMAND_PURCHASE_SCIENCE and the general's button star, getStarImage):
@@ -25,6 +26,7 @@ struct ScienceSlot
 	bool owned{false};   // WIN_STATUS_ALWAYS_COLOR: a science the player has draws in colour
 	std::string image;   // the button's ButtonImage
 	std::string purchase; // what a click asks to buy (empty: nothing)
+	const content::CommandButtonContent *button{nullptr}; // its command button (setControlCommand: the build tooltip's)
 };
 
 struct GeneralsPowersState
@@ -79,6 +81,7 @@ inline ScienceSlot Slot(const Player &player, const content::CommandButtonConten
 	if (button == nullptr || (button->options & content::button_option::ScriptOnly) != 0)
 		return slot;
 	slot.shown = true;
+	slot.button = button;
 	slot.image = button->buttonImage;
 	// GUI_COMMAND_PURCHASE_SCIENCE: the first it may buy, else (the loop run out) the last.
 	for (const std::string &name : button->sciences)
@@ -213,6 +216,33 @@ public:
 	}
 	void Hide() { shown.Set(false); }
 	void Toggle() { shown.Get() ? Hide() : Show(); }
+	// The button on a science window (by rank row and slot; none: no button there): its build tooltip's.
+	const content::CommandButtonContent *SlotButton(std::size_t row, std::size_t slot) const noexcept
+	{
+		return row < m_state.ranks.size() && slot < m_state.ranks[row].size() ? m_state.ranks[row][slot].button : nullptr;
+	}
+
+	// What writes a TextLabel's text (its hotkey's '&'), and what plays HotKeyManager::executeHotKey's sounds.
+	void SetLabels(std::function<std::u16string(std::string_view)> labels) { m_labels = std::move(labels); }
+	void SetSound(std::function<void(std::string_view)> sound) { m_sound = std::move(sound); }
+
+	// populatePurchaseScience's setControlCommand registers each science button's key (rank 1, then 3, then 8, in order)
+	// when the screen shows, after the command windows and the shortcut bar, whose keys win. The original keeps them
+	// until the next context switch, firing a closed screen's buttons and losing an open one's on a reselection; here
+	// they count while the screen shows (a fixed retail quirk).
+	bool HasHotKey(char key) const noexcept { return shown.Get() && m_hotKeys.Find(key).has_value(); }
+	bool PressHotKey(char key)
+	{
+		const std::optional<std::size_t> window = shown.Get() ? m_hotKeys.Find(key) : std::nullopt;
+		if (!window)
+			return false;
+		const std::size_t row = *window / 15, slot = *window % 15;
+		return ExecuteHotKey(slotShown[row][slot].Get(), slotEnabled[row][slot].Get(), [&] { clicked[row][slot].Execute(); },
+			[this](std::string_view sound) {
+				if (m_sound)
+					m_sound(sound);
+			});
+	}
 
 private:
 	void Populate()
@@ -230,6 +260,12 @@ private:
 				slotImage[row][slot].Set(each.image);
 				clicked[row][slot].enabled.Set(each.shown && each.enabled);
 			}
+		m_hotKeys.Clear();
+		for (std::size_t row = 0; row < 3; ++row)
+			for (std::size_t slot = 0; slot < ScienceButtons[row]; ++slot)
+				if (const content::CommandButtonContent *button = m_state.ranks[row][slot].button;
+					button != nullptr && !button->textLabel.empty() && m_labels)
+					m_hotKeys.Add(HotKeyOf(m_labels(button->textLabel)), row * 15 + slot);
 	}
 
 	// ControlBar::getStarImage: no flash once the points fall below those last flashed for, or run out; else lit for the
@@ -271,5 +307,8 @@ private:
 	bool m_flash{true};             // m_genStarFlash starts on
 	std::int32_t m_lastFlashed{-1}; // m_lastFlashedAtPointValue
 	std::uint64_t m_blink{0}; // microseconds into the one-second cycle
+	std::function<std::u16string(std::string_view)> m_labels;
+	std::function<void(std::string_view)> m_sound;
+	HotKeys m_hotKeys; // the keys its science buttons registered (row * 15 + slot), first kept
 };
 }

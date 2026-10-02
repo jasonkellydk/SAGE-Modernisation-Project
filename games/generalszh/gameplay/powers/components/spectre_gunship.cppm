@@ -33,6 +33,8 @@ struct SpectreGunship
 	std::uint32_t steadyTicks{0}; // m_okToFireHowitzerCounter
 	GunshipStatus status{GunshipStatus::Idle};
 	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	// The last tick its gattling's fire walked (the gattling firing: its GattlingStrafeFXParticleSystem at the new spot).
+	std::uint64_t strafedTick{0};
 };
 
 // Per kind of gunship (SpectreGunshipUpdate): its power, its gattling (a definition name), the howitzer (a weapon
@@ -112,7 +114,7 @@ template<>
 struct ComponentTraits<generalszh::gameplay::SpectreGunship>
 {
 	static constexpr std::string_view StableName = "generalszh.gameplay.spectre_gunship";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 

@@ -12,6 +12,8 @@ import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.wander_anchor;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
 import engine.gameplay.rts.navigation.definitions.pathfind_cell;
 import Engine.Core.Math.FixedRandom;
 
@@ -60,6 +62,10 @@ inline bool ChooseLocomotorSet(GameWorld &game, ecs::Entity unit, std::uint8_t s
 	fresh.speed = motion->speed;
 	fresh.vertical = motion->vertical;
 	fresh.majorRadius = motion->majorRadius;
+	fresh.boundingRadius = motion->boundingRadius;
+	// The same body flies on (a new locomotor, its physics as they were).
+	fresh.forced = motion->forced;
+	fresh.flownSpeed = motion->flownSpeed;
 	fresh.upgraded = motion->upgraded;
 	fresh.set = set;
 	fresh.donutTimer = game.tick + game.step.TicksPerSecond() * 5 / 2;
@@ -82,7 +88,14 @@ inline void OrderWander(GameWorld &game, ecs::Entity unit, std::uint32_t way, bo
 	Engine::Math::FixedVector2 goal = game.waypoints.Position(way).XY();
 	if (const std::int64_t cells = gp::PathWanderCells(world.Get<gp::Locomotion>(unit)->locomotor.wanderWidth); cells > 0)
 		goal = goal + gp::WanderOffset(cells, gp::PathfindCellSize, [&](std::int64_t low, std::int64_t high) { return Engine::Math::UniformInt(game.random, low, high); });
+	const auto *decks = world.FindResource<gp::DeckSurfaces>();
+	if (decks != nullptr)
+		goal = gp::WaypointGoalOnWall(*decks, game.waypoints.Position(way).XY(), goal);
 	*order = gp::MoveOrder{goal, way, panic ? gp::MoveMode::Panic : gp::MoveMode::Wander};
+	// computeGoal's goal layer; each leg routed afresh.
+	order->goalLayer = decks != nullptr ? gp::WaypointGoalLayer(*decks, game.waypoints.Position(way).XY()) : gp::GroundLayer;
+	if (auto *route = world.Get<gp::Route>(unit))
+		route->planned = false;
 	if (auto *attack = world.Get<gp::AttackTarget>(unit))
 		*attack = {};
 	detail::EndStance(game, unit);
@@ -108,6 +121,9 @@ inline void OrderWanderInPlace(GameWorld &game, ecs::Entity unit, bool commanded
 	const Engine::Math::FixedVector2 goal =
 		origin + gp::WanderOffset(cells, gp::PathfindCellSize, [&](std::int64_t low, std::int64_t high) { return Engine::Math::UniformInt(game.random, low, high); });
 	*order = gp::MoveOrder{goal, gp::WaypointGraph::None, gp::MoveMode::WanderInPlace};
+	order->goalLayer = gp::GroundLayer;
+	if (auto *route = world.Get<gp::Route>(unit))
+		route->planned = false;
 	if (auto *attack = world.Get<gp::AttackTarget>(unit))
 		*attack = {};
 	detail::EndStance(game, unit);

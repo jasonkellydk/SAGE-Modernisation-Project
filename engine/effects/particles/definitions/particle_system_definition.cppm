@@ -8,7 +8,7 @@ import std;
 // is authored. Games bind their content onto this; the particle world runs it.
 export namespace engine::effects
 {
-// A value picked uniformly between min and max per use.
+// A value picked uniformly between min and max per use (GameClientRandomVariable: max itself when min >= max).
 struct Range
 {
 	float min{0.0f};
@@ -118,7 +118,7 @@ struct ParticleSystemDefinition
 
 	std::array<AlphaKey, KeyframeCount> alpha{};
 	std::array<ColorKey, KeyframeCount> color{};
-	Range colorScale;
+	Range colorScale; // added to each colour channel every frame (0..1 units: the original's INI value / 255)
 
 	Range burstDelay;  // frames between bursts
 	Range burstCount;
@@ -146,8 +146,12 @@ struct ParticleSystemDefinition
 	bool emitAboveGroundOnly{false};
 	bool upTowardsEmitter{false};
 
+	// Wind (ParticleSystemInfo's defaults): radians a frame the wind turns by (PingPong picks a new rate between these
+	// at each end of its swing), and the ranges its swing's start and end angles are picked from.
 	WindMotion wind{WindMotion::None};
-	float windAngleChangeMin{0.0f};
-	float windAngleChangeMax{0.0f};
+	float windAngleChangeMin{0.15f};
+	float windAngleChangeMax{0.45f};
+	Range windStartAngle{0.0f, 0.785398163f};
+	Range windEndAngle{5.497787144f, 6.283185307f};
 };
 }

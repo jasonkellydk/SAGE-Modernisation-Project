@@ -11,6 +11,7 @@ target_sources(generalszh PRIVATE FILE_SET CXX_MODULES FILES
 	control_bar_layer.cppm
 	match_end_layer.cppm
 	popup_message_layer.cppm
+	comm_layer.cppm
 	cinematic_text_view.cppm
 	message_view.cppm
 	military_caption_view.cppm
@@ -28,6 +29,7 @@ target_sources(generalszh PRIVATE FILE_SET CXX_MODULES FILES
 	host_options.cppm
 	frame_draws.cppm
 	cursor_set.cppm
+	mouse_tooltip_view.cppm
 	overlay_views.cppm
 	match_files.cppm
 	match_setup.cppm

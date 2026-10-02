@@ -1,0 +1,200 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+import games.generalszh.hud.hot_keys;
+import games.generalszh.hud.control_bar_view_model;
+import games.generalszh.hud.shortcut_bar;
+import games.generalszh.hud.generals_powers;
+
+// The control bar's hotkeys across its windows (the original's HotKeyManager, Core/GameEngine/Source/GameClient/
+// MessageStream/HotKey.cpp: searchHotKey / addHotKey / executeHotKey, fed by ControlBar::setControlCommand from
+// populateCommand, populateSpecialPowerShortcut and populatePurchaseScience in ControlBar.cpp).
+using namespace generalszh;
+using namespace generalszh::hud;
+
+namespace
+{
+std::u16string Label(std::string_view label)
+{
+	if (label == "GUI:Paradrop")
+		return u"&Paradrop";
+	if (label == "OBJECT:SpyDrone")
+		return u"Spy &Drone";
+	if (label == "CONTROLBAR:Patriot")
+		return u"&Patriot Battery";
+	if (label == "SCIENCE:Paladin")
+		return u"Pa&ladin Tank";
+	if (label == "SCIENCE:Drone")
+		return u"Spy &Drone";
+	return u"No key";
+}
+
+content::CommandButtonContent SelectAll(std::string label, std::string object)
+{
+	content::CommandButtonContent button;
+	button.commandName = "SELECT_ALL_UNITS_OF_TYPE";
+	button.textLabel = std::move(label);
+	button.object = std::move(object);
+	return button;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(hot_keys)
+
+// HotKeyManager::searchHotKey: the character after the first '&' of the label's text, lower-cased (addHotKey's
+// key.toLower()); no '&' or nothing after it: none. addHotKey keeps the first window of a key; executeHotKey looks up
+// the lower-cased key.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_label_marks_its_key_and_the_first_registration_keeps_it)
+{
+	BOOST_TEST(HotKeyOf(u"&Paradrop") == 'p');
+	BOOST_TEST(HotKeyOf(u"Spy &Drone & more") == 'd');
+	BOOST_TEST(HotKeyOf(u"No key") == char{0});
+	BOOST_TEST(HotKeyOf(u"Trailing &") == char{0});
+	HotKeys keys;
+	keys.Add('p', 3);
+	keys.Add('p', 7);
+	keys.Add(0, 9);
+	BOOST_TEST(keys.keys.size() == 1u);
+	BOOST_TEST(*keys.Find('P') == 3u);
+	BOOST_TEST(!keys.Find('x').has_value());
+}
+
+// ControlBar::populateSpecialPowerShortcut: setControlCommand on each shortcut button it fills registers the button's
+// TextLabel key; executeHotKey: a shown, enabled one is pressed (GBM_SELECTED, as a click) with a GUIClick and the key
+// is used; a disabled one only plays GUIClickDisabled and the key goes on; a hidden one does nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_shortcut_button_answers_its_label_key)
+{
+	std::vector<std::string> sounds;
+	std::vector<std::string> pressed;
+	ShortcutBarViewModel bar([](commands::GameCommand) {}, [](std::string, ecs::Entity) {}, [](std::vector<ecs::Entity>) {},
+		[&](const content::CommandButtonContent &button) {
+			pressed.push_back(button.object);
+			return ShortcutSources{};
+		});
+	bar.SetLabels(Label);
+	bar.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	auto paradrop = SelectAll("GUI:Paradrop", "Paradropper");
+	auto drone = SelectAll("OBJECT:SpyDrone", "SpyDrone");
+	auto none = SelectAll("CONTROLBAR:Nothing", "Nothing");
+	ShortcutBarState state;
+	state.hasPlayer = true;
+	state.canShow = true;
+	state.used = 3;
+	state.slots[0] = {&paradrop, true, true};
+	state.slots[1] = {&drone, true, false};
+	state.slots[2] = {&none, true, true};
+	bar.Apply(state);
+	BOOST_TEST(bar.HasHotKey('p'));
+	BOOST_TEST(bar.HasHotKey('D'));
+	BOOST_TEST(!bar.HasHotKey('n'));
+	BOOST_TEST(bar.PressHotKey('P'));
+	BOOST_TEST_REQUIRE(pressed.size() == 1u);
+	BOOST_TEST(pressed[0] == "Paradropper");
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "GUIClick");
+	BOOST_TEST(!bar.PressHotKey('d'));
+	BOOST_TEST(pressed.size() == 1u);
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1] == "GUIClickDisabled");
+	// Hidden (COMMAND_HIDDEN): the key stays registered but nothing happens.
+	state.slots[0].shown = false;
+	bar.Apply(state);
+	BOOST_TEST(!bar.PressHotKey('p'));
+	BOOST_TEST(sounds.size() == 2u);
+	BOOST_TEST(pressed.size() == 1u);
+}
+
+// ControlBar::update: evaluateContextUI (switchToContext resets the map, populateCommand registers the command windows)
+// before populateSpecialPowerShortcut, so a key both mark is the command window's (addHotKey ignores the shortcut's).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_command_windows_keep_a_key_the_shortcut_bar_shares)
+{
+	std::vector<commands::GameCommand> sent;
+	std::vector<std::string> sounds;
+	std::vector<std::string> pressed;
+	ControlBarViewModel commandBar([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int64_t) { return std::u16string{}; });
+	commandBar.SetLabels(Label);
+	commandBar.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	content::CommandButtonContent patriot;
+	patriot.command = content::ButtonCommand::DozerConstruct;
+	patriot.object = "AmericaPatriotBattery";
+	patriot.textLabel = "CONTROLBAR:Patriot";
+	ControlBarState commandState;
+	commandState.hasPlayer = true;
+	commandState.slots[0] = {&patriot, gameplay::ButtonState::Restricted, "SAPatriot"};
+	commandBar.Apply(commandState);
+	ShortcutBarViewModel shortcuts([](commands::GameCommand) {}, [](std::string, ecs::Entity) {}, [](std::vector<ecs::Entity>) {},
+		[&](const content::CommandButtonContent &button) {
+			pressed.push_back(button.object);
+			return ShortcutSources{};
+		});
+	shortcuts.SetLabels(Label);
+	shortcuts.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	auto paradrop = SelectAll("GUI:Paradrop", "Paradropper");
+	auto drone = SelectAll("OBJECT:SpyDrone", "SpyDrone");
+	ShortcutBarState state;
+	state.hasPlayer = true;
+	state.canShow = true;
+	state.used = 2;
+	state.slots[0] = {&paradrop, true, true};
+	state.slots[1] = {&drone, true, true};
+	shortcuts.Apply(state);
+	// 'p': the restricted Patriot's, a disabled click; the shortcut's Paradrop is not pressed.
+	BOOST_TEST(!PressFirstHotKey('p', commandBar, shortcuts));
+	BOOST_TEST(pressed.empty());
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "GUIClickDisabled");
+	// 'd': only the shortcut bar has it.
+	BOOST_TEST(PressFirstHotKey('d', commandBar, shortcuts));
+	BOOST_TEST_REQUIRE(pressed.size() == 1u);
+	BOOST_TEST(pressed[0] == "SpyDrone");
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1] == "GUIClick");
+	// A key nobody registered: nothing.
+	BOOST_TEST(!PressFirstHotKey('z', commandBar, shortcuts));
+	BOOST_TEST(sounds.size() == 2u);
+}
+
+// ControlBar::populatePurchaseScience: setControlCommand registers each science button's key (rank 1, 3, 8 in order;
+// none for a SCRIPT_ONLY slot), after the command windows and the shortcut bar, so their keys win. An enabled science
+// button pressed buys its science (GUI_COMMAND_PURCHASE_SCIENCE); a disabled one only plays GUIClickDisabled. The keys
+// count while the screen shows (the original's stale registrations until the next context switch are a fixed quirk).
+BOOST_AUTO_TEST_CASE(legacy_parity_science_buttons_take_keys_while_the_screen_shows)
+{
+	std::vector<commands::GameCommand> sent;
+	std::vector<std::string> sounds;
+	GeneralsPowersViewModel powers([&](commands::GameCommand command) { sent.push_back(std::move(command)); }, [](std::int32_t) { return std::u16string{}; });
+	powers.SetLabels(Label);
+	powers.SetSound([&](std::string_view sound) { sounds.emplace_back(sound); });
+	content::CommandButtonContent paladin;
+	paladin.textLabel = "SCIENCE:Paladin";
+	content::CommandButtonContent spyDrone;
+	spyDrone.textLabel = "SCIENCE:Drone";
+	GeneralsPowersState state;
+	state.hasPlayer = true;
+	state.ranks[0][0] = {true, true, false, "SNPaladin", "SCIENCE_PaladinTank", &paladin};
+	state.ranks[1][2] = {true, false, false, "SNDrone", "SCIENCE_SpyDrone", &spyDrone};
+	powers.Apply(state, 0);
+	BOOST_TEST(!powers.HasHotKey('l')); // the screen is closed
+	BOOST_TEST(!powers.PressHotKey('l'));
+	BOOST_TEST(sent.empty());
+	powers.Show();
+	BOOST_TEST(powers.HasHotKey('L'));
+	BOOST_TEST(powers.PressHotKey('l'));
+	BOOST_TEST_REQUIRE(sent.size() == 1u);
+	BOOST_TEST(std::get<commands::PurchaseScience>(sent[0]).science == "SCIENCE_PaladinTank");
+	BOOST_TEST_REQUIRE(sounds.size() == 1u);
+	BOOST_TEST(sounds[0] == "GUIClick");
+	BOOST_TEST(!powers.PressHotKey('d'));
+	BOOST_TEST(sent.size() == 1u);
+	BOOST_TEST_REQUIRE(sounds.size() == 2u);
+	BOOST_TEST(sounds[1] == "GUIClickDisabled");
+	powers.Hide();
+	BOOST_TEST(!powers.HasHotKey('l'));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

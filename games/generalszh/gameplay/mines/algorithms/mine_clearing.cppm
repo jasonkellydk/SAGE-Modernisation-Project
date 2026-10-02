@@ -8,6 +8,7 @@ export import engine.gameplay.rts.combat.systems.targeting_system;
 export import engine.gameplay.rts.mines.components.minefield;
 export import engine.gameplay.common.lifetime.components.lifetime;
 export import engine.gameplay.common.identity.components.team_member;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // Mine clearing: the tick's disarms (Weapon::privateFireWeapon's DAMAGE_DISARM) carried out, and the search a weapon
 // with a ContinueAttackRange makes for what to clear next (AIAttackState's continue range, privateAttackPosition).
@@ -96,7 +97,7 @@ inline void DisarmMinefield(GameWorld &game, ecs::Entity victim, gp::Minefield &
 }
 
 // Weapon::privateFireWeapon's DAMAGE_DISARM for the tick's disarms: at a minefield, its fire FX plays there and it is
-// disarmed; else a mine, booby trap or demo trap is removed (with the FX). (The academy's cleared-mine count: not yet.)
+// disarmed; else a mine, booby trap or demo trap is removed (with the FX); either counts for the clearer's academy.
 // Then AIAttackState's ContinueAttackRange: the victim gone or spent, an attack still on it goes on to the closest of the
 // victim's player's it may attack within that range of where it stood (no longer seeing through stealth), if any.
 inline void ApplyDisarms(GameWorld &game)
@@ -141,6 +142,10 @@ inline void ApplyDisarms(GameWorld &game)
 				gone = true;
 			}
 		}
+		// Weapon::privateFireWeapon: a mine or trap cleared counts for the clearer's player's academy (recordMineCleared).
+		if (gone)
+			if (const auto *sourceOwner = world.IsAlive(event.source) ? world.Get<gp::Owner>(event.source) : nullptr)
+				RecordAcademy(game, sourceOwner->player, AcademyCount::MineCleared);
 		const gp::WeaponDefinition &weapon = game.templates.weapons.At(event.weapon);
 		auto *attack = world.IsAlive(event.source) ? world.Get<gp::AttackTarget>(event.source) : nullptr;
 		if (!gone || weapon.continueAttackRange <= Engine::Math::Fixed{} || attack == nullptr || attack->target != event.victim || victimOwner == nullptr)

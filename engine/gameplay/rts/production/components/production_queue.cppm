@@ -7,7 +7,10 @@ import engine.ecs.core.component_registry;
 // What a factory is building (the original's ProductionUpdate): a queue of
 // units, the front one under construction for its build time; each entry
 // makes `quantity` units (the original's quantity modifiers) that join
-// `team` when done. Paid for when queued. An upgrade under research is an
+// `team` when done. Paid for when queued. As the original's update, the
+// front entry counts its updates and is done once they reach its build time
+// as its player's power stands now (calcTimeToBuild each update), so power
+// coming back finishes what was slowed at once. An upgrade under research is an
 // entry too (its `definition` the upgrade's bit): it takes its build time
 // whatever the power, and needs no door.
 export namespace engine::gameplay
@@ -24,11 +27,14 @@ struct ProductionEntry
 	std::uint32_t team{0};
 	std::uint32_t quantity{1};
 	std::uint32_t productionId{0}; // its factory's id for it (ProductionUpdate::requestUniqueUnitID: what cancels it)
-	Engine::Math::Fixed progress; // ticks of work done (a tick at full power is one)
-	std::uint64_t ticksTotal{1};
+	std::uint64_t frames{0};      // m_framesUnderConstruction: the production updates it has had
+	std::uint64_t ticksTotal{1};  // calcTimeToBuild at full power (a unit's BuildTime, an upgrade's)
 	ProductionKind kind{ProductionKind::Unit};
 	std::uint32_t produced{0}; // of its quantity, those already out (one at a time through a gated exit)
 	std::int64_t paid{0}; // what it cost when queued (given back if it is cancelled)
+	// calcTimeToBuild as its last update had it (its player's power stretches a unit's): m_percentComplete is frames
+	// over it (0: not updated yet, ticksTotal).
+	std::uint64_t ticksNow{0};
 };
 
 struct ProductionQueue
@@ -40,6 +46,9 @@ struct ProductionQueue
 	std::uint32_t nextId{1}; // the next production id it hands out
 	// The disabled types it still builds under (ProductionUpdate DisabledTypesToProcess; default DISABLED_HELD, 1 << 3).
 	std::uint32_t runsWhileDisabled{1u << 3};
+	// The tick whose production update a cancellation already spent (the front cancelled as no longer allowed: the
+	// update returns there), so the production system leaves the queue alone that tick.
+	std::uint64_t spentTick{0};
 
 	bool Full() const noexcept { return count >= capacity || count >= MaxEntries; }
 
@@ -77,7 +86,7 @@ template<>
 struct ComponentTraits<engine::gameplay::ProductionQueue>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.production_queue";
-	static constexpr std::uint32_t Version = 6;
+	static constexpr std::uint32_t Version = 8;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }

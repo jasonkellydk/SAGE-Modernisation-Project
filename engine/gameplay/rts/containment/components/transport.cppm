@@ -40,7 +40,8 @@ struct Transport
 	// The player of the last one in and the tick it got in (OpenContain::m_playerEnteredMask, which its next update
 	// clears: the next tick's scripts see it); none yet: 0xFFFFFFFF.
 	std::uint32_t enteredBy{0xFFFFFFFFu};
-	std::uint32_t reserved3{0};
+	// The exit path the next one out takes (OpenContain::m_whichExitPath, from 1: here from 0), cycling through them.
+	std::uint32_t nextExitPath{0};
 	std::uint64_t enteredTick{0};
 	// The tick the last one got out through its door (OpenContain::exitObjectViaDoor: DOOR_1_OPENING until DoorOpenTime
 	// has passed, DOOR_1_CLOSING after); 0: nobody yet.

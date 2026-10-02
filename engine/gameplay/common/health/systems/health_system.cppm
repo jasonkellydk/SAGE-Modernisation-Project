@@ -52,6 +52,13 @@ struct Hit
 	std::uint32_t fxType{0}; // the damage type whose effects it shows (its own unless overridden)
 	bool handled{false};
 	std::uint32_t statusType{DamageRecord::NoStatus}; // STATUS damage's object status bit
+	// The body's health just before and just after it (a killing blow's may be below none), of its maximum then, and the
+	// type of the body's last damage once this one was weighed (ActiveBody's m_lastDamageInfo): what a change of damage
+	// state reads (onBodyDamageStateChange is told per hit, in the order dealt).
+	Engine::Math::Fixed before;
+	Engine::Math::Fixed after;
+	Engine::Math::Fixed maximum;
+	std::uint32_t lastDamageType{0};
 };
 
 struct Hits : ecs::ChunkOutputs<Hit>
@@ -172,9 +179,6 @@ struct HealthSystem
 				}
 				else if (!handled)
 					health.current -= taken;
-				if (taken > Engine::Math::Fixed{} || handled)
-					hits.push_back({entities[row], record.source, record.damageType, health.armor, taken, record.deathType,
-						record.fxType != DamageRecord::NoFxType ? record.fxType : record.damageType, handled, record.statusType});
 				// ActiveBody::attemptDamage's last damage (who, what type, when): a fresh one unless the last was this tick or
 				// the one before; then only one telling who the attacker is replaces it (a live source over a gone one; over
 				// a live one, only a vehicle's, infantry's or structure's).
@@ -203,6 +207,10 @@ struct HealthSystem
 						health.lastDamageTick = now;
 					}
 				}
+				if (taken > Engine::Math::Fixed{} || handled)
+					hits.push_back({entities[row], record.source, record.damageType, health.armor, taken, record.deathType,
+						record.fxType != DamageRecord::NoFxType ? record.fxType : record.damageType, handled, record.statusType, previous,
+						health.current, health.maximum, health.lastDamageType});
 				// startSecondLife: its new maximum, fully healed (setMaxHealth FULLY_HEAL).
 				if (secondLife && !IsDead(health))
 				{

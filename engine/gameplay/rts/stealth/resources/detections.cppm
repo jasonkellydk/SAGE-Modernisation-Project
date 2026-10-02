@@ -96,6 +96,20 @@ struct DetectionWakes : ecs::ChunkOutputs<StealthReveal>
 {
 };
 
+// Something stealthed a detector found this tick that was not detected before (StealthDetectorUpdate::update: "if this
+// object was not previously detected it is now being revealed": the UI feedback for both sides): what, who found it and
+// where (per chunk, in chunk order).
+struct StealthDiscovery
+{
+	ecs::Entity target;
+	ecs::Entity detector;
+	Engine::Math::FixedVector3 position;
+};
+
+struct StealthDiscoveries : ecs::ChunkOutputs<StealthDiscovery>
+{
+};
+
 // A disguiser's look changed this tick (changeVisualDisguise), for the presentation's FX and sounds: disguised (DisguiseFX,
 // DisguiseStarted), or back to its own (DisguiseRevealFX; DisguiseRevealedSuccess with a victim, else
 // DisguiseRevealedFailure). Per chunk, in chunk order.
@@ -158,6 +172,7 @@ public:
 	}
 
 	bool Contains(ecs::Entity entity) const { return std::binary_search(m_granted.begin(), m_granted.end(), entity, Less); }
+	std::span<const ecs::Entity> Entities() const noexcept { return m_granted; }
 	std::size_t Count() const noexcept { return m_granted.size(); }
 
 private:
@@ -193,6 +208,11 @@ template<>
 struct ResourceTraits<engine::gameplay::RevealWakes>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.reveal_wakes";
+};
+template<>
+struct ResourceTraits<engine::gameplay::StealthDiscoveries>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.stealth_discoveries";
 };
 template<>
 struct ResourceTraits<engine::gameplay::DetectionWakes>

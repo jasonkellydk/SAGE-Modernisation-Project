@@ -135,7 +135,7 @@ struct PilotSeekSystem
 						}
 						// aiEnter follows it.
 						if (Engine::Math::DistanceSquared(moves[row].destination, there.XY()) > Fixed::FromInt(100) || moves[row].mode == gp::MoveMode::Idle)
-							moves[row] = gp::MoveToPoint(there.XY(), gp::GoalClaim::None); // AIEnterState: no adjusting, no claim
+							moves[row] = gp::Replanned(gp::MoveToPoint(there.XY(), gp::GoalClaim::None)); // AIEnterState: no adjusting, no claim
 						continue;
 					}
 				}
@@ -160,7 +160,7 @@ struct PilotSeekSystem
 					if (health == nullptr || health->current < health->maximum * seeker.minHealth || pilotAloft || !joinable(vehicle))
 						continue;
 					seeker.goal = vehicle;
-					moves[row] = gp::MoveToPoint(lookup.template Get<gp::Transform>(vehicle)->position.XY(), gp::GoalClaim::None);
+					moves[row] = gp::Replanned(gp::MoveToPoint(lookup.template Get<gp::Transform>(vehicle)->position.XY(), gp::GoalClaim::None));
 					break;
 				}
 			}

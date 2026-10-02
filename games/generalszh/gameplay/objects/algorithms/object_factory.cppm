@@ -21,6 +21,9 @@ export import engine.gameplay.common.identity.components.producer;
 import engine.gameplay.rts.docking.components.repair_dock;
 import engine.gameplay.rts.slaves.components.hive_body;
 import engine.gameplay.rts.combat.components.deploy;
+import engine.gameplay.rts.movement.components.pursuit;
+import engine.gameplay.rts.combat.components.sight_looker;
+import engine.gameplay.rts.movement.components.attack_approach;
 import engine.gameplay.rts.combat.resources.mood_ranges;
 import games.generalszh.gameplay.stealth.components.supply_stealth_grant;
 import games.generalszh.gameplay.combat.components.cooldown_creation;
@@ -52,6 +55,7 @@ export import games.generalszh.gameplay.combat.components.cleanup_hazard;
 export import games.generalszh.gameplay.powers.components.spy_vision;
 import games.generalszh.gameplay.production.components.cost_modifying;
 import engine.gameplay.rts.combat.components.countermeasures;
+import engine.gameplay.rts.combat.components.sneaky_target;
 import engine.gameplay.common.weapons.components.weapon_bonus_conditions;
 import engine.gameplay.rts.veterancy.components.experience;
 import engine.gameplay.rts.horde.components.horde;
@@ -61,6 +65,8 @@ import engine.gameplay.rts.movement.components.move_goal;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.appearance.components.appearance;
 import engine.gameplay.common.spatial.components.targetable;
+import engine.gameplay.common.spatial.components.airborne_target;
+import engine.gameplay.common.appearance.components.occlusion_safe;
 import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.rts.vision.components.vision;
@@ -108,6 +114,9 @@ import engine.gameplay.rts.mines.components.minefield;
 import engine.gameplay.rts.mines.components.demo_trap;
 import engine.gameplay.rts.emp.components.emp_pulse;
 import games.generalszh.content.combat.emp_content;
+import games.generalszh.content.water.wave_guide_content;
+import games.generalszh.gameplay.waveguide.components.wave_guide;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 import games.generalszh.content.mines.mine_content;
 import games.generalszh.content.economy.auto_deposit_content;
 import engine.gameplay.rts.economy.components.auto_deposit;
@@ -139,9 +148,11 @@ import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.combat.components.contained_definitions;
 import engine.gameplay.rts.containment.components.cargo_size;
 import games.generalszh.content.locomotors.locomotor_catalog;
 import games.generalszh.content.containment.transport_content;
+import games.generalszh.gameplay.containment.algorithms.put_inside;
 import engine.gameplay.rts.upgrades.components.upgradable;
 import engine.gameplay.rts.slaves.components.slaved;
 import games.generalszh.content.slaves.slaved_content;
@@ -223,6 +234,9 @@ void AddCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 	for (const auto &[kind, bit] : kinds)
 		if (object.Is(kind))
 			classes |= bit;
+	// Object::isNonFactionStructure.
+	if (content::IsNonFactionStructure(object))
+		classes |= gameplay::target_class::NonFactionStructure;
 	auto &world = game.world;
 	world.Add<gameplay::Targetable>(entity);
 	// Its bounding circle (GeometryInfo::getBoundingCircleRadius): what the partition manager measures from.
@@ -369,7 +383,24 @@ void ArmCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		turret.angle = turret.definition.naturalAngle;
 		turret.pitch = turret.definition.naturalPitch;
 		turret.enabled = !turret.definition.initiallyDisabled;
+		// AttackStateMachine's CHASE_TARGET (AIAttackPursueTargetState): a mobile turret attacker may chase; it sets out to
+		// crush infantry on its own unless KINDOF_DONT_AUTO_CRUSH_INFANTRY.
+		if (locomotor != nullptr)
+		{
+			world.Add<gameplay::Pursuit>(entity);
+			world.Get<gameplay::Pursuit>(entity)->autoCrush = object.Is("DONT_AUTO_CRUSH_INFANTRY") ? 0 : 1;
+		}
 	}
+	// AttackUsesLineOfSight: a KINDOF_ATTACK_NEEDS_LINE_OF_SIGHT attacker's mood look asks for CAN_SEE.
+	if (game.templates.Content().aiData.attackUsesLineOfSight && object.Is("ATTACK_NEEDS_LINE_OF_SIGHT"))
+	{
+		world.Add<gameplay::SightLooker>(entity);
+		world.Get<gameplay::SightLooker>(entity)->immobile = object.Is("IMMOBILE") ? 1 : 0;
+	}
+	// requestAttackPath: a mobile attacker's approach (AIAttackApproachTargetState), on the ground searching for a spot it may
+	// fire from (findAttackPath).
+	if (locomotor != nullptr)
+		world.Add<gameplay::AttackApproach>(entity);
 	// A weapon set beyond PRIMARY: each slot fires on its own, aimed by the turret that controls it.
 	if (!combat.slotWeapons[1].empty() || !combat.slotWeapons[2].empty())
 	{
@@ -414,6 +445,7 @@ void ArmCombat(GameWorld &game, ecs::Entity entity, const content::ObjectDefinit
 		}
 	gameplay::Aggression aggression;
 	aggression.autoAcquire = combat.autoAcquire;
+	aggression.notWhileAttacking = combat.acquireNotWhileAttacking;
 	// canAutoAcquireWhileStealthed: AutoAcquireEnemiesWhenIdle Stealthed, or stealth a special power grants (GrantedBySpecialPower).
 	const auto stealthRules = content::ReadObjectStealth(object, game.step);
 	aggression.acquireStealthed = combat.acquireStealthed ||
@@ -502,6 +534,9 @@ inline void GrantUpgrade(GameWorld &game, ecs::Entity entity, const std::string 
 			game.world.Resource<engine::gameplay::PlayerUpgrades>().Grant(game.world.Get<engine::gameplay::Owner>(entity)->player, *upgrade);
 		else
 			GiveObjectUpgrade(game, entity, name);
+		// The player's academy records it (recordUpgrade, granted).
+		if (const auto *owner = game.world.Get<engine::gameplay::Owner>(entity))
+			RecordAcademyUpgrade(game, owner->player, static_cast<std::uint32_t>(*upgrade), true);
 	}
 }
 }
@@ -536,6 +571,10 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	*world.Get<gameplay::DefinitionRef>(entity) = {game.templates.Definition(*object)};
 	*world.Get<gameplay::TeamMember>(entity) = {team};
 	*world.Get<gameplay::Owner>(entity) = {game.roster.TeamAt(team).owner};
+	// Object::initObject: a MINE, BOOBY_TRAP or DEMOTRAP made counts on the neutral player's academy (recordMine).
+	if (object->Is("MINE") || object->Is("BOOBY_TRAP") || object->Is("DEMOTRAP"))
+		if (const auto neutral = NeutralPlayer(game))
+			RecordAcademy(game, *neutral, AcademyCount::Mine);
 	// What it sees of the shroud (ShroudClearingRange, ShroudRevealToAllRange, KINDOF_REVEAL_TO_ALL; its footprint while
 	// under construction).
 	world.Add<gameplay::Vision>(entity);
@@ -788,6 +827,22 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		world.Get<gameplay::EmpPulse>(entity)->targetScale = Engine::Math::UniformFixed(game.random, pulse->targetScaleMin, pulse->targetScaleMax);
 		facing = Engine::Math::TurnAngle{static_cast<std::uint32_t>(Engine::Math::UniformInt(game.random, 0, 0xFFFFFFFFll))};
 	}
+	// WaveGuideUpdate: a flood wave, its module data kept with its state (it disables itself on its first update).
+	if (const auto guide = content::ReadWaveGuide(*object, game.step))
+	{
+		world.Add<WaveGuide>(entity);
+		WaveGuide &made = *world.Get<WaveGuide>(entity);
+		made.delay = guide->delayFrames;
+		made.ySize = guide->ySize;
+		made.spacing = guide->linearWaveSpacing;
+		made.bend = guide->waveBendMagnitude;
+		made.preferredHeight = guide->preferredHeight;
+		made.shoreline = guide->shorelineEffectDistance;
+		made.damageRadius = guide->damageRadius;
+		made.damageAmount = guide->damageAmount;
+		made.toppleForce = guide->toppleForce;
+		made.splashFrequency = guide->randomSplashSoundFrequency;
+	}
 	// What an EMP pulse asks of its victims: EMP_HARDENED, SPAWNS_ARE_THE_WEAPONS, a faction structure (KINDOFMASK_FS:
 	// the FS_ kinds but FS_POWER).
 	{
@@ -851,6 +906,8 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		// Locomotor::Locomotor: the donut timer set 2.5 seconds on; its major radius for three point turns.
 		world.Get<gameplay::Locomotion>(entity)->donutTimer = game.tick + game.step.TicksPerSecond() * 5 / 2;
 		world.Get<gameplay::Locomotion>(entity)->majorRadius = object->geometry.majorRadius;
+		// Its bounding circle (the distance it turns about its TurnPivotOffset is a fraction of).
+		world.Get<gameplay::Locomotion>(entity)->boundingRadius = content::BoundingCircleRadius(object->geometry);
 		if (locomotor->wanderWidth != Fixed{})
 			gameplay::StartWander(*world.Get<gameplay::Locomotion>(entity),
 				[&](std::int64_t low, std::int64_t high) { return Engine::Math::UniformInt(game.random, low, high); });
@@ -868,6 +925,21 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 			world.Add<gameplay::Wanderer>(entity);
 		if (locomotor->height == gameplay::HeightBehavior::SeaLevel)
 			z = game.ground.Surface(position);
+	}
+	// Its locomotor makes it an airborne target over its AirborneTargetingHeight (AIUpdateInterface::doLocomotor); a
+	// parachute's own locomotor does the same for it.
+	if (const gameplay::LocomotorDefinition *flown =
+			locomotor != nullptr ? locomotor : (parachute != ObjectTemplates::NoParachute ? content::ObjectLocomotor(*object, content.locomotors) : nullptr))
+	{
+		world.Add<gameplay::AirborneTarget>(entity);
+		world.Get<gameplay::AirborneTarget>(entity)->height = flown->airborneTargetingHeight;
+	}
+	// Object::Object: m_safeOcclusionFrame its OcclusionDelay on (every shipped thing takes GameData's
+	// DefaultOcclusionDelay: none sets its own).
+	{
+		const std::uint64_t delay = content.gameData.defaultOcclusionDelayTicks;
+		world.Add<gameplay::OcclusionSafe>(entity);
+		*world.Get<gameplay::OcclusionSafe>(entity) = {game.tick + delay, delay};
 	}
 	*world.Get<gameplay::Transform>(entity) = {{position.x, position.y, z}, facing};
 	detail::AddCombat(game, entity, *object, locomotor);
@@ -963,6 +1035,7 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		CleanupHazard &cleaner = *world.Get<CleanupHazard>(entity);
 		cleaner.scanTicks = cleanup->scanTicks;
 		cleaner.scanRange = cleanup->scanRange;
+		cleaner.slot = cleanup->weaponSlot;
 		if (auto *loadout = world.Get<gameplay::Loadout>(entity))
 			loadout->weaponFlags |= content::SetFlag(content::WeaponSetFlagNames, "VETERAN");
 		// Its AI goes busy on an area job (aiBusy).
@@ -1080,7 +1153,7 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		for (const auto &space : layout->second.spaces)
 			if (field.spaceCount < gameplay::Airfield::MaxSpaces)
 				field.spaces[field.spaceCount++] = {place(space.hangar.position), place(space.parking.position), place(space.prep.position),
-					frame.facing + space.hangar.facing, frame.facing + space.parking.facing, space.runway, 0};
+					frame.facing + space.hangar.facing, frame.facing + space.parking.facing, space.runway, frame.facing + space.apronFacing};
 		for (const auto &runway : layout->second.runways)
 			if (field.runwayCount < gameplay::Airfield::MaxRunways)
 			{
@@ -1099,6 +1172,13 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 			}
 		field.deckHeight = layout->second.deckHeight;
 		field.frontRow = layout->second.frontRow ? 1u : 0u;
+		if (layout->second.helipad)
+		{
+			field.hasHelipad = 1;
+			field.helipad = place(layout->second.helipad->position);
+			field.helipadFacing = frame.facing + layout->second.helipad->facing;
+		}
+		field.approachHeight = layout->second.approachHeight;
 		// ParkingPlaceBehavior HealAmountPerSecond: it repairs its parked jets.
 		for (const content::ModuleEntry &module : object->modules)
 			if (module.type == "ParkingPlaceBehavior" && module.block != nullptr)
@@ -1233,6 +1313,9 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		// (Its floor: raised while it is a flight deck's.)
 		if (world.Get<gameplay::FloorLift>(entity) == nullptr)
 			world.Add<gameplay::FloorLift>(entity);
+		// (Its attackers' misses: getSneakyTargetingOffset, the Aurora's.)
+		if (jet->sneakyOffset != Engine::Math::Fixed{} && world.Get<gameplay::SneakyTarget>(entity) == nullptr)
+			world.Add<gameplay::SneakyTarget>(entity);
 		world.Add<gameplay::Jet>(entity);
 		gameplay::Jet &state = *world.Get<gameplay::Jet>(entity);
 		state.flight = jet->flight;
@@ -1241,15 +1324,31 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		state.idleReturnTicks = jet->idleReturnTicks;
 		state.takeoffPauseTicks = jet->takeoffPauseTicks;
 		state.minHeight = jet->minHeight;
+		state.parkingOffset = jet->parkingOffset;
+		state.attack = jet->attack.value_or(jet->flight);
+		state.returning = jet->returning.value_or(jet->flight);
+		state.attackPersistTicks = jet->attackPersistTicks;
+		state.missPersistTicks = jet->missPersistTicks;
+		state.sneakyOffset = jet->sneakyOffset;
 		state.outOfAmmoDamage = jet->outOfAmmoDamage;
 		state.outOfAmmoDamageType = game.templates.weapons.unresistable;
 		state.outOfAmmoDeathType = content::DeathTypeIndex("NORMAL").value_or(0);
 		if (const std::uint32_t bit = content::ModelConditionBit("JETAFTERBURNER"); bit != content::NoCondition)
 			state.afterburnerBit = bit;
+		if (const std::uint32_t bit = content::ModelConditionBit("JETEXHAUST"); bit != content::NoCondition && bit < gameplay::Jet::NoExhaust)
+			state.exhaustBit = static_cast<std::uint8_t>(bit);
 		state.state = gameplay::JetState::Flying;
 		state.since = state.idleSince = game.tick;
+		if (!jet->needsRunway)
+		{
+			state.helicopter = 1;
+			state.space = gameplay::Jet::NoSpace;
+		}
 		if (const auto *armament = world.Get<gameplay::Armament>(entity); armament != nullptr && armament->weapon != gameplay::WeaponCatalog::None)
+		{
 			state.reloadTicks = game.templates.weapons.At(armament->weapon).clipReload;
+			state.clipSize = game.templates.weapons.At(armament->weapon).clipSize;
+		}
 	}
 	// Factories.
 	// Power plants and what runs on power.
@@ -1327,10 +1426,13 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		if (stealth->stealth.Option(gameplay::stealth_option::UseRiderStealth))
 			world.Add<gameplay::StealthRider>(entity);
 	}
-	// Stealth detectors scan at random phases, so they do not all scan on one tick (as the original).
+	// Stealth detectors scan at random phases, so they do not all scan on one tick (as the original). StealthDetectorUpdate's
+	// constructor draws GameLogicRandomValue(1, DetectionRate) only for an enabled one: an InitiallyDisabled one sleeps
+	// (UPDATE_SLEEP_FOREVER) and draws nothing, leaving the logic random stream as it was.
 	if (auto detector = content::ReadObjectStealthDetector(*object, game.step))
 	{
-		detector->nextScan = game.tick + static_cast<std::uint64_t>(Engine::Math::UniformInt(game.random, 1, static_cast<std::int64_t>(detector->rate)));
+		if (detector->Has(gameplay::stealth_detector_flag::Enabled))
+			detector->nextScan = game.tick + static_cast<std::uint64_t>(Engine::Math::UniformInt(game.random, 1, static_cast<std::int64_t>(detector->rate)));
 		world.Add<gameplay::StealthDetector>(entity);
 		*world.Get<gameplay::StealthDetector>(entity) = *detector;
 	}
@@ -1371,12 +1473,23 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	if (const auto transport = content::ReadObjectTransport(*object, game.step))
 	{
 		world.Add<gameplay::Transport>(entity);
+		world.Add<gameplay::ContainedDefinitions>(entity); // what it holds, for attack priority sets
 		*world.Get<gameplay::Transport>(entity) = {.definition = *transport,
 			.cruiseHeight = locomotor != nullptr ? locomotor->preferredHeight : Fixed{}};
 		if (const auto exit = content.transportExitBones.find(object->name); exit != content.transportExitBones.end())
 		{
 			world.Get<gameplay::Transport>(entity)->definition.exitBone = exit->second.position;
 			world.Get<gameplay::Transport>(entity)->definition.hasExitBone = 1;
+		}
+		if (const auto paths = content.transportExitPaths.find(object->name); paths != content.transportExitPaths.end())
+		{
+			auto &definition = world.Get<gameplay::Transport>(entity)->definition;
+			definition.exitPaths = static_cast<std::uint32_t>(std::min<std::size_t>(paths->second.starts.size(), gameplay::TransportDefinition::MaxExitPaths));
+			for (std::uint32_t path = 0; path < definition.exitPaths; ++path)
+			{
+				definition.exitStarts[path] = paths->second.starts[path];
+				definition.exitEnds[path] = paths->second.ends[path];
+			}
 		}
 		// TransportContain InitialPayload (a Troop Crawler's Red Guards, a Combat Bike's Rebel): made on its first update.
 		// A RiderChangeContain's riders: what each one shows on it (its payload rider shown from the start).
@@ -1424,9 +1537,10 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 							*world.Get<InitialPayload>(entity) = {game.templates.Definition(*rider), static_cast<std::uint32_t>(count)};
 						}
 					}
-		// OverlordContain PayloadTemplateName (every shipped one names a single object: the Avenger's laser turret).
+		// OverlordContain / HelixContain PayloadTemplateName (createPayload, the same in both; every shipped one is an
+		// Overlord's naming a single object: the Avenger's laser turret).
 		for (const content::ModuleEntry &module : object->modules)
-			if (module.type == "OverlordContain" && module.block != nullptr)
+			if ((module.type == "OverlordContain" || module.type == "HelixContain") && module.block != nullptr)
 				if (const auto *payload = module.block->Find("PayloadTemplateName"); payload != nullptr && !payload->values.empty())
 					if (const content::ObjectDefinition *rider = content.objects.Find(payload->Value(0)))
 					{
@@ -1438,6 +1552,7 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	else if (const auto heal = content::ReadObjectTunnel(*object, game.step))
 	{
 		world.Add<gameplay::Transport>(entity);
+		world.Add<gameplay::ContainedDefinitions>(entity); // what it holds, for attack priority sets
 		*world.Get<gameplay::Transport>(entity) = {.definition = {.slots = content.gameData.maxTunnelCapacity}};
 		world.Add<gameplay::Tunnel>(entity);
 		world.Get<gameplay::Tunnel>(entity)->fullHealTicks = *heal;
@@ -1567,6 +1682,14 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 				std::copy_n(points->second[set].begin(), fire.counts[set], fire.points[set].begin());
 			}
 		}
+		// IsEnclosingContainer No (a fire base): its occupants stand at its STATION bones (loadStationGarrisonPoints).
+		if (const auto stations = content.garrisonStations.find(object->name); stations != content.garrisonStations.end())
+		{
+			world.Add<gameplay::GarrisonStations>(entity);
+			auto &held = *world.Get<gameplay::GarrisonStations>(entity);
+			held.count = static_cast<std::uint32_t>(std::min(stations->second.size(), held.points.size()));
+			std::copy_n(stations->second.begin(), held.count, held.points.begin());
+		}
 		if (garrison->rosterCount > 0)
 			if (const content::ObjectDefinition *roster = content.objects.Find(garrison->rosterObject))
 			{
@@ -1591,6 +1714,8 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 		spawner.aggregateHealth = spawns->aggregateHealth;
 		spawner.number = count;
 		spawner.spawnsAreWeapons = object->Is("SPAWNS_ARE_THE_WEAPONS");
+		spawner.freeWill = spawns->freeWill;
+		spawner.initialBurstLeft = static_cast<std::uint8_t>(std::clamp<std::int64_t>(spawns->initialBurst, 0, 255)); // m_initialBurstCountdown
 		if (spawner.templateCount > 0)
 		{
 			world.Add<gameplay::Spawner>(entity);
@@ -1676,6 +1801,25 @@ ecs::Entity SpawnObject(GameWorld &game, const std::string &type, FixedVector2 p
 	if (game.templates.BattlePlanOf(game.templates.Definition(*object)) != nullptr)
 		InitBattlePlan(game, entity);
 	BattlePlanObjectCreated(game, entity);
+	// GarrisonContain::onObjectCreated: its InitialRoster made now (TheThingFactory->newObject) on its controlling player's
+	// default team, each put inside when it may be (isValidContainerFor with its room: addToContain); one that may not
+	// stays where it was made.
+	if (auto *garrison = world.Get<gameplay::Garrison>(entity); garrison != nullptr && garrison->rosterLeft > 0)
+	{
+		const std::uint32_t count = garrison->rosterLeft;
+		const std::string rosterName = game.templates.DefinitionAt(garrison->rosterDefinition).name;
+		garrison->rosterLeft = 0;
+		const auto *owner = world.Get<gameplay::Owner>(entity);
+		if (const auto rosterTeam = owner != nullptr ? game.roster.DefaultTeam(owner->player) : std::nullopt)
+			for (std::uint32_t index = 0; index < count; ++index)
+			{
+				const gameplay::Transform frame = *world.Get<gameplay::Transform>(entity);
+				const ecs::Entity occupant = SpawnObject(game, rosterName, frame.position.XY(), frame.facing, *rosterTeam, "");
+				const gameplay::Transport *room = world.Get<gameplay::Transport>(entity);
+				if (world.IsAlive(occupant) && room != nullptr && !room->closed && room->occupied < room->definition.slots)
+					PutInside(game, entity, occupant);
+			}
+	}
 	return entity;
 }
 }

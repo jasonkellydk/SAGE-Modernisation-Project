@@ -18,6 +18,13 @@ import engine.gameplay.rts.construction.components.construction_progress;
 import engine.gameplay.rts.construction.components.under_construction;
 import engine.gameplay.rts.construction.components.sale;
 import Engine.Core.Math.Fixed;
+import engine.gameplay.rts.containment.components.transport;
+import engine.gameplay.rts.containment.components.mount;
+import engine.gameplay.rts.containment.resources.cargo_manifest;
+import engine.gameplay.common.identity.components.owner;
+import games.generalszh.presentation.objects.components.beacon_look;
+import games.generalszh.presentation.interaction.components.selected;
+import games.generalszh.gameplay.orders.resources.hotkey_squads;
 
 using namespace generalszh::presentation;
 namespace gp = engine::gameplay;
@@ -94,6 +101,205 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_built_shows_its_percent)
 	InGameOverlay hidden;
 	ExtractObjectIcons(world, source, hidden);
 	BOOST_TEST(hidden.texts.empty());
+}
+
+// ContainModuleInterface::getContainerPipsToShow and its overrides (ContainModule.h, HelixContain.h, OverlordContain.cpp,
+// RiderChangeContain.cpp) with Drawable::drawContained's infantry count: a Humvee (5 slots) with two rangers and a
+// 2-slot rider shows 5 pips, 4 full, the first 2 infantry; a Spectre gunship (ShouldDrawPips No) none; a combat cycle
+// (RiderChangeContain) none; an Overlord none until it carries a battle bunker, then the bunker's room as its own
+// Transport holds it; a tunnel its whole network's riders.
+BOOST_AUTO_TEST_CASE(legacy_parity_container_pips_count_its_room_and_riders)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Transport>();
+	world.RegisterComponent<gp::Mount>();
+	world.FinalizeComponents();
+	auto &catalog = world.EmplaceResource<SelectionCatalog>();
+	auto &manifest = world.EmplaceResource<gp::CargoManifest>();
+	enum : std::uint32_t { Humvee, Ranger, Tank, Spectre, Cycle, Overlord, Bunker, Tunnel, Kinds };
+	catalog.byDefinition.resize(Kinds);
+	catalog.byDefinition[Humvee].contain = ContainKind::Transport;
+	catalog.byDefinition[Ranger].kinds = select_kind::Infantry;
+	catalog.byDefinition[Spectre].contain = ContainKind::Helix;
+	catalog.byDefinition[Spectre].drawsPips = false;
+	catalog.byDefinition[Cycle].contain = ContainKind::RiderChange;
+	catalog.byDefinition[Overlord].contain = ContainKind::Overlord;
+	catalog.byDefinition[Bunker].contain = ContainKind::Transport;
+	catalog.byDefinition[Tunnel].contain = ContainKind::Tunnel;
+	const auto make = [&](std::uint32_t kind, std::uint32_t slots = 0) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = kind;
+		if (slots > 0)
+		{
+			world.Add<gp::Transport>(entity);
+			world.Get<gp::Transport>(entity)->definition.slots = slots;
+		}
+		return entity;
+	};
+	const ecs::Entity humvee = make(Humvee, 5);
+	for (const ecs::Entity rider : {make(Ranger), make(Ranger), make(Tank)})
+		manifest.Board(humvee, rider, true);
+	world.Get<gp::Transport>(humvee)->occupied = 4; // the third rider takes 2
+	const auto pips = ContainerPips(world, catalog, humvee);
+	BOOST_TEST_REQUIRE(pips.has_value());
+	BOOST_TEST(pips->total == 5u);
+	BOOST_TEST(pips->full == 4u);
+	BOOST_TEST(pips->infantry == 2u);
+
+	BOOST_TEST(!ContainerPips(world, catalog, make(Spectre, 4)).has_value());
+	BOOST_TEST(!ContainerPips(world, catalog, make(Cycle, 1)).has_value());
+	BOOST_TEST(!ContainerPips(world, catalog, make(Ranger)).has_value());
+
+	const ecs::Entity overlord = make(Overlord, 1);
+	BOOST_TEST(!ContainerPips(world, catalog, overlord).has_value());
+	const ecs::Entity bunker = make(Bunker, 5);
+	world.Add<gp::Mount>(overlord);
+	world.Get<gp::Mount>(overlord)->rider = bunker;
+	world.Get<gp::Transport>(overlord)->definition.slots = 5; // activateRedirectedContain: the bunker's room
+	manifest.Board(overlord, make(Ranger), true);
+	world.Get<gp::Transport>(overlord)->occupied = 1;
+	const auto carried = ContainerPips(world, catalog, overlord);
+	BOOST_TEST_REQUIRE(carried.has_value());
+	BOOST_TEST(carried->total == 5u);
+	BOOST_TEST(carried->full == 1u);
+	BOOST_TEST(carried->infantry == 1u);
+
+	const ecs::Entity first = make(Tunnel, 10), second = make(Tunnel, 10);
+	manifest.Link(first, 7);
+	manifest.Link(second, 7);
+	manifest.Board(first, make(Ranger), true);
+	manifest.Board(second, make(Ranger), true);
+	manifest.Board(second, make(Tank), true);
+	const auto network = ContainerPips(world, catalog, first);
+	BOOST_TEST_REQUIRE(network.has_value());
+	BOOST_TEST(network->total == 10u);
+	BOOST_TEST(network->full == 3u);
+	BOOST_TEST(network->infantry == 2u);
+}
+
+// Drawable::drawUIText (flushed for the text-bearing drawables) and Drawable::drawCaption (Drawable.cpp): a selected unit
+// of the local player in its hotkey squad 3, its health box 40 wide at zoom 1 with its top at 15 (the box 10 above it:
+// (0, 100, 25) projects to (400, 225)): computeHealthRegion's (382, 223) 40 wide; the shipped DrawGroupInfo (-20% of the
+// width, -10 pixels: (374, 213), white, a black 1,1 shadow) and the defaults (-5%: 380, the player's red, a -1,-1 shadow);
+// nothing for another player's unit, while icon UI is off, or when dead. A beacon's caption at its geometry's centre
+// (center 25: (400, 225)) in DrawableCaptionColor; none while the beacon is hidden from this client.
+BOOST_AUTO_TEST_CASE(legacy_parity_group_numbers_and_captions_as_draw_ui_text_and_draw_caption)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Owner>();
+	world.RegisterComponent<gp::Experience>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::ConstructionProgress>();
+	world.RegisterComponent<gp::UnderConstruction>();
+	world.RegisterComponent<gp::Sale>();
+	world.RegisterComponent<ObjectIcons>();
+	world.RegisterComponent<Selected>();
+	world.RegisterComponent<BeaconLook>();
+	world.RegisterComponent<BeaconCaption>();
+	world.FinalizeComponents();
+	world.EmplaceResource<InteractionView>().valid = true;
+	world.EmplaceResource<PresentationFrame>();
+	auto &looks = world.EmplaceResource<LookCatalog>();
+	looks.playerColors = {{1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f, 1.0f}};
+	world.EmplaceResource<LocalPlayer>(LocalPlayer{0, true});
+	auto &catalog = world.EmplaceResource<SelectionCatalog>();
+	catalog.byDefinition.resize(2);
+	catalog.byDefinition[0].top = 15.0f;
+	catalog.byDefinition[0].healthBoxWidth = 40.0f;
+	catalog.byDefinition[0].kinds = select_kind::Selectable;
+	catalog.byDefinition[1].center = 25.0f;
+	auto &squads = world.EmplaceResource<generalszh::gameplay::HotkeySquads>();
+	auto &visible = world.EmplaceResource<gp::VisibleObjects>();
+	visible.Reset(1);
+	const auto unit = [&](std::uint32_t player) {
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Transform>(entity);
+		world.Get<gp::Transform>(entity)->position = {Fixed{}, Fixed::FromInt(100), Fixed{}};
+		world.Add<gp::DefinitionRef>(entity);
+		world.Add<gp::Owner>(entity);
+		world.Get<gp::Owner>(entity)->player = player;
+		world.Add<gp::Health>(entity);
+		world.Get<gp::Health>(entity)->current = Fixed::FromInt(10);
+		world.Get<gp::Health>(entity)->maximum = Fixed::FromInt(10);
+		world.Side<Selected>().Emplace(entity);
+		return entity;
+	};
+	const ecs::Entity mine = unit(0);
+	const ecs::Entity theirs = unit(1);
+	const std::vector<ecs::Entity> group{mine};
+	generalszh::gameplay::CreateHotkeySquad(squads, 0, 3, group, [](ecs::Entity) { return true; });
+	const std::vector<ecs::Entity> other{theirs};
+	generalszh::gameplay::CreateHotkeySquad(squads, 1, 5, other, [](ecs::Entity) { return true; });
+
+	generalszh::content::DrawGroupInfoContent shipped;
+	shipped.usePlayerColor = false;
+	shipped.dropShadowOffsetX = 1;
+	shipped.dropShadowOffsetY = 1;
+	shipped.percentOffsetX = Fixed::FromInt(-20);
+	generalszh::content::Anim2DTemplates animations;
+	generalszh::content::InGameUiContent ui;
+	ui.drawableCaptionColor = {10, 20, 30, 255};
+	OverlaySource source;
+	source.animations = &animations;
+	source.inGameUi = &ui;
+	source.drawGroupInfo = &shipped;
+	InGameOverlay overlay;
+	ExtractGroupNumbers(world, source, overlay);
+	BOOST_TEST_REQUIRE(overlay.groupNumbers.size() == 1u);
+	BOOST_TEST(overlay.groupNumbers[0].group == 3);
+	BOOST_TEST(overlay.groupNumbers[0].x == 374);
+	BOOST_TEST(overlay.groupNumbers[0].y == 213);
+	BOOST_TEST((overlay.groupNumbers[0].color == std::array<float, 4>{1, 1, 1, 1}));
+	BOOST_TEST((overlay.groupNumbers[0].dropColor == std::array<float, 4>{0, 0, 0, 1}));
+	BOOST_TEST(overlay.groupNumbers[0].dropX == 1);
+	BOOST_TEST(overlay.groupNumbers[0].dropY == 1);
+
+	const generalszh::content::DrawGroupInfoContent defaults;
+	source.drawGroupInfo = &defaults;
+	InGameOverlay own;
+	ExtractGroupNumbers(world, source, own);
+	BOOST_TEST_REQUIRE(own.groupNumbers.size() == 1u);
+	BOOST_TEST(own.groupNumbers[0].x == 380);
+	BOOST_TEST((own.groupNumbers[0].color == std::array<float, 4>{1, 0, 0, 1}));
+	BOOST_TEST(own.groupNumbers[0].dropX == -1);
+
+	source.drawIconUi = false;
+	InGameOverlay off;
+	ExtractGroupNumbers(world, source, off);
+	BOOST_TEST(off.groupNumbers.empty());
+	source.drawIconUi = true;
+	world.Get<gp::Health>(mine)->current = Fixed{};
+	InGameOverlay dead;
+	ExtractGroupNumbers(world, source, dead);
+	BOOST_TEST(dead.groupNumbers.empty());
+
+	// A beacon's caption.
+	const ecs::Entity beacon = world.Create();
+	world.Add<gp::DefinitionRef>(beacon);
+	world.Get<gp::DefinitionRef>(beacon)->index = 1;
+	world.Side<BeaconCaption>().Emplace(beacon, BeaconCaption{u"Rally"});
+	world.Side<BeaconLook>().Emplace(beacon);
+	gp::VisibleObject object;
+	object.entity = beacon;
+	object.definition = 1;
+	object.transform.position = {Fixed{}, Fixed::FromInt(100), Fixed{}};
+	visible.SlotAt(0).push_back(object);
+	InGameOverlay captioned;
+	ExtractObjectIcons(world, source, captioned);
+	BOOST_TEST_REQUIRE(captioned.captions.size() == 1u);
+	BOOST_TEST((captioned.captions[0].text == u"Rally"));
+	BOOST_TEST(captioned.captions[0].x == 400);
+	BOOST_TEST(captioned.captions[0].y == 225);
+	BOOST_TEST((captioned.captions[0].color == std::array<float, 4>{10.0f / 255.0f, 20.0f / 255.0f, 30.0f / 255.0f, 1.0f}));
+	world.Side<BeaconLook>().Get(beacon)->hidden = 1;
+	InGameOverlay hiddenBeacon;
+	ExtractObjectIcons(world, source, hiddenBeacon);
+	BOOST_TEST(hiddenBeacon.captions.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

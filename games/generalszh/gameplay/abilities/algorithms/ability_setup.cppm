@@ -71,6 +71,9 @@ inline SpecialAbilities MakeSpecialAbilities(const content::GameContent &content
 		objectOption(module.specialObjectsPersistWhenOwnerDies, special_object_option::PersistWhenOwnerDies);
 		objectOption(module.uniqueSpecialObjectTargets, special_object_option::UniqueTargets);
 		objectOption(module.alwaysValidateSpecialObjects, special_object_option::AlwaysValidate);
+		if (const content::ObjectDefinition *object = content.objects.Find(module.specialObject))
+			objectOption(std::ranges::any_of(object->modules, [](const content::ModuleEntry &entry) { return entry.type == "LaserUpdate"; }),
+				special_object_option::Laser);
 	}
 	return made;
 }

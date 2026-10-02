@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 import engine.gameplay.common.health.components.subdual;
@@ -16,6 +17,8 @@ import engine.gameplay.rts.slaves.components.slaved;
 import engine.gameplay.common.physics.components.physics_body;
 import engine.gameplay.common.weapons.components.weapon_slots;
 import games.generalszh.session.session;
+import games.generalszh.gameplay.abilities.components.ability_laser;
+import games.generalszh.gameplay.abilities.resources.ability_notices;
 import Engine.Core.Math.FixedPresentation;
 import engine.gameplay.rts.navigation.components.navigation;
 import engine.gameplay.rts.navigation.components.ignored_obstacle;
@@ -39,6 +42,7 @@ import engine.gameplay.rts.powers.components.special_power_timers;
 import engine.gameplay.rts.powers.resources.shared_power_timers;
 import engine.gameplay.rts.powers.algorithms.special_power_timing;
 import engine.gameplay.rts.stealth.components.undetected_defector;
+import games.generalszh.gameplay.combat.resources.unmanned_notices;
 import engine.gameplay.rts.sciences.resources.player_ranks;
 import games.generalszh.gameplay.abilities.components.special_abilities;
 import games.generalszh.content.powers.special_ability_content;
@@ -567,6 +571,189 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_defender_laser_guides_its_missiles)
 	BOOST_TEST_REQUIRE(locked);
 	BOOST_TEST(world.Get<gp::WeaponSlots>(defender)->current == 1u);
 	BOOST_TEST((world.Get<gp::AttackTarget>(defender)->target == tank));
+}
+
+// Legacy parity (SpecialAbilityUpdate::isWithinStartAbilityRange with ApproachRequiresLOS (default Yes):
+// PartitionFilterLineOfSight -> Pathfinder::isViewBlockedByObstacle -> isAttackViewBlockedByObstacle (EA AIPathfind.cpp;
+// AttackUsesLineOfSight Yes, the Missile Defender ATTACK_NEEDS_LINE_OF_SIGHT): a Missile Defender 150 from a tank (in
+// its 200 StartAbilityRange) is in range on the same tick as one with a clear view only when no structure stands between
+// them: with an American barracks on the line its obstacle cells block the view and it is not yet within range.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_between_blocks_an_ability_approach)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	const auto within = [&](bool wall, int ticks) {
+		session::Session game(match->skirmish.level, shell.game, match->Options(1));
+		auto &world = game.World();
+		const ecs::Entity defender = game.Place("AmericaInfantryMissileDefender", match->At(150, -350), {}, match->Team(game, 0));
+		const ecs::Entity tank = game.Place("ChinaTankBattleMaster", match->At(300, -350), {}, match->Team(game, 1));
+		if (wall)
+			game.Place("AmericaBarracks", match->At(225, -350), {}, match->Team(game, 0));
+		game.Tick(); // the barracks stamped into the pathfinding grid
+		const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityMissileDefenderLaserGuidedMissiles");
+		gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(defender)->Find(power), game.CurrentTick());
+		generalszh::gameplay::FireSpecialPowerAtObject(game.Game(), defender, "SpecialAbilityMissileDefenderLaserGuidedMissiles", tank, true);
+		int tick = 0;
+		while (tick < ticks && !Slot(game, defender).Has(generalszh::gameplay::ability_flag::WithinRange))
+		{
+			game.Tick();
+			++tick;
+		}
+		return Slot(game, defender).Has(generalszh::gameplay::ability_flag::WithinRange) ? tick : -1;
+	};
+	const int clear = within(false, 30);
+	BOOST_TEST_REQUIRE(clear >= 0);
+	BOOST_TEST(within(true, clear) == -1);
+}
+
+// Legacy parity (SpecialAbilityUpdate::startPreparation / initLaser / endPreparation / triggerAbilityEffect, SPECIAL_HACKER_
+// DISABLE_BUILDING; LaserUpdate::initLaser; GeometryInfo::getCenterPosition, getFootprintArea): a China Hacker fired by a
+// script at an American barracks starts its preparation streaming its SpecialObject (BinaryDataStream) at it: the stream
+// is made on the hacker's team as its effects apply, from the hacker (SpecialObjectAttachToBone, drawn) to the barracks'
+// centre (its position, half its 20 height up: 10), the hacker typing (FIRING_A, not UNPACKING). Each trigger asks for its
+// DisableFXParticleSystem over the barracks for EffectDuration (60 ticks). Another hacker at a Gattling cannon (a box
+// footprint of 4 x 8 x 8 = 256, under 300) toggles it: none on its first trigger, then 120 ticks (doubled) on its second,
+// and so on. Stopped, the hacker's stream goes as its preparation ends (killSpecialObjects). One and four workers agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_hacker_streams_at_what_it_hacks)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	std::optional<ecs::StateHashValue> hashes[2];
+	for (const std::size_t workers : {std::size_t{1}, std::size_t{4}})
+	{
+		session::Session game(match->skirmish.level, shell.game, match->Options(workers));
+		game.Tick();
+		auto &world = game.World();
+		const ecs::Entity barracks = game.Place("AmericaBarracks", match->At(300, -350), {}, match->Team(game, 0));
+		const ecs::Entity cannon = game.Place("ChinaGattlingCannon", match->At(300, -150), {}, match->Team(game, 0));
+		const ecs::Entity hacker = game.Place("ChinaInfantryHacker", match->At(150, -350), {}, match->Team(game, 1));
+		const ecs::Entity other = game.Place("ChinaInfantryHacker", match->At(150, -150), {}, match->Team(game, 1));
+		const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityHackerDisableBuilding");
+		for (const ecs::Entity unit : {hacker, other})
+			gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(unit)->Find(power), game.CurrentTick());
+		ga::FireSpecialPowerAtObject(game.Game(), hacker, "SpecialAbilityHackerDisableBuilding", barracks, true);
+		ga::FireSpecialPowerAtObject(game.Game(), other, "SpecialAbilityHackerDisableBuilding", cannon, true);
+		const auto streamOf = [&](ecs::Entity unit) {
+			ecs::Entity found;
+			ecs::Query<ecs::Read<ga::AbilityLaser>> query(world);
+			query.ForEachChunk([&](auto chunk) {
+				const auto lasers = chunk.template Get<ga::AbilityLaser>();
+				const auto entities = chunk.Entities();
+				for (std::size_t row = 0; row < lasers.size(); ++row)
+					if (lasers[row].parent == unit)
+						found = entities[row];
+			});
+			return found;
+		};
+		std::vector<std::uint64_t> barracksFx, cannonFx;
+		std::vector<std::uint64_t> cannonTriggers;
+		std::uint64_t lastCannon = 0;
+		bool checked = false;
+		for (int tick = 0; tick < 1500 && cannonTriggers.size() < 4; ++tick)
+		{
+			game.Tick();
+			for (const auto &fx : world.Resource<ga::AbilityNotices>().disableFx)
+			{
+				BOOST_TEST((fx.power == power));
+				(fx.target == barracks ? barracksFx : cannonFx).push_back(fx.ticks);
+			}
+			if (const auto *until = world.Get<gp::DisabledUntil>(cannon); until != nullptr && until->until[1] != lastCannon)
+			{
+				lastCannon = until->until[1];
+				cannonTriggers.push_back(game.CurrentTick() - 1);
+			}
+			const ecs::Entity stream = streamOf(hacker);
+			if (!checked && stream != ecs::Entity{})
+			{
+				checked = true;
+				BOOST_TEST(game.DefinitionName(world.Get<gp::DefinitionRef>(stream)->index) == "BinaryDataStream");
+				BOOST_TEST(world.Get<gp::Owner>(stream)->player == world.Get<gp::Owner>(hacker)->player);
+				const auto &laser = *world.Get<ga::AbilityLaser>(stream);
+				const auto &at = world.Get<gp::Transform>(barracks)->position;
+				BOOST_TEST((laser.end.x == at.x && laser.end.y == at.y));
+				BOOST_TEST((laser.end.z == at.z + Fixed::FromInt(10)));
+				BOOST_TEST(world.Get<gp::Appearance>(hacker)->Test(generalszh::content::ModelConditionBit("FIRING_A")));
+				BOOST_TEST(!world.Get<gp::Appearance>(hacker)->Test(generalszh::content::ModelConditionBit("UNPACKING")));
+			}
+		}
+		BOOST_TEST_REQUIRE(checked);
+		BOOST_TEST_REQUIRE(cannonTriggers.size() == 4u);
+		BOOST_TEST(barracksFx.size() >= 4u);
+		for (const std::uint64_t ticks : barracksFx)
+			BOOST_TEST(ticks == 60u);
+		// The cannon's: its second and fourth triggers only, doubled.
+		BOOST_TEST_REQUIRE(cannonFx.size() == 2u);
+		BOOST_TEST(cannonFx[0] == 120u);
+		BOOST_TEST(cannonFx[1] == 120u);
+		BOOST_TEST((streamOf(other) != ecs::Entity{}));
+		ga::OrderStop(game.Game(), hacker, true);
+		for (int tick = 0; tick < 3; ++tick)
+			game.Tick();
+		BOOST_TEST((streamOf(hacker) == ecs::Entity{}));
+		hashes[workers == 1 ? 0 : 1] = game.StateHash();
+	}
+	BOOST_TEST((hashes[0] == hashes[1]));
+}
+
+// Legacy parity (SpecialAbilityUpdate::startPreparation, SPECIAL_MISSILE_DEFENDER_LASER_GUIDED_MISSILES -> createSpecialObject,
+// initLaser): a Missile Defender fired by a script at a Battlemaster streams its LaserBeam at the tank's centre as it
+// starts preparing (and keeps guiding: its preparation is persistent); stopped, the beam goes as its preparation ends
+// (killSpecialObjects).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_defender_streams_its_laser_while_it_guides)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	namespace ga = generalszh::gameplay;
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity defender = game.Place("AmericaInfantryMissileDefender", match->At(150, -350), {}, match->Team(game, 0));
+	const ecs::Entity tank = game.Place("ChinaTankBattleMaster", match->At(300, -350), {}, match->Team(game, 1));
+	const std::uint32_t power = *shell.game.powers.Template("SpecialAbilityMissileDefenderLaserGuidedMissiles");
+	gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(defender)->Find(power), game.CurrentTick());
+	ga::FireSpecialPowerAtObject(game.Game(), defender, "SpecialAbilityMissileDefenderLaserGuidedMissiles", tank, true);
+	const auto beams = [&] {
+		std::vector<ecs::Entity> found;
+		ecs::Query<ecs::Read<ga::AbilityLaser>> query(world);
+		query.ForEachChunk([&](auto chunk) {
+			const auto entities = chunk.Entities();
+			found.insert(found.end(), entities.begin(), entities.end());
+		});
+		return found;
+	};
+	std::optional<std::uint64_t> streaming, preparing;
+	for (int tick = 0; tick < 600 && !streaming; ++tick)
+	{
+		game.Tick();
+		if (!preparing && world.Get<gp::AiActivity>(defender)->usingAbility != 0)
+			preparing = game.CurrentTick();
+		if (!beams().empty())
+			streaming = game.CurrentTick();
+	}
+	BOOST_TEST_REQUIRE(streaming.has_value());
+	BOOST_TEST_REQUIRE(preparing.has_value());
+	BOOST_TEST(*streaming == *preparing); // made as the tick's ability effects apply
+	const ecs::Entity beam = beams().front();
+	BOOST_TEST(game.DefinitionName(world.Get<gp::DefinitionRef>(beam)->index) == "LaserBeam");
+	BOOST_TEST((world.Get<ga::AbilityLaser>(beam)->parent == defender));
+	for (int tick = 0; tick < 30; ++tick)
+		game.Tick();
+	BOOST_TEST(beams().size() == 1u); // still guiding
+	ga::OrderStop(game.Game(), defender, true);
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	BOOST_TEST(world.Get<gp::AiActivity>(defender)->usingAbility == 0);
+	BOOST_TEST(beams().empty());
 }
 
 // Legacy parity (SpecialAbilityUpdate::triggerAbilityEffect, SPECIAL_HELIX_NAPALM_BOMB -> createSpecialObject): a Helix
@@ -2269,9 +2456,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_saboteurs_shut_down_power_factories_timers_an
 	for (int n = 0; n < 900 && std::ranges::any_of(sabotaged, [](const auto &at) { return !at; }); ++n)
 	{
 		tick();
+		std::size_t now = 0;
 		for (std::size_t index = 0; index < 4; ++index)
 			if (!sabotaged[index] && !world.IsAlive(one.saboteurs[index]))
+			{
 				sabotaged[index] = game.CurrentTick();
+				++now;
+			}
+		// doSabotageFeedbackFX once, the frame it sabotages: the tick's feedback notices are that tick's sabotages only.
+		BOOST_TEST(world.Resource<ga::AbilityNotices>().sabotages.size() == now);
 	}
 	for (std::size_t index = 0; index < 4; ++index)
 		BOOST_TEST_REQUIRE(sabotaged[index].has_value());
@@ -2782,8 +2975,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_neutron_blast_kills_crews_and_leaves_their_
 	BOOST_TEST_REQUIRE(killed.has_value());
 	BOOST_TEST_MESSAGE("blast on " << *killed);
 	BOOST_TEST((world.IsAlive(ranger) && world.Get<gp::Dying>(ranger) == nullptr)); // not yet: with the next frame's dead
+	// neutronBlastToObject's setDisabled(DISABLED_UNMANNED) on the Humvee and the car, once each (the presentation's
+	// SplatterVehiclePilotsBrain), noticed the tick the blast went off.
+	std::vector<ecs::Entity> unmanned;
+	for (const ga::UnmannedNotice &notice : world.Resource<ga::UnmannedNotices>().list)
+		unmanned.push_back(notice.entity);
 	game.Tick();
 	four.Tick();
+	for (const ga::UnmannedNotice &notice : world.Resource<ga::UnmannedNotices>().list)
+		unmanned.push_back(notice.entity);
+	BOOST_TEST(unmanned.size() == 2u);
+	BOOST_TEST(std::count(unmanned.begin(), unmanned.end(), humvee) == 1);
+	BOOST_TEST(std::count(unmanned.begin(), unmanned.end(), car) == 1);
 	const auto dead = [&](ecs::Entity entity) { return !world.IsAlive(entity) || world.Get<gp::Dying>(entity) != nullptr; };
 	BOOST_TEST(dead(ranger));
 	BOOST_TEST(dead(rider));
@@ -3396,6 +3599,123 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_bored_dozer_repairs_what_is_near_else_clear
 	BOOST_TEST(clearing == made + 151);
 	BOOST_TEST(cleared != 0u);
 	BOOST_TEST((four->StateHash() == game->StateHash()));
+}
+
+// DozerAIUpdate::getBoredRange (AIDozerBoredRadiusModifier, Default/AIData.ini 2.0): a computer player's dozer looks
+// twice its BoredRange when bored, a human player's its BoredRange. A China dozer of a computer player (BoredRange 150:
+// 300) and an America dozer of a human player (150), each with a hurt power plant of its own 250 away: the China dozer
+// goes to repair its plant the frame it is bored (151 after it was made); the America dozer finds nothing in reach.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_players_bored_dozer_looks_twice_as_far)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	// Player::setPlayerType(PLAYER_COMPUTER): the China seat is the computer's.
+	const std::uint32_t china = *game.Teams().FindPlayer("player1");
+	game.Game().roster.PlayerAt(china).human = false;
+	const std::uint64_t made = game.CurrentTick();
+	const ecs::Entity computerDozer = game.Place("ChinaVehicleDozer", match->At(300, -350), {}, match->Team(game, 1));
+	const ecs::Entity computerPlant = game.Place("ChinaPowerPlant", match->At(300, -100), {}, match->Team(game, 1));
+	const ecs::Entity humanDozer = game.Place("AmericaVehicleDozer", match->At(-300, -350), {}, match->Team(game, 0));
+	const ecs::Entity humanPlant = game.Place("AmericaPowerPlant", match->At(-300, -100), {}, match->Team(game, 0));
+	for (const ecs::Entity plant : {computerPlant, humanPlant})
+	{
+		auto &health = *world.Get<gp::Health>(plant);
+		health.current = health.maximum / Fixed::FromInt(2);
+	}
+	BOOST_TEST_REQUIRE(world.Get<gameplay::BuilderBoredom>(computerDozer) != nullptr);
+	BOOST_TEST((world.Get<gameplay::BuilderBoredom>(computerDozer)->boredRange == Fixed::FromInt(150)));
+	std::uint64_t repairing = 0;
+	bool humanRepairs = false;
+	for (int tick = 0; tick < 240; ++tick)
+	{
+		game.Tick();
+		if (repairing == 0)
+			if (const auto *task = world.Get<gp::Builder>(computerDozer); task != nullptr && task->target == computerPlant && task->repair != 0)
+				repairing = game.CurrentTick();
+		if (const auto *task = world.Get<gp::Builder>(humanDozer); task != nullptr && task->target == humanPlant)
+			humanRepairs = true;
+	}
+	BOOST_TEST(repairing == made + 151);
+	BOOST_TEST(!humanRepairs);
+}
+
+// Legacy parity (ScriptActions::doNamedFireSpecialPowerAtWaypoint -> the power's first module's doSpecialPowerAtLocation;
+// CashHackSpecialPower::doSpecialPowerAtLocation: "only allowed at objects", nothing happens; CashBountyPower keeps
+// SpecialPowerModule::doSpecialPowerAtLocation: initiateIntentToDoSpecialPower, then triggerSpecialPower at the spot as
+// UpdateModuleStartsAttack is No). A China Command Center's SuperweaponCashHack fired by a script at a spot neither
+// triggers nor starts its recharge; a GLA Command Center's SpecialAbilityCashBounty1 fired so triggers at once, at the spot.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_power_fired_at_a_spot_does_what_its_module_does_there)
+{
+	namespace ga = generalszh::gameplay;
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	auto &world = game.World();
+	const ecs::Entity china = game.Place("ChinaCommandCenter", match->At(300, -350), {}, match->Team(game, 1));
+	const ecs::Entity gla = game.Place("GLACommandCenter", match->At(-300, -350), {}, match->Team(game, 0));
+	const std::uint32_t hack = *shell.game.powers.Template("SuperweaponCashHack");
+	const std::uint32_t bounty = *shell.game.powers.Template("SpecialAbilityCashBounty1");
+	BOOST_TEST_REQUIRE(world.Get<gp::SpecialPowerTimers>(china)->Find(hack) != nullptr);
+	BOOST_TEST_REQUIRE(world.Get<gp::SpecialPowerTimers>(gla)->Find(bounty) != nullptr);
+	auto &notices = world.Resource<ga::AbilityNotices>().powers;
+	notices.clear();
+	const gp::SpecialPowerTimer hackBefore = *world.Get<gp::SpecialPowerTimers>(china)->Find(hack);
+	const Engine::Math::FixedVector2 spot = match->At(0, -350);
+	ga::FireSpecialPower(game.Game(), china, "SuperweaponCashHack", spot, true);
+	BOOST_TEST(notices.empty());
+	BOOST_TEST(world.Get<gp::SpecialPowerTimers>(china)->Find(hack)->availableOn == hackBefore.availableOn);
+	ga::FireSpecialPower(game.Game(), gla, "SpecialAbilityCashBounty1", spot, true);
+	BOOST_TEST_REQUIRE(notices.size() == 1u);
+	BOOST_TEST((notices[0].source == gla));
+	BOOST_TEST(notices[0].power == bounty);
+	BOOST_TEST_REQUIRE(notices[0].at.has_value());
+	BOOST_TEST((notices[0].at->XY() == spot));
+}
+
+// EA's StealthDetectorUpdate.cpp (StealthDetectorUpdate::StealthDetectorUpdate, setSDEnabled): an enabled detector
+// starts at a random phase, GameLogicRandomValue(1, DetectionRate); an InitiallyDisabled one sleeps forever and draws
+// nothing from the logic random stream, so its first scan waits for setSDEnabled. Shipped AmericaVehicleScoutDrone:
+// DetectionRate 500 ms (15 ticks); AmericaStrategyCenter: InitiallyDisabled (enabled by the Search and Destroy plan).
+BOOST_AUTO_TEST_CASE(legacy_parity_only_an_enabled_stealth_detector_draws_its_scan_phase)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	game.Tick();
+	const std::uint32_t team = match->Team(game, 0);
+	const std::uint64_t placed = game.CurrentTick();
+	const ecs::Entity center = game.Place("AmericaStrategyCenter", match->At(250, 250), {}, team);
+	const ecs::Entity drone = game.Place("AmericaVehicleScoutDrone", match->At(150, 350), {}, team);
+	auto &world = game.World();
+	const auto *off = world.Get<gp::StealthDetector>(center);
+	const auto *on = world.Get<gp::StealthDetector>(drone);
+	BOOST_TEST_REQUIRE(off != nullptr);
+	BOOST_TEST_REQUIRE(on != nullptr);
+	BOOST_TEST(!off->Has(gp::stealth_detector_flag::Enabled));
+	BOOST_TEST(off->nextScan == 0u); // no phase drawn
+	BOOST_TEST(on->Has(gp::stealth_detector_flag::Enabled));
+	BOOST_TEST(on->rate == 15u);
+	BOOST_TEST(on->nextScan >= placed + 1);
+	BOOST_TEST(on->nextScan <= placed + 15);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

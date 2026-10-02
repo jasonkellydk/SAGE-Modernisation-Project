@@ -335,6 +335,27 @@ public:
 		return true;
 	}
 
+	// A push button's border (GadgetButtonSetBorder) follows `argb` (0xAARRGGBB): a one-pixel open rectangle just outside
+	// it in that colour; 0 (GAME_COLOR_UNDEFINED, or drawBorder off): none.
+	bool BindBorder(std::string_view window, engine::gui::mvvm::Observable<std::uint32_t> &argb)
+	{
+		if (m_document.Find_Window(window) == nullptr)
+			return Missing(window);
+		const std::string name(window);
+		const auto id = argb.Subscribe([this, name](std::uint32_t value) {
+			if (WNDWindow *target = m_document.Find_Window(name))
+			{
+				target->extra_border = value != 0;
+				target->extra_border_color = Graphics::Color2D{static_cast<float>((value >> 16) & 0xFF) / 255.0f,
+					static_cast<float>((value >> 8) & 0xFF) / 255.0f, static_cast<float>(value & 0xFF) / 255.0f,
+					static_cast<float>((value >> 24) & 0xFF) / 255.0f};
+			}
+			m_dirty = true;
+		});
+		m_releases.push_back([&argb, id] { argb.Unsubscribe(id); });
+		return true;
+	}
+
 	// A push button's clock follows `perMille` (0..1000, shown as whole percent as the original's Int percent), swept
 	// in `color`; `remaining`: the inverse clock (the part still to go darkened).
 	bool BindClock(std::string_view window, engine::gui::mvvm::Observable<std::uint32_t> &perMille, Graphics::Color2D color, bool remaining)

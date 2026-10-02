@@ -2,8 +2,10 @@ export module engine.gameplay.rts.combat.systems.missile_flight_system;
 import std;
 export import engine.gameplay.rts.combat.resources.garrison_kills;
 export import engine.gameplay.common.lifetime.components.lifetime;
+export import engine.gameplay.common.appearance.components.draw_hidden;
 
 export import engine.ecs.system.system;
+export import engine.gameplay.rts.combat.components.sneaky_target;
 export import engine.gameplay.rts.combat.components.countermeasures;
 export import engine.gameplay.rts.combat.algorithms.countermeasure_decoys;
 export import engine.gameplay.rts.combat.components.missile;
@@ -69,7 +71,7 @@ struct MissileFlightSystem
 		ecs::Read<Relationships>, ecs::Write<MissileDetonations>, ecs::Write<MissileGarrisonHits>>;
 	// Whether a victim that left the fight still exists (dying, its hulk still there) or is gone; a decoyed victim's
 	// flares and where they are.
-	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<Countermeasures>, ecs::Read<Transform>, ecs::Read<Health>>;
+	using Lookup = ecs::Lookup<ecs::Read<DefinitionRef>, ecs::Read<Countermeasures>, ecs::Read<Transform>, ecs::Read<Health>, ecs::Read<SneakyTarget>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context)
 	{
@@ -104,6 +106,8 @@ struct MissileFlightSystem
 				if (m.noDamage != 0)
 					landed.damageScale = Fixed{}; // handleProjectileDetonation without damage
 				detonated.push_back(landed);
+				// MissileAIUpdate::detonate: its drawable hidden as it holds KILL_SELF (MISSILE_KILLING_SELF).
+				context.Commands().Add<DrawHidden>(entities[row]);
 				// MissileCallsOnDie: it stays for the impact to kill it (its die modules run), and takes itself away once its
 				// KILL_SELF state has held KillSelfDelay (doKillSelfState: destroyObject); else it takes itself away now.
 				if (weapons.At(m.shot.weapon).missileCallsOnDie && lookup.Get<Health>(entities[row]) != nullptr)
@@ -117,8 +121,12 @@ struct MissileFlightSystem
 					context.Commands().Remove<MissileFlight>(entities[row]);
 					context.Commands().Add<Lifetime>(entities[row], Lifetime{tick + d.killSelfTicks, 0u, weapons.normalDeath});
 				}
+				// Else it holds KILL_SELF for KillSelfDelay (its contrail catches up), then is destroyed (doKillSelfState).
 				else
-					context.Commands().Destroy(entities[row]);
+				{
+					context.Commands().Remove<MissileFlight>(entities[row]);
+					context.Commands().Add<Lifetime>(entities[row], Lifetime{tick + d.killSelfTicks, 1u, weapons.normalDeath});
+				}
 			};
 			// The distance flown since the last tick counts against the straight run once ignited.
 			if (m.noTurnLeft > Fixed{} && m.state >= MissileState::Ignition)
@@ -263,8 +271,17 @@ struct MissileFlightSystem
 					burnOut();
 				break;
 			case MissileState::KillSelf:
-				// Held a few ticks (its trail catches up), then gone.
-				if (tick - m.stateTick >= d.killSelfTicks)
+				// Held a few ticks (its trail catches up), then gone (doKillSelfState): killed with DetonateCallsKill (its die
+				// modules run; the lifetime system kills it the tick the hold ends), else destroyed.
+				if (d.detonateCallsKill)
+				{
+					if (tick + 1 - m.stateTick >= d.killSelfTicks)
+					{
+						context.Commands().Remove<MissileFlight>(entities[row]);
+						context.Commands().Add<Lifetime>(entities[row], Lifetime{std::max(tick + 1, m.stateTick + d.killSelfTicks), 0u, weapons.normalDeath});
+					}
+				}
+				else if (tick - m.stateTick >= d.killSelfTicks)
 					context.Commands().Destroy(entities[row]);
 				gone = true;
 				break;
@@ -272,7 +289,11 @@ struct MissileFlightSystem
 			if (gone)
 				continue;
 			// Running into its victim or anything its weapon collides with, armed, it blows up (projectileHandleCollision).
-			if (const SpatialEntry *other = m.armed ? ProjectileCollision(weapons.At(m.shot.weapon), m.shot, entities[row], position, d.radius, spatial, relationships) : nullptr)
+			const auto sneaky = [&](ecs::Entity thing) {
+				const SneakyTarget *miss = context.Lookup<Lookup>().Get<SneakyTarget>(thing);
+				return miss != nullptr && miss->Active(tick);
+			};
+			if (const SpatialEntry *other = m.armed ? ProjectileCollision(weapons.At(m.shot.weapon), m.shot, entities[row], position, d.radius, spatial, relationships, sneaky) : nullptr)
 			{
 				// GarrisonHitKillCount: a building is left to the garrison clearing (it kills riders instead, or it detonates).
 				if (d.garrisonHitKill > 0 && (other->classes & target_class::Structure) != 0)

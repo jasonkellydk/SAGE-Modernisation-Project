@@ -63,8 +63,8 @@ struct CollideWeaponSystem
 				for (const ecs::Entity mover : movers)
 				{
 					const Transform *victim = lookup.template Get<Transform>(mover);
-					const Engine::Math::Fixed distance = Engine::Math::Distance(at.XY(), victim->position.XY());
-					const std::uint64_t travel = weapon.speed > Engine::Math::Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
+					// fireWeapon(me, other): dealt at once under a frame's travel (3D), else after it (HitDelayTicks).
+					const std::uint64_t travel = HitDelayTicks(at, victim->position, weapon.speed);
 					Shot shot;
 					shot.source = entities[row];
 					shot.target = mover;

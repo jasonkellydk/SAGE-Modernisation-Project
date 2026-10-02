@@ -9,8 +9,9 @@ import engine.ecs.system.system;
 
 // A unit that cleans up hazards on its own (CleanupHazardUpdate: the Ambulance's toxin clean-up), as data: how often and
 // how far it looks (ScanRate, ScanRange), the ticks left until it looks again (m_nextScanFrames), the hazard it last
-// picked (m_bestTargetID) and whether it was within reach of it (m_inRange); and the area a CleanupAreaPower sent it to
-// (m_pos) and how far round it it cleans (m_moveRange; 0: none). Simulation state: checkpointed.
+// picked (m_bestTargetID) and whether it was within reach of it (m_inRange); the area a CleanupAreaPower sent it to
+// (m_pos) and how far round it it cleans (m_moveRange; 0: none); and the weapon slot it cleans with (WeaponSlot: PRIMARY 0,
+// SECONDARY 1, TERTIARY 2). Simulation state: checkpointed.
 export namespace generalszh::gameplay
 {
 struct CleanupHazard
@@ -22,7 +23,8 @@ struct CleanupHazard
 	std::uint64_t scanTicks{0};
 	std::uint64_t nextScan{0};
 	std::uint8_t inRange{0};
-	std::uint8_t reserved[7]{};
+	std::uint8_t slot{0};
+	std::uint8_t reserved[6]{};
 };
 }
 
@@ -41,7 +43,7 @@ struct ComponentTraits<generalszh::gameplay::CleanupHazard>
 		hasher.AppendU64((std::uint64_t{value.best.index} << 32) | value.best.generation);
 		hasher.AppendU64(static_cast<std::uint64_t>(value.moveRange.Raw()));
 		hasher.AppendU64(value.nextScan);
-		hasher.AppendU64(value.inRange);
+		hasher.AppendU64((std::uint64_t{value.slot} << 8) | value.inRange);
 	}
 };
 }

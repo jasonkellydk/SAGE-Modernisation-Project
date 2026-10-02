@@ -100,7 +100,7 @@ void ObjectRendering::Preload(Graphics::Device &device, std::span<const ObjectIn
 
 void ObjectRendering::Draw(Graphics::Device &device, Graphics::CommandList &commands, const std::array<float, 16> &viewProjection,
 	const std::array<float, 3> &eye, const engine::level::LightingSet *lighting, std::span<const ObjectInstance> instances,
-	ModelLibrary &library, std::span<const ShownLight> lights, const ShroudBinding *shroud, float infantryLightScale)
+	ModelLibrary &library, std::span<const ShownLight> lights, const ShroudBinding *shroud, float infantryLightScale, const OcclusionPlan *occlusion)
 {
 	Assets::AssetCache *cache = Assets::Try_Get_Asset_Cache();
 	// W3DShroudMaterialPassClass: objects multiplied by the viewer's shroud as the terrain is.
@@ -157,11 +157,10 @@ void ObjectRendering::Draw(Graphics::Device &device, Graphics::CommandList &comm
 			infantryGlobals.push_back(source);
 		}
 	}
-	for (const ObjectInstance &instance : instances)
-	{
+	const auto drawOne = [&](const ObjectInstance &instance, const Graphics::RHIStencilDescription *stencil) {
 		const auto [model, binding] = state.Bound(device, *cache, library, instance.look);
 		if (model == nullptr)
-			continue;
+			return;
 		if (lighting != nullptr)
 		{
 			Graphics::LocalLighting environment;
@@ -214,9 +213,9 @@ void ObjectRendering::Draw(Graphics::Device &device, Graphics::CommandList &comm
 			if (!instance.heatOnly)
 			{
 				if (instance.opacity < 1.0f)
-					binding->Draw_Part_Translucent(commands, part, parameters, instance.opacity, pose, 0, shroudTexture);
+					binding->Draw_Part_Translucent(commands, part, parameters, instance.opacity, pose, 0, shroudTexture, stencil);
 				else
-					binding->Draw_Part(commands, part, parameters, pose, 0, shroudTexture);
+					binding->Draw_Part(commands, part, parameters, pose, 0, shroudTexture, stencil);
 			}
 			// W3DScene's heat vision pass (m_heatVisionMaterialPass / m_heatVisionOnlyPass): additive, lit with diffuse
 			// (0.02, 0.01, 0) and emissive (0.5, 0.2, 0) scaled by its strength; over its own drawing (depth equal), or
@@ -250,6 +249,35 @@ void ObjectRendering::Draw(Graphics::Device &device, Graphics::CommandList &comm
 			}
 		}
 		parameters.uv_transform[0][3] = 0.0f;
+	};
+	if (occlusion == nullptr || !occlusion->active)
+	{
+		for (const ObjectInstance &instance : instances)
+			drawOne(instance, nullptr);
+		return;
+	}
+	// RTS3DScene::flushOccludedObjectsIntoStencil: the occludees store their player's colour index (Always, Replace); the
+	// occluders set the top bit where they draw in front (reference 0xFF, write mask 0x80).
+	for (const OcclusionPlan::Entry &entry : occlusion->order)
+	{
+		if (entry.instance >= instances.size())
+			continue;
+		if (entry.group == OcclusionPlan::Group::Plain)
+		{
+			drawOne(instances[entry.instance], nullptr);
+			continue;
+		}
+		Graphics::RHIStencilDescription stencil;
+		stencil.enabled = true;
+		stencil.read_mask = 0xFF;
+		stencil.write_mask = entry.group == OcclusionPlan::Group::Occluder ? 0x80 : 0xFF;
+		stencil.reference = entry.reference;
+		stencil.front.comparison = Graphics::RHIComparison::Always;
+		stencil.front.fail = Graphics::RHIStencilOperation::Keep;
+		stencil.front.depth_fail = Graphics::RHIStencilOperation::Keep;
+		stencil.front.pass = Graphics::RHIStencilOperation::Replace;
+		stencil.back = stencil.front;
+		drawOne(instances[entry.instance], &stencil);
 	}
 }
 

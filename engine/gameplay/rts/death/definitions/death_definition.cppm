@@ -366,6 +366,9 @@ public:
 
 	// The damage type that crushes (CrushDie applies only to it).
 	std::uint32_t crushDamageType{0xFFFFFFFFu};
+	// The game's status bit(s) for being built (UNDER_CONSTRUCTION), which die filters see while UnderConstruction is on
+	// it (Object::getStatusBits: the original keeps it among the status bits).
+	std::uint64_t underConstructionStatus{0};
 
 private:
 	std::vector<DeathDefinition> m_definitions;

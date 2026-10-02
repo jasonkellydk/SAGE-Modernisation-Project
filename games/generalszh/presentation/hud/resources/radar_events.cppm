@@ -48,7 +48,6 @@ struct RadarEvents
 
 struct RadarFeedback
 {
-	std::vector<bool> onRadar; // by definition index
 	std::uint32_t penaltyDamage{0xFFFFFFFFu};
 	std::uint32_t healingDamage{0xFFFFFFFFu};
 	// RADAR:UnderAttack, UnitUnderAttack, HarvesterUnderAttack, StructureUnderAttack, Infiltration.
@@ -57,7 +56,11 @@ struct RadarFeedback
 	std::string harvesterSound, structureSound, infiltrationSound;
 	// Each definition's BattlePlanUpdate messages (BombardmentMessageLabel, HoldTheLineMessageLabel,
 	// SearchAndDestroyMessageLabel), by definition index (none: empty).
-	std::vector<std::array<std::u16string, 3>> battlePlanMessages;
+	std::map<std::string, std::array<std::u16string, 3>, std::less<>> battlePlanMessages;
+	// StealthDetectorUpdate's feedback: MESSAGE:StealthDiscovered / StealthNeutralized, MiscAudio StealthDiscoveredSound /
+	// StealthNeutralizedSound (each definition's EVA lines and kinds are its DefinitionLooks').
+	std::u16string stealthDiscovered, stealthNeutralized;
+	std::string stealthDiscoveredSound, stealthNeutralizedSound;
 };
 }
 

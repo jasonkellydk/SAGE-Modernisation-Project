@@ -17,6 +17,9 @@ import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.common.weapons.components.weapon_slots;
 import engine.gameplay.common.weapons.resources.weapon_catalog;
 import engine.gameplay.rts.veterancy.components.experience;
+export import engine.gameplay.rts.containment.components.transport;
+export import engine.gameplay.rts.containment.components.mount;
+export import engine.gameplay.rts.containment.resources.cargo_manifest;
 import engine.gameplay.rts.death.components.dying;
 import games.generalszh.content.objects.object_definition;
 import games.generalszh.hud.superweapon_timers;
@@ -35,6 +38,9 @@ import engine.gameplay.rts.construction.components.sale;
 import engine.gameplay.rts.construction.components.under_construction;
 import engine.gameplay.rts.construction.components.construction_progress;
 import games.generalszh.presentation.hud.algorithms.named_timer_lines;
+export import games.generalszh.presentation.hud.algorithms.language_font_choice;
+import games.generalszh.presentation.interaction.algorithms.hotkey_teams;
+import games.generalszh.presentation.objects.components.beacon_look;
 
 // The extract stage of the interface's drawing: what InGameUI::postDraw and each Drawable's UI (drawHealthBar,
 // drawAmmo, drawIconUI) would draw this frame, read from the presentation's resources and side tables and the
@@ -50,6 +56,7 @@ struct OverlaySource
 	bool specialPowerDisplayDisabled{false}; // a script hid the superweapon countdowns
 	float zoom{1};                          // the camera's zoom
 	std::u16string constructionPattern;     // CONTROLBAR:UnderConstructionDesc ("Building: %.0f%%")
+	const content::DrawGroupInfoContent *drawGroupInfo{nullptr}; // DrawGroupInfo.ini with Language.ini's font (none: no numbers)
 };
 
 namespace overlay_detail
@@ -154,6 +161,100 @@ inline void ExtractAmmoPips(ecs::World &world, session::SessionView &game, ecs::
 	}
 }
 
+// What a container's pips show (ContainModuleInterface::getContainerPipsToShow and its overrides): its room (getContainMax)
+// and how much of it is used (getContainCount + getExtraSlotsInUse), with drawContained's count of its INFANTRY riders
+// (the first that many full pips are theirs). None: no contain, a RiderChangeContain (its rider is always there), a
+// HelixContain with ShouldDrawPips No, or an OverlordContain not redirected to a mounted structure's contain (with one:
+// that contain's, which its own Transport here holds). A tunnel or cave counts its network's riders.
+struct ContainerPipCount
+{
+	std::uint32_t total{0};
+	std::uint32_t full{0};
+	std::uint32_t infantry{0};
+};
+
+inline std::optional<ContainerPipCount> ContainerPips(const ecs::World &world, const SelectionCatalog &catalog, ecs::Entity entity)
+{
+	namespace gp = engine::gameplay;
+	const auto *definition = world.Get<gp::DefinitionRef>(entity);
+	const auto *transport = world.Get<gp::Transport>(entity);
+	const SelectionLook *look = definition != nullptr ? catalog.Of(definition->index) : nullptr;
+	if (transport == nullptr || look == nullptr || look->contain == ContainKind::None || look->contain == ContainKind::RiderChange)
+		return std::nullopt;
+	if (look->contain == ContainKind::Helix && !look->drawsPips)
+		return std::nullopt;
+	if (look->contain == ContainKind::Overlord)
+	{
+		const auto *mount = world.Get<gp::Mount>(entity);
+		if (mount == nullptr || !world.IsAlive(mount->rider) || world.Get<gp::Transport>(mount->rider) == nullptr)
+			return std::nullopt;
+	}
+	const auto *manifest = world.FindResource<gp::CargoManifest>();
+	std::vector<ecs::Entity> riders;
+	ContainerPipCount count{transport->definition.slots, transport->occupied, 0};
+	if (manifest != nullptr)
+	{
+		if (const auto network = manifest->NetworkOf(entity))
+		{
+			for (const ecs::Entity tunnel : manifest->Network(*network))
+				for (const ecs::Entity rider : manifest->Aboard(tunnel))
+					riders.push_back(rider);
+			count.full = static_cast<std::uint32_t>(riders.size());
+		}
+		else
+		{
+			const auto aboard = manifest->Aboard(entity);
+			riders.assign(aboard.begin(), aboard.end());
+		}
+	}
+	for (const ecs::Entity rider : riders)
+		if (const auto *ref = world.Get<gp::DefinitionRef>(rider))
+			if (const SelectionLook *riderLook = catalog.Of(ref->index); riderLook != nullptr && (riderLook->kinds & select_kind::Infantry) != 0)
+				++count.infantry;
+	return count;
+}
+
+// Drawable::drawContained for its own player's selected: none while empty; a pip a slot of its room, the used ones
+// SCPPipFull (green for each of its infantry, blue after), the rest SCPPipEmpty, left-aligned with its health bar under
+// its projected top (plus ContainerPipWorldOffset).
+inline void ExtractContainerPips(ecs::World &world, session::SessionView &game, ecs::Entity entity, const SelectionLook &look, float sx, float sy,
+	float zoom, InGameOverlay &overlay)
+{
+	const auto *local = world.FindResource<LocalPlayer>();
+	const auto *owner = world.Get<engine::gameplay::Owner>(entity);
+	if (local == nullptr || !local->valid || owner == nullptr || owner->player != local->player)
+		return;
+	const auto pips = ContainerPips(world, world.Resource<SelectionCatalog>(), entity);
+	if (!pips || pips->full == 0)
+		return;
+	const auto *transform = world.Get<engine::gameplay::Transform>(entity);
+	const auto *definition = world.Get<engine::gameplay::DefinitionRef>(entity);
+	const auto &data = game.Content().gameData;
+	const auto &view = world.Resource<InteractionView>();
+	float cx = 0, cy = 0;
+	const auto &offset = data.containerPipWorldOffset;
+	if (!view.Project(Engine::Math::ToFloat(transform->position.x + offset[0]), Engine::Math::ToFloat(transform->position.y + offset[1]),
+			Engine::Math::ToFloat(transform->position.z + offset[2]) + look.top, cx, cy))
+		return;
+	const auto region = HealthRegion(static_cast<int>(sx), static_cast<int>(sy), look.healthBoxWidth, zoom);
+	const float bounding = Engine::Math::ToFloat(content::BoundingSphereRadius(game.Definition(definition->index).geometry));
+	for (std::uint32_t pip = 0; pip < pips->total; ++pip)
+	{
+		const bool full = pip < pips->full;
+		OverlayImage image{full ? "SCPPipFull" : "SCPPipEmpty", 0.0f, 0.0f, 1.0f, 1.0f};
+		image.placement = OverlayImage::Placement::ContainerPip;
+		image.region = region;
+		image.pip = static_cast<int>(pip);
+		image.pipFull = full;
+		image.pipCenterY = static_cast<int>(cy);
+		image.pipOffset = Engine::Math::ToFloat(data.containerPipScreenOffset[1]);
+		image.pipBounding = bounding;
+		if (full)
+			image.tint = pip < pips->infantry ? std::array<float, 3>{0.0f, 1.0f, 0.0f} : std::array<float, 3>{0.0f, 0.0f, 1.0f};
+		overlay.images.push_back(std::move(image));
+	}
+}
+
 // Drawable::drawHealthBar for the selected (computeHealthRegion: the health box position projected, its width over the
 // zoom, 3 high, starting 0.45 of its width left of centre; none at no health or for FORCEATTACKABLE), then its ammo.
 inline void ExtractSelectedMarkers(ecs::World &world, session::SessionView &game, const OverlaySource &source, InGameOverlay &overlay)
@@ -188,6 +289,7 @@ inline void ExtractSelectedMarkers(ecs::World &world, session::SessionView &game
 			marker.disabled = (off->mask & ~engine::gameplay::disabled_type::Held) != 0;
 		overlay.selected.push_back(marker);
 		ExtractAmmoPips(world, game, entity, *look, sx, sy, zoom, overlay);
+		ExtractContainerPips(world, game, entity, *look, sx, sy, zoom, overlay);
 	}
 }
 
@@ -205,8 +307,24 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 	const auto *looks = world.FindResource<LookCatalog>();
 	const auto &iconTable = world.Side<ObjectIcons>();
 	const content::Anim2DTemplates &animations = *source.animations;
+	// The beacons' side tables, where the world has them.
+	const bool captioned = world.Components().TryGet<BeaconCaption>() != ecs::InvalidComponentId;
+	const bool beaconLooks = world.Components().TryGet<BeaconLook>() != ecs::InvalidComponentId;
 	world.Resource<engine::gameplay::VisibleObjects>().ForEach([&](const engine::gameplay::VisibleObject &object) {
 		const SelectionLook *look = catalog.Of(object.definition);
+		// drawCaption (before the construction percent): a beacon's caption, unless this client hides the beacon
+		// (BeaconClientUpdate::hideBeacon: a hidden drawable draws no UI), at its geometry's centre.
+		if (const auto *caption = captioned ? world.Side<BeaconCaption>().Get(object.entity) : nullptr; caption != nullptr && !caption->text.empty())
+		{
+			const auto *beacon = beaconLooks ? world.Side<BeaconLook>().Get(object.entity) : nullptr;
+			const auto &at = object.transform.position;
+			const float centre = look != nullptr ? look->center : 0.0f;
+			float sx = 0, sy = 0;
+			if ((beacon == nullptr || beacon->hidden == 0) &&
+				view.Project(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z) + centre, sx, sy))
+				overlay.captions.push_back({caption->text, static_cast<std::int32_t>(sx), static_cast<std::int32_t>(sy),
+					overlay_detail::Rgba(source.inGameUi->drawableCaptionColor)});
+		}
 		// drawConstructPercent (health region or not): a structure under construction and not being sold shows "Building:
 		// n%" in white, centred over its geometry's centre, unless that lands off the screen's left edge.
 		if (const auto *progress = world.Get<engine::gameplay::ConstructionProgress>(object.entity);
@@ -217,7 +335,7 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 			const float centre = look != nullptr ? look->center : 0.0f; // getZDeltaToCenterPosition
 			float sx = 0, sy = 0;
 			if (view.Project(Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z) + centre, sx, sy) && static_cast<int>(sx) >= 1)
-				overlay.texts.push_back({FormatConstructionPercent(source.constructionPattern, progress->percent.Raw()), sx, sy, {1, 1, 1, 1}});
+				overlay.texts.push_back({FormatConstructionPercent(source.constructionPattern, progress->percent.Raw()), sx, sy, {1, 1, 1, 1}, true});
 		}
 		if (look == nullptr || look->healthBoxWidth <= 0.0f)
 			return;
@@ -239,7 +357,8 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 				if (found == animations.end() || found->second.images.empty())
 					continue;
 				const auto frames = static_cast<std::uint64_t>(std::max(clock - icons->since[index], 0.0) * 30.0);
-				OverlayImage image{found->second.images[found->second.ImageAt(frames)], sx, sy, 1.0f, 1.0f};
+				const std::size_t first = found->second.StartImage(icons->roll[index]);
+				OverlayImage image{found->second.images[found->second.ImageFrom(frames, first)], sx, sy, 1.0f, 1.0f};
 				image.placement = OverlayImage::Placement::Icon;
 				image.icon = icon;
 				image.region = HealthRegion(screenX, screenY, look->healthBoxWidth, zoom);
@@ -264,7 +383,7 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 }
 
 // InGameUI::updateAndDrawWorldAnimations: each at its risen point, on the image its Animation2D shows this many logic
-// frames in, its own size at 1.3 over the zoom, at its fading alpha.
+// frames in (from its first image, or a random one with RandomizeStartFrame), its own size at 1.3 over the zoom, at its fading alpha.
 inline void ExtractWorldAnimations(ecs::World &world, const OverlaySource &source, InGameOverlay &overlay)
 {
 	const auto *shown = world.FindResource<WorldAnimations>();
@@ -283,7 +402,8 @@ inline void ExtractWorldAnimations(ecs::World &world, const OverlaySource &sourc
 		if (!view.Project(at[0], at[1], at[2], sx, sy))
 			continue;
 		const auto frames = static_cast<std::uint64_t>(std::max(clock - animation.start, 0.0) * 30.0);
-		overlay.images.push_back({found->second.images[found->second.ImageAt(frames)], sx, sy, 1.3f / zoom, animation.AlphaAt(clock)});
+		const std::size_t image = found->second.ImageFrom(frames, found->second.StartImage(animation.Roll()));
+		overlay.images.push_back({found->second.images[image], sx, sy, 1.3f / zoom, animation.AlphaAt(clock)});
 	}
 }
 
@@ -324,6 +444,47 @@ inline void ExtractFloatingTexts(ecs::World &world, InGameOverlay &overlay)
 	}
 }
 
+// GameClient::flushTextBearingDrawables -> Drawable::drawUIText, for the drawables drawIconUI found bearing text
+// (drawsAnyUIText: selected, the local player's, in a hotkey squad; alive and not IGNORED_IN_GUI; while icon UI is on and
+// no script fade runs): each one's group number by its health region (computeHealthRegion), placed and coloured by
+// DrawGroupInfo (PlaceGroupNumber), in its controlling player's colour unless DrawGroupInfo fixes one.
+inline void ExtractGroupNumbers(ecs::World &world, const OverlaySource &source, InGameOverlay &overlay)
+{
+	if (source.drawGroupInfo == nullptr || !source.drawIconUi || overlay.fade != 0)
+		return;
+	const auto &view = world.Resource<InteractionView>();
+	const auto &catalog = world.Resource<SelectionCatalog>();
+	const auto *looks = world.FindResource<LookCatalog>();
+	const float zoom = std::max(source.zoom, 0.01f);
+	for (const ecs::Entity entity : world.Side<Selected>().Entities())
+	{
+		const std::int32_t group = ShownGroupNumber(world, entity);
+		if (!ShowsGroupNumber(group))
+			continue;
+		const auto *transform = world.Get<engine::gameplay::Transform>(entity);
+		const auto *definition = world.Get<engine::gameplay::DefinitionRef>(entity);
+		const auto *owner = world.Get<engine::gameplay::Owner>(entity);
+		if (transform == nullptr || definition == nullptr || owner == nullptr)
+			continue;
+		if (const auto *body = world.Get<engine::gameplay::Health>(entity); body != nullptr && engine::gameplay::IsDead(*body))
+			continue;
+		const SelectionLook *look = catalog.Of(definition->index);
+		if (look == nullptr || look->healthBoxWidth <= 0.0f || (look->kinds & select_kind::IgnoredInGui) != 0)
+			continue;
+		float sx = 0, sy = 0;
+		if (!view.Project(Engine::Math::ToFloat(transform->position.x), Engine::Math::ToFloat(transform->position.y),
+				Engine::Math::ToFloat(transform->position.z) + look->top + 10.0f, sx, sy))
+			continue;
+		const auto region = HealthRegion(static_cast<int>(sx), static_cast<int>(sy), look->healthBoxWidth, zoom);
+		std::array<std::uint8_t, 4> playerColor{255, 255, 255, 255};
+		if (looks != nullptr && owner->player < looks->playerColors.size())
+			for (std::size_t channel = 0; channel < 4; ++channel)
+				playerColor[channel] = static_cast<std::uint8_t>(std::clamp(std::lround(looks->playerColors[owner->player][channel] * 255.0f), 0l, 255l));
+		const GroupNumberDraw draw = PlaceGroupNumber(*source.drawGroupInfo, region.loX, region.loY, region.hiX - region.loX, playerColor);
+		overlay.groupNumbers.push_back({group, draw.x, draw.y, overlay_detail::Rgba(draw.color), overlay_detail::Rgba(draw.dropColor), draw.dropX, draw.dropY});
+	}
+}
+
 // The whole overlay, in the order InGameUI draws it.
 inline InGameOverlay ExtractInGameOverlay(ecs::World &world, session::SessionView &game, const OverlaySource &source)
 {
@@ -336,6 +497,7 @@ inline InGameOverlay ExtractInGameOverlay(ecs::World &world, session::SessionVie
 	overlay.box = {std::min(box.x0, box.x1), std::min(box.y0, box.y1), std::max(box.x0, box.x1), std::max(box.y0, box.y1)};
 	ExtractSelectedMarkers(world, game, source, overlay);
 	ExtractObjectIcons(world, source, overlay);
+	ExtractGroupNumbers(world, source, overlay);
 	ExtractWorldAnimations(world, source, overlay);
 	ExtractSuperweapons(world, game, source, overlay);
 	ExtractFloatingTexts(world, overlay);

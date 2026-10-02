@@ -32,6 +32,7 @@ struct Options
 	std::uint32_t height{768};
 	// A left-button drag to make once a match runs (x0, y0, x1, y1 in pixels).
 	std::optional<std::array<float, 4>> drag;
+	float wheel{0}; // mouse wheel notches turned 60 frames into the match (checks: the camera's zoom)
 	// Left clicks to make once a match runs (after the drag), one every 20 frames.
 	std::vector<std::pair<float, float>> clicks;
 	// The player's data folder (Options.ini): the original's, under Documents, unless given.
@@ -118,6 +119,8 @@ std::optional<Options> ParseOptions(int argc, char **argv)
 			if (comma != std::string::npos)
 				options.look = std::pair{std::strtof(point.substr(0, comma).c_str(), nullptr), std::strtof(point.substr(comma + 1).c_str(), nullptr)};
 		}
+		else if (argument == "--wheel" && hasValue)
+			options.wheel = std::strtof(argv[++index], nullptr);
 		else if (argument == "--drag" && hasValue)
 		{
 			// x0,y0,x1,y1: once in a match, the left button drags across that box (checks and captures).

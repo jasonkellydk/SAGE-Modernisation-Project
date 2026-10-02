@@ -127,6 +127,7 @@ inline void CarryOutDeathAftermath(GameWorld &game)
 			gp::Shot shot{event.entity, {}, weapon, player, event.position, event.position, game.tick, game.tick + 1};
 			shot.producer = event.credit;
 			shot.kind = event.definition; // none: gp::Shot::NoKind
+			shot.sourceHeld = 1; // the original deals it as its dying firer fires it
 			game.world.Resource<gp::ShotQueue>().Add(shot);
 		}
 	}

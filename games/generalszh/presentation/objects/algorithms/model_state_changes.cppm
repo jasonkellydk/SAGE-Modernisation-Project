@@ -37,7 +37,7 @@ inline double ShownClipFrame(const ShownLook &shown, const LookClip &clip, conte
 	switch (mode)
 	{
 	case content::ModelAnimationMode::Manual:
-		return 0.0;
+		return static_cast<double>(shown.start) * last; // held on its start frame (ANIM_MODE_MANUAL)
 	case content::ModelAnimationMode::Loop:
 		return std::fmod(frames, count);
 	case content::ModelAnimationMode::LoopBackwards:

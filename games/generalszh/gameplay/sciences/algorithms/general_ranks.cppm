@@ -6,6 +6,7 @@ export import engine.gameplay.rts.sciences.algorithms.ranks;
 import games.generalszh.gameplay.scripts.resources.script_records;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import games.generalszh.gameplay.eva.resources.eva_notices;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // A player's rank as a general and what it knows (Player: addScience, grantScience, resetSciences, addSkillPoints,
 // setRankLevel, attemptToPurchaseScience), over the world's PlayerRanks, RankRules and PlayerSciences. A science
@@ -105,6 +106,9 @@ inline bool PurchaseScience(GameWorld &game, std::uint32_t player, std::uint32_t
 			game.world.Resource<engine::gameplay::RankRules>(), player, science))
 		return false;
 	AddScience(game, player, science);
+	// The general's points spent go to its academy (recordGeneralsPointsSpent, by the science's cost).
+	if (const engine::gameplay::ScienceRule *rule = game.world.Resource<engine::gameplay::RankRules>().Science(science))
+		RecordAcademy(game, player, AcademyCount::GeneralsPointsSpent, static_cast<std::uint32_t>(rule->purchaseCost));
 	return true;
 }
 }

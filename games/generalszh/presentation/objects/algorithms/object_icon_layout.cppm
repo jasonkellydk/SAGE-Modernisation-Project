@@ -88,6 +88,17 @@ inline IconRect PlaceAmmoPip(const IconRegion &health, int centerY, float screen
 	return {x, y, width, height};
 }
 
+// Drawable::drawContained: its `index`th container pip, as an ammo pip (left-aligned with its health bar, 1 apart,
+// ContainerPipScreenOffset's y of its bounding sphere radius from the projected top) but a full one's top right there,
+// an empty one's 1 under it.
+inline IconRect PlaceContainerPip(const IconRegion &health, int centerY, float screenOffsetY, float boundingRadius, int width, int height, int index,
+	bool full) noexcept
+{
+	const int x = health.loX + index * (width + 1);
+	const int y = centerY + static_cast<int>(screenOffsetY * boundingRadius) + (full ? 0 : 1);
+	return {x, y, width, height};
+}
+
 inline IconRect PlaceVeterancy(int screenX, int screenY, float healthBoxWidth, float zoom, int imageWidth, int imageHeight) noexcept
 {
 	const float scale = 1.3f / zoom;

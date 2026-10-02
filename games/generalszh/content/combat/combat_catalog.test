@@ -205,6 +205,17 @@ BOOST_AUTO_TEST_CASE(shipped_combat_content_binds_and_shell_map_units_are_armed)
 	BOOST_TEST(poison->dealType == *DamageTypeIndex("UNRESISTABLE"));
 	BOOST_TEST(poison->fxType == poison->catchType);
 	BOOST_TEST(!ReadObjectPoison(*objects.Find("AmericaTankCrusader"), engine::time::FixedStep{30}).has_value());
+	// Weapon.cpp's field parse: LaserName makes a laser (Weapon::isLaser: any name), CapableOfFollowingWaypoints marks the
+	// Tomahawk's missile (the only shipped one), AcceptableAimDelta is in degrees (the biker's machine gun: 20).
+	const auto weapon = [&](const char *name) -> const engine::gameplay::WeaponDefinition & { return weapons.Find(name)->simulation; };
+	for (const char *name : {"Lazr_CrusaderTankGun", "TomahawkMissileWeapon", "CrusaderTankGun", "GLARebelBikerMachineGun"})
+		BOOST_TEST_REQUIRE(weapons.Find(name) != nullptr);
+	BOOST_TEST(weapon("Lazr_CrusaderTankGun").laser);
+	BOOST_TEST(!weapon("CrusaderTankGun").laser);
+	BOOST_TEST(weapon("TomahawkMissileWeapon").followsWaypoints);
+	BOOST_TEST(!weapon("CrusaderTankGun").followsWaypoints);
+	BOOST_TEST(weapon("GLARebelBikerMachineGun").aimDelta.units == Engine::Math::TurnFromDegrees(20).units);
+	BOOST_TEST(weapon("CrusaderTankGun").aimDelta.units == 0u);
 }
 
 // DamageFX.ini (DamageFX::getDamageFXList, parseAmount / parseMajorFXList / parseTime): TankDamageFX shows

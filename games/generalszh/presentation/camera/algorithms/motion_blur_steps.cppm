@@ -33,6 +33,7 @@ inline void SetUpMotionBlur(ViewFilter &filter, ViewFilterMode mode, std::int32_
 inline void SetMotionBlurFilter(ViewFilter &filter)
 {
 	filter.motionBlur = true;
+	filter.blackWhite = false; // the view has one filter
 	SetUpMotionBlur(filter, filter.mode, filter.panFactor);
 }
 
@@ -94,7 +95,10 @@ struct MotionBlurStep
 inline MotionBlurStep StepMotionBlur(ViewFilter &filter, std::uint64_t tick)
 {
 	MotionBlurStep step;
-	if (!MotionBlurZooming(filter) || filter.lastTick == tick)
+	if (filter.lastTick == tick)
+		return step;
+	filter.skipRender = false;
+	if (!MotionBlurZooming(filter))
 		return step;
 	bool going = true;
 	if (filter.decrement)
@@ -105,6 +109,8 @@ inline MotionBlurStep StepMotionBlur(ViewFilter &filter, std::uint64_t tick)
 			filter.decrement = false;
 			going = false;
 		}
+		else
+			filter.skipRender = true;
 	}
 	else
 	{
@@ -117,6 +123,8 @@ inline MotionBlurStep StepMotionBlur(ViewFilter &filter, std::uint64_t tick)
 			else
 				going = false;
 		}
+		else
+			filter.skipRender = true;
 	}
 	filter.lastTick = tick;
 	if (!going)

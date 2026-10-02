@@ -24,6 +24,14 @@ struct SpatialEntry
 	std::int32_t disguisePlayer{-1};          // and player (Targetable)
 };
 
+// An entry's bounding sphere (GeometryInfo::getBoundingSphereRadius, and getZDeltaToCenterPosition: how far its centre is
+// above its position), kept as a column beside the entries for FROM_BOUNDINGSPHERE_3D queries.
+struct BoundingSphere
+{
+	Engine::Math::Fixed radius;
+	Engine::Math::Fixed lift;
+};
+
 class SpatialIndex
 {
 public:
@@ -44,10 +52,12 @@ public:
 		return static_cast<std::uint32_t>(row * m_columns + column);
 	}
 
-	// Replaces the contents; `entries` may come in any order.
+	// Replaces the contents; `entries` may come in any order. Without bounding spheres given, each entry's is its
+	// footprint's circle about its position.
 	void Rebuild(std::vector<SpatialEntry> entries)
 	{
 		m_gathered = std::move(entries);
+		CircleSpheres();
 		RebuildGathered();
 	}
 	// The same, `fill(entries)` appending them to the index's own (reused) buffer: no allocation once warm.
@@ -56,6 +66,18 @@ public:
 	{
 		m_gathered.clear();
 		fill(m_gathered);
+		CircleSpheres();
+		RebuildGathered();
+	}
+	// The same with their bounding spheres: `fill(entries, spheres)` appends both, a sphere for each entry, in step.
+	template<typename Fill>
+	void RebuildWithSpheres(Fill &&fill)
+	{
+		m_gathered.clear();
+		m_gatheredSpheres.clear();
+		fill(m_gathered, m_gatheredSpheres);
+		if (m_gatheredSpheres.size() != m_gathered.size())
+			CircleSpheres();
 		RebuildGathered();
 	}
 
@@ -93,6 +115,49 @@ public:
 			}
 	}
 
+	// PartitionManager::iterateObjectsInRange(pos, range, FROM_BOUNDINGSPHERE_3D) (distCalcProc_BoundaryAndBoundary_3D
+	// from a point): calls `visit(entry, distanceSquared)` for every entry whose bounding sphere comes nearer than `range`
+	// to `center`, `distanceSquared` measured from `center` to the sphere (its centre less its radius, never below
+	// zero), in cell-then-entity order.
+	template<typename Visit>
+	void ForEachSphereWithin(Engine::Math::FixedVector3 center, Engine::Math::Fixed range, Visit &&visit) const
+	{
+		if (m_entries.empty())
+			return;
+		// Horizontally a sphere comes no nearer than its centre less its radius.
+		const Engine::Math::Fixed reach = range + m_largestSphere;
+		const std::int64_t minColumn = std::clamp<std::int64_t>(((center.x - reach) / m_cellSize).Floor(), 0, m_columns - 1);
+		const std::int64_t maxColumn = std::clamp<std::int64_t>(((center.x + reach) / m_cellSize).Floor(), 0, m_columns - 1);
+		const std::int64_t minRow = std::clamp<std::int64_t>(((center.y - reach) / m_cellSize).Floor(), 0, m_rows - 1);
+		const std::int64_t maxRow = std::clamp<std::int64_t>(((center.y + reach) / m_cellSize).Floor(), 0, m_rows - 1);
+		for (std::int64_t row = minRow; row <= maxRow; ++row)
+			for (std::int64_t column = minColumn; column <= maxColumn; ++column)
+			{
+				const auto cell = static_cast<std::size_t>(row * m_columns + column);
+				for (std::uint32_t index = m_cellBegin[cell]; index < m_cellBegin[cell + 1]; ++index)
+				{
+					const SpatialEntry &entry = m_entries[index];
+					const BoundingSphere &sphere = m_spheres[index];
+					const Engine::Math::FixedVector3 offset{entry.position.x - center.x, entry.position.y - center.y,
+						entry.position.z + sphere.lift - center.z};
+					const Engine::Math::Fixed lengthSquared = Engine::Math::LengthSquared(offset);
+					const Engine::Math::Fixed limit = range + sphere.radius;
+					if (!(lengthSquared < limit * limit))
+						continue;
+					Engine::Math::Fixed distanceSquared = lengthSquared;
+					if (sphere.radius > Engine::Math::Fixed{})
+					{
+						const Engine::Math::Fixed shrunk = Engine::Math::Sqrt(lengthSquared) - sphere.radius;
+						distanceSquared = shrunk > Engine::Math::Fixed{} ? shrunk * shrunk : Engine::Math::Fixed{};
+					}
+					// (shrunk below the range, as lengthSquared < limit squared: never visited at range 0.)
+					if (!(distanceSquared < range * range))
+						continue;
+					visit(entry, distanceSquared);
+				}
+			}
+	}
+
 	std::span<const SpatialEntry> Entries() const noexcept { return m_entries; }
 
 private:
@@ -103,8 +168,10 @@ private:
 	std::int64_t m_columns{1};
 	std::int64_t m_rows{1};
 	Engine::Math::Fixed m_largestRadius;
+	Engine::Math::Fixed m_largestSphere;
 	std::vector<std::uint32_t> m_cellBegin{0, 0};
 	std::vector<SpatialEntry> m_entries;
+	std::vector<BoundingSphere> m_spheres; // m_entries' bounding spheres, in step
 	// Rebuild's working buffers, kept for the next tick.
 	struct SortKey
 	{
@@ -112,6 +179,7 @@ private:
 		std::uint32_t at;  // in m_gathered
 	};
 	std::vector<SpatialEntry> m_gathered;
+	std::vector<BoundingSphere> m_gatheredSpheres;
 	std::vector<SortKey> m_order;
 	std::vector<SortKey> m_orderScratch;
 	std::vector<std::uint32_t> m_counts;
@@ -142,12 +210,23 @@ private:
 		}
 	}
 
+	// Each gathered entry's footprint circle as its sphere, centred at its position.
+	void CircleSpheres()
+	{
+		m_gatheredSpheres.resize(m_gathered.size());
+		for (std::size_t index = 0; index < m_gathered.size(); ++index)
+			m_gatheredSpheres[index] = {m_gathered[index].radius, {}};
+	}
+
 	// Sorted by cell, entity breaking ties: deterministic whatever the gather order (entity indices are unique among
 	// the live, so index order is the original's (index, generation) order).
 	void RebuildGathered()
 	{
 		const std::size_t count = m_gathered.size();
 		m_largestRadius = {};
+		m_largestSphere = {};
+		for (const BoundingSphere &sphere : m_gatheredSpheres)
+			m_largestSphere = std::max(m_largestSphere, sphere.radius);
 		std::uint32_t maxIndex = 0;
 		for (const SpatialEntry &entry : m_gathered)
 		{
@@ -165,10 +244,12 @@ private:
 		RadixSort(indexBits + cellBits);
 		std::fill(m_cellBegin.begin(), m_cellBegin.end(), 0u);
 		m_entries.resize(count);
+		m_spheres.resize(count);
 		for (std::size_t index = 0; index < count; ++index)
 		{
 			const SortKey &key = m_order[index];
 			m_entries[index] = m_gathered[key.at];
+			m_spheres[index] = m_gatheredSpheres[key.at];
 			++m_cellBegin[static_cast<std::size_t>(key.key >> indexBits) + 1];
 		}
 		for (std::size_t cell = 1; cell < m_cellBegin.size(); ++cell)

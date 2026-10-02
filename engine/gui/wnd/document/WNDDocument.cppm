@@ -35,6 +35,8 @@ export struct ImageDefinition final
 	std::uint32_t width = 0;
 	std::uint32_t height = 0;
 	Graphics::Rect2D uv{0.0f, 0.0f, 1.0f, 1.0f};
+	// Status ROTATED_90_CLOCKWISE (Image::parseImageStatus): packed turned, its size swapped back.
+	bool rotated = false;
 };
 
 export class ImageCatalog final
@@ -67,6 +69,7 @@ public:
 			return result;
 		result = Resolve_Image_Reference(definition->texture);
 		result.uv = definition->uv;
+		result.rotated = definition->rotated;
 		return result;
 	}
 
@@ -285,6 +288,20 @@ export bool Parse_Mapped_Image_INI(std::string_view source, ImageCatalog &catalo
 				static_cast<float>(right) / std::max(1u, definition.texture_width),
 				static_cast<float>(bottom) / std::max(1u, definition.texture_height)};
 		}
+		else if (field == "STATUS") {
+			// Image::parseImageStatus (NONE, ROTATED_90_CLOCKWISE, RAW_TEXTURE as bits): rotated, the size read from
+			// the packed rectangle so far swaps.
+			std::istringstream words{value};
+			std::string word;
+			while (words >> word) {
+				for (char &character : word)
+					character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+				if (word == "ROTATED_90_CLOCKWISE" && !definition.rotated) {
+					definition.rotated = true;
+					std::swap(definition.width, definition.height);
+				}
+			}
+		}
 	}
 	return !in_definition;
 }
@@ -303,8 +320,15 @@ export struct WNDWindow final
 	WindowType type = WindowType::Unknown;
 	std::string name;
 	std::string draw_callback;
+	std::string header_template; // HEADERTEMPLATE: the font template whose font replaces FONT (none: "[NONE]")
 	std::string text_label;
 	std::u16string text;
+	// Its tooltip (WinInstanceData: TOOLTIPTEXT's label, fetched when localized; TOOLTIPDELAY, -1: the mouse's own
+	// delay) and TOOLTIPCALLBACK's function name (empty or "[None]": none).
+	std::string tooltip_label;
+	std::u16string tooltip;
+	int tooltip_delay = -1;
+	std::string tooltip_callback;
 	std::string font_name;
 	std::uint32_t font_size = 0;
 	bool font_bold = false;
@@ -324,6 +348,10 @@ export struct WNDWindow final
 	Graphics::Color2D clock_color{};
 	// A push button's overlay image, drawn over it (GadgetButtonDrawOverlayImage: a rank chevron); none: nothing.
 	ImageRef overlay_image{};
+	// A push button's border (GadgetButtonSetBorder: a command button's colour by its kind), a one-pixel open rectangle
+	// just outside it; none: nothing.
+	bool extra_border = false;
+	Graphics::Color2D extra_border_color{};
 	Rect authored_region{};
 	Rect screen_region{};
 	std::array<WNDDrawState, 3> draw_states{};
@@ -398,6 +426,17 @@ export inline Rect Combo_List_Region(const WNDWindow &window) noexcept
 {
 	const Rect box = Combo_Box_Region(window);
 	return {box.left, box.bottom, box.right, box.bottom + Combo_Rows(window) * Combo_Row_Height(window) + 4};
+}
+
+// The row of a combo box's open list under (x, y), or -1 (rows from 2 pixels under its top).
+export inline int Combo_List_Row_At(const WNDWindow &combo, float x, float y) noexcept
+{
+	const Rect list = Combo_List_Region(combo);
+	if (!combo.list_open || x < static_cast<float>(list.left) || x >= static_cast<float>(list.right) || y < static_cast<float>(list.top)
+		|| y >= static_cast<float>(list.bottom))
+		return -1;
+	const int row = static_cast<int>((y - static_cast<float>(list.top) - 2.0f) / static_cast<float>(Combo_Row_Height(combo))) + combo.list_top;
+	return row >= 0 && row < static_cast<int>(combo.entries.size()) && row - combo.list_top < Combo_Rows(combo) ? row : -1;
 }
 
 // A list box's rows: one line of its font each, a pixel apart (computeTotalHeight),
@@ -505,6 +544,57 @@ export inline int List_Row_At(const WNDWindow &window, float y) noexcept
 	return -1;
 }
 
+// GadgetListBoxGetEntryBasedOnXY (getListboxEntryBasedOnCoord): the row and column at (x, y) in layout units, -1 each
+// when none. Rows are searched from the first down the scrolled rows' bottoms (from under its title) against
+// y + the scrolled height: a row past the visible area, or past the last, is none (so is a point above the rows: the
+// first row); the column from the left by the columns' widths (each its share of the width left of the scroll bar's
+// slider and 2 pixels, whole pixels; one column takes all of it).
+export struct ListCell final
+{
+	int row = -1;
+	int column = -1;
+};
+
+export inline ListCell List_Cell_At(const WNDWindow &window, float x, float y, int creation_width = 800) noexcept
+{
+	ListCell cell;
+	const int top = List_Top(window);
+	int displayPos = 0;
+	for (int row = 0; row < (std::min)(window.list_top, static_cast<int>(window.entries.size())); ++row)
+		displayPos += List_Entry_Height(window, static_cast<std::size_t>(row));
+	const int displayHeight = window.authored_region.bottom - top;
+	const int offset = static_cast<int>(y) - top + displayPos;
+	int bottom = 0;
+	int found = -1;
+	for (int row = 0;; ++row) {
+		if (row > 0 && bottom > displayPos + displayHeight)
+			return cell;
+		if (row >= static_cast<int>(window.entries.size()))
+			return cell;
+		bottom += List_Entry_Height(window, static_cast<std::size_t>(row));
+		if (bottom > offset) {
+			found = row;
+			break;
+		}
+	}
+	cell.row = found;
+	int width = window.authored_region.right - window.authored_region.left;
+	if (window.scroll_bar)
+		width -= 21 * (std::max)(creation_width, 1) / 800 + 2;
+	const int columns = (std::max)(static_cast<int>(window.list_columns), 1);
+	int total = 0;
+	for (int column = 0; column < columns; ++column) {
+		const int share = columns == 1 ? width
+			: (static_cast<std::size_t>(column) < window.column_widths.size() ? window.column_widths[static_cast<std::size_t>(column)] * width / 100 : 0);
+		total += share;
+		if (static_cast<int>(x) - window.authored_region.left < total) {
+			cell.column = column;
+			break;
+		}
+	}
+	return cell;
+}
+
 // Opens or closes its list: the window grows over the list (it takes the pointer there) or shrinks back.
 export inline void Set_Combo_Open(WNDWindow &window, bool open) noexcept
 {
@@ -598,8 +688,20 @@ void Parse_Statement(
 		}
 	} else if (field == "NAME") {
 		window.name = Unquote(value);
+	} else if (field == "HEADERTEMPLATE") {
+		window.header_template = Unquote(value);
 	} else if (field == "DRAWCALLBACK") {
 		window.draw_callback = Unquote(value);
+	} else if (field == "TOOLTIPTEXT") {
+		// parseTooltipText: the label between the quotes ("" sets none).
+		window.tooltip_label = Unquote(value);
+		window.tooltip.assign(window.tooltip_label.begin(), window.tooltip_label.end());
+	} else if (field == "TOOLTIPDELAY") {
+		Read_Int(" DELAY:" + std::string(Trim(value)), "DELAY:", window.tooltip_delay);
+	} else if (field == "TOOLTIPCALLBACK") {
+		window.tooltip_callback = Unquote(value);
+		if (window.tooltip_callback == "[None]")
+			window.tooltip_callback.clear();
 	} else if (field == "STATUS") {
 		Parse_Status(window, value);
 	} else if (field == "STYLE") {
@@ -845,9 +947,12 @@ public:
 	template<class Translator>
 	void Localize(Translator &&translate)
 	{
-		for (WNDWindow &window : m_windows)
+		for (WNDWindow &window : m_windows) {
 			if (!window.text_label.empty())
 				window.text = translate(std::string_view(window.text_label));
+			if (!window.tooltip_label.empty())
+				window.tooltip = translate(std::string_view(window.tooltip_label));
+		}
 	}
 
 	// Each window's font at its size times `scale` (GlobalLanguage::adjustFontSize: floored, at least 1).
@@ -913,6 +1018,13 @@ public:
 	WNDWindow *Find_Window(std::string_view name) noexcept
 	{
 		for (WNDWindow &window : m_windows)
+			if (window.name == name)
+				return &window;
+		return nullptr;
+	}
+	const WNDWindow *Find_Window(std::string_view name) const noexcept
+	{
+		for (const WNDWindow &window : m_windows)
 			if (window.name == name)
 				return &window;
 		return nullptr;
@@ -1148,6 +1260,8 @@ private:
 		control.clock_remaining = window.clock_remaining;
 		control.clock_color = window.clock_color;
 		control.overlay_image = window.overlay_image;
+		control.extra_border = window.extra_border;
+		control.extra_border_color = window.extra_border_color;
 		control.highlighted_overlay = &document->m_highlighted_overlay;
 		control.pushed_overlay = &document->m_pushed_overlay;
 		control.wrap_centered = window.wrap_centered;

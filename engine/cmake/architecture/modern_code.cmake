@@ -6,6 +6,8 @@
 #   the-naming       legacy global naming (TheGlobalData, TheThingFactory, ...)
 #   singleton        static Instance()/GetInstance() accessors
 #   genre-dependency engine/gameplay/common importing rts/fps, or rts<->fps
+#   presentation-dependency  simulation code (games/generalszh gameplay, session, content, commands, scripting)
+#                    importing the presentation tier (presentation, hud, shell, hosts)
 #   world-access     gameplay reaching the mutable World via GetWorld(); use
 #                    ecs::Lookup for reads and Commands() for writes
 # Graphics, gui, assets and video are still shared with the legacy build and
@@ -18,8 +20,9 @@ endif()
 set(modern_roots
     engine/ecs engine/jobs engine/events engine/time engine/core/math/fixed engine/core/serialization engine/net engine/audio engine/effects engine/config engine/filesystem engine/compression engine/level engine/localization engine/scripting
     engine/gameplay games/generalszh)
-# Presentation code may use float; everything else in scope is simulation.
-set(float_exempt "^(engine/audio|engine/effects|games/generalszh/presentation|games/generalszh/hosts|engine/core/math/fixed/presentation|engine/level/presentation)/")
+# Presentation code may use float; everything else in scope is simulation. The game's hud and shell are the presentation
+# tier's view models (the screens and menus): the simulation never imports them (presentation-dependency below).
+set(float_exempt "^(engine/audio|engine/effects|games/generalszh/presentation|games/generalszh/hosts|games/generalszh/hud|games/generalszh/shell|engine/core/math/fixed/presentation|engine/level/presentation)/")
 
 if(NOT DEFINED MODERN_CODE_DEBT_FILE)
     set(MODERN_CODE_DEBT_FILE "${CMAKE_CURRENT_LIST_DIR}/modern_code_debt.cmake")
@@ -82,6 +85,12 @@ foreach(path IN LISTS sources)
        OR (path MATCHES "^engine/gameplay/rts/" AND text MATCHES "${import_prefix}fps[.]")
        OR (path MATCHES "^engine/gameplay/fps/" AND text MATCHES "${import_prefix}rts[.]"))
         report("${path}" genre-dependency)
+    endif()
+    # The simulation never reads the presentation tier (its floats and client state stay out of the deterministic game).
+    if(path MATCHES "^games/generalszh/(gameplay|session|content|commands|scripting)/"
+       AND text MATCHES "(^|[;
+])[ 	]*(export[ 	]+)?import[ 	]+games[.]generalszh[.](presentation|hud|shell|hosts)[.]")
+        report("${path}" presentation-dependency)
     endif()
 endforeach()
 

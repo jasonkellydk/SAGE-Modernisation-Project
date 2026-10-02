@@ -9,6 +9,7 @@ import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.containment.components.mount;
 import engine.gameplay.rts.veterancy.components.experience;
 export import games.generalszh.gameplay.containment.components.held_aboard;
+export import games.generalszh.gameplay.containment.algorithms.put_inside;
 import engine.gameplay.rts.containment.resources.cargo_manifest;
 import engine.gameplay.common.health.components.health;
 import engine.gameplay.common.identity.components.owner;
@@ -38,8 +39,8 @@ import engine.gameplay.common.identity.resources.relationships;
 //   WEAPONBONUSCONDITION_GARRISONED (their range and damage grow) and lose it
 //   once out;
 //   healObjects (HealObjects): each inside heals its most over TimeForFullHeal
-//   a frame. A subdued garrison's occupants hold their fire; InitialRoster
-//   occupants are made on its team and put inside as it is first tended.
+//   a frame. A subdued garrison's occupants hold their fire. (InitialRoster
+//   occupants are made as it is: SpawnObject.)
 export namespace generalszh::gameplay
 {
 // HelixContain / OverlordContain::addToContain of a portable structure: `rider` mounts on `carrier` (its one), riding
@@ -77,26 +78,6 @@ inline void MountOn(GameWorld &game, ecs::Entity carrier, ecs::Entity rider)
 	// OverlordContain::onContaining: ExperienceSinkForRider, its kills make the carrier a veteran.
 	if (auto *experience = world.Get<gp::Experience>(rider); experience != nullptr && transport != nullptr && transport->definition.experienceSink)
 		experience->sink = carrier;
-}
-
-// OpenContain::addToContain: `passenger` straight inside `container` (off the map, armed as it lets it be), taking
-// `slots` of its room (a TransportContain's getTransportSlotCount; one elsewhere); `quiet`: without its load sound.
-inline void PutInside(GameWorld &game, ecs::Entity container, ecs::Entity passenger, std::uint32_t slots = 1, bool quiet = false)
-{
-	namespace gp = engine::gameplay;
-	auto &world = game.world;
-	gp::Transport *transport = world.Get<gp::Transport>(container);
-	if (transport == nullptr || !world.IsAlive(passenger))
-		return;
-	const gp::Targetable *kind = world.Get<gp::Targetable>(passenger);
-	const bool infantry = kind != nullptr && (kind->classes & gp::target_class::Infantry) != 0;
-	const bool armed = transport->definition.passengersFire && (!transport->definition.infantryOnly || infantry);
-	world.Add<gp::Passenger>(passenger);
-	*world.Get<gp::Passenger>(passenger) = {container, slots, 0, game.tick};
-	world.Add<gp::OffMap>(passenger);
-	*world.Get<gp::OffMap>(passenger) = gp::OffMap{1, armed, {}, container};
-	world.Resource<gp::CargoManifest>().Board(container, passenger, quiet);
-	transport->occupied += slots;
 }
 
 // aiEvacuateInstantly for one rider: out of `container` at once, where it stands (removeFromContain), its room freed.
@@ -180,16 +161,6 @@ inline void TendGarrisons(GameWorld &game)
 			garrison.originalTeam = member->team;
 			garrison.originalPlayer = game.roster.TeamAt(member->team).owner;
 		}
-		// GarrisonContain::onObjectCreated: its InitialRoster, made on its team and put inside.
-		for (; garrison.rosterLeft > 0 && transport->occupied < transport->definition.slots; --garrison.rosterLeft)
-		{
-			const auto *frame = world.Get<gp::Transform>(held.building);
-			const ecs::Entity occupant = SpawnObject(game, std::string(game.templates.DefinitionAt(garrison.rosterDefinition).name),
-				frame->position.XY(), frame->facing, member->team, "");
-			PutInside(game, held.building, occupant);
-			held.inside.push_back(occupant);
-		}
-		garrison.rosterLeft = 0;
 		const bool wrecked = health->current <= Engine::Math::Fixed{} ||
 			(!garrison.untilDestroyed && health->current <= health->maximum * reallyDamaged);
 		transport->closed = wrecked;

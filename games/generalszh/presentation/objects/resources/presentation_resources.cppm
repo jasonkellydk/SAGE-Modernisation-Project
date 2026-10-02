@@ -17,6 +17,7 @@ export namespace generalszh::presentation
 struct PresentationFrame
 {
 	float seconds{0.0f};     // game time this frame (real time scaled by the game speed)
+	float realSeconds{0.0f}; // real time this frame (what the original's per-render-frame updates count: dynamic lights)
 	double clock{0.0};       // the presentation clock: game time so far
 	float alpha{0.0f};       // how far this frame is between the last two ticks
 	std::uint32_t frame{0};  // counts presentation frames
@@ -156,6 +157,7 @@ struct LaserRequest
 	ecs::Entity source;
 	ecs::Entity target;
 	std::array<float, 3> end{};
+	bool atTarget{false}; // ends where its target is as it starts (an assisted targeting stream), not at `end`
 };
 
 struct LaserRequests
@@ -218,6 +220,9 @@ struct BonePoses
 	// Where a bone sits in a look's model `seconds` into its animation (started `start` of the way in): the model's
 	// animated pose (W3DModelDraw::updateBonesForClientParticleSystems: Get_Bone_Transform). Not found: its rest pose.
 	std::function<BoneLookup(std::uint32_t look, float seconds, float start, std::string_view bone)> animated;
+	// A bone's whole transform in its model (row-major 3x4) `seconds` into the look's animation; none while the model
+	// loads or when it has no such bone.
+	std::function<std::optional<std::array<float, 12>>(std::uint32_t look, float seconds, float start, std::string_view bone)> transform;
 };
 
 // Effects asked for this frame (FX lists to play; the sounds and camera

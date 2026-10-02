@@ -1,6 +1,7 @@
 #define BOOST_TEST_MODULE EngineGameplayAircraft
 #include <boost/test/included/unit_test.hpp>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -8,6 +9,8 @@
 
 import engine.gameplay.common.status.components.status_flags;
 import engine.gameplay.rts.aircraft.systems.jet_system;
+import engine.gameplay.rts.aircraft.algorithms.jet_runway_cycle;
+import engine.gameplay.rts.aircraft.systems.jet_touchdown_system;
 import engine.core.serialization.byte_stream;
 import engine.ecs.core.world;
 import engine.ecs.scheduler.scheduler;
@@ -75,7 +78,15 @@ struct Base
 		target.RegisterComponent<Transform>();
 		target.RegisterComponent<Airfield>();
 		target.RegisterComponent<Jet>();
+		target.RegisterComponent<SneakyTarget>();
 		target.RegisterComponent<Locomotion>();
+		target.RegisterComponent<Collider>();
+		target.RegisterComponent<Squishable>();
+		target.RegisterComponent<Pursuit>();
+		target.RegisterComponent<SightLooker>();
+		target.RegisterComponent<Slaved>();
+		target.RegisterComponent<SurfaceLayer>();
+		target.RegisterComponent<BlockedState>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();
 		target.RegisterComponent<MoveEnded>();
@@ -107,7 +118,7 @@ struct Base
 		field.spaceCount = 1;
 		field.runwayCount = 1;
 		field.spaces[0] = {{Fixed::FromInt(980), Fixed::FromInt(1060), {}}, {Fixed::FromInt(980), Fixed::FromInt(1040), {}},
-			{Fixed::FromInt(990), Fixed::FromInt(1010), {}}, {}, {}, 0, 0};
+			{Fixed::FromInt(990), Fixed::FromInt(1010), {}}, {}, {}, 0, {}};
 		field.runways[0] = {{Fixed::FromInt(1000), Fixed::FromInt(1000), {}}, {Fixed::FromInt(1100), Fixed::FromInt(1000), {}}};
 		return entity;
 	}
@@ -262,6 +273,48 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_pauses_with_afterburners_before_takeoff
 	BOOST_TEST(!base.world.Get<Appearance>(mig)->Test(3));
 }
 
+// JetAIUpdate::update (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp), before its
+// state machine runs: JETEXHAUST (the Raptor's and MiG's contrails, ParticleSysBone in those condition states) while
+// getVelocityMagnitude() > 0 and ALLOW_AIR_LOCO. Taxiing out (moving, taxi locomotion) it shows none; the roll starting on
+// tick R (JetTakeoffOrLandingState::onEnter: air locomotion), the next update, R + 1, sees it moving on it and lights it;
+// it burns on through its flight. Out of ammo it lands and taxis in: the tick after JetOrHeliTaxiState::onEnter turns the
+// air locomotion off, it goes out.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_shows_its_exhaust_while_it_moves_on_air_locomotion)
+{
+	Base base(2);
+	const ecs::Entity mig = base.Mig(base.Field());
+	base.world.Add<Appearance>(mig);
+	base.world.Get<Jet>(mig)->exhaustBit = 4;
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::TaxiToStart) != 0u);
+	bool taxiExhaust = false, taxiMoved = false;
+	while (base.world.Get<Jet>(mig)->state == JetState::TaxiToStart)
+	{
+		base.Step();
+		taxiMoved = taxiMoved || base.world.Get<Locomotion>(mig)->speed > Fixed{};
+		taxiExhaust = taxiExhaust || base.world.Get<Appearance>(mig)->Test(4);
+	}
+	BOOST_TEST(taxiMoved);
+	BOOST_TEST(!taxiExhaust);
+	const std::uint64_t roll = base.Until(mig, JetState::TakeoffRoll);
+	BOOST_TEST_REQUIRE(roll != 0u);
+	BOOST_TEST(!base.world.Get<Appearance>(mig)->Test(4)); // its last update still saw it stand at the pause
+	base.Step();
+	BOOST_TEST((base.world.Get<Locomotion>(mig)->speed > Fixed{}));
+	BOOST_TEST(base.world.Get<Appearance>(mig)->Test(4));
+	BOOST_TEST(base.Until(mig, JetState::Flying) != 0u);
+	base.Step();
+	BOOST_TEST(base.world.Get<Appearance>(mig)->Test(4));
+	// Out of ammo: home, down and taxiing in.
+	base.world.Get<Aggression>(mig)->stance = Stance::Idle;
+	base.world.Get<Armament>(mig)->readyTick = OutOfAmmo;
+	const std::uint64_t taxiIn = base.Until(mig, JetState::TaxiToParking, 6000);
+	BOOST_TEST_REQUIRE(taxiIn != 0u);
+	BOOST_TEST(base.world.Get<Appearance>(mig)->Test(4)); // the landing's air locomotion, moving
+	base.Step();
+	BOOST_TEST(!base.world.Get<Appearance>(mig)->Test(4));
+}
+
 // JetAIUpdate::update's MinHeight (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp):
 // parked on the ground (not above the terrain) and through its airfield cycle it is drawn raised to MinHeight (5)
 // above the terrain; flying well above it, not at all.
@@ -312,7 +365,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_circles_its_dead_airfield_hurting)
 	BOOST_TEST(hurt.front().damageType == 7u);
 }
 
-BOOST_AUTO_TEST_CASE(jets_take_the_runway_one_at_a_time)
+// Legacy parity (ParkingPlaceBehavior::reserveRunway, transferRunwayReservationToNextInLineForTakeoff and releaseRunway;
+// JetAwaitingRunwayState, JetPauseBeforeTakeoffState's retail update and findWaiter, calcPPInfo's m_wasInLine): two jets
+// sent off from one runway. The first reserves it and taxies; the second, asking while it is taken, is next in line
+// and waits where it stands. The first lines up on tick P; its first pause update (P + 1) times the transfer for the
+// next one (P + 2: it had not waited), when the second takes the runway (from the line) and taxies out the same tick.
+// The first, still turning to face the runway's end, waits while the second (holding the runway) taxies; the second
+// lines up on tick Q, and the first rolls on Q + 1. Both end up flying.
+BOOST_AUTO_TEST_CASE(legacy_parity_jets_queue_for_the_runway)
 {
 	Base base(3);
 	const ecs::Entity field = base.Field();
@@ -320,20 +380,104 @@ BOOST_AUTO_TEST_CASE(jets_take_the_runway_one_at_a_time)
 	const ecs::Entity second = base.Mig(field);
 	base.world.Get<Transform>(second)->position.x = Fixed::FromInt(970);
 	base.world.Get<Aggression>(first)->stance = Stance::Hunt;
+	base.Step(); // the first to ask takes it
 	base.world.Get<Aggression>(second)->stance = Stance::Hunt;
-	bool together = false;
-	for (int step = 0; step < 2000; ++step)
+	base.Step(); // TAKING_OFF_AWAIT_CLEARANCE
+	base.Step(); // its first update there asks
+	BOOST_TEST(base.world.Get<Jet>(first)->runwayHold == 1u);
+	BOOST_TEST(base.world.Get<Jet>(second)->runwayHold == 2u); // next in line
+	BOOST_TEST((base.world.Get<Jet>(second)->state == JetState::AwaitRunway));
+	const std::uint64_t lined = base.Until(first, JetState::PauseBeforeTakeoff);
+	BOOST_TEST_REQUIRE(lined != 0u);
+	BOOST_TEST((base.world.Get<Jet>(second)->state == JetState::AwaitRunway));
+	base.Step(); // P + 1
+	BOOST_TEST(base.world.Get<Jet>(first)->runwayHold == 1u);
+	base.Step(); // P + 2: handed on
+	BOOST_TEST(base.world.Get<Jet>(first)->runwayHold == 0u);
+	BOOST_TEST(base.world.Get<Jet>(second)->runwayHold == 1u);
+	BOOST_TEST(base.world.Get<Jet>(second)->wasInLine == 1u);
+	BOOST_TEST((base.world.Get<Jet>(second)->state == JetState::TaxiToStart));
+	// Taken from the line, its roll starts at its prep point.
+	BOOST_TEST((base.world.Get<Jet>(second)->path[base.world.Get<Jet>(second)->pathCount - 1].x == base.world.Get<Airfield>(field)->spaces[0].prep.x));
+	std::uint64_t secondLined = 0, firstRolled = 0;
+	for (int step = 0; step < 600 && (secondLined == 0 || firstRolled == 0); ++step)
 	{
 		base.Step();
-		const auto on = [&](ecs::Entity jet) {
-			const JetState state = base.world.Get<Jet>(jet)->state;
-			return state == JetState::TaxiToStart || state == JetState::TakeoffRoll;
-		};
-		together = together || (on(first) && on(second));
+		if (secondLined == 0 && base.world.Get<Jet>(second)->state == JetState::PauseBeforeTakeoff)
+			secondLined = base.tick;
+		if (firstRolled == 0 && base.world.Get<Jet>(first)->state == JetState::TakeoffRoll)
+			firstRolled = base.tick;
+		if (secondLined == 0)
+			BOOST_TEST((base.world.Get<Jet>(first)->state == JetState::PauseBeforeTakeoff)); // findWaiter
 	}
-	BOOST_TEST(!together);
-	BOOST_TEST((base.world.Get<Jet>(first)->state == JetState::Flying));
-	BOOST_TEST((base.world.Get<Jet>(second)->state == JetState::Flying));
+	BOOST_TEST_REQUIRE(secondLined != 0u);
+	BOOST_TEST(firstRolled == secondLined + 1);
+	BOOST_TEST(base.Until(first, JetState::Flying) != 0u);
+	BOOST_TEST(base.Until(second, JetState::Flying) != 0u);
+}
+
+// Legacy parity (JetOrHeliReturnForLandingState, JetTakeoffOrLandingState, JetOrHeliTaxiState TO_PARKING and
+// FROM_PARKING with intersectInfiniteLine2D, JetOrHeliParkOrientState, ParkingPlaceBehavior::calcPPInfo): out of ammo,
+// a jet flies to the runway approach (0.75 of the runway past its end, ApproachHeight 50 up: (1175, 1000, 50)), lands
+// over it onto the runway's end and along to its start (the way it took off, in reverse) at its least speed, its
+// runway released; it taxies by its prep point and the point where a line along its space's turn meets one across it
+// through the prep point (990, 1040) into its space, is set there and turned to the space's turn, and reloads; with
+// ParkingOffset 3 (the Raptors': reserveSpace moves its spot along the space's apron turn) it stands at (983, 1040). A
+// move order while it stands sends it out (pending) and, once up, there.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_lands_the_way_it_took_off_in_reverse)
+{
+	Base base(2);
+	const ecs::Entity field = base.Field();
+	base.world.Get<Airfield>(field)->approachHeight = Fixed::FromInt(50);
+	const ecs::Entity mig = base.Mig(field);
+	base.world.Get<Jet>(mig)->parkingOffset = Fixed::FromInt(3);
+	base.world.Get<Aggression>(mig)->stance = Stance::Hunt;
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Flying) != 0u);
+	base.world.Get<Armament>(mig)->readyTick = OutOfAmmo;
+	base.world.Get<Aggression>(mig)->stance = Stance::Idle;
+	base.Step();
+	BOOST_TEST((base.world.Get<Jet>(mig)->state == JetState::Returning));
+	BOOST_TEST((base.world.Get<MoveOrder>(mig)->destination == Engine::Math::FixedVector2{Fixed::FromInt(1175), Fixed::FromInt(1000)}));
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Landing) != 0u);
+	const Jet &jet = *base.world.Get<Jet>(mig);
+	BOOST_TEST(jet.pathCount == 3u);
+	BOOST_TEST((jet.path[0] == Engine::Math::FixedVector3{Fixed::FromInt(1175), Fixed::FromInt(1000), Fixed::FromInt(50)}));
+	BOOST_TEST((jet.path[1] == Engine::Math::FixedVector3{Fixed::FromInt(1100), Fixed::FromInt(1000), Fixed{}}));
+	BOOST_TEST((jet.path[2] == Engine::Math::FixedVector3{Fixed::FromInt(1000), Fixed::FromInt(1000), Fixed{}}));
+	BOOST_TEST((base.world.Get<Locomotion>(mig)->locomotor.maxSpeed == Wings().minSpeed));
+	BOOST_TEST(jet.runwayHold == 1u);
+	// Down the runway westward.
+	Fixed lastX = base.world.Get<Transform>(mig)->position.x;
+	bool westward = true;
+	std::uint64_t taxiing = 0;
+	for (int step = 0; step < 2000 && taxiing == 0; ++step)
+	{
+		base.Step();
+		const Fixed x = base.world.Get<Transform>(mig)->position.x;
+		if (jet.state == JetState::Landing && jet.leg == 2)
+			westward = westward && x <= lastX;
+		lastX = x;
+		if (jet.state == JetState::TaxiToParking)
+			taxiing = base.tick;
+	}
+	BOOST_TEST_REQUIRE(taxiing != 0u);
+	BOOST_TEST(westward);
+	BOOST_TEST(jet.runwayHold == 0u); // released
+	BOOST_TEST(jet.pathCount == 3u);
+	BOOST_TEST((jet.path[1] == Engine::Math::FixedVector3{Fixed::FromInt(990), Fixed::FromInt(1040), Fixed{}}));
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Reloading) != 0u);
+	BOOST_TEST((base.world.Get<Transform>(mig)->position.XY() == Engine::Math::FixedVector2{Fixed::FromInt(983), Fixed::FromInt(1040)}));
+	const auto facing = static_cast<std::int32_t>(base.world.Get<Transform>(mig)->facing.units);
+	BOOST_TEST((facing < 0 ? -facing : facing) <= 683565); // the space's turn (0), within 0.001
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Parked) != 0u);
+	// A move order while it stands.
+	const Engine::Math::FixedVector2 there{Fixed::FromInt(1500), Fixed::FromInt(1500)};
+	*base.world.Get<MoveOrder>(mig) = MoveToPoint(there);
+	base.Step();
+	BOOST_TEST((jet.state == JetState::AwaitRunway));
+	BOOST_TEST(jet.pending == 1u);
+	BOOST_TEST_REQUIRE(base.Until(mig, JetState::Flying) != 0u);
+	BOOST_TEST((base.world.Get<MoveOrder>(mig)->destination == there));
 }
 
 BOOST_AUTO_TEST_CASE(jets_fly_the_same_on_any_number_of_workers_and_after_a_checkpoint)
@@ -367,6 +511,240 @@ BOOST_AUTO_TEST_CASE(jets_fly_the_same_on_any_number_of_workers_and_after_a_chec
 		loaded.Step();
 	}
 	BOOST_TEST(loaded.world.StateHash() == one.world.StateHash());
+}
+
+// JetTakeoffOrLandingState::update while landing (JetAIUpdate.cpp, m_landingSoundPlayed): a living jet in its landing
+// touches down (AircraftWheelScreech at its position) the first frame its height less 0.25 is no more than the ground
+// under it plus its airfield's LandingDeckHeightOffset (getLandingDeckHeightOffset; none once the airfield is gone), and
+// once a landing: not again while it rolls, again on its next landing. Flying low is not landing; a dead jet's state fails
+// before it looks. Flat ground at 0: 0.25 high touches, 0.26 does not; a carrier deck 45 up touches at 45.25.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_landing_jet_touches_down_once_a_landing)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<Transform>();
+	world.RegisterComponent<Airfield>();
+	world.RegisterComponent<Jet>();
+	world.RegisterComponent<Touchdown>();
+	world.RegisterComponent<Health>();
+	world.FinalizeComponents();
+	engine::level::Heightfield terrain;
+	terrain.width = terrain.height = 2;
+	terrain.cellSize = Fixed::FromInt(4000);
+	terrain.heights.assign(4, Fixed{});
+	world.EmplaceResource<GroundHeight>(terrain);
+	const auto &touchdowns = world.EmplaceResource<JetTouchdowns>().list;
+	const auto field = [&](Fixed deck) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Add<Airfield>(entity);
+		world.Get<Airfield>(entity)->deckHeight = deck;
+		return entity;
+	};
+	const ecs::Entity strip = field(Fixed{});
+	const ecs::Entity carrier = field(Fixed::FromInt(45));
+	const auto jet = [&](ecs::Entity airfield, JetState state, Fixed z, int x) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transform>(entity);
+		world.Get<Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(100), z};
+		world.Add<Jet>(entity);
+		world.Get<Jet>(entity)->airfield = airfield;
+		world.Get<Jet>(entity)->state = state;
+		world.Get<Jet>(entity)->since = 5;
+		world.Add<Health>(entity);
+		world.Get<Health>(entity)->maximum = Fixed::FromInt(100);
+		world.Get<Health>(entity)->current = Fixed::FromInt(100);
+		return entity;
+	};
+	const ecs::Entity raptor = jet(strip, JetState::Landing, Fixed::FromInt(10), 10);
+	const ecs::Entity hornet = jet(carrier, JetState::Landing, Fixed::FromInt(45) + Fixed::FromRatio(1, 4), 20);
+	const ecs::Entity low = jet(strip, JetState::Flying, Fixed{}, 30);
+	const ecs::Entity dead = jet(strip, JetState::Landing, Fixed{}, 40);
+	world.Get<Health>(dead)->current = Fixed{};
+	JetTouchdownSystem system;
+	ecs::SystemRegistry registry;
+	registry.Register(system);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	std::uint64_t tick = 5;
+	const auto step = [&] {
+		scheduler.Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{30}});
+		std::vector<ecs::Entity> down;
+		for (const JetTouchdown &touchdown : touchdowns)
+			down.push_back(touchdown.jet);
+		return down;
+	};
+	// The hornet is on its deck (45.25 - 0.25 = 45); the raptor is 10 up.
+	auto down = step();
+	BOOST_TEST_REQUIRE(down.size() == 1u);
+	BOOST_TEST((down[0] == hornet));
+	BOOST_TEST((touchdowns[0].position == world.Get<Transform>(hornet)->position));
+	world.Get<Transform>(raptor)->position.z = Fixed::FromRatio(26, 100);
+	BOOST_TEST(step().empty()); // 0.26 - 0.25 is above the ground; the hornet has touched down on this landing already
+	world.Get<Transform>(raptor)->position.z = Fixed::FromRatio(1, 4);
+	down = step();
+	BOOST_TEST_REQUIRE(down.size() == 1u);
+	BOOST_TEST((down[0] == raptor));
+	BOOST_TEST(world.Get<Touchdown>(raptor)->landing == 5u);
+	world.Get<Transform>(raptor)->position.z = Fixed{};
+	BOOST_TEST(step().empty()); // rolling down the runway: once a landing
+	// Its next landing (begun on tick 20) touches down again.
+	world.Get<Jet>(raptor)->since = 20;
+	tick = 20;
+	down = step();
+	BOOST_TEST_REQUIRE(down.size() == 1u);
+	BOOST_TEST((down[0] == raptor));
+	BOOST_TEST(world.Get<Touchdown>(raptor)->landing == 20u);
+	// The carrier gone, the hornet's next landing knows no deck: 1 up is not down, 0.25 is.
+	world.Destroy(carrier);
+	world.Get<Jet>(hornet)->since = 21;
+	world.Get<Transform>(hornet)->position.z = Fixed::FromInt(1);
+	BOOST_TEST(step().empty());
+	world.Get<Transform>(hornet)->position.z = Fixed::FromRatio(1, 4);
+	down = step();
+	BOOST_TEST_REQUIRE(down.size() == 1u);
+	BOOST_TEST((down[0] == hornet));
+	BOOST_TEST(!world.Has<Touchdown>(low));
+	BOOST_TEST(!world.Has<Touchdown>(dead));
+}
+
+namespace
+{
+double RealOf(Fixed value) { return static_cast<double>(value.Raw()) / 65536.0; }
+
+// MIGLocomotor (Locomotor.ini): WINGS over AIR, Speed 160, MinSpeed 60, TurnRate 120, Acceleration 110, Braking 10, Lift
+// 120, SURFACE_RELATIVE_HEIGHT 100 (a frame: 16/3, 2, 4 degrees, 11/90, 1/90, 2/15); ChinaJetMIG's Mass 500.
+LocomotorDefinition MigFlight()
+{
+	LocomotorDefinition mig;
+	mig.maxSpeed = Fixed::FromRatio(16, 3);
+	mig.minSpeed = Fixed::FromInt(2);
+	mig.acceleration = Fixed::FromRatio(11, 90);
+	mig.braking = Fixed::FromRatio(1, 90);
+	mig.turnRate = Engine::Math::TurnFromDegrees(4);
+	mig.lift = Fixed::FromRatio(2, 15);
+	mig.preferredHeight = Fixed::FromInt(100);
+	mig.height = HeightBehavior::SurfaceRelative;
+	mig.appearance = LocomotorAppearance::Wings;
+	mig.surfaces = 8;
+	mig.airborneMotiveForce = 1;
+	SettleLocomotorRates(mig);
+	return mig;
+}
+
+// One frame of a force-flown jet toward `goal` (the movement's flight), then its physics; the ground at 0.
+void FlyFrame(Transform &transform, Locomotion &motion, PhysicsBody &body, const PhysicsSettings &settings, std::uint64_t frame,
+	Engine::Math::FixedVector2 goal)
+{
+	FlightStep step;
+	step.body = &body;
+	step.settings = &settings;
+	step.tick = frame;
+	step.aloft = transform.position.z > Fixed{};
+	BeginFlight(transform, motion, body);
+	FlightSteer(transform, motion, step, goal, true, Fixed{}, motion.locomotor.maxSpeed);
+	EndFlight(transform, motion, step, [](Engine::Math::FixedVector2) { return Fixed{}; });
+}
+}
+
+// JetTakeoffOrLandingState (takeoff; GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/AIUpdate/JetAIUpdate.cpp)
+// over the force flight: a MIG at rest at the start of a runway from (1000, 1000) to (1200, 1000) (runwayTakeoffDist
+// 200; the airfield's ApproachHeight 50: the exit 0.75 of the runway on, (1350, 1000, 50)), PRECISE_Z_POS and
+// ULTRA_ACCURATE, its lift capped each frame at its lift x (1 - its 3D distance to the runway's end / 200) squared
+// (setMaxLift), follows its path (AIFollowPathState: each leg done once less than CloseEnoughDist is left along it,
+// the next leg's 150 counted beyond the first). It rolls at 11/90 a frame squared (1000.1222, 1000.3667, 1000.7333),
+// stays on the runway until its capped lift outdoes gravity (frame 53, 0.1548 up), is past the runway's end on frame 65
+// and at the exit on frame 104. Frame numbers and positions as the original's arithmetic (positions within 0.01).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mig_rolls_down_its_runway_and_lifts_off)
+{
+	Transform transform;
+	transform.position = {Fixed::FromInt(1000), Fixed::FromInt(1000), Fixed{}};
+	Locomotion motion = MakeLocomotion(MigFlight());
+	motion.ultraAccurate = 1;
+	motion.preciseZ = 1;
+	motion.liftCap = Fixed{};
+	PhysicsBody body;
+	body.mass = Fixed::FromInt(500);
+	body.flags = physics_flag::Locomotive | physics_flag::AirborneFriction;
+	const PhysicsSettings settings;
+	const Engine::Math::FixedVector3 end{Fixed::FromInt(1200), Fixed::FromInt(1000), Fixed{}};
+	const Engine::Math::FixedVector3 path[2] = {{Fixed::FromInt(1200), Fixed::FromInt(1000), Fixed::FromInt(50)},
+		{Fixed::FromInt(1350), Fixed::FromInt(1000), Fixed::FromInt(50)}};
+	const double rolling[3] = {1000.1222, 1000.3667, 1000.7333};
+	std::uint32_t leg = 0;
+	int lifted = 0, pastEnd = 0, atExit = 0;
+	for (std::uint64_t frame = 1; frame <= 200 && atExit == 0; ++frame)
+	{
+		motion.liftCap = runway_detail::TakeoffLift(motion.locomotor.lift, end - transform.position, Fixed::FromInt(200));
+		if (motion.tracking != 0 && motion.flightGoal == path[leg].XY() &&
+			TrackFlightLeg(transform, motion, motion.flightGoal).left < motion.locomotor.closeEnough)
+		{
+			++leg;
+			if (leg == 1)
+			{
+				pastEnd = static_cast<int>(frame);
+				BOOST_TEST(std::abs(RealOf(transform.position.x) - 1200.089) <= 0.05);
+			}
+			else
+			{
+				atExit = static_cast<int>(frame);
+				break;
+			}
+		}
+		motion.preciseHeight = path[leg].z;
+		motion.flightExtra = leg == 0 ? Fixed::FromInt(150) : Fixed{};
+		FlyFrame(transform, motion, body, settings, frame, path[leg].XY());
+		if (frame <= 3)
+			BOOST_TEST(std::abs(RealOf(transform.position.x) - rolling[frame - 1]) <= 0.01);
+		if (lifted == 0 && transform.position.z > Fixed{})
+		{
+			lifted = static_cast<int>(frame);
+			BOOST_TEST(std::abs(RealOf(transform.position.z) - 0.1548) <= 0.01);
+		}
+	}
+	BOOST_TEST(lifted == 53);
+	BOOST_TEST(pastEnd == 65);
+	BOOST_TEST(atExit == 104);
+}
+
+// JetTakeoffOrLandingState::update (takeoff) on a flight deck (FlightDeckBehavior's runwayTakeoffDist, the deck's
+// height in the runway's end): the cap is lift x (1 - 3D distance to the end / the runway's length) squared, clipped to
+// [0, 1], whichever deck height: at the start none, halfway a quarter, at the end the whole lift; past the end it wanes
+// again (half a runway past: a quarter).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_deck_jets_lift_grows_along_its_runway)
+{
+	const Fixed lift = Fixed::FromRatio(2, 15);
+	const Fixed length = Fixed::FromInt(200);
+	const auto cap = [&](std::int64_t along) {
+		return runway_detail::TakeoffLift(lift, Engine::Math::FixedVector3{Fixed::FromInt(along), Fixed{}, Fixed{}}, length);
+	};
+	BOOST_TEST((cap(200) == Fixed{}));
+	BOOST_TEST(std::abs(RealOf(cap(100)) - RealOf(lift) / 4.0) <= 0.0001);
+	BOOST_TEST((cap(0) == lift));
+	BOOST_TEST(std::abs(RealOf(cap(-100)) - RealOf(lift) / 4.0) <= 0.0001);
+}
+
+// JetTakeoffOrLandingState::onEnter (landing): setMaxSpeed(MinSpeed). A MIG at full speed (16/3) with its speed so
+// capped slows by its braking, 1/90 a frame (within 0.0001).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_landing_jet_is_held_to_its_least_speed)
+{
+	Transform transform;
+	transform.position = {Fixed{}, Fixed{}, Fixed::FromInt(100)};
+	Locomotion motion = MakeLocomotion(MigFlight());
+	motion.speedCap = motion.locomotor.minSpeed;
+	motion.speed = motion.flownSpeed = Fixed::FromRatio(16, 3);
+	motion.forced = 1;
+	PhysicsBody body;
+	body.mass = Fixed::FromInt(500);
+	body.flags = physics_flag::Locomotive | physics_flag::AirborneFriction;
+	body.velocity = {Fixed::FromRatio(16, 3), Fixed{}, Fixed{}};
+	body.motiveUntil = 1000;
+	const PhysicsSettings settings;
+	for (std::uint64_t frame = 1; frame <= 3; ++frame)
+	{
+		FlyFrame(transform, motion, body, settings, frame, {Fixed::FromInt(10000), Fixed{}});
+		BOOST_TEST(std::abs(RealOf(motion.speed) - (16.0 / 3.0 - static_cast<double>(frame) / 90.0)) <= 0.0001);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

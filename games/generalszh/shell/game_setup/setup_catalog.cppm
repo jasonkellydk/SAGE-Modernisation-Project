@@ -18,6 +18,7 @@ struct SetupFaction
 {
 	int playerTemplate{-1}; // the index a game setup names
 	std::u16string name;    // SIDE:<side>
+	std::string armyTooltip; // its PlayerTemplate's ArmyTooltip (a label: the faction box's tooltip)
 };
 
 // A point on a map as the preview shows it: per 10000 of the map's extent, from its top left.
@@ -45,6 +46,7 @@ struct SetupCatalog
 	std::vector<SetupColor> colors;
 	std::vector<SetupFaction> factions;
 	int playerTemplateCount{15}; // every template, pickable or not (a setup names one by index)
+	std::vector<std::string> sideIcons; // each template's SideIconImage, by index (GameInfoWindow's player icons)
 	std::vector<std::uint32_t> startingMoney;
 	std::uint32_t defaultStartingMoney{10000};
 	int startCountdown{5}; // MultiplayerSettings StartCountdownTimer (LAN)

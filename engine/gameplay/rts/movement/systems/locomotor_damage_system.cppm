@@ -29,6 +29,7 @@ struct LocomotorDamageSystem
 			locomotor.maxSpeed = damaged ? locomotor.speedDamaged : locomotor.speedFull;
 			locomotor.acceleration = damaged ? locomotor.accelerationDamaged : locomotor.accelerationFull;
 			locomotor.turnRate = damaged ? locomotor.turnRateDamaged : locomotor.turnRateFull;
+			locomotor.lift = damaged ? locomotor.liftDamaged : locomotor.liftFull; // getMaxLift
 		}
 	}
 };

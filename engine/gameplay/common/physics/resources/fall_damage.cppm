@@ -12,6 +12,11 @@ export namespace engine::gameplay
 struct FallDamage : ecs::ChunkOutputs<DamageRecord>
 {
 };
+
+// The same from bodies their locomotor steps itself (flyers: the movement's chunks).
+struct LocomotorFalls : ecs::ChunkOutputs<DamageRecord>
+{
+};
 }
 
 export namespace ecs
@@ -20,5 +25,10 @@ template<>
 struct ResourceTraits<engine::gameplay::FallDamage>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.fall_damage";
+};
+template<>
+struct ResourceTraits<engine::gameplay::LocomotorFalls>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.locomotor_falls";
 };
 }

@@ -3,6 +3,7 @@ import std;
 
 export import engine.config.binding.schema;
 import engine.core.text.quoted_printable;
+import Engine.Core.Math.FixedPresentation;
 
 // Maps\MapCache.ini (the original's INI::parseMapCacheDefinition): what the
 // menus know of each shipped map without loading it: its name tag, whether
@@ -24,6 +25,7 @@ struct MapMetaData
 	std::uint32_t crc{0};
 	Engine::Math::FixedVector3 extentMin{}, extentMax{};
 	Engine::Math::FixedVector3 initialCamera{};
+	bool hasInitialCamera{false}; // the map has an InitialCameraPosition waypoint (written to the cache only then)
 	std::vector<Engine::Math::FixedVector3> starts; // Player_1_Start... one per player
 	std::vector<Engine::Math::FixedVector3> supplies, techs;
 
@@ -94,7 +96,10 @@ inline MapCache BindMapCache(const engine::config::Document &document, engine::c
 			else if (key == "extentMax")
 				map.extentMax = ReadVec3(field, context).value_or(Engine::Math::FixedVector3{});
 			else if (key == "InitialCameraPosition")
+			{
 				map.initialCamera = ReadVec3(field, context).value_or(Engine::Math::FixedVector3{});
+				map.hasInitialCamera = true;
+			}
 			else if (key == "supplyPosition")
 			{
 				if (const auto at = ReadVec3(field, context))
@@ -117,5 +122,135 @@ inline MapCache BindMapCache(const engine::config::Document &document, engine::c
 			cache.maps.insert(at, std::move(map));
 	}
 	return cache;
+}
+
+
+// Common/crc.h's CRC (the release build's computeCRC): each byte added to the running value shifted left by one, with
+// the bit shifted out added back (MapUtil.cpp calcCRC: the whole map file, read in 4096-byte blocks, from 0).
+constexpr std::uint32_t MapFileCrc(std::span<const std::byte> bytes, std::uint32_t crc = 0) noexcept
+{
+	for (const std::byte byte : bytes)
+	{
+		const std::uint32_t high = crc >> 31;
+		crc = (crc << 1) + std::to_integer<std::uint32_t>(byte) + high;
+	}
+	return crc;
+}
+
+// MapCache::addMap: a cached map still holds when the file's size is the one cached and its CRC is set (the CRC itself
+// is not computed again: a file changed but for its size is not noticed).
+constexpr bool MapCacheEntryHolds(const MapMetaData *cached, std::uint32_t fileSize) noexcept
+{
+	return cached != nullptr && cached->fileSize == fileSize && cached->crc != 0;
+}
+
+// A map file found in the user's map folder: its path (any case; '/' or '\') and size (FileInfo sizeLow).
+struct MapFile
+{
+	std::string path;
+	std::uint32_t size{0};
+};
+
+namespace detail
+{
+inline std::string CacheKey(std::string_view path)
+{
+	std::string key(path);
+	for (char &c : key)
+		c = c == '/' ? '\\' : (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+	return key;
+}
+}
+
+// A user map's cache key (its full path, lower case) as the files list it, the user's map folder being mounted as
+// "Maps" (main.cpp): "maps\<rest>"; none when the key is not in `folder`.
+inline std::optional<std::string> UserMapFileKey(std::string_view key, std::string_view folder)
+{
+	const std::string prefix = detail::CacheKey(folder);
+	if (!key.starts_with(prefix) || key.size() <= prefix.size() + 1 || key[prefix.size()] != '\\')
+		return std::nullopt;
+	return "maps\\" + std::string(key.substr(prefix.size() + 1));
+}
+
+// MapCache::loadUserMaps (the user's map folder, `folder`, after its MapCache.ini was read into `cache`) with addMap:
+// each map file must sit in a folder of its own name ("x\x.map", else it is skipped); one whose cached entry still
+// holds is kept, any other is described anew (`describe`: MapUtil's loadMap and what addMap takes from it; none:
+// unreadable, left out) with its size, as not official; cached maps of the folder no longer found go
+// (clearUnseenMaps). True when anything was described or removed (the folder's MapCache.ini is then written again:
+// writeCacheINI(TRUE)).
+inline bool UpdateUserMaps(MapCache &cache, std::string_view folder, std::span<const MapFile> found,
+	const std::function<std::optional<MapMetaData>(const MapFile &)> &describe)
+{
+	std::set<std::string> seen;
+	bool parsed = false;
+	for (const MapFile &file : found)
+	{
+		const std::string key = detail::CacheKey(file.path);
+		const auto slash = key.find_last_of('\\');
+		if (slash == std::string::npos || !key.ends_with(".map"))
+			continue;
+		const std::string name = key.substr(slash + 1, key.size() - slash - 1 - 4);
+		if (!key.ends_with(name + "\\" + name + ".map"))
+			continue; // "Found map in wrong spot"
+		seen.insert(key);
+		if (MapCacheEntryHolds(cache.Find(key), file.size))
+			continue;
+		std::optional<MapMetaData> described = describe ? describe(file) : std::nullopt;
+		if (!described)
+			continue;
+		described->file = key;
+		described->fileSize = file.size;
+		described->official = false;
+		const auto at = std::lower_bound(cache.maps.begin(), cache.maps.end(), key,
+			[](const MapMetaData &each, const std::string &name) { return each.file < name; });
+		if (at != cache.maps.end() && at->file == key)
+			*at = std::move(*described);
+		else
+			cache.maps.insert(at, std::move(*described));
+		parsed = true;
+	}
+	const std::string prefix = detail::CacheKey(folder);
+	const auto before = cache.maps.size();
+	std::erase_if(cache.maps, [&](const MapMetaData &map) { return map.file.starts_with(prefix) && !seen.contains(map.file); });
+	return parsed || cache.maps.size() != before;
+}
+
+// MapCache::writeCacheINI for the maps of `folder` (written as `path`): the header, then per map its size, CRC,
+// timestamps (not kept: 0), whether official and multiplayer, its players, extent (%2.2f), name tag, waypoints in name
+// order (InitialCameraPosition, then Player_1_Start...), tech and supply positions.
+inline std::string WriteMapCacheIni(const MapCache &cache, std::string_view folder, std::string_view path)
+{
+	const auto vector = [](const Engine::Math::FixedVector3 &at) {
+		return std::format("X:{:.2f} Y:{:.2f} Z:{:.2f}", Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z));
+	};
+	std::string out = std::format("; FILE: {} /////////////////////////////////////////////////////////////\n", path);
+	out += "; This INI file is auto-generated - do not modify\n";
+	out += "; /////////////////////////////////////////////////////////////////////////////\n";
+	const std::string prefix = detail::CacheKey(folder);
+	for (const MapMetaData &map : cache.maps)
+	{
+		if (!map.file.starts_with(prefix))
+			continue;
+		out += std::format("\nMapCache {}\n", engine::core::text::EncodeQuotedPrintable(map.file));
+		out += std::format("  fileSize = {}\n", map.fileSize);
+		out += std::format("  fileCRC = {}\n", map.crc);
+		out += "  timestampLo = 0\n  timestampHi = 0\n";
+		out += std::format("  isOfficial = {}\n", map.official ? "yes" : "no");
+		out += std::format("  isMultiplayer = {}\n", map.multiplayer ? "yes" : "no");
+		out += std::format("  numPlayers = {}\n", map.players);
+		out += "  extentMin = " + vector(map.extentMin) + "\n";
+		out += "  extentMax = " + vector(map.extentMax) + "\n";
+		out += "  nameLookupTag = " + map.nameLookupTag + "\n";
+		if (map.hasInitialCamera)
+			out += "  InitialCameraPosition = " + vector(map.initialCamera) + "\n";
+		for (std::size_t player = 0; player < map.starts.size(); ++player)
+			out += std::format("  Player_{}_Start = ", player + 1) + vector(map.starts[player]) + "\n";
+		for (const auto &tech : map.techs)
+			out += "  techPosition = " + vector(tech) + "\n";
+		for (const auto &supply : map.supplies)
+			out += "  supplyPosition = " + vector(supply) + "\n";
+		out += "END\n\n";
+	}
+	return out;
 }
 }

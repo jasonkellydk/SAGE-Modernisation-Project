@@ -84,6 +84,18 @@ struct CreationNugget
 	bool ignorePrimaryObstacle{false};
 	std::uint64_t invulnerableTicks{0}; // InvulnerableTime: an undetected defector this long (Object::goInvulnerable)
 	std::string putInContainer;          // PutInContainer: what holds what it makes (a parachute)
+	// SpreadFormation: each piece put at findPositionAround's spot from MinDistanceAFormation..MinDistanceBFormation (a random
+	// pick) out to MaxDistanceFormation (none found: the centre).
+	bool spreadFormation{false};
+	Engine::Math::Fixed minDistanceA, minDistanceB, maxDistance;
+	// FadeIn / FadeOut over FadeTime (its drawable's fade), FadeSound played on the source as each fades.
+	bool fadeIn{false}, fadeOut{false};
+	std::uint64_t fadeTicks{0};
+	std::string fadeSound;
+	// DiesOnBadLand: made over water it drowns (DEATH_FLOODED); on a cliff, water or impassable cell, or off the map, killed.
+	bool diesOnBadLand{false};
+	// PreserveLayer: made on the deck its source stands on (none in a container).
+	bool preserveLayer{false};
 };
 
 struct CreationList
@@ -196,6 +208,26 @@ CreationNugget ReadNugget(CreationKind kind, const Node &block, engine::config::
 			nugget.putInContainer = std::string(field.Value());
 		else if (Same(key, "InvulnerableTime"))
 			nugget.invulnerableTicks = engine::config::ReadDurationTicks(field, bind).value_or(0);
+		else if (Same(key, "SpreadFormation"))
+			nugget.spreadFormation = engine::config::ReadBool(field, bind).value_or(false);
+		else if (Same(key, "MinDistanceAFormation"))
+			nugget.minDistanceA = fixed();
+		else if (Same(key, "MinDistanceBFormation"))
+			nugget.minDistanceB = fixed();
+		else if (Same(key, "MaxDistanceFormation"))
+			nugget.maxDistance = fixed();
+		else if (Same(key, "FadeIn"))
+			nugget.fadeIn = engine::config::ReadBool(field, bind).value_or(false);
+		else if (Same(key, "FadeOut"))
+			nugget.fadeOut = engine::config::ReadBool(field, bind).value_or(false);
+		else if (Same(key, "FadeTime"))
+			nugget.fadeTicks = engine::config::ReadDurationTicks(field, bind).value_or(0);
+		else if (Same(key, "FadeSound"))
+			nugget.fadeSound = std::string(field.Value());
+		else if (Same(key, "PreserveLayer"))
+			nugget.preserveLayer = engine::config::ReadBool(field, bind).value_or(false);
+		else if (Same(key, "DiesOnBadLand"))
+			nugget.diesOnBadLand = engine::config::ReadBool(field, bind).value_or(false);
 		else if (Same(key, "IgnorePrimaryObstacle"))
 			nugget.ignorePrimaryObstacle = engine::config::ReadBool(field, bind).value_or(false);
 	}

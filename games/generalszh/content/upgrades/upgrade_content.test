@@ -38,6 +38,16 @@ BOOST_AUTO_TEST_CASE(legacy_parity_shipped_upgrades_and_triggers_bind)
 	BOOST_TEST(!radar.player); // Type = OBJECT
 	BOOST_TEST(radar.cost == 500);
 	BOOST_TEST(radar.buildTicks == 300u); // 10 s
+	// ButtonImage (parseAsciiString) and AcademyClassify (parseIndexList over TheAcademyClassificationTypeNames): the
+	// three radars are ACT_UPGRADE_RADAR (AcademyStats::recordUpgrade's m_researchedRadar), nothing else is classified.
+	BOOST_TEST(radar.buttonImage == "SARadarUpgrade");
+	BOOST_TEST(radar.academyClassification == 1u);
+	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_ChinaRadar")].academyClassification == 1u);
+	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_GLARadar")].academyClassification == 1u);
+	std::size_t classified = 0;
+	for (const UpgradeContent &upgrade : catalog.upgrades)
+		classified += upgrade.academyClassification != 0 ? 1u : 0u;
+	BOOST_TEST(classified == 3u);
 	BOOST_TEST(catalog.upgrades[*catalog.Find("Upgrade_AmericaChemicalSuits")].player);
 
 	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});

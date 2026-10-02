@@ -190,7 +190,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_a10_strike_dives_strafes_and_fires_its_mis
 	std::vector<gp::Shot> shots;
 	std::vector<std::pair<std::uint64_t, std::int32_t>> drops;
 	std::vector<gp::VisibleDrop> dropRecords;
-	std::map<std::uint32_t, std::pair<gp::Transform, gp::MissileFlight>> missiles; // entity index -> as made
+	std::map<std::uint64_t, std::pair<gp::Transform, gp::MissileFlight>> missiles; // entity (index and generation) -> as made
 	std::size_t detonated = 0;
 	const auto missileWeapon = [&] { return game.templates.Weapon("A10ThunderboltMissileWeapon|A10ThunderboltMissile"); };
 	for (int step = 0; step < 30 * 90 && world.IsAlive(jet); ++step)
@@ -240,8 +240,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_a10_strike_dives_strafes_and_fires_its_mis
 			const auto placed = chunk.template Get<gp::Transform>();
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < flight.size(); ++row)
-				if (flight[row].shot.source == jet && !missiles.contains(entities[row].index))
-					missiles.emplace(entities[row].index, std::pair{placed[row], flight[row]});
+				if (const std::uint64_t key = (std::uint64_t{entities[row].index} << 32) | entities[row].generation;
+					flight[row].shot.source == jet && !missiles.contains(key))
+					missiles.emplace(key, std::pair{placed[row], flight[row]});
 		});
 		world.Resource<gp::MissileDetonations>().ForEach([&](const gp::Shot &shot) {
 			if (shot.source == jet && shot.weapon == missileWeapon())

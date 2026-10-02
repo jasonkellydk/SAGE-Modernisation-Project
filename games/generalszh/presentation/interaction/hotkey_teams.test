@@ -1,0 +1,232 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <vector>
+
+import games.generalszh.presentation.interaction.algorithms.hotkey_teams;
+import engine.gameplay.common.identity.components.owner;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.object_id;
+import engine.gameplay.common.health.components.health;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.rts.slaves.components.slaved;
+import engine.gameplay.rts.construction.components.sale;
+import Engine.Core.Math.Fixed;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+namespace gp = engine::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+// A world of the components the control groups read: definition 0 a selectable unit, 1 a selectable structure.
+struct Groups
+{
+	ecs::World world{ecs::WorldConfig{2}};
+
+	Groups()
+	{
+		world.RegisterComponent<gp::Owner>();
+		world.RegisterComponent<gp::DefinitionRef>();
+		world.RegisterComponent<gp::ObjectId>();
+		world.RegisterComponent<gp::Health>();
+		world.RegisterComponent<gp::Transform>();
+		world.RegisterComponent<gp::OffMap>();
+		world.RegisterComponent<gp::Slaved>();
+		world.RegisterComponent<gp::Sale>();
+		world.RegisterComponent<Selected>();
+		world.FinalizeComponents();
+		world.EmplaceResource<LocalPlayer>(LocalPlayer{0, true});
+		auto &catalog = world.EmplaceResource<SelectionCatalog>();
+		catalog.byDefinition.resize(2);
+		catalog.byDefinition[0].kinds = select_kind::Selectable;
+		catalog.byDefinition[1].kinds = select_kind::Selectable | select_kind::Structure;
+		world.EmplaceResource<gameplay::HotkeySquads>();
+		world.EmplaceResource<HotkeyTaps>();
+	}
+
+	ecs::Entity Make(std::uint32_t player, std::uint32_t id, std::int64_t x, std::uint32_t definition = 0)
+	{
+		const ecs::Entity entity = world.Create();
+		world.Add<gp::Owner>(entity);
+		world.Get<gp::Owner>(entity)->player = player;
+		world.Add<gp::DefinitionRef>(entity);
+		world.Get<gp::DefinitionRef>(entity)->index = definition;
+		world.Add<gp::ObjectId>(entity);
+		world.Get<gp::ObjectId>(entity)->value = id;
+		world.Add<gp::Health>(entity);
+		world.Get<gp::Health>(entity)->current = Fixed::FromInt(100);
+		world.Get<gp::Health>(entity)->maximum = Fixed::FromInt(100);
+		world.Add<gp::Transform>(entity);
+		world.Get<gp::Transform>(entity)->position = {Fixed::FromInt(x), Fixed::FromInt(5), Fixed{}};
+		return entity;
+	}
+
+	void Select(std::initializer_list<ecs::Entity> entities)
+	{
+		world.Side<Selected>().Clear();
+		for (const ecs::Entity entity : entities)
+			world.Side<Selected>().Emplace(entity);
+	}
+
+	bool IsSelected(ecs::Entity entity) { return world.Side<Selected>().Get(entity) != nullptr; }
+
+	// The simulation applying a CreateTeam (Player::processCreateTeamGameMessage), as the session would.
+	void Apply(const commands::CreateTeam &create, std::uint32_t player = 0)
+	{
+		gameplay::CreateHotkeySquad(world.Resource<gameplay::HotkeySquads>(), player, create.squad, create.units,
+			[&](ecs::Entity unit) { return world.IsAlive(unit); });
+	}
+};
+}
+
+BOOST_AUTO_TEST_SUITE(hotkey_teams)
+
+// Player::processCreateTeamGameMessage / getSquadNumberForObject / removeObjectFromHotkeySquad (Player.cpp), Squad.cpp:
+// squad 1 of a and b, then squad 2 of b and c: b leaves squad 1 (an object is in one of its player's squads); squad 2
+// again of c alone empties it first; a squad number out of 0..9 does nothing; an object no longer there is not added;
+// each player has its own squads.
+BOOST_AUTO_TEST_CASE(legacy_parity_create_team_messages_build_the_players_squads)
+{
+	gameplay::HotkeySquads squads;
+	const ecs::Entity a{1, 1}, b{2, 1}, c{3, 1}, gone{4, 1};
+	const auto exists = [&](ecs::Entity unit) { return !(unit == gone); };
+	const std::vector<ecs::Entity> ab{a, b}, bc{b, c}, cg{c, gone}, only{a};
+	gameplay::CreateHotkeySquad(squads, 0, 1, ab, exists);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 0, a) == 1);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 0, b) == 1);
+	gameplay::CreateHotkeySquad(squads, 0, 2, bc, exists);
+	BOOST_TEST_REQUIRE(squads.Members(0, 1).size() == 1u);
+	BOOST_TEST((squads.Members(0, 1)[0] == a));
+	BOOST_TEST_REQUIRE(squads.Members(0, 2).size() == 2u);
+	BOOST_TEST((squads.Members(0, 2)[0] == b));
+	BOOST_TEST((squads.Members(0, 2)[1] == c));
+	gameplay::CreateHotkeySquad(squads, 0, 2, cg, exists);
+	BOOST_TEST_REQUIRE(squads.Members(0, 2).size() == 1u);
+	BOOST_TEST((squads.Members(0, 2)[0] == c));
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 0, b) == gameplay::NoHotkeySquad);
+	gameplay::CreateHotkeySquad(squads, 0, 10, only, exists);
+	gameplay::CreateHotkeySquad(squads, 0, -1, only, exists);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 0, a) == 1);
+	gameplay::CreateHotkeySquad(squads, 3, 0, only, exists);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 3, a) == 0);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 0, a) == 1);
+	BOOST_TEST(gameplay::SquadNumberOf(squads, 1, a) == gameplay::NoHotkeySquad);
+
+	// Player::xfer: the squads survive a checkpoint.
+	engine::core::serialization::ByteWriter writer;
+	squads.Save(writer);
+	const auto bytes = writer.Take();
+	engine::core::serialization::ByteReader reader(bytes);
+	gameplay::HotkeySquads loaded;
+	BOOST_TEST_REQUIRE(loaded.Load(reader));
+	BOOST_TEST(gameplay::SquadNumberOf(loaded, 3, a) == 0);
+	BOOST_TEST((loaded.Members(0, 2)[0] == c));
+}
+
+// SelectionTranslator's MSG_META_CREATE_TEAMn / SELECT_TEAMn / ADD_TEAMn / VIEW_TEAMn (SelectionXlat.cpp):
+// - create: the selected objects the local player controls, in the drawable list's order (newest first: ids 3 then 1),
+//   an enemy's selected one left out;
+// - select on logic frame 100 (the first press: the last press time taken as now): all deselected, then the group's live
+//   members the local player controls; again on frame 110 (under 20 frames, the same group): the selection stays and
+//   the view goes to the group's last live member (id 1, at x 10); on frame 140: selected again;
+// - a member that dies leaves the group's live members (Squad::getLiveObjects: isSelectable);
+// - add with a structure selected last: the structure goes first, then the group joins the selection;
+// - view: the view to the group's last live member; VIEW_TEAM0 too (the original takes 1..10 there, so Alt+0 did
+//   nothing: fixed).
+BOOST_AUTO_TEST_CASE(legacy_parity_team_keys_work_the_selection_as_the_selection_translator)
+{
+	Groups groups;
+	const ecs::Entity first = groups.Make(0, 1, 10);
+	const ecs::Entity second = groups.Make(0, 2, 20);
+	const ecs::Entity third = groups.Make(0, 3, 30);
+	const ecs::Entity enemy = groups.Make(1, 4, 40);
+	const ecs::Entity depot = groups.Make(0, 5, 50, 1);
+
+	groups.Select({first, third, enemy});
+	const TeamMetaOutcome created = ApplyTeamMeta(groups.world, TeamMeta::Create, 1, 50);
+	BOOST_TEST_REQUIRE(created.command.has_value());
+	BOOST_TEST(created.command->squad == 1);
+	BOOST_TEST_REQUIRE(created.command->units.size() == 2u);
+	BOOST_TEST((created.command->units[0] == third));
+	BOOST_TEST((created.command->units[1] == first));
+	BOOST_TEST(!created.lookAt.has_value());
+	groups.Apply(*created.command);
+	BOOST_TEST(ShownGroupNumber(groups.world, first) == 1);
+	BOOST_TEST(ShownGroupNumber(groups.world, second) == gameplay::NoHotkeySquad);
+
+	groups.Select({second, enemy});
+	const TeamMetaOutcome selected = ApplyTeamMeta(groups.world, TeamMeta::Select, 1, 100);
+	BOOST_TEST(!selected.command.has_value());
+	BOOST_TEST(!selected.lookAt.has_value());
+	BOOST_TEST(groups.IsSelected(first));
+	BOOST_TEST(groups.IsSelected(third));
+	BOOST_TEST(!groups.IsSelected(second));
+	BOOST_TEST(!groups.IsSelected(enemy));
+
+	groups.Select({second});
+	const TeamMetaOutcome twice = ApplyTeamMeta(groups.world, TeamMeta::Select, 1, 110);
+	BOOST_TEST_REQUIRE(twice.lookAt.has_value());
+	BOOST_TEST((*twice.lookAt)[0] == 10.0f);
+	BOOST_TEST((*twice.lookAt)[1] == 5.0f);
+	BOOST_TEST(groups.IsSelected(second));
+	BOOST_TEST(!groups.IsSelected(first));
+
+	ApplyTeamMeta(groups.world, TeamMeta::Select, 1, 140);
+	BOOST_TEST(groups.IsSelected(first));
+	BOOST_TEST(!groups.IsSelected(second));
+
+	// The last member dies: no longer a live member (the view now goes to id 3).
+	groups.world.Get<gp::Health>(first)->current = Fixed{};
+	groups.Select({});
+	ApplyTeamMeta(groups.world, TeamMeta::Select, 1, 200);
+	BOOST_TEST(!groups.IsSelected(first));
+	BOOST_TEST(groups.IsSelected(third));
+	const TeamMetaOutcome viewed = ApplyTeamMeta(groups.world, TeamMeta::View, 1, 300);
+	BOOST_TEST_REQUIRE(viewed.lookAt.has_value());
+	BOOST_TEST((*viewed.lookAt)[0] == 30.0f);
+
+	// Add: a structure selected last goes first.
+	groups.Select({second, depot});
+	ApplyTeamMeta(groups.world, TeamMeta::Add, 1, 400);
+	BOOST_TEST(!groups.IsSelected(depot));
+	BOOST_TEST(!groups.IsSelected(second));
+	BOOST_TEST(groups.IsSelected(third));
+	groups.Select({second});
+	ApplyTeamMeta(groups.world, TeamMeta::Add, 1, 500);
+	BOOST_TEST(groups.IsSelected(second));
+	BOOST_TEST(groups.IsSelected(third));
+
+	// VIEW_TEAM0 (fixed: the original ignores group 0 there).
+	groups.Select({second});
+	groups.Apply(*ApplyTeamMeta(groups.world, TeamMeta::Create, 0, 600).command);
+	const TeamMetaOutcome zero = ApplyTeamMeta(groups.world, TeamMeta::View, 0, 600);
+	BOOST_TEST_REQUIRE(zero.lookAt.has_value());
+	BOOST_TEST((*zero.lookAt)[0] == 20.0f);
+}
+
+// Select (SelectionXlat: getControllingPlayer() == player) takes only the members the local player controls now; add
+// takes every live member.
+BOOST_AUTO_TEST_CASE(legacy_parity_select_keeps_to_the_players_own_and_add_does_not)
+{
+	Groups groups;
+	const ecs::Entity mine = groups.Make(0, 1, 10);
+	const ecs::Entity taken = groups.Make(0, 2, 20);
+	groups.Select({mine, taken});
+	groups.Apply(*ApplyTeamMeta(groups.world, TeamMeta::Create, 4, 10).command);
+	groups.world.Get<gp::Owner>(taken)->player = 1; // captured since
+	groups.Select({});
+	ApplyTeamMeta(groups.world, TeamMeta::Select, 4, 100);
+	BOOST_TEST(groups.IsSelected(mine));
+	BOOST_TEST(!groups.IsSelected(taken));
+	BOOST_TEST(ShownGroupNumber(groups.world, taken) == gameplay::NoHotkeySquad);
+	groups.Select({});
+	ApplyTeamMeta(groups.world, TeamMeta::Add, 4, 200);
+	BOOST_TEST(groups.IsSelected(mine));
+	BOOST_TEST(groups.IsSelected(taken));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

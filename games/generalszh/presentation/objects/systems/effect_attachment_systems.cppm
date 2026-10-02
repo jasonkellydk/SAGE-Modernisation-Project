@@ -14,15 +14,19 @@ export import games.generalszh.presentation.objects.systems.object_presentation_
 export import games.generalszh.presentation.objects.algorithms.barrel_placement;
 export import games.generalszh.presentation.objects.algorithms.laser_beams;
 export import engine.gameplay.rts.combat.components.missile;
+export import games.generalszh.gameplay.abilities.components.ability_laser;
 export import engine.gameplay.rts.death.components.height_die;
 export import engine.gameplay.common.spatial.components.transform;
+export import engine.gameplay.common.spatial.resources.deck_surfaces;
+export import engine.gameplay.common.identity.components.owner;
+export import engine.gameplay.common.spatial.components.object_shroud;
 import Engine.Core.Math.FixedPresentation;
 
 // Particle systems riding on objects, each frame after the objects are
 // presented (one pass: the particle world is the side effect): an object
 // entering a model state starts the systems the state carries at their bones
 // (oriented like the bone; the original's ParticleSysBone), leaving it
-// removes them at once (as the original); a dying helicopter trails its
+// destroys them (W3DModelDraw::stopClientParticleSystems: they emit no more, what is out lives on); a dying helicopter trails its
 // smoke for the rest of its death. Systems follow their objects; objects
 // no longer presented lose theirs.
 export namespace generalszh::presentation
@@ -40,7 +44,7 @@ inline engine::effects::EmitterTransform Place(const PresentedObject &object, co
 inline void Remove(engine::effects::ParticleWorld &particles, std::vector<AttachedSystem> &systems)
 {
 	for (const AttachedSystem &attached : systems)
-		particles.Destroy(attached.id);
+		particles.Stop(attached.id);
 	systems.clear();
 }
 
@@ -70,10 +74,91 @@ inline bool Start(std::vector<AttachedSystem> &systems, std::span<const content:
 		{
 			AttachedSystem attached = placed[index];
 			attached.id = particles.world->Create(*definition, Place(object, attached));
+			// Its draw module switches it off and on (ParticleSystem::stop / start); only destroy() ends it.
+			particles.world->Hold(attached.id);
 			systems.push_back(attached);
 		}
 	return true;
 }
+
+// ParticleSystem::update's isShrouded for a system attached to an object: the viewer sees the object fogged or shrouded
+// (getShroudedStatus >= OBJECTSHROUD_FOGGED: neither clear nor partly clear). No viewer, or no shroud: never.
+inline bool ShroudedFromViewer(const engine::gameplay::ObjectShroud *shroud, std::uint32_t viewer) noexcept
+{
+	return shroud != nullptr && viewer != PresentationFrame::NoViewer && viewer < 64 && !shroud->SeenBy(viewer);
+}
+
+// W3DModelDraw::doStartOrStopParticleSys: its systems stop (emit nothing, kept) while the drawable is hidden or fully
+// obscured by the shroud, and start again when it is not.
+inline void SwitchSystems(engine::effects::ParticleWorld &particles, const std::vector<AttachedSystem> &systems, bool on)
+{
+	for (const AttachedSystem &attached : systems)
+		if (on)
+			particles.Resume(attached.id);
+		else
+			particles.Pause(attached.id);
+}
+
+inline void ObscureSystems(engine::effects::ParticleWorld &particles, const std::vector<AttachedSystem> &systems, bool obscured)
+{
+	for (const AttachedSystem &attached : systems)
+		particles.SetObscured(attached.id, obscured);
+}
+
+// ParticleSystem::update for a system attached to an object that is not drawn this frame (hidden by the shroud): it
+// still follows the object's transform (getTransformMatrix), here the simulation's position and facing at the look's
+// scale; and it emits nothing (obscured).
+inline void FollowHidden(engine::effects::ParticleWorld &particles, const std::vector<AttachedSystem> &systems, const engine::gameplay::Transform *transform,
+	float scale)
+{
+	if (transform != nullptr)
+	{
+		PresentedObject at;
+		at.position = {Engine::Math::ToFloat(transform->position.x), Engine::Math::ToFloat(transform->position.y), Engine::Math::ToFloat(transform->position.z)};
+		at.facing = static_cast<float>(transform->facing.units) * 6.283185307179586f / 4294967296.0f;
+		at.scale = scale;
+		for (const AttachedSystem &attached : systems)
+			particles.Move(attached.id, Place(at, attached));
+	}
+	ObscureSystems(particles, systems, true);
+}
+
+// The look's scale for an object's definition (1 when unknown).
+inline float LookScale(const LookCatalog &catalog, const engine::gameplay::DefinitionRef *definition) noexcept
+{
+	const DefinitionLooks *looks = definition != nullptr ? catalog.Of(definition->index) : nullptr;
+	return looks != nullptr ? looks->scale : 1.0f;
+}
+}
+
+// W3DModelDraw::getCurrentBoneTransforms then Thing::transformBoneToWorld (FXListAtBonePosFXNugget::doFxAtBones): the
+// world transforms (row-major 3x4) of `object`'s bones as its model is drawn now: `bone` itself (start 0), or bone01,
+// bone02, ... up to bone99 (start 1), stopping at the first its model does not have, at most 40. Each is the bone's
+// transform in its model scaled by the object's scale (getCurrentBoneTransforms' model-scaled inverse), then turned
+// by the object's facing and moved to where it is. None while its model is loading.
+inline std::vector<std::array<float, 12>> CurrentBoneTransforms(const PresentedObject &object, const BonePoses &poses, std::string_view bone, int start)
+{
+	std::vector<std::array<float, 12>> found;
+	if (!poses.transform)
+		return found;
+	constexpr std::size_t MaxBonePoints = 40;
+	const float c = std::cos(object.facing), s = std::sin(object.facing);
+	const std::array<float, 9> turn{c, -s, 0, s, c, 0, 0, 0, 1};
+	const int last = start == 0 ? 0 : 99;
+	for (int index = start; index <= last && found.size() < MaxBonePoints; ++index)
+	{
+		const std::string name = index == 0 ? std::string(bone) : std::format("{}{:02}", bone, index);
+		const auto local = poses.transform(object.look, object.animationSeconds, object.animationStart, name);
+		if (!local)
+			break;
+		std::array<float, 12> world{};
+		for (std::size_t row = 0; row < 3; ++row)
+			for (std::size_t column = 0; column < 4; ++column)
+				world[row * 4 + column] = object.scale * (turn[row * 3] * (*local)[column] + turn[row * 3 + 1] * (*local)[4 + column] +
+					turn[row * 3 + 2] * (*local)[8 + column]) + (column == 3 ? object.position[row] : 0.0f);
+		found.push_back(world);
+	}
+	return found;
 }
 
 // The frame's weapon fire FX moved onto the barrels that fired them, once the objects are presented.
@@ -187,6 +272,7 @@ struct ExhaustSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Read<ExhaustState>, ecs::Write<ExhaustEmission>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::ObjectShroud>, ecs::Read<engine::gameplay::Transform>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<WeaponExhausts>, ecs::Write<ParticleWorldHandle>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
@@ -199,6 +285,13 @@ struct ExhaustSystem
 		const auto &states = context.SideRead<SideTables, ExhaustState>();
 		auto &emissions = context.Side<SideTables, ExhaustEmission>();
 		auto &commands = context.Commands();
+		const auto lookup = context.Lookup<Lookup>();
+		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
+		// MissileAIUpdate's exhaust rides the missile (attachToObject): nothing emitted while the viewer sees it fogged or
+		// shrouded (ParticleSystem::update's isShrouded), and kept while it is.
+		const auto shrouded = [&](ecs::Entity entity) {
+			return lookup.IsAlive(entity) && effect_attachment_detail::ShroudedFromViewer(lookup.Get<engine::gameplay::ObjectShroud>(entity), viewer);
+		};
 		context.Read<PresentedObjects>().ForEach([&](const PresentedObject &object) {
 			const ExhaustState *state = states.Get(object.entity);
 			if (state == nullptr)
@@ -219,7 +312,10 @@ struct ExhaustSystem
 			if (emission != nullptr && emission->id != 0)
 			{
 				if (emission->tossed == 0)
+				{
 					particles.world->Move(emission->id, at);
+					particles.world->SetObscured(emission->id, shrouded(object.entity));
+				}
 				return;
 			}
 			const std::string_view name = exhausts.Of(state->weapon, state->veterancy);
@@ -232,10 +328,20 @@ struct ExhaustSystem
 			else
 				commands.Add<ExhaustEmission>(object.entity, ExhaustEmission{id, serial, 0});
 		});
-		// Missiles no longer presented (gone): their exhausts stop.
+		// Missiles no longer presented (gone): their exhausts stop; hidden by the shroud, they emit nothing meanwhile.
 		for (std::size_t index = 0; index < emissions.Size(); ++index)
 			if (ExhaustEmission &emission = emissions.Value(index); emission.seenFrame != serial && emission.id != 0 && emission.tossed == 0)
 			{
+				if (const ecs::Entity entity = emissions.Entities()[index]; shrouded(entity))
+				{
+					// Following the missile meanwhile (attached: its transform), emitting nothing.
+					if (const auto *transform = lookup.Get<engine::gameplay::Transform>(entity))
+						particles.world->Move(emission.id, engine::effects::EmitterTransform::At(Engine::Math::ToFloat(transform->position.x),
+							Engine::Math::ToFloat(transform->position.y), Engine::Math::ToFloat(transform->position.z),
+							static_cast<float>(transform->facing.units) * 6.283185307179586f / 4294967296.0f));
+					particles.world->SetObscured(emission.id, true);
+					continue;
+				}
 				particles.world->Stop(emission.id);
 				emission.tossed = 1;
 			}
@@ -244,24 +350,30 @@ struct ExhaustSystem
 
 // Laser beams (a weapon's LaserName: LaserUpdate driving W3DLaserDraw), each frame after the objects are
 // presented: a laser shot puts its beam out with its muzzle and target particle systems; the beam runs from its
-// shooter's laser bone (turned with the turret) to its target, both followed as they move, for its lifetime
-// (LifetimeUpdate), then goes (its systems stop). This frame's beams: W3DLaserDraw's NumBeams from the inner to
+// shooter's laser bone (turned with the turret) to where it was aimed, for its lifetime
+// (LifetimeUpdate), then goes (its systems stop). Its start follows its shooter (updateStartPos); its end stays where
+// it was put (the callers all give initLaser an end, so updateEndPos never follows a target). This frame's beams: W3DLaserDraw's NumBeams from the inner to
 // the outer width and colour (the original's colour ramp scaled by the inner alpha), over its segments (arched
-// by ArcHeight on a cosine, never below 2 over the ground), their texture tiled by length over width.
+// by ArcHeight on a cosine, never below 2 over the ground), their texture tiled by length over width. Its muzzle and
+// target particle systems are put where it starts and ends as it begins (initLaser), and stay there.
+// An ability's laser special object (AbilityLaser: the Missile Defender's, the hackers') is drawn the same way for as
+// long as it exists: from its unit's SpecialObjectAttachToBone (its position when it has no such bone), followed, to the
+// target's centre as it began; its particle systems (when its unit is seen as it starts) go with it.
 struct LaserSystem
 {
-	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
-	using SideTables = ecs::SideTables<ecs::Read<WeaponPose>>;
+	using Query = ecs::Query<ecs::Read<generalszh::gameplay::AbilityLaser>, ecs::Read<engine::gameplay::DefinitionRef>>;
+	using SideTables = ecs::SideTables<ecs::Read<WeaponPose>, ecs::Write<AbilityLaserView>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<LookCatalog>, ecs::Read<BonePoses>,
 		ecs::Read<WeaponLasers>, ecs::Read<TerrainHeightHandle>, ecs::Write<LaserRequests>, ecs::Write<ActiveLasers>, ecs::Write<LaserFrame>,
 		ecs::Write<ParticleWorldHandle>, ecs::Write<PresentationRandom>>;
 
-	void Execute(Query &, ecs::SystemContext &context) const
+	void Execute(Query &query, ecs::SystemContext &context) const
 	{
 		const PresentationFrame &frame = context.Read<PresentationFrame>();
 		const LookCatalog &catalog = context.Read<LookCatalog>();
 		const BonePoses &poses = context.Read<BonePoses>();
 		const WeaponLasers &weapons = context.Read<WeaponLasers>();
+		auto &abilityViews = context.Side<SideTables, AbilityLaserView>();
 		const GroundHeightAt &ground = context.Read<TerrainHeightHandle>().at;
 		auto &requests = context.Write<LaserRequests>().pending;
 		auto &active = context.Write<ActiveLasers>().lasers;
@@ -269,14 +381,28 @@ struct LaserSystem
 		ParticleWorldHandle &particles = context.Write<ParticleWorldHandle>();
 		const auto &weaponPoses = context.SideRead<SideTables, WeaponPose>();
 		out.beams.clear();
-		if (active.empty() && requests.empty())
+		std::vector<std::pair<ecs::Entity, const generalszh::gameplay::AbilityLaser *>> abilityLasers;
+		std::vector<std::uint32_t> abilityDefinitions;
+		query.ForEachChunk([&](auto chunk) {
+			const auto lasers = chunk.template Get<generalszh::gameplay::AbilityLaser>();
+			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < lasers.size(); ++row)
+			{
+				abilityLasers.emplace_back(entities[row], &lasers[row]);
+				abilityDefinitions.push_back(definitions[row].index);
+			}
+		});
+		if (active.empty() && requests.empty() && abilityLasers.empty())
 			return;
 		// The objects the lasers hang on, found in one pass over this frame's objects.
 		std::vector<std::pair<ecs::Entity, const PresentedObject *>> shown;
 		for (const LaserRequest &request : requests)
 			shown.emplace_back(request.source, nullptr), shown.emplace_back(request.target, nullptr);
 		for (const ActiveLaser &laser : active)
-			shown.emplace_back(laser.source, nullptr), shown.emplace_back(laser.target, nullptr);
+			shown.emplace_back(laser.source, nullptr);
+		for (const auto &[entity, laser] : abilityLasers)
+			shown.emplace_back(laser->parent, nullptr);
 		context.Read<PresentedObjects>().ForEach([&](const PresentedObject &object) {
 			for (auto &[entity, found] : shown)
 				if (entity == object.entity)
@@ -290,20 +416,22 @@ struct LaserSystem
 					return found;
 			return nullptr;
 		};
-		const auto startOf = [&](const ActiveLaser &laser, const WeaponLaser &look) -> std::optional<std::array<float, 3>> {
-			const PresentedObject *source = presented(laser.source);
+		// The source's bone (turned with its turret), or its position without one.
+		const auto boneOf = [&](ecs::Entity from, std::string_view bone) -> std::optional<std::array<float, 3>> {
+			const PresentedObject *source = presented(from);
 			if (source == nullptr)
 				return std::nullopt;
 			const DefinitionLooks *looks = catalog.Of(source->definition);
 			if (looks != nullptr && !looks->states.Empty() && source->look < catalog.lookModels.size() && source->state < looks->states.states.size())
 			{
-				const WeaponPose *aim = weaponPoses.Get(laser.source);
+				const WeaponPose *aim = weaponPoses.Get(from);
 				if (const auto place = PlaceOnBarrel(*source, looks->states.states[source->state], catalog.lookModels[source->look], poses,
-						aim != nullptr ? aim->currentTurret : 0.0f, aim != nullptr ? aim->currentPitch : 0.0f, 0, nullptr, look.bone))
+						aim != nullptr ? aim->currentTurret : 0.0f, aim != nullptr ? aim->currentPitch : 0.0f, 0, nullptr, bone))
 					return place->at;
 			}
 			return source->position;
 		};
+		const auto startOf = [&](const ActiveLaser &laser, const WeaponLaser &look) { return boneOf(laser.source, look.bone); };
 		const auto systemAt = [&](std::string_view name, const std::array<float, 3> &at) -> std::uint64_t {
 			if (particles.world == nullptr || particles.content == nullptr || name.empty())
 				return 0;
@@ -319,8 +447,10 @@ struct LaserSystem
 					context.Write<PresentationRandom>().engine);
 				laser.lifetime = static_cast<float>(frames) / 30.0f;
 				laser.start = startOf(laser, *look).value_or(request.end);
-				if (const PresentedObject *target = presented(request.target))
-					laser.end = target->position;
+				// AssistedTargetingUpdate's streams end where their target is as they start (to->getPosition()).
+				if (request.atTarget)
+					if (const PresentedObject *target = presented(request.target))
+						laser.end = target->position;
 				laser.muzzle = systemAt(look->look.muzzleSystem, laser.start);
 				laser.impact = systemAt(look->look.targetSystem, laser.end);
 				active.push_back(laser);
@@ -344,24 +474,46 @@ struct LaserSystem
 			}
 			if (const auto start = startOf(laser, *look))
 				laser.start = *start;
-			if (const PresentedObject *target = presented(laser.target))
-				laser.end = target->position;
-			if (particles.world != nullptr)
-			{
-				if (laser.muzzle != 0)
-					particles.world->Move(laser.muzzle, engine::effects::EmitterTransform::At(laser.start[0], laser.start[1], laser.start[2], 0.0f));
-				if (laser.impact != 0)
-					particles.world->Move(laser.impact, engine::effects::EmitterTransform::At(laser.end[0], laser.end[1], laser.end[2], 0.0f));
-			}
 			AppendLaserBeams(out, look->look, laser.start, laser.end, 1.0f, laser.age, ground);
 			laser.age += frame.seconds;
 			++index;
+		}
+		for (std::size_t index = 0; index < abilityLasers.size(); ++index)
+		{
+			const auto &[entity, laser] = abilityLasers[index];
+			const DefinitionLooks *looks = catalog.Of(abilityDefinitions[index]);
+			if (looks == nullptr || !looks->laser)
+				continue;
+			std::string_view bone;
+			if (const PresentedObject *parent = presented(laser->parent))
+				if (const DefinitionLooks *unit = catalog.Of(parent->definition))
+					for (const auto &[power, name] : unit->laserBones)
+						if (power == laser->power)
+							bone = name;
+			const std::array<float, 3> end{Engine::Math::ToFloat(laser->end.x), Engine::Math::ToFloat(laser->end.y), Engine::Math::ToFloat(laser->end.z)};
+			const auto start = boneOf(laser->parent, bone);
+			AbilityLaserView *view = abilityViews.Get(entity);
+			if (view == nullptr)
+			{
+				view = abilityViews.Emplace(entity);
+				view->start = start.value_or(end);
+				// Its flares only when its unit is seen as it starts.
+				if (start)
+				{
+					view->muzzle = systemAt(looks->laser->muzzleSystem, view->start);
+					view->impact = systemAt(looks->laser->targetSystem, end);
+				}
+			}
+			else if (start)
+				view->start = *start;
+			AppendLaserBeams(out, *looks->laser, view->start, end, 1.0f, view->age, ground);
+			view->age += frame.seconds;
 		}
 	}
 };
 
 // ParticleSystemManager::destroyAttachedSystems, once a tick after the simulation: an object whose HeightDieUpdate went
-// below its DestroyAttachedParticlesAtHeight this tick loses every particle system riding on it at once (its model
+// below its DestroyAttachedParticlesAtHeight this tick destroys every particle system riding on it (ParticleSystem::destroy: they emit no more, what is out lives on; its model
 // states', its damage state's, its FX lists', a crash trail, a missile's exhaust); they are not started again for what
 // it shows now (only something new starts them).
 struct AttachedParticleClearSystem
@@ -384,7 +536,7 @@ struct AttachedParticleClearSystem
 		auto &exhausts = context.Side<SideTables, ExhaustEmission>();
 		const auto destroy = [&](std::vector<AttachedSystem> &systems) {
 			for (const AttachedSystem &attached : systems)
-				particles.world->Destroy(attached.id);
+				particles.world->Stop(attached.id);
 			systems.clear();
 		};
 		for (const ecs::Entity entity : clears)
@@ -399,7 +551,7 @@ struct AttachedParticleClearSystem
 				destroy(emission->systems);
 			if (ExhaustEmission *exhaust = exhausts.Get(entity); exhaust != nullptr && exhaust->id != 0)
 			{
-				particles.world->Destroy(exhaust->id);
+				particles.world->Stop(exhaust->id);
 				exhaust->tossed = 1;
 			}
 		}
@@ -409,7 +561,8 @@ struct AttachedParticleClearSystem
 struct EffectAttachmentSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
-	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DebrisLook>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DebrisLook>, ecs::Read<engine::gameplay::ObjectShroud>, ecs::Read<engine::gameplay::Transform>,
+		ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Write<ConditionEmission>, ecs::Write<CrashTrailEmission>, ecs::Write<FxEmission>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<LookCatalog>, ecs::Read<BonePoses>,
 		ecs::Write<ParticleWorldHandle>>;
@@ -428,12 +581,18 @@ struct EffectAttachmentSystem
 		auto &attachedFx = context.Side<SideTables, FxEmission>();
 		auto &commands = context.Commands();
 		const auto lookup = context.Lookup<Lookup>();
+		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
+		const auto shrouded = [&](ecs::Entity entity) {
+			return lookup.IsAlive(entity) && ShroudedFromViewer(lookup.Get<engine::gameplay::ObjectShroud>(entity), viewer);
+		};
 		context.Read<PresentedObjects>().ForEach([&](const PresentedObject &object) {
+			const bool obscured = shrouded(object.entity);
 			if (FxEmission *riding = attachedFx.Get(object.entity))
 			{
 				riding->seenFrame = serial;
 				for (const AttachedSystem &attached : riding->systems)
 					particles.world->Move(attached.id, Place(object, attached));
+				ObscureSystems(*particles.world, riding->systems, obscured);
 			}
 			// A debris piece's ParticleSystem (GenericObjectCreationNugget: attachToObject), started as it first shows and
 			// riding on it from then on, as FX attachments do.
@@ -471,6 +630,8 @@ struct EffectAttachmentSystem
 						}
 					particles.world->Move(attached.id, Place(object, attached));
 				}
+				// Presented, it is not obscured by the shroud (lingering included); stealth hides it (not drawn).
+				SwitchSystems(*particles.world, emission->systems, object.drawn);
 			}
 			else if (!bones.empty())
 				commands.Add<ConditionEmission>(object.entity, ConditionEmission{}); // starts next frame
@@ -483,27 +644,49 @@ struct EffectAttachmentSystem
 					trail->started = Start(trail->systems, looks->crashTrail, object, model, poses, particles) ? 1u : 0u;
 				for (const AttachedSystem &attached : trail->systems)
 					particles.world->Move(attached.id, Place(object, attached));
+				ObscureSystems(*particles.world, trail->systems, obscured);
 			}
 			else
 				commands.Add<CrashTrailEmission>(object.entity, CrashTrailEmission{});
 		});
-		// Objects no longer presented (off the map, gone) lose their systems.
+		// Objects not presented: hidden from the viewer by the shroud, their systems are kept (a model's stopped, an
+		// object's emitting nothing: doStartOrStopParticleSys / ParticleSystem::update's isShrouded) and go on where
+		// they were when it shows again; otherwise (off the map, gone) they are destroyed (what is out lives on).
 		for (std::size_t index = 0; index < conditions.Size(); ++index)
 			if (ConditionEmission &emission = conditions.Value(index); emission.seenFrame != serial && !emission.systems.empty())
 			{
+				if (shrouded(conditions.Entities()[index]))
+				{
+					SwitchSystems(*particles.world, emission.systems, false);
+					continue;
+				}
 				Remove(*particles.world, emission.systems);
 				emission.look = ConditionEmission::NoLook;
 			}
 		for (std::size_t index = 0; index < trails.Size(); ++index)
 			if (CrashTrailEmission &trail = trails.Value(index); trail.seenFrame != serial && !trail.systems.empty())
 			{
+				if (const ecs::Entity entity = trails.Entities()[index]; shrouded(entity))
+				{
+					FollowHidden(*particles.world, trail.systems, lookup.Get<engine::gameplay::Transform>(entity),
+						LookScale(catalog, lookup.Get<engine::gameplay::DefinitionRef>(entity)));
+					continue;
+				}
 				Remove(*particles.world, trail.systems);
 				trail.started = 0;
 			}
 		// As the original: a system attached to an object goes with it.
 		for (std::size_t index = 0; index < attachedFx.Size(); ++index)
 			if (FxEmission &riding = attachedFx.Value(index); riding.seenFrame != serial && !riding.systems.empty())
+			{
+				if (const ecs::Entity entity = attachedFx.Entities()[index]; shrouded(entity))
+				{
+					FollowHidden(*particles.world, riding.systems, lookup.Get<engine::gameplay::Transform>(entity),
+						LookScale(catalog, lookup.Get<engine::gameplay::DefinitionRef>(entity)));
+					continue;
+				}
 				Remove(*particles.world, riding.systems);
+			}
 	}
 };
 
@@ -517,7 +700,8 @@ struct DamageEffectSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Write<DamageEmission>>;
-	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Health>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Health>, ecs::Read<engine::gameplay::ObjectShroud>, ecs::Read<engine::gameplay::Transform>,
+		ecs::Read<engine::gameplay::DefinitionRef>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<LookCatalog>, ecs::Read<BonePoses>,
 		ecs::Write<ParticleWorldHandle>, ecs::Write<FxRequests>, ecs::Write<PresentationRandom>, ecs::Write<EffectStats>>;
 
@@ -544,6 +728,10 @@ struct DamageEffectSystem
 		auto &emissions = context.Side<SideTables, DamageEmission>();
 		auto &commands = context.Commands();
 		const auto lookup = context.Lookup<Lookup>();
+		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
+		const auto shrouded = [&](ecs::Entity entity) {
+			return lookup.IsAlive(entity) && ShroudedFromViewer(lookup.Get<engine::gameplay::ObjectShroud>(entity), viewer);
+		};
 		const auto stop = [&](DamageEmission &emission) {
 			for (const AttachedSystem &attached : emission.systems)
 				particles.world->Stop(attached.id);
@@ -605,10 +793,20 @@ struct DamageEffectSystem
 			}
 			for (const AttachedSystem &attached : emission->systems)
 				particles.world->Move(attached.id, Place(object, attached));
+			// TransitionDamageFX's systems ride the object (attachToObject): none emitted while the viewer sees it
+			// fogged or shrouded (ParticleSystem::update's isShrouded).
+			ObscureSystems(*particles.world, emission->systems, shrouded(object.entity));
 		});
 		for (std::size_t index = 0; index < emissions.Size(); ++index)
 			if (DamageEmission &emission = emissions.Value(index); emission.seenFrame != serial && emission.known != 0)
 			{
+				// Hidden by the shroud: kept, emitting nothing, until it shows again.
+				if (const ecs::Entity entity = emissions.Entities()[index]; shrouded(entity))
+				{
+					FollowHidden(*particles.world, emission.systems, lookup.Get<engine::gameplay::Transform>(entity),
+						LookScale(catalog, lookup.Get<engine::gameplay::DefinitionRef>(entity)));
+					continue;
+				}
 				stop(emission);
 				emission.known = 0;
 			}
@@ -617,14 +815,20 @@ struct DamageEffectSystem
 
 // The frame's FX requests played (one pass: the particle world, the sound
 // and shake requests are its side effects); systems they attach to their
-// object ride on it (FxEmission) from the next frame.
+// object ride on it (FxEmission) from the next frame. A request on an object
+// sounds for its controlling player (SoundFXNugget::doFXObj); FXListAtBonePos
+// finds the object's bones as presented this frame (CurrentBoneTransforms);
+// CreateAtGroundHeight stands on the bridge deck a spot is nearest when the
+// world has decks (TerrainLogic::getLayerForDestination, getLayerHeight).
 struct FxPlaybackSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Owner>>;
 	using SideTables = ecs::SideTables<ecs::Write<FxEmission>>;
 	using Resources = ecs::Resources<ecs::Read<TerrainHeightHandle>, ecs::Write<ParticleWorldHandle>, ecs::Write<FxRequests>, ecs::Write<SoundRequests>,
 		ecs::Write<ShakeRequests>, ecs::Write<PresentationRandom>, ecs::Write<EffectStats>, ecs::Write<LightPulses>, ecs::Write<ScorchMarks>,
-		ecs::Write<Tracers>>;
+		ecs::Write<Tracers>, ecs::Read<PresentedObjects>, ecs::Read<BonePoses>, ecs::Read<engine::gameplay::DeckSurfaces>,
+		ecs::Read<engine::gameplay::GroundHeight>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -644,9 +848,32 @@ struct FxPlaybackSystem
 		auto &random = context.Write<PresentationRandom>().engine;
 		EffectStats &stats = context.Write<EffectStats>();
 		auto &riding = context.Side<SideTables, FxEmission>();
+		const auto owners = context.Lookup<Lookup>();
+		FxSurroundings around;
+		const PresentedObjects &presented = context.Read<PresentedObjects>();
+		const BonePoses &poses = context.Read<BonePoses>();
+		around.bones = [&](ecs::Entity object, std::string_view bone, int start) {
+			const PresentedObject *found = nullptr;
+			presented.ForEach([&](const PresentedObject &candidate) {
+				if (candidate.entity == object)
+					found = &candidate;
+			});
+			return found != nullptr ? CurrentBoneTransforms(*found, poses, bone, start) : std::vector<std::array<float, 12>>{};
+		};
+		const auto *decks = context.Find<engine::gameplay::DeckSurfaces>();
+		const auto *logicGround = context.Find<engine::gameplay::GroundHeight>();
+		if (decks != nullptr && logicGround != nullptr && !decks->decks.empty())
+			around.layerHeight = [&](float x, float y, float z) {
+				const auto fixed = [](float value) { return Engine::Math::Fixed::FromRaw(std::llround(static_cast<double>(value) * 65536.0)); };
+				const Engine::Math::FixedVector3 at{fixed(x), fixed(y), fixed(z)};
+				const std::uint8_t layer = engine::gameplay::LayerForDestination(*decks, *logicGround, at);
+				if (layer == engine::gameplay::GroundLayer)
+					return ground ? ground(x, y) : Engine::Math::ToFloat(logicGround->At(at.XY()));
+				return Engine::Math::ToFloat(engine::gameplay::LayerHeight(*decks, *logicGround, at.XY(), layer));
+			};
 		std::vector<std::pair<ecs::Entity, std::vector<AttachedSystem>>> added; // to objects without any yet
 		std::vector<FxAttachment> attached;
-		for (const FxRequest &request : requests.pending)
+		for (FxRequest &request : requests.pending)
 		{
 			attached.clear();
 			if (request.scorchRadius > 0.0f)
@@ -655,7 +882,13 @@ struct FxPlaybackSystem
 				if (request.fx.empty())
 					continue;
 			}
-			stats.fxPlayed += PlayFx(*particles.content, *particles.world, random, ground, request, sounds, shakes, &attached, &pulses, 0, &scorches, &tracers) ? 1u : 0u;
+			if (request.object.IsValid() && request.owner == SoundRequest::NoOwner && owners.IsAlive(request.object))
+				if (const auto *owner = owners.Get<engine::gameplay::Owner>(request.object))
+					request.owner = owner->player;
+			stats.fxPlayed += PlayFx(*particles.content, *particles.world, random, ground, request, sounds, shakes, &attached, &pulses, 0, &scorches, &tracers,
+								  &around)
+				? 1u
+				: 0u;
 			if (attached.empty())
 				continue;
 			std::vector<AttachedSystem> *systems = nullptr;

@@ -1,0 +1,180 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <string>
+
+import games.generalszh.presentation.hud.algorithms.in_game_ui_layout;
+import games.generalszh.presentation.hud.algorithms.language_font_choice;
+import games.generalszh.content.ini.zero_hour_grammar;
+import engine.config.adapters.ini.ini_reader;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+// The shipped Data\INI\InGameUI.ini's lines these read.
+content::InGameUiContent ShippedInGameUi()
+{
+	engine::config::Diagnostics grammarDiagnostics, diagnostics;
+	const auto grammar = content::ZeroHourIniGrammar(grammarDiagnostics);
+	engine::config::Document document;
+	engine::config::ini::Read(document,
+		document.AddSource("InGameUI.ini",
+			"InGameUI\n"
+			"  MaxSelectionSize               = 0 ; <1 to disable\n"
+			"  MilitaryCaptionColor           = R:255 G:255 B:255 A:255\n"
+			"  MilitaryCaptionPosition        = X:10 Y:340\n"
+			"  MilitaryCaptionTitleFont       = Courier New\n"
+			"  MilitaryCaptionTitlePointSize  = 12\n"
+			"  MilitaryCaptionTitleBold       = Yes\n"
+			"  MilitaryCaptionFont            = Courier New\n"
+			"  MilitaryCaptionPointSize       = 12\n"
+			"  MilitaryCaptionBold            = No\n"
+			"  MilitaryCaptionRandomizeTyping = Yes\n"
+			"  NamedTimerCountdownPosition         = X:0.90 Y:0.666\n"
+			"  NamedTimerCountdownFlashDuration    = 500 ; in milliseconds, 0 to disable\n"
+			"  NamedTimerCountdownFlashColor       = R:255 G:255 B:255\n"
+			"  NamedTimerCountdownNormalFont       = Arial\n"
+			"  NamedTimerCountdownNormalPointSize  = 10\n"
+			"  NamedTimerCountdownNormalBold       = No\n"
+			"  NamedTimerCountdownNormalColor      = R:255 G:255 B:255\n"
+			"  NamedTimerCountdownReadyFont        = Arial\n"
+			"  NamedTimerCountdownReadyPointSize   = 10\n"
+			"  NamedTimerCountdownReadyBold        = No\n"
+			"  NamedTimerCountdownReadyColor       = R:255 G:255 B:255\n"
+			"  FloatingTextTimeOut                 = 333\n"
+			"  FloatingTextMoveUpSpeed             = 30\n"
+			"  FloatingTextVanishRate              = 3\n"
+			"  DrawRMBScrollAnchor                 = No\n"
+			"  MoveRMBScrollAnchor                 = Yes\n"
+			"  PopupMessageColor                   = R:255 G:255 B:255 A:255\n"
+			"End\n"),
+		grammar, diagnostics);
+	return content::BindInGameUi(document);
+}
+}
+
+BOOST_AUTO_TEST_SUITE(in_game_ui)
+
+// InGameUI's m_inGameUIFieldParseTable (InGameUI.cpp) over its constructor's defaults (InGameUI::InGameUI): the shipped
+// file's military caption (white, (10, 340), Courier New 12 bold title and 12 lines), named timers ((0.90, 0.666), a
+// 500 ms flash = 15 frames, white flash and normal colours, Arial 10), floating text (333 ms, 30 and 3 a second), the
+// right-button anchor (not drawn, dragged along), the popup's white and no selection cap (0). The defaults where the
+// file is silent: named timers at (0.05, 0.7), no floating text values (the constructor's), anchors off, cap -1.
+BOOST_AUTO_TEST_CASE(legacy_parity_in_game_ui_ini_binds_over_the_constructors_defaults)
+{
+	const content::InGameUiContent ui = ShippedInGameUi();
+	BOOST_TEST(ui.maxSelectionSize == 0);
+	BOOST_TEST((ui.militaryCaptionColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST((ui.militaryCaptionPosition == std::array<int, 2>{10, 340}));
+	BOOST_TEST(ui.militaryCaptionTitleFont == "Courier New");
+	BOOST_TEST(ui.militaryCaptionTitlePointSize == 12);
+	BOOST_TEST(ui.militaryCaptionTitleBold);
+	BOOST_TEST(ui.militaryCaptionFont == "Courier New");
+	BOOST_TEST(ui.militaryCaptionPointSize == 12);
+	BOOST_TEST(!ui.militaryCaptionBold);
+	BOOST_TEST((ui.namedTimerPosition[0] == Engine::Math::Fixed::FromRatio(90, 100)));
+	BOOST_TEST((ui.namedTimerPosition[1] == Engine::Math::Fixed::FromRatio(666, 1000)));
+	BOOST_TEST((ui.namedTimerFlashFrames == Engine::Math::Fixed::FromInt(15)));
+	BOOST_TEST((ui.namedTimerFlashColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST((ui.namedTimerNormalColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+	BOOST_TEST(ui.namedTimerNormalFont == "Arial");
+	BOOST_TEST(ui.namedTimerReadyPointSize == 10);
+	BOOST_TEST(ui.floatingTextTimeoutMs.value_or(0) == 333u);
+	BOOST_TEST((ui.floatingTextMoveUpSpeed.value_or(Engine::Math::Fixed{}) == Engine::Math::Fixed::FromInt(30)));
+	BOOST_TEST((ui.floatingTextVanishRate.value_or(Engine::Math::Fixed{}) == Engine::Math::Fixed::FromInt(3)));
+	BOOST_TEST(!ui.drawRmbScrollAnchor);
+	BOOST_TEST(ui.moveRmbScrollAnchor);
+	BOOST_TEST((ui.popupMessageColor == std::array<std::uint8_t, 4>{255, 255, 255, 255}));
+
+	const content::InGameUiContent defaults;
+	BOOST_TEST((defaults.namedTimerPosition[0] == Engine::Math::Fixed::FromRatio(5, 100)));
+	BOOST_TEST((defaults.namedTimerPosition[1] == Engine::Math::Fixed::FromRatio(7, 10)));
+	BOOST_TEST((defaults.namedTimerNormalColor == std::array<std::uint8_t, 4>{255, 255, 0, 255}));
+	BOOST_TEST((defaults.namedTimerFlashColor == std::array<std::uint8_t, 4>{0, 255, 255, 255}));
+	BOOST_TEST((defaults.militaryCaptionColor == std::array<std::uint8_t, 4>{200, 200, 30, 255}));
+	BOOST_TEST((defaults.militaryCaptionPosition == std::array<int, 2>{10, 380}));
+	BOOST_TEST(!defaults.floatingTextTimeoutMs.has_value());
+	BOOST_TEST(!defaults.drawRmbScrollAnchor);
+	BOOST_TEST(!defaults.moveRmbScrollAnchor);
+	BOOST_TEST(defaults.maxSelectionSize == -1);
+
+	// InGameUI::init: InGameUI.ini's military caption fonts unless Language.ini names its own.
+	const InGameFonts fonts = ChooseInGameFonts(content::LanguageFonts{}, ui);
+	BOOST_TEST(fonts.militaryCaptionTitle.name == "Courier New");
+	BOOST_TEST(fonts.militaryCaptionTitle.bold);
+	BOOST_TEST(fonts.militaryCaption.size == 12);
+	BOOST_TEST(fonts.namedTimerNormal.name == "Arial");
+}
+
+// InGameUI::militarySubtitle: (10, 340) on 800 x 600 at 1024 x 768 is 10 x 1.28 = 12.8 -> 12 and 340 x 1.28 = 435.2 -> 435
+// (cut to the ICoord2D); at 800 x 600 it stays. postDraw's named timers at (0.90, 0.666) of 1024 x 768: 921.6 -> 921,
+// 511.488 -> 511, from the right (0.90 >= 0.5); the bound Fixed shares (0.8999939, 0.6659851) land on the same pixels
+// here; (0.05, 0.7): from the left.
+BOOST_AUTO_TEST_CASE(legacy_parity_captions_and_named_timers_start_where_in_game_ui_puts_them)
+{
+	BOOST_TEST((MilitaryCaptionOrigin({10, 340}, 1024, 768) == std::array<int, 2>{12, 435}));
+	BOOST_TEST((MilitaryCaptionOrigin({10, 340}, 800, 600) == std::array<int, 2>{10, 340}));
+	const NamedTimerStart start = NamedTimerOrigin(0.90f, 0.666f, 1024, 768);
+	BOOST_TEST(start.x == 921);
+	BOOST_TEST(start.y == 511);
+	BOOST_TEST(start.fromRight);
+	const content::InGameUiContent ui = ShippedInGameUi();
+	const auto share = [](const Engine::Math::Fixed &value) { return static_cast<float>(static_cast<double>(value.Raw()) / 65536.0); };
+	const NamedTimerStart bound = NamedTimerOrigin(share(ui.namedTimerPosition[0]), share(ui.namedTimerPosition[1]), 1024, 768);
+	BOOST_TEST(bound.x == 921);
+	BOOST_TEST(bound.y == 511);
+	BOOST_TEST(!NamedTimerOrigin(0.05f, 0.7f, 800, 600).fromRight);
+}
+
+// INI::parseDurationUnsignedInt (ceilf(333 x 0.03) = ceilf(9.99) = 10 frames) and parseVelocityReal (30 / s = 1 a frame,
+// 3 / s = 0.10000001 a frame, the float product); none given: the constructor's 10 frames, 1 and 0.1.
+BOOST_AUTO_TEST_CASE(legacy_parity_floating_text_timing_converts_as_the_ini_parsers)
+{
+	const FloatingTextMotion shipped = FloatingTextMotionFor(ShippedInGameUi());
+	BOOST_TEST(shipped.timeoutTicks == 10u);
+	BOOST_TEST(shipped.riseRate == 1.0f);
+	BOOST_TEST(shipped.vanishPerTick == 3.0f * (1.0f / 30.0f));
+	const FloatingTextMotion defaults = FloatingTextMotionFor(content::InGameUiContent{});
+	BOOST_TEST(defaults.timeoutTicks == 10u);
+	BOOST_TEST(defaults.riseRate == 1.0f);
+	BOOST_TEST(defaults.vanishPerTick == 0.1f);
+	content::InGameUiContent longer;
+	longer.floatingTextTimeoutMs = 1000;
+	BOOST_TEST(FloatingTextMotionFor(longer).timeoutTicks == 30u);
+}
+
+// LookAtTranslator's SCROLL_RMB with MoveRMBScrollAnchor: on 800 x 600 the anchor stays within 400 across and 300 up or
+// down of the pointer (pointer at 700, anchor at 100: dragged to 300; pointer at (100, 50), anchor (700, 500): to
+// (500, 350)); InGameUI::postDraw's anchor cross at (100, 50): shadow (91, 47) 19 x 7 and (97, 41) 7 x 19, green (92, 48)
+// 17 x 5 and (98, 42) 5 x 17. The selection cap (MaxSelectionSize > 0 and as many selected): none at 0 or -1.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_rmb_scroll_anchor_follows_and_draws_as_look_at_translator)
+{
+	int x = 100, y = 100;
+	FollowRmbScrollAnchor(x, y, 700, 100, 800, 600);
+	BOOST_TEST(x == 300);
+	BOOST_TEST(y == 100);
+	x = 700, y = 500;
+	FollowRmbScrollAnchor(x, y, 100, 50, 800, 600);
+	BOOST_TEST(x == 500);
+	BOOST_TEST(y == 350);
+	x = 400, y = 300;
+	FollowRmbScrollAnchor(x, y, 450, 320, 800, 600);
+	BOOST_TEST(x == 400);
+	BOOST_TEST(y == 300);
+
+	const auto rects = RmbScrollAnchorRects(100, 50);
+	BOOST_TEST((rects[0].x == 91 && rects[0].y == 47 && rects[0].width == 19 && rects[0].height == 7 && !rects[0].green));
+	BOOST_TEST((rects[1].x == 97 && rects[1].y == 41 && rects[1].width == 7 && rects[1].height == 19 && !rects[1].green));
+	BOOST_TEST((rects[2].x == 92 && rects[2].y == 48 && rects[2].width == 17 && rects[2].height == 5 && rects[2].green));
+	BOOST_TEST((rects[3].x == 98 && rects[3].y == 42 && rects[3].width == 5 && rects[3].height == 17 && rects[3].green));
+
+	BOOST_TEST(!SelectionCapReached(0, 500));
+	BOOST_TEST(!SelectionCapReached(-1, 500));
+	BOOST_TEST(!SelectionCapReached(5, 4));
+	BOOST_TEST(SelectionCapReached(5, 5));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

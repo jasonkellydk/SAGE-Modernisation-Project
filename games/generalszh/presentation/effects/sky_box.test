@@ -1,0 +1,42 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <string>
+
+import games.generalszh.presentation.effects.sky_box;
+
+using namespace generalszh::presentation;
+
+BOOST_AUTO_TEST_SUITE(sky_box)
+
+// legacy_parity: W3DWater WaterRenderSystem::render with m_drawSkyBox (DRAW_SKYBOX_BEGIN) and WaterSkyboxSystem: the
+// "new_skybox" model made at SkyBoxScale (GameData.ini: 8.4) centred at the camera's x, y and SkyBoxPositionZ (-100, under
+// the terrain); INIWater's map override with W3DTerrainVisual::replaceSkyboxTextures: only the faces the map's map.ini
+// names other than Water.ini's are swapped, each from Water.ini's name to the map's.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_sky_box_sits_under_the_camera_with_the_maps_faces)
+{
+	SkyBoxSetting setting;
+	setting.scale = 8.4f;
+	setting.positionZ = -100.0f;
+	setting.textures = {"TSMorningN.tga", "TSMorningE.tga", "TSMorningS.tga", "TSMorningW.tga", "TSMorningT.tga"};
+	setting.mapTextures = setting.textures;
+	BOOST_TEST(SkyBoxReplacements(setting).empty());
+	setting.mapTextures[1] = "TSNightE.tga";
+	setting.mapTextures[4] = "TSNightT.tga";
+	const auto replacements = SkyBoxReplacements(setting);
+	BOOST_TEST_REQUIRE(replacements.size() == 2u);
+	BOOST_TEST(replacements[0].first == "TSMorningE.tga");
+	BOOST_TEST(replacements[0].second == "TSNightE.tga");
+	BOOST_TEST(replacements[1].first == "TSMorningT.tga");
+	BOOST_TEST(replacements[1].second == "TSNightT.tga");
+	const auto world = SkyBoxWorld(setting, {512.0f, 256.0f, 300.0f});
+	BOOST_TEST(world[0] == 8.4f);
+	BOOST_TEST(world[5] == 8.4f);
+	BOOST_TEST(world[10] == 8.4f);
+	BOOST_TEST(world[3] == 512.0f);
+	BOOST_TEST(world[7] == 256.0f);
+	BOOST_TEST(world[11] == -100.0f);
+	BOOST_TEST(SkyBoxModel == "new_skybox");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

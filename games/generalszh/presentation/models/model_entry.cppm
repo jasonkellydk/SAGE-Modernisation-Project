@@ -306,6 +306,21 @@ inline float ClipFrame(const ModelAnimation &animation, double seconds, bool &lo
 	return 0;
 }
 
+// The clip frame an animation started `start` of the way in (RANDOMSTART, START_FRAME_LAST, a frame kept across
+// states) shows `seconds` on: as if it had run that far already. A MANUAL clip never runs (W3D's ANIM_MODE_MANUAL holds
+// the frame adjustAnimation set): it stays on its start frame (START_FRAME_LAST: its last, the uplink's raised dish).
+inline float AnimationFrame(const ModelAnimation &animation, double seconds, float start, bool &loop)
+{
+	if (animation.mode == ObjectAnimationMode::Manual)
+	{
+		loop = false;
+		return animation.frameCount > 1 ? std::clamp(start, 0.0f, 1.0f) * static_cast<float>(animation.frameCount - 1) : 0.0f;
+	}
+	if (start > 0.0f && animation.frameRate > 0.0f && animation.frameCount > 1)
+		seconds += static_cast<double>(start) * static_cast<double>(animation.frameCount - 1) / static_cast<double>(animation.frameRate);
+	return ClipFrame(animation, seconds, loop);
+}
+
 // W3DModelDraw::doHideShowProjectileObjects: a slot's projectiles are its launch bone's NAME01, NAME02... (or its
 // one WeaponHideShowBone sub-object); hiding one hides every sub-object hanging below its bone
 // (doHideShowBoneSubObjs).
@@ -523,11 +538,8 @@ inline const Graphics::ModelAssetPose *PoseOf(ModelEntry &model, double seconds,
 	if (!model.animation || !model.animation->valid)
 		return nullptr;
 	ModelAnimation &animation = *model.animation;
-	// Started part-way (RANDOMSTART, START_FRAME_LAST): as if it had run that far already.
-	if (start > 0.0f && animation.frameRate > 0.0f && animation.frameCount > 1)
-		seconds += static_cast<double>(start) * static_cast<double>(animation.frameCount - 1) / static_cast<double>(animation.frameRate);
 	bool loop = false;
-	const float clipFrame = ClipFrame(animation, seconds, loop);
+	const float clipFrame = AnimationFrame(animation, seconds, start, loop);
 	if (animation.evaluatedFrame != clipFrame)
 	{
 		animation.evaluatedFrame = clipFrame;

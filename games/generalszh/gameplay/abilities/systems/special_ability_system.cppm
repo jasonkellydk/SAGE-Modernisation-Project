@@ -29,6 +29,11 @@ export import engine.gameplay.rts.powers.components.special_power_timers;
 export import engine.gameplay.rts.powers.resources.shared_power_timers;
 export import engine.gameplay.rts.powers.algorithms.special_power_timing;
 import engine.gameplay.common.spatial.algorithms.geometry_collision;
+export import engine.gameplay.rts.navigation.resources.navigation_grid;
+import engine.gameplay.rts.navigation.algorithms.view_blocked;
+export import engine.gameplay.common.physics.resources.physics_settings;
+export import engine.gameplay.rts.containment.components.transport;
+export import engine.gameplay.rts.slaves.components.slaved;
 import games.generalszh.content.objects.model_conditions;
 import games.generalszh.content.powers.special_ability_content;
 import Engine.Core.Math.FixedRandom;
@@ -50,6 +55,7 @@ struct AbilityEvent
 		PowerRecharge,  // startPowerRecharge
 		Effect,         // triggerAbilityEffect's effect on the target (captures, charges, booby traps)
 		KillObjects,    // killSpecialObjects (onExit of a module whose special objects are not persistent)
+		Laser,          // createSpecialObject, then initLaser at the target (startPreparation of a laser ability)
 		TrapCheck,      // the target's booby trap set off by the unit (an infantry capture's startPreparation)
 		IntoTarget,     // a contact approach routes into its target (its cells open to the unit's route searches)
 		Award,          // AwardXPForTriggering / SkillPointsForTriggering (`amount`, `skill`)
@@ -106,7 +112,7 @@ inline constexpr std::uint32_t RaisingFlag = content::ModelConditionBit("RAISING
 }
 
 using TargetLookup = ecs::Lookup<ecs::Read<gp::Transform>, ecs::Read<gp::TeamMember>, ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>,
-	ecs::Read<gp::Stealth>, ecs::Read<gp::Health>, ecs::Read<gp::Dying>>;
+	ecs::Read<gp::Stealth>, ecs::Read<gp::Health>, ecs::Read<gp::Dying>, ecs::Read<gp::Armament>, ecs::Read<gp::Passenger>, ecs::Read<gp::Slaved>>;
 
 // What the system reads beyond the unit, and where its events go.
 struct Env
@@ -121,6 +127,8 @@ struct Env
 	std::vector<AbilityEvent> &events;
 	std::uint64_t tick;
 	std::uint64_t seed;
+	const gp::NavigationGrid &grid;
+	Fixed significantHeight; // Thing::isSignificantlyAboveTerrain: higher above the ground than this
 };
 
 // The unit's own components (its row).
@@ -347,6 +355,40 @@ inline bool Touching(const Env &env, const Unit &unit, ecs::Entity target)
 	return gp::WouldCollide(BodyOf(self, unit.transform.position, {}), BodyOf(*other, at->position, at->facing));
 }
 
+// Pathfinder::isViewBlockedByObstacle(unit, target) -> isAttackViewBlockedByObstacle: never for a target significantly
+// above the ground; only with AttackUsesLineOfSight and for a KINDOF_ATTACK_NEEDS_LINE_OF_SIGHT unit; with a current
+// weapon and not IMMOBILE, first the terrain from its top (getFiringLineOfSightOrigin) to the target's middle
+// (getCenterPosition: a sphere's position, else half its height up); then the obstacle cells on the line between them
+// (ground layer).
+inline bool ViewBlockedByObstacle(const Env &env, const Unit &unit, ecs::Entity target)
+{
+	const FixedVector3 there = env.lookup.Get<gp::Transform>(target)->position;
+	if (there.z - env.ground.At(there.XY()) > env.significantHeight)
+		return false;
+	const auto &gameContent = env.templates.Content();
+	const content::ObjectDefinition &self = env.templates.DefinitionAt(unit.definition);
+	if (!gameContent.aiData.attackUsesLineOfSight || !self.Is("ATTACK_NEEDS_LINE_OF_SIGHT"))
+		return false;
+	const auto *armament = env.lookup.Get<gp::Armament>(unit.entity);
+	if (armament != nullptr && armament->weapon != 0xFFFFFFFFu && !self.Is("IMMOBILE"))
+	{
+		FixedVector3 origin = unit.transform.position;
+		origin.z += TopAbovePosition(&self);
+		FixedVector3 middle = there;
+		if (const content::ObjectDefinition *kind = DefinitionOf(env, target); kind != nullptr && kind->geometry.shape != content::GeometryShape::Sphere)
+			middle.z += kind->geometry.height / Fixed::FromInt(2);
+		if (!env.ground.ClearLineOfSight(origin, middle))
+			return true;
+	}
+	const auto slaverOf = [&](ecs::Entity entity) {
+		const auto *slaved = env.lookup.Get<gp::Slaved>(entity);
+		return slaved != nullptr ? slaved->master : ecs::Entity{};
+	};
+	const auto *ride = env.lookup.Get<gp::Passenger>(unit.entity);
+	const gp::ViewIgnores ignore{unit.entity, target, slaverOf(target), ride != nullptr ? ride->transport : ecs::Entity{}, slaverOf(unit.entity)};
+	return gp::AttackViewBlockedByObstacle(env.grid, unit.transform.position.XY(), there.XY(), ignore);
+}
+
 inline bool WithinStartRange(const Env &env, const Unit &unit, AbilitySlot &slot)
 {
 	if (slot.Has(ability_flag::WithinRange))
@@ -372,11 +414,14 @@ inline bool WithinStartRange(const Env &env, const Unit &unit, AbilitySlot &slot
 		return true;
 	if (target == ecs::Entity{} || distance > range * range)
 		return false;
+	// PartitionFilterLineOfSight: the terrain between their tops, then Pathfinder::isViewBlockedByObstacle.
 	FixedVector3 from = unit.transform.position;
 	FixedVector3 to = env.lookup.Get<gp::Transform>(target)->position;
 	from.z += TopAbovePosition(&env.templates.DefinitionAt(unit.definition));
 	to.z += TopAbovePosition(DefinitionOf(env, target));
-	return env.ground.ClearLineOfSight(from, to);
+	if (!env.ground.ClearLineOfSight(from, to))
+		return false;
+	return !ViewBlockedByObstacle(env, unit, target);
 }
 
 inline bool WithinAbortRange(const Env &env, const Unit &unit, const AbilitySlot &slot)
@@ -398,6 +443,23 @@ inline void EndPreparation(Env &env, Unit &unit, const AbilitySlot &slot)
 {
 	unit.activity.usingAbility = 0;
 	Notify(env, unit, slot, AbilityCue::PreparationEnd);
+	// The lasers and capture specials keep no special objects once their preparation is over (killSpecialObjects).
+	switch (slot.kind)
+	{
+	case AbilityKind::LaserGuidedMissiles:
+	case AbilityKind::HackerDisableBuilding:
+	case AbilityKind::BlackLotusDisableVehicle:
+	case AbilityKind::BlackLotusCaptureBuilding:
+	case AbilityKind::BlackLotusStealCash:
+	case AbilityKind::InfantryCaptureBuilding:
+	{
+		AbilityEvent kill;
+		kill.kind = AbilityEvent::Kind::KillObjects;
+		Emit(env, unit, slot, kill);
+		break;
+	}
+	default: break;
+	}
 }
 
 inline void Exit(Env &env, Unit &unit, AbilitySlot &slot)
@@ -580,6 +642,15 @@ inline void Approach(Env &env, Unit &unit, AbilitySlot &slot)
 	}
 }
 
+// SpecialAbilityUpdate::createSpecialObject + initLaser (its SpecialObject has a LaserUpdate), made as the events apply.
+inline void StreamLaser(Env &env, Unit &unit, AbilitySlot &slot)
+{
+	AbilityEvent laser;
+	laser.kind = AbilityEvent::Kind::Laser;
+	laser.target = TargetOf(env, slot);
+	Emit(env, unit, slot, laser);
+}
+
 inline void StartPreparation(Env &env, Unit &unit, AbilitySlot &slot)
 {
 	slot.prepTicks = slot.preparationTicks;
@@ -615,6 +686,12 @@ inline void StartPreparation(Env &env, Unit &unit, AbilitySlot &slot)
 		if (target != ecs::Entity{})
 			warn(true);
 	}
+	// The Missile Defender's laser at its target: createSpecialObject, initLaser.
+	else if (slot.kind == AbilityKind::LaserGuidedMissiles)
+	{
+		if (target != ecs::Entity{} && slot.ObjectOption(special_object_option::Laser))
+			StreamLaser(env, unit, slot);
+	}
 	else if (slot.kind == AbilityKind::HackerDisableBuilding || slot.kind == AbilityKind::BlackLotusCaptureBuilding ||
 		slot.kind == AbilityKind::BlackLotusDisableVehicle || slot.kind == AbilityKind::BlackLotusStealCash)
 	{
@@ -622,7 +699,13 @@ inline void StartPreparation(Env &env, Unit &unit, AbilitySlot &slot)
 		{
 			if (Allied(env, unit, target))
 				return;
-			// Its laser special object (FIRING_A while it streams) is not ported.
+			// Its laser special object streams at the target, the unit typing (FIRING_A) while it does.
+			if (slot.ObjectOption(special_object_option::Laser))
+			{
+				StreamLaser(env, unit, slot);
+				Look(unit, mc::Unpacking, false);
+				Look(unit, mc::FiringA, true);
+			}
 			warn(slot.kind == AbilityKind::BlackLotusCaptureBuilding);
 		}
 	}
@@ -875,7 +958,7 @@ struct SpecialAbilitySystem
 	using Lookup = ability_system_detail::TargetLookup;
 	using Resources = ecs::Resources<ecs::Read<ObjectTemplates>, ecs::Read<engine::gameplay::Relationships>, ecs::Read<engine::gameplay::GroundHeight>,
 		ecs::Read<engine::gameplay::SpatialIndex>, ecs::Read<engine::gameplay::SpecialPowerRules>, ecs::Read<engine::gameplay::SharedPowerTimers>,
-		ecs::Read<engine::gameplay::RandomSeed>, ecs::Write<AbilityEvents>>;
+		ecs::Read<engine::gameplay::RandomSeed>, ecs::Read<engine::gameplay::NavigationGrid>, ecs::Read<engine::gameplay::PhysicsSettings>, ecs::Write<AbilityEvents>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context) { context.Write<AbilityEvents>().Reset(query.PreparedChunkCount()); }
 
@@ -886,7 +969,7 @@ struct SpecialAbilitySystem
 		const auto lookup = context.Lookup<Lookup>();
 		Env env{lookup, context.Read<ObjectTemplates>(), context.Read<gp::Relationships>(), context.Read<gp::GroundHeight>(), context.Read<gp::SpatialIndex>(),
 			context.Read<gp::SpecialPowerRules>(), context.Read<gp::SharedPowerTimers>(), context.Write<AbilityEvents>().Slot(context), context.Tick(),
-			context.Read<gp::RandomSeed>().value};
+			context.Read<gp::RandomSeed>().value, context.Read<gp::NavigationGrid>(), context.Read<gp::PhysicsSettings>().SignificantHeight()};
 		auto abilities = chunk.Get<SpecialAbilities>();
 		auto activities = chunk.Get<gp::AiActivity>();
 		auto transforms = chunk.Get<gp::Transform>();

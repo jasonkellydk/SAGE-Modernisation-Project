@@ -10,6 +10,7 @@ export import engine.gameplay.rts.combat.resources.historic_damage;
 export import engine.gameplay.common.identity.components.producer;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.identity.resources.template_equivalence;
+export import engine.gameplay.common.health.components.pending_damage;
 
 // Queues the tick's shots and lands the due ones: a direct hit damages its
 // target; radius damage hits everything within the primary radius for the
@@ -106,8 +107,13 @@ struct ImpactSystem
 				if (const Health *body = lookup.Get<Health>(shot.carrier))
 					killed.push_back({shot.carrier, ecs::Entity{}, body->maximum, weapons.unresistable, weapons.detonatedDeath, DamageRecord::NoFxType,
 						DamageRecord::NoPlayer});
-			const SpatialEntry *target = detonated ? nullptr : spatial.Find(shot.target);
-			Engine::Math::FixedVector3 at = detonated ? shot.aim : weapon.damageAtSelf ? shot.origin : target != nullptr ? target->position : shot.aim;
+			// WeaponTemplate::fireWeaponTemplate: DamageDealtAtSelfPosition deals it with no victim (damageID INVALID_ID) at
+			// the firer's position as it fired (a laser: where its beam ends).
+			const SpatialEntry *target = detonated || weapon.damageAtSelf ? nullptr : spatial.Find(shot.target);
+			Engine::Math::FixedVector3 at = detonated ? shot.aim : weapon.damageAtSelf && !weapon.laser ? shot.origin : target != nullptr ? target->position : shot.aim;
+			// Weapon::dealDamageInternal's source: a detonating projectile itself (its launcher is its producer), else the firer.
+			const ecs::Entity self = detonated && shot.carrier != ecs::Entity{} ? shot.carrier : shot.source;
+			const bool suicide = (weapon.affects & weapon_affects::Suicide) != 0;
 			queue.Impacts().push_back({shot.source, shot.weapon, at, shot.veterancy});
 			if (weapon.historicBonusCount > 0 && ProcessHistoricDamage(context.Write<HistoricDamage>(), shot.weapon, weapon, at.XY(), context.Tick()) &&
 				weapon.historicBonusWeapon != WeaponCatalog::None)
@@ -123,11 +129,26 @@ struct ImpactSystem
 			const Engine::Math::Fixed radius = std::max(primaryRadius, secondaryRadius);
 			if (radius <= Engine::Math::Fixed{})
 			{
+				// SUICIDE (WEAPON_KILLS_SELF) without a radius: only its source is hurt, by HUGE_DAMAGE_AMOUNT of the
+				// weapon's damage and death types (no player's: m_sourcePlayerMask 0); its victim is spared. (A source
+				// already gone: the original dereferences it; nothing here.)
+				if (suicide)
+				{
+					if (lookup.IsAlive(self))
+						incoming.Add({self, self, HugeDamage(), weapon.damageType, weapon.deathType, DamageRecord::NoFxType, DamageRecord::NoPlayer,
+							weapon.damageStatusType});
+					continue;
+				}
+				// The direct victim, whatever the weapon's affects flags.
 				if (target != nullptr)
 					incoming.Add({shot.target, shot.source, primaryDamage, weapon.damageType, weapon.deathType, DamageRecord::NoFxType, shot.sourcePlayer,
 						weapon.damageStatusType});
 				continue;
 			}
+			// Weapon::dealDamageInternal with its source gone (findObjectByID null: a delayed hit whose firer was deleted before
+			// it landed): no affects flag is tested, nobody is the source to kill, and every shock wave goes straight up. A
+			// detonating projectile is there as it goes off; a shot marked sourceHeld was dealt while its source still was.
+			const bool sourceGone = !detonated && shot.sourceHeld == 0 && !lookup.IsAlive(shot.source);
 			const SpatialEntry *firer = spatial.Find(shot.source);
 			const std::uint32_t firerTeam = firer != nullptr ? firer->team : Relationships::NoTeam;
 			// The shock wave's source: a detonating projectile where it went off, else the firer where it stands.
@@ -147,13 +168,22 @@ struct ImpactSystem
 					kind = ref->index;
 			const TemplateEquivalence *kinds =
 				kind != Shot::NoKind && (weapon.affects & weapon_affects::NotSimilar) != 0 ? &context.Read<TemplateEquivalence>() : nullptr;
-			spatial.ForEachWithin(at.XY(), radius, [&](const SpatialEntry &entry) {
-				bool similar = false;
-				if (kinds != nullptr)
-					if (const DefinitionRef *ref = lookup.Get<DefinitionRef>(entry.entity))
-						similar = kinds->Equivalent(kind, ref->index);
-				if (!Affected(relationships, weapon, shot, entry, firerTeam, producer, similar))
-					return;
+			// Weapon::dealDamageInternal: the primary victim (the shot's direct target) is hurt whatever the affects flags;
+			// with SUICIDE the source in the blast takes HUGE_DAMAGE_AMOUNT instead of its share, whatever SELF says.
+			const ecs::Entity primaryVictim = target != nullptr ? shot.target : ecs::Entity{};
+			// iterateObjectsInRange(pos, radius, DAMAGE_RANGE_CALC_TYPE = FROM_BOUNDINGSPHERE_3D): to each bounding sphere.
+			spatial.ForEachSphereWithin(at, radius, [&](const SpatialEntry &entry, Engine::Math::Fixed distanceSquared) {
+				const bool primaryHit = primaryVictim != ecs::Entity{} && entry.entity == primaryVictim;
+				const bool killSelf = !sourceGone && !primaryHit && suicide && entry.entity == self;
+				if (!sourceGone && !primaryHit && !killSelf)
+				{
+					bool similar = false;
+					if (kinds != nullptr)
+						if (const DefinitionRef *ref = lookup.Get<DefinitionRef>(entry.entity))
+							similar = kinds->Equivalent(kind, ref->index);
+					if (!Affected(relationships, weapon, shot, entry, firerTeam, producer, similar))
+						return;
+				}
 				if (firerBody != nullptr)
 				{
 					const Engine::Math::FixedVector3 toward = entry.position - firerBody->position;
@@ -166,15 +196,14 @@ struct ImpactSystem
 				// Weapon::dealDamageInternal: a shock wave rides the damage (straight up when on top of its source).
 				if (weapon.shockWaveAmount > Engine::Math::Fixed{})
 				{
-					Engine::Math::FixedVector3 vector = entry.position - from;
+					Engine::Math::FixedVector3 vector = sourceGone ? Engine::Math::FixedVector3{} : entry.position - from;
 					const Engine::Math::Fixed tiny = Engine::Math::Fixed::FromRaw(1);
 					if (Engine::Math::Abs(vector.x) < tiny && Engine::Math::Abs(vector.y) < tiny && Engine::Math::Abs(vector.z) < tiny)
 						vector.z = Engine::Math::Fixed::One();
 					shocks.push_back({entry.entity, vector, weapon.shockWaveAmount, weapon.shockWaveRadius, weapon.shockWaveTaperOff});
 				}
-				const Engine::Math::Fixed reach = primaryRadius + entry.radius;
-				const bool primary = Engine::Math::DistanceSquared(entry.position.XY(), at.XY()) <= reach * reach;
-				const Engine::Math::Fixed amount = primary ? primaryDamage : secondaryDamage;
+				const bool primary = distanceSquared <= primaryRadius * primaryRadius;
+				const Engine::Math::Fixed amount = killSelf ? HugeDamage() : primary ? primaryDamage : secondaryDamage;
 				if (amount > Engine::Math::Fixed{})
 					incoming.Add({entry.entity, shot.source, amount, weapon.damageType, weapon.deathType, DamageRecord::NoFxType, shot.sourcePlayer,
 						weapon.damageStatusType});

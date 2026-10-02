@@ -273,6 +273,7 @@ struct Field
 		catalog.byDefinition = {SelectionLook{select_kind::Selectable, 8.0f, 4.0f}};
 		world.EmplaceResource<LocalPlayer>(LocalPlayer{0, true});
 		world.EmplaceResource<PlayerOrders>();
+		world.EmplaceResource<UnitVoiceCues>();
 		world.EmplaceResource<BuildPlacement>();
 	}
 
@@ -530,6 +531,41 @@ BOOST_AUTO_TEST_CASE(placing_a_structure_anchors_turns_and_orders_the_build)
 	BOOST_TEST(field.IsSelected(worker));
 }
 
+// PlaceEventTranslator with a SPECIAL_POWER_CONSTRUCT button noted by the builder (the sneak attack): placed where it is
+// legal, MSG_DO_SPECIAL_POWER_AT_LOCATION goes instead of a build: the power at the spot, the placement's angle, the
+// button's options, the builder as its source.
+BOOST_AUTO_TEST_CASE(legacy_parity_placing_a_sneak_attack_fires_its_power_at_the_angle)
+{
+	Field field;
+	const ecs::Entity centre = field.Tank(100, 100, 0);
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	BuildPlacement &placement = field.world.Resource<BuildPlacement>();
+	placement.active = true;
+	placement.structure = "GLASneakAttackTunnelNetwork";
+	placement.builder = centre;
+	placement.specialPower = "SuperweaponSneakAttack";
+	placement.options = 1u << 3;
+	placement.legal = true;
+	float ax = 0, ay = 0, bx = 0, by = 0;
+	InteractionView &view = field.world.Resource<InteractionView>();
+	view.Project(80, 120, 0, ax, ay);
+	view.Project(80, 160, 0, bx, by);
+	field.Frame(ax, ay, pointer_button::Left);
+	field.Frame(bx, by);
+	field.Frame(bx, by, 0, pointer_button::Left);
+	BOOST_TEST(!placement.active);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *power = std::get_if<generalszh::commands::UseSpecialPower>(&orders[0]);
+	BOOST_TEST_REQUIRE(power != nullptr);
+	BOOST_TEST((power->source == centre));
+	BOOST_TEST(power->power == "SuperweaponSneakAttack");
+	BOOST_TEST(power->atLocation);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(power->target.x) - 80.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(power->target.y) - 120.0f) < 0.5f);
+	BOOST_TEST(power->options == (1u << 3));
+	BOOST_TEST(power->angle == 0x40000000u); // a quarter turn
+}
+
 // CommandTranslator::evaluateContextCommand (ACTIONTYPE_GET_REPAIRED_AT, SELECTION_ANY): with a damaged tank selected,
 // a click on the player's repair pad orders it repaired there (MSG_GET_REPAIRED) instead of selecting the pad; whole,
 // the click selects the pad.
@@ -738,6 +774,83 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_cursor_shows_what_a_click_would_do)
 	BOOST_TEST(field.world.Resource<CursorState>().direction == 0);
 }
 
+// CommandTranslator::handleDefaultMoveCommand (DO_HINT) and InGameUI::createCommandHint: a move hint asks whether a selected
+// unit could path to the point (the host answers: rule_queries QueryQuickPath); where none could, MSG_DO_INVALID_HINT
+// shows GENERIC_INVALID in place of MOVETO. An answer for another point does not count; no hint (scrolling) asks nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_move_where_no_path_goes_shows_the_invalid_cursor)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	CursorState &cursor = field.world.Resource<CursorState>();
+	BOOST_TEST(cursor.quickPathAsked);
+	const std::array<float, 2> asked = cursor.quickPathAt;
+	cursor.quickPathAnsweredAt = asked;
+	cursor.quickPathBlocked = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::GenericInvalid));
+	BOOST_TEST((field.Hover(420, 60) == Cursor::Move)); // answered for another point
+	cursor.quickPathAnsweredAt = cursor.quickPathAt;
+	BOOST_TEST((field.Hover(420, 60) == Cursor::GenericInvalid));
+	cursor.quickPathBlocked = false;
+	BOOST_TEST((field.Hover(420, 60) == Cursor::Move));
+	// Scrolling (no hints): nothing asked.
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.scrolling = true;
+	field.Hover(420, 60);
+	BOOST_TEST(!cursor.quickPathAsked);
+	pointer.scrolling = false;
+}
+
+// InGameUI::createCommandHint's underWindow loop and its MSG_DO_MOVETO_HINT case: over the radar (a LeftHUDInput window)
+// the hints go on as if no window were there, with nothing picked (W3DView::pickDrawable: not see-through) at the ground
+// behind it; a move hint there shows MOVETO, the arrow when the player has no radar; over any other window the arrow.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_radar_lets_the_move_cursor_through)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.overInterface = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow)); // the bar elsewhere
+	pointer.overRadar = true;
+	pointer.hasRadar = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move));
+	const auto mineAt = field.Pixel(100, 100);
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Move)); // nothing picked behind the radar
+	pointer.hasRadar = false;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));
+	pointer.overRadar = false;
+	pointer.overInterface = false;
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+}
+
+// InGameUI::createCommandHint returns at once in a replay (RECORDERMODETYPE_PLAYBACK): with a selection the cursor keeps
+// what it was; createMouseoverHint's cursor with nothing selected comes only while the mouse moved within the last
+// second (LookAtTranslator::hasMouseMovedRecently).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_replay_gives_no_command_hints)
+{
+	using Cursor = generalszh::content::MouseCursorKind;
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	field.Select(tank);
+	const auto mineAt = field.Pixel(100, 100);
+	BOOST_TEST((field.Hover(mineAt[0], mineAt[1]) == Cursor::Select));
+	PointerInput &pointer = field.world.Resource<PointerInput>();
+	pointer.playback = true;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Select)); // no move hint: kept
+	field.Click(10, 10, pointer_button::Right);            // nothing selected now
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));   // just moved: the mouse-over cursor
+	for (int frame = 0; frame < 40; ++frame) // over a second without moving (33 ms a frame)
+		field.Hover(400, 60);
+	field.world.Resource<CursorState>().cursor = Cursor::Move;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Move)); // not moved lately: kept
+	pointer.playback = false;
+	BOOST_TEST((field.Hover(400, 60) == Cursor::Arrow));
+}
+
 // SelectionTranslator / evaluateContextCommand: a click on something the selection could shoot at but has no weapon
 // for (INVALID_SHOT: handleInvalidShotCommand, a command all the same) neither selects it nor orders anything.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_click_on_what_the_selection_cannot_hit_does_nothing)
@@ -918,6 +1031,35 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_guard_button_guards_the_spot_or_object_clic
 	BOOST_TEST_REQUIRE(stand != nullptr);
 	BOOST_TEST((stand->position == Engine::Math::FixedVector2{Fixed::FromInt(100), Fixed::FromInt(100)}));
 	BOOST_TEST(stand->mode == 2u);
+}
+
+// BuildAssistant::sellObject: a structure being sold leaves every selection (GameLogic::deselectObject) and is
+// OBJECT_STATUS_UNSELECTABLE from then on (Object::isSelectable): a click on it selects nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_sold_is_deselected_and_unselectable)
+{
+	Field field;
+	auto &catalog = field.world.Resource<SelectionCatalog>();
+	catalog.byDefinition.push_back(SelectionLook{static_cast<std::uint16_t>(select_kind::Selectable | select_kind::Structure), 8.0f, 4.0f});
+	catalog.kinds = {generalszh::content::KindOfMask{}, generalszh::content::KindOfMask{}};
+	const ecs::Entity barracks = field.Tank(100, 100, 0);
+	field.world.Add<gp::DefinitionRef>(barracks);
+	field.world.Get<gp::DefinitionRef>(barracks)->index = 1;
+	field.world.Resource<gp::VisibleObjects>().SlotAt(0)[0].definition = 1;
+	const auto at = field.Pixel(100, 100);
+	field.Click(at[0], at[1]);
+	BOOST_TEST_REQUIRE(field.IsSelected(barracks));
+	// Sold: the logic deselects it.
+	field.world.Add<gp::Sale>(barracks);
+	field.world.Resource<generalszh::gameplay::Deselections>().list.push_back(barracks);
+	field.Frame(500, 500);
+	field.world.Resource<generalszh::gameplay::Deselections>().list.clear();
+	BOOST_TEST(!field.IsSelected(barracks));
+	field.Click(at[0], at[1]);
+	BOOST_TEST(!field.IsSelected(barracks));
+	// Not sold, the same click selects it.
+	field.world.Remove<gp::Sale>(barracks);
+	field.Click(at[0], at[1]);
+	BOOST_TEST(field.IsSelected(barracks));
 }
 
 // CommandTranslator::evaluateContextCommand (ACTIONTYPE_SET_RALLY_POINT, SELECTION_ALL: every selected one AUTO_RALLYPOINT
@@ -1564,6 +1706,87 @@ BOOST_AUTO_TEST_CASE(legacy_parity_pick_types_follow_the_kinds_in_w3d_model_draw
 	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::ClickThrough, false) == 0);
 	BOOST_TEST(PickTypes(select_kind::Selectable, true) == 0);
 	BOOST_TEST(PickTypes(select_kind::Selectable | select_kind::Bridge, true) == pick_type::Selectable);
+}
+
+// Object::onContainedBy: anything contained is OBJECT_STATUS_UNSELECTABLE, and MASKED only inside a container that
+// encloses it. A fire base's occupant is not hidden (OpenContain::addToContain leaves it in the world: OffMap Stationed),
+// so the pick ray meets it (W3DView::pickDrawable): a click on an enemy one orders the attack
+// (WeaponSet::getAbleToAttackSpecificObject refuses only an enclosed victim), a click on one of mine selects nothing.
+// An enclosed one's drawable is hidden: the click goes through to the ground (a move).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_bases_occupant_is_targeted_but_never_selected)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity stationed = field.Tank(150, 100, 1);
+	field.world.Add<gp::OffMap>(stationed);
+	*field.world.Get<gp::OffMap>(stationed) = gp::OffMap{gp::off_map_reason::Stationed, true, {}, {}};
+	field.Select(tank);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	orders.clear();
+	field.ClickOn(stationed);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *attack = std::get_if<generalszh::commands::Attack>(&orders[0]);
+	BOOST_TEST_REQUIRE(attack != nullptr);
+	BOOST_TEST((attack->target == stationed));
+	BOOST_TEST(!field.IsSelected(stationed));
+	orders.clear();
+	*field.world.Get<gp::OffMap>(stationed) = gp::OffMap{gp::off_map_reason::Contained, true, {}, {}};
+	field.ClickOn(stationed);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::MoveTo>(&orders[0]) != nullptr);
+	// One of mine at its station: never selected by a click.
+	orders.clear();
+	field.Click(10, 10, pointer_button::Right);
+	const ecs::Entity mine = field.Tank(100, 150, 0);
+	field.world.Add<gp::OffMap>(mine);
+	*field.world.Get<gp::OffMap>(mine) = gp::OffMap{gp::off_map_reason::Stationed, true, {}, {}};
+	field.ClickOn(mine);
+	BOOST_TEST(!field.IsSelected(mine));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(waypoint_mode)
+
+// CommandTranslator in waypoint mode (MSG_META_BEGIN_WAYPOINTS / END_WAYPOINTS: Alt held, CommandMap.ini): the cursor
+// over the ground is WAYPOINT (MSG_ADD_WAYPOINT_HINT); a click there adds a waypoint (handleWaypointModeCommand ->
+// issueMoveToLocationCommand: MSG_ADD_WAYPOINT at the spot) for the selection, which answers as for a move in waypoint
+// mode (pickAndPlayUnitVoiceResponse MSG_DO_MOVETO); a click on another of mine is a waypoint too, not a selection
+// (contextCommandForNewSelection: the command is MSG_ADD_WAYPOINT, not invalid); Alt let go, a click moves again.
+BOOST_AUTO_TEST_CASE(legacy_parity_alt_clicks_add_waypoints)
+{
+	Field field;
+	const ecs::Entity tank = field.Tank(100, 100, 0);
+	const ecs::Entity second = field.Tank(130, 100, 0);
+	field.Click(400, 300);
+	BOOST_TEST_REQUIRE(field.IsSelected(tank));
+	field.world.Resource<PointerInput>().alt = true;
+	BOOST_TEST((field.Hover(400, 100) == generalszh::content::MouseCursorKind::Waypoint));
+	auto &orders = field.world.Resource<PlayerOrders>().pending;
+	auto &cues = field.world.Resource<UnitVoiceCues>().pending;
+	orders.clear();
+	cues.clear();
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	const auto *waypoint = std::get_if<generalszh::commands::AddWaypoint>(&orders[0]);
+	BOOST_TEST_REQUIRE(waypoint != nullptr);
+	BOOST_TEST((waypoint->units == std::vector<ecs::Entity>{tank}));
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(waypoint->destination.x) - 100.0f) < 0.5f);
+	BOOST_TEST(std::abs(Engine::Math::ToFloat(waypoint->destination.y) - 186.6f) < 0.5f);
+	BOOST_TEST_REQUIRE(cues.size() == 1u);
+	BOOST_TEST((cues[0].order == VoiceOrder::Move));
+	BOOST_TEST(cues[0].waypointMode);
+	orders.clear();
+	field.ClickOn(second);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::AddWaypoint>(&orders[0]) != nullptr);
+	BOOST_TEST(!field.IsSelected(second));
+	orders.clear();
+	field.world.Resource<PointerInput>().alt = false;
+	field.Click(400, 100);
+	BOOST_TEST_REQUIRE(orders.size() == 1u);
+	BOOST_TEST(std::get_if<generalszh::commands::MoveTo>(&orders[0]) != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

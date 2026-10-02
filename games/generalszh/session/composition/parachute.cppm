@@ -1,6 +1,7 @@
 export module games.generalszh.session.composition.parachute;
 import std;
 import engine.gameplay.rts.parachute.resources.parachute_openings;
+import engine.gameplay.rts.parachute.resources.parachute_landings;
 export import games.generalszh.session.composition.simulation_setup;
 
 export import engine.ecs.core.world;
@@ -21,6 +22,7 @@ export namespace generalszh::session::composition
 inline void EmplaceParachuteResources(ecs::World &world, [[maybe_unused]] const SimulationSetup &setup)
 {
 	world.EmplaceResource<engine::gameplay::ParachuteOpenings>();
+	world.EmplaceResource<engine::gameplay::ParachuteLandings>();
 }
 
 inline void RegisterParachuteComponents(ecs::World &world)

@@ -16,6 +16,8 @@ import engine.gameplay.common.identity.components.object_id;
 import engine.gameplay.rts.production.components.production_queue;
 import games.generalszh.gameplay.world.resources.solo_play;
 import games.generalszh.gameplay.score.algorithms.scoring;
+import games.generalszh.content.production.production_content;
+import engine.gameplay.rts.production.components.rally_point;
 
 // The computer players' start (AISkirmishPlayer::newMap, adjustBuildList, AIPlayer::computeCenterAndRadiusOfBase,
 // buildStructureNow) and the enemy each picks (AISkirmishPlayer::acquireEnemy / getAiEnemy,
@@ -168,6 +170,51 @@ inline void CheckForSupplyCenter(const GameWorld &game, const AiPlayer &ai, AiBu
 	slot.desiredGatherers = desired + 1;
 }
 
+// AIPlayer::buildStructureNow / buildStructureWithDozer's rally point: a built structure with a production exit
+// (getObjectExitInterface) whose entry has a RallyPointOffset over 1 either way gets its natural rally point (the exit's
+// NaturalRallyPoint in its frame) moved by it (setRallyPoint). Retail never set its gotOffset (a bare `gotOffset;`), so
+// the offset never took: fixed here, as the field evidently meant.
+inline void ApplyBuildRallyOffset(GameWorld &game, const AiBuildSlot &slot, ecs::Entity structure)
+{
+	using Engine::Math::Fixed;
+	if (Engine::Math::Abs(slot.rallyOffset.x) <= Fixed::One() && Engine::Math::Abs(slot.rallyOffset.y) <= Fixed::One())
+		return;
+	const content::ObjectDefinition *definition = ai_detail::DefinitionOf(game, structure);
+	const auto *frame = game.world.IsAlive(structure) ? game.world.Get<engine::gameplay::Transform>(structure) : nullptr;
+	if (definition == nullptr || frame == nullptr)
+		return;
+	const auto production = content::ReadObjectProduction(*definition, game.step);
+	if (!production || !production->hasExit)
+		return;
+	const Fixed c = Engine::Math::Cos(frame->facing), s = Engine::Math::Sin(frame->facing);
+	const Engine::Math::FixedVector2 natural{frame->position.x + production->rallyPoint.x * c - production->rallyPoint.y * s,
+		frame->position.y + production->rallyPoint.x * s + production->rallyPoint.y * c};
+	if (!game.world.Has<engine::gameplay::RallyPoint>(structure))
+		game.world.Add<engine::gameplay::RallyPoint>(structure);
+	game.world.Get<engine::gameplay::RallyPoint>(structure)->at = natural + slot.rallyOffset;
+}
+
+// adjustBuildList's turn of a skirmish base plan: 135 degrees, and with RotateSkirmishBases more by which ninth of the
+// map (TerrainLogic::getMaximumPathfindExtent: from 0 to the largest boundary) the start is in, so the same side of
+// every base faces the map's middle (by grid 6 7 8 / 3 4 5 / 0 1 2: 0, 45, 90, -45, 0, 135, -90, -135, 180 degrees; a
+// start past a third of the width or height counts as in the next column or row).
+inline Engine::Math::TurnAngle SkirmishBaseTurn(bool rotate, Engine::Math::FixedVector2 start, Engine::Math::FixedVector2 extent)
+{
+	using Engine::Math::Fixed;
+	std::int32_t grid = 0;
+	if (start.x > extent.x / Fixed::FromInt(3))
+		++grid;
+	if (start.x > extent.x * Fixed::FromInt(2) / Fixed::FromInt(3))
+		++grid;
+	if (start.y > extent.y / Fixed::FromInt(3))
+		grid += 3;
+	if (start.y > extent.y * Fixed::FromInt(2) / Fixed::FromInt(3))
+		grid += 3;
+	static constexpr std::array<std::int32_t, 9> Degrees{0, 45, 90, -45, 0, 135, -90, -135, 180};
+	const std::int32_t extra = rotate ? Degrees[static_cast<std::size_t>(grid)] : 0;
+	return Engine::Math::TurnFromDegrees(static_cast<std::int64_t>(extra + 135));
+}
+
 // AISkirmishPlayer::newMap for a computer player: its side's skirmish build list (AIData), moved to its start
 // (adjustBuildList: its starting command centre goes and stands again as the plan's first, initially built entry;
 // the plan turned by 135 degrees about its command centre and put where that stood; only when the plan's first entry
@@ -184,7 +231,11 @@ inline void SetUpSkirmishAi(GameWorld &game, AiPlayers &ais, std::uint32_t playe
 	const auto &content = game.templates.Content();
 	if (const content::AiBuildList *plan = content.aiData.BuildList(ai.side))
 		for (const content::AiBuildListEntry &entry : plan->structures)
+		{
 			ai.buildList.push_back({entry.structure, entry.location, entry.angleDegrees, entry.rebuilds, entry.initiallyBuilt, entry.automaticallyBuild});
+			ai.buildList.back().name = entry.name;
+			ai.buildList.back().rallyOffset = entry.rallyPointOffset;
+		}
 
 	// adjustBuildList.
 	std::optional<Engine::Math::FixedVector2> start;
@@ -209,8 +260,14 @@ inline void SetUpSkirmishAi(GameWorld &game, AiPlayers &ais, std::uint32_t playe
 				buildAt = slot.location;
 				slot.initiallyBuilt = true;
 			}
-		// RotateSkirmishBases would turn it further by the start's ninth of the map; the shipped data does not.
-		const Engine::Math::FixedVector2 turn = Engine::Math::Direction(Engine::Math::TurnFromDegrees(135));
+		// RotateSkirmishBases turns it further by the start's ninth of the map.
+		Engine::Math::FixedVector2 extent;
+		for (const auto &boundary : game.level.terrain.playableExtents)
+		{
+			extent.x = std::max(extent.x, Fixed::FromInt(boundary[0]) * game.level.terrain.cellSize);
+			extent.y = std::max(extent.y, Fixed::FromInt(boundary[1]) * game.level.terrain.cellSize);
+		}
+		const Engine::Math::FixedVector2 turn = Engine::Math::Direction(SkirmishBaseTurn(content.aiData.rotateSkirmishBases, *start, extent));
 		const auto *first = ai.buildList.empty() ? nullptr : content.objects.Find(ai.buildList.front().structure);
 		if (first != nullptr && first->Is("COMMANDCENTER"))
 			for (AiBuildSlot &slot : ai.buildList)
@@ -230,7 +287,8 @@ inline void SetUpSkirmishAi(GameWorld &game, AiPlayers &ais, std::uint32_t playe
 			++slot.rebuilds;
 			continue;
 		}
-		const ecs::Entity built = SpawnObject(game, slot.structure, slot.location, Engine::Math::TurnFromDegrees(slot.angleDegrees), defaultTeam, "");
+		// buildStructureNow: named as its entry (updateObjValuesFromMapProperties' objectName).
+		const ecs::Entity built = SpawnObject(game, slot.structure, slot.location, Engine::Math::TurnFromDegrees(slot.angleDegrees), defaultTeam, slot.name);
 		if (game.world.IsAlive(built))
 		{
 			slot.built = built;
@@ -238,6 +296,7 @@ inline void SetUpSkirmishAi(GameWorld &game, AiPlayers &ais, std::uint32_t playe
 			OnBuildComplete(game, built); // BuildAssistant::buildObjectNow
 			ScoreStructureComplete(game, built, false);
 			CheckForSupplyCenter(game, ai, slot, built);
+			ApplyBuildRallyOffset(game, slot, built);
 		}
 	}
 	// AISkirmishPlayer: unit building on from the start.
@@ -266,6 +325,7 @@ inline void SetUpAi(GameWorld &game, AiPlayers &ais, std::uint32_t player, std::
 		slot.angleDegrees = Engine::Math::Degrees(planned.orientation);
 		slot.rebuilds = planned.rebuilds;
 		slot.initiallyBuilt = planned.initiallyPlaced;
+		slot.name = planned.name;
 		ai.buildList.push_back(std::move(slot));
 	}
 	std::vector<std::pair<std::uint32_t, ecs::Entity>> factories;

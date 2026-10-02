@@ -34,6 +34,7 @@ import engine.gameplay.common.identity.resources.relationships;
 import engine.gameplay.common.spatial.components.transform;
 import engine.ecs.query.query;
 import games.generalszh.gameplay.world.resources.deselections;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 
 // Vehicles whose pilot is killed, and infantry taking them over:
 // - ActiveBody::attemptDamage, DAMAGE_KILLPILOT (a handled damage type: it takes no health, whatever its amount): a
@@ -164,8 +165,13 @@ inline void ApplyPilotKills(GameWorld &game)
 	});
 	for (const auto &[vehicle, damager] : struck)
 	{
+		// ActiveBody's DAMAGE_KILLPILOT on a VEHICLE: the neutral player's academy counts a vehicle sniped.
+		const content::ObjectDefinition *definition = unmanned_detail::DefinitionOf(game, vehicle);
 		KillBikeRider(game, vehicle, damager);
 		KillPilot(game, vehicle);
+		if (definition != nullptr && definition->Is("VEHICLE"))
+			if (const auto neutral = NeutralPlayer(game))
+				RecordAcademy(game, *neutral, AcademyCount::VehicleSniped);
 	}
 }
 
@@ -302,6 +308,10 @@ inline void SetUnmanned(GameWorld &game, ecs::Entity unit)
 	if (!game.world.IsAlive(unit))
 		return;
 	unmanned_detail::SetDisabledFlag(game, unit, engine::gameplay::disabled_type::Unmanned, true);
+	// setDisabled(DISABLED_UNMANNED): its pilot's splatter (not a drone's).
+	if (auto *notices = game.world.FindResource<UnmannedNotices>())
+		if (const auto *ref = game.world.Get<engine::gameplay::DefinitionRef>(unit))
+			notices->list.push_back({unit, ref->index});
 	if (auto *deselections = game.world.FindResource<Deselections>())
 		deselections->list.push_back(unit);
 	if (const auto neutral = game.roster.FindTeam("team"))

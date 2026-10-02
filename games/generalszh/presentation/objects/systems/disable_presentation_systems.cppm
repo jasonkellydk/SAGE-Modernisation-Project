@@ -9,6 +9,8 @@ export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.rts.containment.components.mount;
 export import engine.gameplay.rts.emp.resources.emp_strikes;
+export import games.generalszh.gameplay.abilities.resources.ability_notices;
+export import games.generalszh.gameplay.combat.resources.unmanned_notices;
 export import games.generalszh.presentation.objects.components.object_presentation;
 export import games.generalszh.presentation.objects.components.effect_attachments;
 export import games.generalszh.presentation.objects.resources.presentation_resources;
@@ -20,7 +22,8 @@ import Engine.Core.Math.FixedPresentation;
 // Disabled things heard and seen, once a tick after the simulation:
 //   DisabledSoundSystem (Object::setDisabledUntil): a structure or vehicle that loses its power (underpowered, EMP,
 //   subdued or hacked, when none of those held it yet) plays MiscAudio's BuildingDisabled or VehicleDisabled where it is;
-//   anything but a drone left unmanned (its pilot sniped) plays SplatterVehiclePilotsBrain there;
+//   anything but a drone set unmanned (setDisabledUntil(DISABLED_UNMANNED): its pilot sniped, a neutron blast, a script;
+//   each time, one already unmanned too) plays SplatterVehiclePilotsBrain there;
 //   EmpSparkSystem (EMPUpdate::doDisableAttack): each victim an EMP pulse's sphere disabled crackles with the pulse's
 //   DisableFXParticleSystem, EmpSparkCount emitters riding on it at EmpSparkOffset, each starting 1 to 100 frames on and
 //   running for the disable less a second (DisabledDuration - 30 frames, at least none: the original's unsigned
@@ -75,14 +78,29 @@ struct RiderTintSystem
 struct DisabledSoundSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::Disabled>, ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Transform>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Transform>>;
 	using SideTables = ecs::SideTables<ecs::Write<DisableHeard>>;
-	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Write<SoundRequests>>;
+	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Write<SoundRequests>, ecs::Read<generalszh::gameplay::UnmannedNotices>>;
 
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
 		const LookCatalog &catalog = context.Read<LookCatalog>();
 		auto &sounds = context.Write<SoundRequests>().pending;
 		auto &heard = context.Side<SideTables, DisableHeard>();
+		// Each setDisabledUntil(DISABLED_UNMANNED) of the tick, in order: the pilot's splatter where the thing is (not a drone's).
+		if (!catalog.pilotSplatterSound.empty())
+		{
+			const auto lookup = context.Lookup<Lookup>();
+			for (const generalszh::gameplay::UnmannedNotice &notice : context.Read<generalszh::gameplay::UnmannedNotices>().list)
+			{
+				const DefinitionLooks *looks = catalog.Of(notice.definition);
+				const auto *transform = lookup.IsAlive(notice.entity) ? lookup.Get<engine::gameplay::Transform>(notice.entity) : nullptr;
+				if (looks == nullptr || looks->drone || transform == nullptr)
+					continue;
+				const auto &at = transform->position;
+				sounds.push_back({catalog.pilotSplatterSound, {Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)}});
+			}
+		}
 		query.ForEachChunk([&](auto chunk) {
 			const auto disabled = chunk.template Get<engine::gameplay::Disabled>();
 			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
@@ -90,8 +108,7 @@ struct DisabledSoundSystem
 			const auto entities = chunk.Entities();
 			for (std::size_t row = 0; row < disabled.size(); ++row)
 			{
-				constexpr std::uint32_t Unmanned = engine::gameplay::disabled_type::Unmanned;
-				const std::uint32_t now = disabled[row].mask & (PowerLossTypes | Unmanned);
+				const std::uint32_t now = disabled[row].mask & PowerLossTypes;
 				DisableHeard *seen = heard.Get(entities[row]);
 				const std::uint32_t before = seen != nullptr ? seen->mask : 0u;
 				if (seen != nullptr)
@@ -103,8 +120,6 @@ struct DisabledSoundSystem
 					continue;
 				const auto &at = transforms[row].position;
 				const std::array<float, 3> where{Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)};
-				if ((now & Unmanned) != 0 && (before & Unmanned) == 0 && !looks->drone && !catalog.pilotSplatterSound.empty())
-					sounds.push_back({catalog.pilotSplatterSound, where});
 				// Object::clearDisabled: the last of those taken away, it plays BuildingReenabled or VehicleReenabled.
 				if ((before & PowerLossTypes) != 0 && (now & PowerLossTypes) == 0)
 				{
@@ -203,8 +218,8 @@ struct EmpSparkSystem
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Transform>>;
 	using SideTables = ecs::SideTables<ecs::Write<FxEmission>, ecs::Write<TintEnvelope>>;
-	using Resources = ecs::Resources<ecs::Read<engine::gameplay::EmpStrikes>, ecs::Read<LookCatalog>, ecs::Write<ParticleWorldHandle>,
-		ecs::Write<PresentationRandom>>;
+	using Resources = ecs::Resources<ecs::Read<engine::gameplay::EmpStrikes>, ecs::Read<generalszh::gameplay::AbilityNotices>, ecs::Read<LookCatalog>,
+		ecs::Write<ParticleWorldHandle>, ecs::Write<PresentationRandom>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -224,13 +239,50 @@ struct EmpSparkSystem
 			}
 		}
 		const auto &strikes = context.Read<engine::gameplay::EmpStrikes>().list;
+		const auto &hacks = context.Read<generalszh::gameplay::AbilityNotices>().disableFx;
 		ParticleWorldHandle &particles = context.Write<ParticleWorldHandle>();
-		if (strikes.empty() || particles.world == nullptr || particles.content == nullptr)
+		if ((strikes.empty() && hacks.empty()) || particles.world == nullptr || particles.content == nullptr)
 			return;
 		const LookCatalog &catalog = context.Read<LookCatalog>();
 		auto &random = context.Write<PresentationRandom>().engine;
 		auto &riding = context.Side<SideTables, FxEmission>();
 		std::vector<std::pair<ecs::Entity, std::vector<AttachedSystem>>> added; // to objects without any yet
+		const auto ride = [&](ecs::Entity victim, const std::vector<AttachedSystem> &systems) {
+			if (FxEmission *emission = riding.Get(victim))
+				emission->systems.insert(emission->systems.end(), systems.begin(), systems.end());
+			else
+			{
+				auto found = std::find_if(added.begin(), added.end(), [&](const auto &entry) { return entry.first == victim; });
+				auto &list = found != added.end() ? found->second : added.emplace_back(victim, std::vector<AttachedSystem>{}).second;
+				list.insert(list.end(), systems.begin(), systems.end());
+			}
+		};
+		// SpecialAbilityUpdate::triggerAbilityEffect's disable effect: the hacker's DisableFXParticleSystem riding on the
+		// target at a random spot over its footprint (makeRandomOffsetWithinFootprint), emitting for the time it was given.
+		for (const generalszh::gameplay::AbilityNotices::DisableFx &hack : hacks)
+		{
+			const auto *unitRef = lookup.IsAlive(hack.unit) ? lookup.Get<engine::gameplay::DefinitionRef>(hack.unit) : nullptr;
+			const auto *victimRef = lookup.IsAlive(hack.target) ? lookup.Get<engine::gameplay::DefinitionRef>(hack.target) : nullptr;
+			const auto *transform = victimRef != nullptr ? lookup.Get<engine::gameplay::Transform>(hack.target) : nullptr;
+			const DefinitionLooks *unit = unitRef != nullptr ? catalog.Of(unitRef->index) : nullptr;
+			const DefinitionLooks *victim = victimRef != nullptr ? catalog.Of(victimRef->index) : nullptr;
+			if (unit == nullptr || victim == nullptr || transform == nullptr)
+				continue;
+			const engine::effects::ParticleSystemDefinition *definition = nullptr;
+			for (const auto &[power, name] : unit->disableFx)
+				if (power == hack.power)
+					definition = particles.content->particles.Find(name);
+			if (definition == nullptr)
+				continue;
+			const float facing = static_cast<float>(transform->facing.units) * (6.283185307179586f / 4294967296.0f);
+			const float c = std::cos(facing), s = std::sin(facing);
+			const std::array<float, 3> offset = FootprintOffset(*victim, random);
+			const auto id = particles.world->Create(*definition, engine::effects::EmitterTransform::At(
+				Engine::Math::ToFloat(transform->position.x) + offset[0] * c - offset[1] * s,
+				Engine::Math::ToFloat(transform->position.y) + offset[0] * s + offset[1] * c, Engine::Math::ToFloat(transform->position.z), facing));
+			particles.world->SetSystemLifetime(id, static_cast<std::uint32_t>(hack.ticks));
+			ride(hack.target, {AttachedSystem{id, offset, 0.0f}});
+		}
 		for (const engine::gameplay::EmpStrike &strike : strikes)
 		{
 			const auto *pulseRef = lookup.IsAlive(strike.pulse) ? lookup.Get<engine::gameplay::DefinitionRef>(strike.pulse) : nullptr;
@@ -258,14 +310,7 @@ struct EmpSparkSystem
 				particles.world->SetInitialDelay(id, static_cast<std::uint32_t>(std::uniform_int_distribution<int>(1, 100)(random)));
 				systems.push_back({id, offset, 0.0f});
 			}
-			if (FxEmission *emission = riding.Get(strike.victim))
-				emission->systems.insert(emission->systems.end(), systems.begin(), systems.end());
-			else
-			{
-				auto found = std::find_if(added.begin(), added.end(), [&](const auto &entry) { return entry.first == strike.victim; });
-				auto &list = found != added.end() ? found->second : added.emplace_back(strike.victim, std::vector<AttachedSystem>{}).second;
-				list.insert(list.end(), systems.begin(), systems.end());
-			}
+			ride(strike.victim, systems);
 		}
 		for (auto &[object, systems] : added)
 			context.Commands().Add<FxEmission>(object, FxEmission{std::move(systems), 0});

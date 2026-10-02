@@ -7,6 +7,7 @@ export import games.generalszh.presentation.audio.systems.audio_systems;
 export import games.generalszh.presentation.objects.systems.uplink_systems;
 export import games.generalszh.session.session_view;
 import Engine.Core.Math.FixedPresentation;
+import games.generalszh.presentation.audio.systems.wave_guide_sound_system;
 import engine.gameplay.rts.teams.resources.team_roster;
 import engine.gameplay.common.physics.resources.landings;
 import engine.gameplay.rts.parachute.resources.parachute_openings;
@@ -30,6 +31,10 @@ void RegisterSoundComponents(ecs::World &world)
 	world.RegisterComponent<UplinkSounds>();
 	world.RegisterComponent<TrainSoundLoop>();
 	world.RegisterComponent<FireSoundLoop>();
+	world.RegisterComponent<PrepSoundLoop>();
+	world.RegisterComponent<BattlePlanSound>();
+	world.RegisterComponent<DoorIdleSound>();
+	world.RegisterComponent<WaveGuideSoundLoop>();
 }
 
 inline void RegisterSoundFrame(ecs::SystemRegistry &frame)
@@ -40,6 +45,29 @@ inline void RegisterSoundFrame(ecs::SystemRegistry &frame)
 	static UplinkSoundSystem uplinks;
 	static FireLoopSystem fireLoops;
 	static TrainSoundSystem trains;
+	static PrepSoundSystem preps;
+	static BattlePlanSoundSystem planSounds;
+	static DoorIdleSoundSystem doorSounds;
+	// The missile launchers' open-door hiss, with the objects' loops, before the mix.
+	frame.Register(doorSounds);
+	// The flood waves' looping sound, with the objects' loops, before the mix.
+	static WaveGuideSoundSystem waveGuideSounds;
+	frame.Register(waveGuideSounds);
+	frame.OrderBefore<DoorIdleSoundSystem, WaveGuideSoundSystem>();
+	frame.OrderBefore<WaveGuideSoundSystem, AudioMixSystem>();
+	frame.OrderBefore<BattlePlanSoundSystem, DoorIdleSoundSystem>();
+	frame.OrderBefore<DoorIdleSoundSystem, AudioMixSystem>();
+	// The Strategy Centers' plan sounds, with the objects' loops, before the mix.
+	frame.Register(planSounds);
+	frame.OrderBefore<PrepSoundSystem, BattlePlanSoundSystem>();
+	frame.OrderBefore<BattlePlanSoundSystem, AudioMixSystem>();
+	// The abilities' preparation loops, with the objects' loops, before the mix.
+	frame.Register(preps);
+	frame.OrderBefore<SoundLoopSystem, PrepSoundSystem>();
+	frame.OrderBefore<UplinkSoundSystem, PrepSoundSystem>();
+	frame.OrderBefore<FireLoopSystem, PrepSoundSystem>();
+	frame.OrderBefore<TrainSoundSystem, PrepSoundSystem>();
+	frame.OrderBefore<PrepSoundSystem, AudioMixSystem>();
 	// Locomotives' running loops, with the objects' loops, before the mix.
 	frame.Register(trains);
 	frame.OrderBefore<SoundLoopSystem, TrainSoundSystem>();
@@ -154,8 +182,7 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 			if (!sound.empty() && sound != "NoSound")
 				sounds.pending.push_back({std::string(sound), at(cue.at)});
 		}
-	// Strategy Centers (BattlePlanUpdate::setStatus): unpacking, the plan's unpack sound on it and its announcement there;
-	// packing, its pack sound (played when the plan has an unpack sound, as the original tests it).
+	// Strategy Centers (BattlePlanUpdate::setStatus): unpacking, the plan's announcement there.
 	if (const auto *plans = view.World().FindResource<generalszh::gameplay::BattlePlanCues>())
 		for (const generalszh::gameplay::BattlePlanCue &cue : plans->list)
 		{
@@ -173,18 +200,14 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 			};
 			constexpr std::array<std::string_view, 3> names{"Bombardment", "HoldTheLine", "SearchAndDestroy"};
 			const std::string name(names[static_cast<std::size_t>(cue.plan) - 1]);
-			const std::string unpack = field(name + "PlanUnpackSoundName");
 			const auto play = [&](const std::string &sound) {
 				if (!sound.empty() && sound != "NoSound")
 					sounds.pending.push_back({sound, at(cue.at)});
 			};
+			// Its unpack and pack sounds ride on it, stopped as their status ends (BattlePlanSoundSystem); the announcement
+			// is heard whole.
 			if (cue.kind == Kind::Unpack)
-			{
-				play(unpack);
 				play(field(name + "AnnouncementName"));
-			}
-			else if (!unpack.empty())
-				play(field(name + "PlanPackSoundName"));
 		}
 	// Parachutes opening (ParachuteContain::update): their ParachuteOpenSound, on the rider.
 	if (const auto *openings = view.World().FindResource<engine::gameplay::ParachuteOpenings>())
@@ -201,13 +224,17 @@ void QueueTickSounds(SoundRequests &sounds, session::SessionView &view)
 			sounds.pending.push_back({found->second.openSound, at(opening.position), owner != nullptr ? owner->player : SoundRequest::NoOwner});
 		}
 	// Thrown pieces' bounce sounds each time they land (PhysicsBehavior::doBounceSound), on the piece.
+	const auto bounce = [&](const engine::gameplay::Landing &landing) {
+		const std::string_view sound = view.DeathEffectName(engine::gameplay::DeathEffectKind::Sound, landing.sound);
+		if (sound.empty())
+			return;
+		const auto *owner = view.World().IsAlive(landing.entity) ? view.World().Get<engine::gameplay::Owner>(landing.entity) : nullptr;
+		sounds.pending.push_back({std::string(sound), at(landing.position), owner != nullptr ? owner->player : SoundRequest::NoOwner});
+	};
 	if (const auto *landings = view.World().FindResource<engine::gameplay::Landings>())
-		landings->ForEach([&](const engine::gameplay::Landing &landing) {
-			const std::string_view sound = view.DeathEffectName(engine::gameplay::DeathEffectKind::Sound, landing.sound);
-			if (sound.empty())
-				return;
-			const auto *owner = view.World().IsAlive(landing.entity) ? view.World().Get<engine::gameplay::Owner>(landing.entity) : nullptr;
-			sounds.pending.push_back({std::string(sound), at(landing.position), owner != nullptr ? owner->player : SoundRequest::NoOwner});
-		});
+		landings->ForEach(bounce);
+	// And flyers', whose locomotor steps their bodies.
+	if (const auto *flown = view.World().FindResource<engine::gameplay::LocomotorLandings>())
+		flown->ForEach(bounce);
 }
 }

@@ -202,9 +202,9 @@ bool InSight(std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1,
 }
 }
 
-// The search both kinds of route share: toward a goal (`towardGoal`: A* to `to`, as above), or out from the start until a
-// ground cell other than the start that `accept(x, y)` takes (no goal: cost alone orders the search, Dijkstra; nothing
-// accepted within the budget: no route).
+// The search both kinds of route share: toward a goal (`towardGoal`: A* to `to`, as above, ending early at a ground cell
+// other than the start that `accept(x, y)` takes), or out from the start until such a cell (no goal: cost alone orders
+// the search, Dijkstra; nothing accepted within the budget: no route).
 template<typename Accept>
 inline FoundRoute SearchRoute(const NavigationGrid &grid, const ClearancePlane &plane, RouteMover mover, Engine::Math::FixedVector2 from,
 	Engine::Math::FixedVector2 to, RouteScratch &scratch, std::uint8_t fromLayer, std::uint8_t toLayer, const RouteUnits *units, bool towardGoal,
@@ -452,7 +452,8 @@ inline FoundRoute SearchRoute(const NavigationGrid &grid, const ClearancePlane &
 			bestH = entry.h;
 			bestCost = atCost;
 		}
-		if (entry.cell == goal || (!towardGoal && here.layer == GroundLayer && entry.cell != start && accept(x, y)))
+		// (Toward a goal, a ground cell `accept` takes ends the search too: Pathfinder::findAttackPath's goal test.)
+		if (entry.cell == goal || (here.layer == GroundLayer && entry.cell != start && accept(x, y)))
 		{
 			found = true;
 			accepted = entry.cell;
@@ -574,7 +575,8 @@ inline FoundRoute SearchRoute(const NavigationGrid &grid, const ClearancePlane &
 		route.layers.push_back(n.layer);
 		anchor = next;
 	}
-	if (found && towardGoal)
+	// The goal itself reached: the route ends on it (an accepted cell: on that cell's centre).
+	if (found && towardGoal && accepted == goal)
 	{
 		if (route.points.size() == 1)
 		{
@@ -607,8 +609,10 @@ inline std::uint8_t RouteGoalLayer(const NavigationGrid &grid, const ClearancePl
 		return fromLayer;
 	if (Passable(grid, plane, x, y, radius))
 		return GroundLayer;
+	// The wall is no destination from off it (a point on the ground is nearer the ground than the wall: more than half
+	// the wall's height from it is what getLayerForDestination asks).
 	for (std::uint8_t layer = 1; layer <= grid.Decks().size(); ++layer)
-		if (DeckPassable(grid, plane, layer, x, y, 0))
+		if (!grid.Decks()[layer - 1].wall && DeckPassable(grid, plane, layer, x, y, 0))
 			return layer;
 	return GroundLayer;
 }

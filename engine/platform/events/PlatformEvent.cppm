@@ -14,7 +14,14 @@ enum class EventType : std::uint8_t
 enum class KeyCode : std::uint8_t
 {
 	unknown, enter, keypad_enter, backspace, escape, tab, up, down, left, right, del,
-	a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z
+	a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z,
+	space, digit0, digit1, digit2, digit3, digit4, digit5, digit6, digit7, digit8, digit9,
+	f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12,
+	keypad0, keypad1, keypad2, keypad3, keypad4, keypad5, keypad6, keypad7, keypad8, keypad9,
+	keypad_period, keypad_multiply, keypad_minus, keypad_plus, keypad_divide,
+	home, end, page_up, page_down, insert,
+	minus, equals, left_bracket, right_bracket, semicolon, apostrophe, grave, backslash, comma, period, slash,
+	shift, control, alt // either side's
 };
 enum EventModifier : std::uint32_t { modifier_alt = 1u << 0, modifier_control = 1u << 1, modifier_shift = 1u << 2, modifier_command = 1u << 3 };
 

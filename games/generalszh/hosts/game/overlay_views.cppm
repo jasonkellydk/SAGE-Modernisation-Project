@@ -17,6 +17,8 @@ import games.generalszh.hosts.game.message_view;
 import games.generalszh.hosts.game.military_caption_view;
 import games.generalszh.hosts.game.named_timers_view;
 import games.generalszh.hosts.game.superweapon_timers_view;
+import games.generalszh.presentation.hud.algorithms.language_font_choice;
+import games.generalszh.presentation.hud.algorithms.in_game_ui_layout;
 import Engine.Core.Math.FixedPresentation;
 
 // The submit stage of the in-game overlay (InGameUI::postDraw, each Drawable's UI, W3DDisplay's letterbox): the
@@ -39,25 +41,32 @@ inline void LoadOverlayViews(OverlayViews &views, const engine::filesystem::Virt
 	const content::LanguageFonts &language, const content::InGameUiContent &ui, std::uint32_t width, std::uint32_t height)
 {
 	const float scale = FontScale(width, height, Engine::Math::ToFloat(language.resolutionAdjustment));
-	const auto pick = [](const content::LanguageFont &font, const std::string &name, int size, bool bold) {
-		return font.name.empty() ? content::LanguageFont{name, size, bold} : font;
-	};
+	// InGameUI::init: InGameUI.ini's fonts, each replaced by Language.ini's where it names one.
+	const presentation::InGameFonts fonts = presentation::ChooseInGameFonts(language, ui);
 	if (!views.worldAnimations.Load(files))
 		std::fprintf(stderr, "world animations: the mapped images could not be read\n");
 	if (!views.floatingTexts.Load(language.displayString, scale))
 		std::fprintf(stderr, "floating text: its font could not be made\n");
-	// The messages at the top of the screen (InGameUI.ini's Arial 10 bold without a MessageFont).
-	if (!views.messages.Load(language.message.name.empty() ? content::LanguageFont{"Arial", 10, true} : language.message, scale))
+	if (!views.floatingTexts.LoadCaption(fonts.drawableCaption, scale))
+		std::fprintf(stderr, "drawable captions: their font could not be made\n");
+	if (!views.messages.Load(fonts.message, scale))
 		std::fprintf(stderr, "messages: their font could not be made\n");
-	if (!views.militaryCaption.Load(pick(language.militaryCaptionTitle, ui.militaryCaptionTitleFont, ui.militaryCaptionTitlePointSize, ui.militaryCaptionTitleBold),
-			pick(language.militaryCaption, ui.militaryCaptionFont, ui.militaryCaptionPointSize, ui.militaryCaptionBold), scale))
+	if (!views.militaryCaption.Load(fonts.militaryCaptionTitle, fonts.militaryCaption, scale))
 		std::fprintf(stderr, "military caption: its fonts could not be made\n");
-	if (!views.namedTimers.Load(pick(language.namedTimerNormal, ui.namedTimerNormalFont, ui.namedTimerNormalPointSize, ui.namedTimerNormalBold),
-			pick(language.namedTimerReady, ui.namedTimerReadyFont, ui.namedTimerReadyPointSize, ui.namedTimerReadyBold), scale))
+	if (!views.namedTimers.Load(fonts.namedTimerNormal, fonts.namedTimerReady, scale))
 		std::fprintf(stderr, "named timers: their fonts could not be made\n");
-	if (!views.superweaponTimers.Load(pick(language.superweaponNormal, ui.superweaponNormalFont, ui.superweaponNormalPointSize, ui.superweaponNormalBold),
-			pick(language.superweaponReady, ui.superweaponReadyFont, ui.superweaponReadyPointSize, ui.superweaponReadyBold), strings, scale))
+	if (!views.superweaponTimers.Load(fonts.superweaponNormal, fonts.superweaponReady, strings, scale))
 		std::fprintf(stderr, "superweapon countdowns: their fonts could not be made\n");
+}
+
+// The control group numerals (W3DDisplayStringManager::postProcessLoad: the strings NUMBER:0..9 in DrawGroupInfo's font).
+inline void LoadGroupNumberViews(OverlayViews &views, const engine::localization::StringTable &strings, const content::DrawGroupInfoContent &info)
+{
+	std::array<std::u16string, 10> numerals;
+	for (std::size_t group = 0; group < numerals.size(); ++group)
+		numerals[group] = Localized(strings, "NUMBER:" + std::to_string(group));
+	if (!views.floatingTexts.LoadGroupNumbers(info, std::move(numerals)))
+		std::fprintf(stderr, "group numbers: their font could not be made\n");
 }
 
 // The selection box being dragged, and the selected objects' health bars (Drawable::drawHealthBar: an outline and a fill
@@ -103,11 +112,19 @@ inline void DrawOverlay(OverlayViews &views, const InGameOverlay &overlay, float
 {
 	DrawSelectionMarkers(renderer, overlay);
 	views.worldAnimations.Draw(overlay.images, renderer);
+	views.floatingTexts.DrawCaptions(overlay.captions, renderer);
 	views.floatingTexts.Draw(overlay.texts, renderer);
+	views.floatingTexts.DrawGroupNumbers(overlay.groupNumbers, renderer);
 	views.messages.Draw(overlay.messages, overlay.messageAt, renderer);
 	views.militaryCaption.Draw(overlay.caption, width, height, renderer);
 	views.namedTimers.Draw(overlay.namedTimers, overlay.namedTimerAt, width, height, renderer);
 	views.superweaponTimers.Draw(overlay.superweapons, overlay.superweaponAt, width, height, renderer);
+	// InGameUI::postDraw's right-button scroll anchor (DrawRMBScrollAnchor): its black cross, then its green one.
+	if (overlay.rmbAnchorShown)
+		for (const presentation::AnchorRect &rect : presentation::RmbScrollAnchorRects(overlay.rmbAnchor[0], overlay.rmbAnchor[1]))
+			renderer.Add_Rect({static_cast<float>(rect.x), static_cast<float>(rect.y), static_cast<float>(rect.x + rect.width),
+								  static_cast<float>(rect.y + rect.height)},
+				rect.green ? Graphics::Color2D{0.0f, 1.0f, 0.0f, 1.0f} : Graphics::Color2D{0.0f, 0.0f, 0.0f, 1.0f});
 }
 
 // W3DDisplay::renderLetterBox's fade level: a change of the scripts' letterbox starts it from now; on, it fades in over

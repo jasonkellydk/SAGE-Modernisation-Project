@@ -32,6 +32,8 @@ struct SpecialAbilityContent
 	std::int32_t awardXp{0};
 	std::int32_t skillPoints{-1};
 	std::string specialObject;
+	std::string specialObjectAttachToBone; // SpecialObjectAttachToBone: where its laser special object streams from
+	std::string disableFxParticleSystem;   // DisableFXParticleSystem: over what its hack disables
 	std::string packSound, unpackSound, prepSoundLoop, triggerSound; // PackSound, UnpackSound, PrepSoundLoop, TriggerSound
 	bool skipPackingWithNoTarget{false};
 	bool specialObjectsPersistent{false};
@@ -113,6 +115,8 @@ inline std::vector<SpecialAbilityContent> ReadSpecialAbilities(const ObjectDefin
 		text("PackSound", ability.packSound);
 		text("UnpackSound", ability.unpackSound);
 		text("PrepSoundLoop", ability.prepSoundLoop);
+		text("SpecialObjectAttachToBone", ability.specialObjectAttachToBone);
+		text("DisableFXParticleSystem", ability.disableFxParticleSystem);
 		text("TriggerSound", ability.triggerSound);
 		fixed("StartAbilityRange", ability.startRange);
 		fixed("AbilityAbortRange", ability.abortRange);

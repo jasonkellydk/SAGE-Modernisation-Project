@@ -18,6 +18,7 @@ export import engine.gameplay.common.spatial.resources.spatial_index;
 export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.rts.movement.systems.movement_system;
 export import engine.gameplay.rts.containment.components.garrison;
+export import engine.gameplay.rts.combat.components.aggression;
 export import engine.gameplay.rts.containment.resources.cargo_manifest;
 export import engine.gameplay.rts.stealth.systems.stealth_system;
 
@@ -35,7 +36,8 @@ export namespace engine::gameplay
 {
 struct StealthDetectorSystem
 {
-	using Query = ecs::Query<ecs::Optional<TeamMember>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Write<StealthDetector>, ecs::Optional<Health>, ecs::Optional<OffMap>, ecs::Optional<Disabled>>;
+	using Query = ecs::Query<ecs::Optional<TeamMember>, ecs::Read<Transform>, ecs::Read<Owner>, ecs::Write<StealthDetector>, ecs::Optional<Health>, ecs::Optional<OffMap>, ecs::Optional<Disabled>,
+		ecs::Optional<Aggression>>;
 	using Lookup = ecs::Lookup<ecs::Read<Garrison>, ecs::Read<Stealth>, ecs::Read<Owner>, ecs::Read<TeamMember>, ecs::Read<Health>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<Relationships>, ecs::Write<DetectionOffers>, ecs::Write<Detections>,
 		ecs::Write<DetectorPings>, ecs::Read<CargoManifest>>;
@@ -63,6 +65,7 @@ struct StealthDetectorSystem
 		const CargoManifest &manifest = context.Read<CargoManifest>();
 		const auto entities = chunk.Entities();
 		const auto disabledRows = chunk.Get<Disabled>();
+		const auto aggressions = chunk.Get<Aggression>();
 		for (std::size_t row = 0; row < detectors.size(); ++row)
 		{
 			if (!disabledRows.empty() && !RunsWhileDisabled(disabledRows[row], disabled_type::Held))
@@ -84,7 +87,10 @@ struct StealthDetectorSystem
 			bool foundInside = false; // a stealthed occupant found, revealed or not (foundSomeone)
 			// Revealed until just past the next scan.
 			const std::uint64_t until = tick + detector.rate + 1;
-			spatial.ForEachWithin(transforms[row].position.XY(), detector.range, [&](const SpatialEntry &entry) {
+			// StealthDetectorUpdate::update: DetectionRange when given, else its vision range as it is now (getVisionRange:
+			// veterancy and Search and Destroy change it).
+			const Engine::Math::Fixed range = detector.Has(stealth_detector_flag::OwnRange) || aggressions.empty() ? detector.range : aggressions[row].vision;
+			spatial.ForEachWithin(transforms[row].position.XY(), range, [&](const SpatialEntry &entry) {
 				if ((entry.classes & detector.forbiddenClasses) != 0)
 					return;
 				if ((entry.classes & target_class::Stealthed) == 0)
@@ -191,9 +197,13 @@ struct StealthRevealSystem
 {
 	using Query = ecs::Query<ecs::Write<Stealth>, ecs::OptionalWrite<Targetable>, ecs::Optional<StealthRider>>;
 	using Resources = ecs::Resources<ecs::Read<Detections>, ecs::Read<StealthGrants>, ecs::Read<TemporaryStealthGrants>, ecs::Write<DetectionWakes>,
-		ecs::Read<TeamRoster>>;
+		ecs::Read<TeamRoster>, ecs::Write<StealthDiscoveries>>;
 
-	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<DetectionWakes>().Reset(query.PreparedChunkCount()); }
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const
+	{
+		context.Write<DetectionWakes>().Reset(query.PreparedChunkCount());
+		context.Write<StealthDiscoveries>().Reset(query.PreparedChunkCount());
+	}
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
@@ -208,6 +218,7 @@ struct StealthRevealSystem
 		const auto riders = chunk.Get<StealthRider>();
 		const auto entities = chunk.Entities();
 		auto &wakes = context.Write<DetectionWakes>().Slot(context);
+		auto &discoveries = context.Write<StealthDiscoveries>().Slot(context);
 		const TeamRoster &roster = context.Read<TeamRoster>();
 		for (std::size_t row = 0; row < stealths.size(); ++row)
 		{
@@ -224,6 +235,9 @@ struct StealthRevealSystem
 				continue;
 			const std::uint64_t until = detection->until;
 			const StealthRules rules = stealth_detail::RulesOf(stealth, riders.empty() ? nullptr : &riders[row]);
+			// Not detected before this scan: the detector's and the victim's sides hear of it.
+			if (!stealth.Has(stealth_flag::Detected))
+				discoveries.push_back({entities[row], detection->detector, detection->position});
 			if (MarkAsDetected(stealth, rules, tick, until > tick ? until - tick : 0))
 				wakes.push_back({entities[row], detection->position, detection->player, stealth_detail::DefaultTeamOf(roster, detection->player)});
 			stealth.Set(stealth_flag::Detected, stealth.detectedUntil > tick);

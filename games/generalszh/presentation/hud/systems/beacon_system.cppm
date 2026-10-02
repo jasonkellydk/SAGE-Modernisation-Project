@@ -9,6 +9,8 @@ export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.appearance.components.indicator_color;
 export import games.generalszh.gameplay.beacons.resources.beacons;
 export import games.generalszh.presentation.objects.components.beacon_look;
+export import games.generalszh.presentation.objects.components.object_presentation;
+export import engine.gameplay.common.spatial.components.object_shroud;
 export import games.generalszh.presentation.objects.resources.presentation_resources;
 export import games.generalszh.presentation.objects.resources.look_catalog;
 export import games.generalszh.presentation.hud.algorithms.message_list;
@@ -47,8 +49,8 @@ inline std::array<float, 3> ToFloats(const Engine::Math::FixedVector3 &at)
 struct BeaconSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Transform>>;
-	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::IndicatorColor>>;
-	using SideTables = ecs::SideTables<ecs::Write<BeaconLook>, ecs::Write<BeaconCaption>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::IndicatorColor>, ecs::Read<engine::gameplay::ObjectShroud>>;
+	using SideTables = ecs::SideTables<ecs::Write<BeaconLook>, ecs::Write<BeaconCaption>, ecs::Read<ShroudSight>>;
 	using Resources = ecs::Resources<ecs::Read<generalszh::gameplay::BeaconCues>, ecs::Read<PresentationFrame>, ecs::Read<engine::gameplay::Relationships>,
 		ecs::Write<InGameMessages>, ecs::Write<SoundRequests>, ecs::Write<RadarEvents>, ecs::Write<EvaState>, ecs::Read<LookCatalog>,
 		ecs::Write<ParticleWorldHandle>>;
@@ -102,6 +104,18 @@ struct BeaconSystem
 						if (state.hidden != 0)
 							particles.world->Stop(state.smoke);
 					}
+				}
+				// The smoke rides the beacon's drawable (attachToDrawable): it emits nothing while the drawable is fully
+				// obscured by the viewer's shroud (ParticleSystem::update's isShrouded: getFullyObscuredByShroud, fogged
+				// or shrouded and more than 2 seconds since the viewer last saw it clear: GameClient::update).
+				if (state.smoke != 0 && state.hidden == 0 && particles.world != nullptr)
+				{
+					const PresentationFrame &frame = context.Read<PresentationFrame>();
+					const auto *shroud = lookup.Get<engine::gameplay::ObjectShroud>(entity);
+					const ShroudSight *sight = context.SideRead<SideTables, ShroudSight>().Get(entity);
+					const bool fogged = frame.viewer != PresentationFrame::NoViewer && frame.viewer < 64 && shroud != nullptr && !shroud->SeenBy(frame.viewer);
+					const bool lingering = sight != nullptr && frame.clock < sight->lastClear + 2.0;
+					particles.world->SetObscured(state.smoke, fogged && !lingering);
 				}
 				if (state.hidden == 0 && tick > state.lastPulse + definition->beaconPulseEvery)
 				{

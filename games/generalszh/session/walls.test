@@ -1,0 +1,249 @@
+#include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+import games.generalszh.session.session;
+import Engine.Core.Math.FixedPresentation;
+import engine.ecs.query.query;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import engine.gameplay.common.spatial.components.transform;
+import engine.gameplay.common.spatial.components.surface_layer;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
+import engine.gameplay.rts.navigation.components.navigation;
+import engine.gameplay.rts.movement.components.move_order;
+import games.generalszh.gameplay.walls.algorithms.walls;
+import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+
+// The wall units walk on top of (the original's LAYER_WALL) on shipped maps: the FortressWall pieces of Fallen Empire
+// (else Iron Dragon) made into the wall layer at AIData's WallHeight, a unit on it falling when the piece under it falls
+// to rubble, and a checkpoint giving the same wall back.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+namespace ga = generalszh::gameplay;
+using Engine::Math::Fixed;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Match
+{
+	std::optional<engine::level::generals_map::ReadResult> read;
+	session::setup::SkirmishLevel skirmish;
+	std::size_t pieces{0};
+
+	session::SessionOptions Options() const
+	{
+		session::SessionOptions options{11, 1, {}, {"player0", "player1"}};
+		for (const auto &player : skirmish.players)
+			options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+		return options;
+	}
+};
+
+// The first of the walled maps that has wall pieces, as a two-player skirmish.
+std::optional<Match> WalledMap(Install &shell)
+{
+	for (const char *name : {"Fallen Empire", "Iron Dragon"})
+	{
+		const auto bytes = shell.files.Read(std::string("Maps/") + name + "/" + name + ".map");
+		if (!bytes)
+			continue;
+		auto read = engine::level::generals_map::Read(*bytes);
+		if (!read)
+			continue;
+		Match match;
+		for (const auto &placement : read->level.placements)
+			if (const auto *kind = shell.game.objects.Find(placement.type); kind != nullptr && kind->Is("WALK_ON_TOP_OF_WALL") && (placement.flags & 0x36u) == 0)
+				++match.pieces;
+		if (match.pieces == 0)
+			continue;
+		match.read = std::move(*read);
+		const auto templateOf = [&](std::string_view faction) {
+			for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+				if (shell.game.playerTemplates.templates[index].name == faction)
+					return static_cast<int>(index);
+			return -1;
+		};
+		session::setup::GameSetup setup;
+		setup.seed = 7;
+		setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+		setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+		setup.slots[0].startPos = 0;
+		setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+		setup.slots[1].playerTemplate = templateOf("FactionChina");
+		setup.slots[1].startPos = 1;
+		match.skirmish = session::setup::PrepareSkirmishLevel(match.read->level, setup, shell.game.playerTemplates, 4);
+		BOOST_TEST_MESSAGE(name << ": " << match.pieces << " wall pieces");
+		return match;
+	}
+	return std::nullopt;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(walls)
+
+// GameLogic::startNewGame's bridge pass (addWallPiece: each WALK_ON_TOP_OF_WALL thing placed, up to 127) and
+// Pathfinder::newMap (allocateCellsForWallLayer, classifyWallCells): the wall layer, at AIData's WallHeight (43); every
+// clear cell of it is one all four of whose corners lie on a piece; a point on one is on the wall
+// (Pathfinder::isPointOnWall) at the wall's height. A Ranger put on the wall stays at its height; when the piece under it
+// falls to rubble (classifyObjectFootprint removing a wall piece) it falls (HUGE_DAMAGE_AMOUNT of DAMAGE_FALLING: dead
+// the tick after) and the wall over that piece is gone. A checkpoint gives the same wall back.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_map_wall_is_walked_on_and_falls_with_its_pieces)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	BOOST_TEST((shell.game.aiData.wallHeight == Fixed::FromInt(43)));
+	const auto match = WalledMap(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options());
+	auto &world = game.World();
+	auto &surfaces = world.Resource<gp::DeckSurfaces>();
+	const gp::WallSurface &wall = surfaces.wall;
+	BOOST_TEST(wall.Pieces() == (std::min)(match->pieces, std::size_t{127}));
+	BOOST_TEST_REQUIRE(wall.layer != 0);
+	BOOST_TEST((wall.height == Fixed::FromInt(43)));
+	const auto &grid = world.Resource<gp::NavigationGrid>();
+	BOOST_TEST_REQUIRE(wall.layer <= grid.Decks().size());
+	BOOST_TEST(grid.Decks()[wall.layer - 1].wall);
+	BOOST_TEST(surfaces.decks.size() == grid.Decks().size());
+	// Every clear cell has its four corners on pieces; find one to stand on.
+	std::optional<std::pair<std::int32_t, std::int32_t>> standing;
+	std::size_t clear = 0;
+	for (std::int32_t y = 0; y < wall.rows; ++y)
+		for (std::int32_t x = 0; x < wall.columns; ++x)
+		{
+			if (wall.clear[static_cast<std::size_t>(y) * static_cast<std::size_t>(wall.columns) + static_cast<std::size_t>(x)] == 0)
+				continue;
+			++clear;
+			const Fixed lx = Fixed::FromInt((wall.x0 + x) * 10), ly = Fixed::FromInt((wall.y0 + y) * 10);
+			for (const auto &corner : {Engine::Math::FixedVector2{lx, ly}, Engine::Math::FixedVector2{lx + Fixed::FromInt(10), ly},
+					 Engine::Math::FixedVector2{lx, ly + Fixed::FromInt(10)}, Engine::Math::FixedVector2{lx + Fixed::FromInt(10), ly + Fixed::FromInt(10)}})
+				BOOST_TEST(gp::PointOnWallPieces(wall, corner));
+			if (!standing)
+				standing = std::pair{wall.x0 + x, wall.y0 + y};
+		}
+	BOOST_TEST_MESSAGE(clear << " clear wall cells");
+	BOOST_TEST_REQUIRE(standing.has_value());
+	const Engine::Math::FixedVector2 at{Fixed::FromInt(standing->first * 10 + 5), Fixed::FromInt(standing->second * 10 + 5)};
+	BOOST_TEST(gp::PointOnWall(surfaces, at));
+	BOOST_TEST((gp::LayerHeight(surfaces, game.Game().ground, at, wall.layer) == Fixed::FromInt(43)));
+	// AIFollowWaypointPathState::computeGoal: a waypoint on the wall (its goal LAYER_WALL, at the wall's height) whose
+	// member's offset goal is off the wall goes to the waypoint itself.
+	const Engine::Math::FixedVector2 offWall{at.x + Fixed::FromInt(100000), at.y};
+	BOOST_TEST((gp::WaypointGoalOnWall(surfaces, at, offWall) == at));
+	BOOST_TEST((gp::WaypointGoalOnWall(surfaces, at, at) == at));
+
+	// A checkpoint gives the same wall back.
+	const auto checkpoint = game.Checkpoint();
+	auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(), checkpoint);
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	const gp::WallSurface &again = restored->World().Resource<gp::DeckSurfaces>().wall;
+	BOOST_TEST(again.layer == wall.layer);
+	BOOST_TEST(again.x0 == wall.x0);
+	BOOST_TEST(again.columns == wall.columns);
+	BOOST_TEST((again.clear == wall.clear));
+
+	// A Ranger on the ground (the first player's start) sent to that cell with its goal on the wall (Pathfinder::findPath's
+	// destinationLayer LAYER_WALL, as AIFollowWaypointPathState gives a waypoint on the wall): no way up, so the route
+	// (findClosestPath) stays on the ground and ends at the reached cell nearest the goal; it never stands on the wall.
+	game.Tick();
+	{
+		std::optional<Engine::Math::FixedVector2> start;
+		for (const auto &marker : match->skirmish.level.markers)
+			if (marker.name == "Player_1_Start")
+				start = marker.position.XY();
+		BOOST_TEST_REQUIRE(start.has_value());
+		const ecs::Entity walker = game.Place("AmericaInfantryRanger", *start, {}, *game.Teams().FindTeam(match->skirmish.players[0].team));
+		BOOST_TEST_REQUIRE(world.IsAlive(walker));
+		*world.Get<gp::MoveOrder>(walker) = gp::MoveToPointOn(at, wall.layer);
+		if (auto *route = world.Get<gp::Route>(walker))
+			route->planned = false;
+		bool planned = false;
+		for (int tick = 0; tick < 300; ++tick)
+		{
+			game.Tick();
+			BOOST_TEST(!world.Has<gp::SurfaceLayer>(walker));
+			if (const auto *route = world.Get<gp::Route>(walker); route != nullptr && route->planned && route->count > 0)
+			{
+				planned = true;
+				for (std::size_t point = 0; point < route->count; ++point)
+					BOOST_TEST(route->layers[point] == gp::GroundLayer);
+			}
+		}
+		BOOST_TEST(planned);
+	}
+	// A Ranger on the wall over that cell.
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", at, {}, *game.Teams().FindTeam(match->skirmish.players[0].team));
+	BOOST_TEST_REQUIRE(world.IsAlive(ranger));
+	world.Get<gp::Transform>(ranger)->position.z = Fixed::FromInt(43);
+	world.Add<gp::SurfaceLayer>(ranger);
+	*world.Get<gp::SurfaceLayer>(ranger) = gp::SurfaceLayer{wall.layer};
+	game.Tick();
+	game.Tick();
+	BOOST_TEST((world.Get<gp::Transform>(ranger)->position.z == Fixed::FromInt(43)));
+	BOOST_TEST(!ga::EffectivelyDead(game.Game(), ranger));
+	// The piece under it falls to rubble.
+	std::optional<std::size_t> under;
+	for (std::size_t piece = 0; piece < wall.Pieces() && !under; ++piece)
+		if (gp::PointOnWallPiece(wall, piece, at))
+			under = piece;
+	BOOST_TEST_REQUIRE(under.has_value());
+	const ecs::Entity piece = wall.owner[*under];
+	ga::KillNow(game.Game(), piece);
+	game.Tick();
+	game.Tick();
+	game.Tick();
+	const auto *info = world.IsAlive(piece) ? world.Get<ga::WallPiece>(piece) : nullptr;
+	BOOST_TEST((info == nullptr || info->valid == 0));
+	// The wall there now only where the pieces still standing hold it up.
+	const Fixed lx = Fixed::FromInt(standing->first * 10), ly = Fixed::FromInt(standing->second * 10);
+	const bool held = gp::PointOnWallPieces(wall, {lx, ly}) && gp::PointOnWallPieces(wall, {lx + Fixed::FromInt(10), ly}) &&
+		gp::PointOnWallPieces(wall, {lx, ly + Fixed::FromInt(10)}) && gp::PointOnWallPieces(wall, {lx + Fixed::FromInt(10), ly + Fixed::FromInt(10)});
+	BOOST_TEST((!gp::PointOnWall(surfaces, at) || held));
+	BOOST_TEST((!world.IsAlive(ranger) || ga::EffectivelyDead(game.Game(), ranger)));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

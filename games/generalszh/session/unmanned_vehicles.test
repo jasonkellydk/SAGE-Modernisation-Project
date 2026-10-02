@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -32,6 +33,7 @@ import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.veterancy.components.experience;
 import games.generalszh.gameplay.veterancy.algorithms.veterancy_placement;
 import games.generalszh.gameplay.combat.algorithms.unmanned_vehicles;
+import games.generalszh.gameplay.combat.resources.unmanned_notices;
 import games.generalszh.gameplay.crates.algorithms.car_bombs;
 import games.generalszh.gameplay.crates.resources.crates;
 import games.generalszh.gameplay.abilities.algorithms.command_button_hunts;
@@ -206,6 +208,22 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_kill_leaves_a_vehicle_unmanned)
 	BOOST_TEST((!world.IsAlive(taxi) || world.Get<gp::Dying>(taxi) != nullptr));
 	BOOST_TEST(!Unmanned(game, soldier));
 	BOOST_TEST((world.Get<gp::Health>(soldier)->current == soldierHealth));
+	// Each shot's setDisabled(DISABLED_UNMANNED) is noticed that tick (the presentation's SplatterVehiclePilotsBrain): the
+	// tank's and the taxi's (set unmanned before it is killed), not the soldier's.
+	const auto noticed = [&](ecs::Entity entity) {
+		const auto &list = world.Resource<generalszh::gameplay::UnmannedNotices>().list;
+		return std::count_if(list.begin(), list.end(), [&](const auto &notice) { return notice.entity == entity; });
+	};
+	BOOST_TEST(world.Resource<generalszh::gameplay::UnmannedNotices>().list.size() == 2u);
+	BOOST_TEST(noticed(tank) == 1);
+	BOOST_TEST(noticed(taxi) == 1);
+	// Shot again, unmanned already: set so again, and noticed again.
+	Snipe(game, jarmen, tank);
+	game.Tick();
+	BOOST_TEST(Unmanned(game, tank));
+	BOOST_TEST(noticed(tank) == 1);
+	game.Tick();
+	BOOST_TEST(noticed(tank) == 0); // cleared as the next tick began
 }
 
 // doTeamCaptureNearestUnownedFactionUnit and the unmanned-vehicle case of ActionManager::canEnterObject /
@@ -715,6 +733,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_kill_on_a_combat_bike)
 	Snipe(game, jarmen, standing);
 	game.Tick();
 	BOOST_TEST(world.Resource<gp::CargoManifest>().Aboard(standing).empty());
+	BOOST_TEST(world.Resource<generalszh::gameplay::UnmannedNotices>().list.empty()); // a bike is never unmanned
 	game.Tick(); // the kill (Object::kill) is carried out with the next deaths
 	BOOST_TEST((!world.IsAlive(rider) || world.Get<gp::Dying>(rider) != nullptr));
 	BOOST_TEST(world.Get<gp::Experience>(jarmen)->points > points);

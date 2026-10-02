@@ -22,7 +22,9 @@ export enum class BeamFlags : std::uint32_t
 	Enabled = 1u << 0,
 	AlphaTest = 1u << 1,
 	Additive = 1u << 2,
-	Multiply = 1u << 3
+	Multiply = 1u << 3,
+	// Additive and never hidden by what is drawn (no depth test: W3DWaypointBuffer's PASS_ALWAYS lines).
+	NoDepthTest = 1u << 4
 };
 
 export constexpr BeamFlags operator|(BeamFlags left, BeamFlags right) noexcept
@@ -627,8 +629,13 @@ public:
 		m_pipelines[1] = m_shaders.Create_Pipeline(device, m_shader, additive_description);
 		m_pipelines[2] = m_shaders.Create_Pipeline(device, m_shader, multiply_description);
 		m_pipelines[3] = m_shaders.Create_Pipeline(device, m_shader, alpha_test_description);
+		PipelineDesc overlay_description = additive_description;
+		overlay_description.depth_test = false;
+		overlay_description.depth_write = false;
+		m_pipelines[4] = m_shaders.Create_Pipeline(device, m_shader, overlay_description);
 		m_pipeline = m_pipelines[0];
-		if (!m_pipelines[0].Is_Valid() || !m_pipelines[1].Is_Valid() || !m_pipelines[2].Is_Valid() || !m_pipelines[3].Is_Valid()) {
+		if (!m_pipelines[0].Is_Valid() || !m_pipelines[1].Is_Valid() || !m_pipelines[2].Is_Valid() || !m_pipelines[3].Is_Valid() ||
+			!m_pipelines[4].Is_Valid()) {
 			Shutdown();
 			return false;
 		}
@@ -735,6 +742,8 @@ public:
 
 	PipelineHandle Pipeline_For_Flags(BeamFlags flags) const noexcept
 	{
+		if (Has_Beam_Flag(flags, BeamFlags::NoDepthTest))
+			return m_pipelines[4];
 		if (Has_Beam_Flag(flags, BeamFlags::AlphaTest))
 			return m_pipelines[3];
 		if (Has_Beam_Flag(flags, BeamFlags::Additive))
@@ -926,7 +935,7 @@ private:
 	MaterialPool m_materials;
 	std::unique_ptr<GPUResourceResidency> m_residency;
 	MaterialHandle m_material{};
-	std::array<PipelineHandle, 4> m_pipelines{};
+	std::array<PipelineHandle, 5> m_pipelines{};
 	PipelineHandle m_pipeline{};
 	RHIBufferHandle m_material_constants{};
 	RHIBufferHandle m_vertex_buffer{};

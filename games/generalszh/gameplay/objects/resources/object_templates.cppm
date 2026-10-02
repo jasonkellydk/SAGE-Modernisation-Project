@@ -156,13 +156,14 @@ public:
 				for (auto &slow : death.slow)
 					if (slow.crash.kind == engine::gameplay::CrashKind::Helicopter)
 						slow.crash.bladeOffset = blade->second;
-			// Its spiral is flown by its NORMAL locomotor, working on while it is dead.
+			// Its spiral is flown by its NORMAL locomotor when that works on while it is dead (AIUpdateInterface::doLocomotor:
+			// a dead unit's locomotor does nothing unless LocomotorWorksWhenDead).
 			if (const auto hover = m_content.helicopterLocomotors.find(object.name); hover != m_content.helicopterLocomotors.end())
 				for (auto &slow : death.slow)
 					if (slow.crash.kind == engine::gameplay::CrashKind::Helicopter)
 					{
 						slow.crash.hover = hover->second;
-						slow.crash.hovering = true;
+						slow.crash.hovering = hover->second.worksWhenDead;
 					}
 			m_deathOf.push_back(deaths.Add(std::move(death)));
 		}
@@ -197,6 +198,11 @@ public:
 			m_boneFxOf.push_back(&boneFx->second);
 		else
 			m_boneFxOf.push_back(nullptr);
+		// Its TransitionDamageFX creation lists.
+		if (const auto creations = m_content.transitionCreations.find(object.name); creations != m_content.transitionCreations.end())
+			m_transitionCreationsOf.push_back(&creations->second);
+		else
+			m_transitionCreationsOf.push_back(nullptr);
 		m_definitionIndex.emplace(object.name, index);
 		upgradeTriggers.byDefinition.emplace_back();
 		// Its veterancy (IGNORED_IN_GUI objects score no kills).
@@ -1135,6 +1141,11 @@ public:
 	{
 		return definition < m_boneFxOf.size() ? m_boneFxOf[definition] : nullptr;
 	}
+	// Its TransitionDamageFX modules' creation lists (none: nullptr).
+	const content::TransitionCreations *TransitionCreationsOf(std::uint32_t definition) const noexcept
+	{
+		return definition < m_transitionCreationsOf.size() ? m_transitionCreationsOf[definition] : nullptr;
+	}
 	const std::vector<content::RestBone> *SpawnPointsOf(std::uint32_t definition) const noexcept
 	{
 		return definition < m_spawnPointsOf.size() ? m_spawnPointsOf[definition] : nullptr;
@@ -1269,6 +1280,7 @@ private:
 	std::vector<std::uint32_t> m_parachuteOf;
 	std::vector<const std::vector<content::RestBone> *> m_spawnPointsOf;
 	std::vector<const content::BoneFxContent *> m_boneFxOf;
+	std::vector<const content::TransitionCreations *> m_transitionCreationsOf;
 	std::set<std::string, std::less<>> m_historicResolving; // weapons whose historic bonus weapon is being made
 	std::vector<ProjectileBody> m_bodies;
 	std::vector<std::string> m_modelNames;

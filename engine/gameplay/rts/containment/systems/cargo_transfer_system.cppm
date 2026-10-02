@@ -21,6 +21,7 @@ export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.common.spatial.components.targetable;
 export import engine.gameplay.rts.combat.components.aggression;
 export import engine.gameplay.common.identity.components.owner;
+export import engine.gameplay.rts.blocking.components.blocked_state;
 
 // After the step: puts boarding units aboard (while there is room) and lets
 // unloading passengers out, in the requests' deterministic order, through
@@ -36,7 +37,7 @@ struct CargoTransferSystem
 	using Query = ecs::Query<ecs::Read<Transport>>;
 	using Lookup = ecs::Lookup<ecs::Read<Transport>, ecs::Read<Transform>, ecs::Read<CargoSize>, ecs::Read<Passenger>, ecs::Read<MoveOrder>,
 		ecs::Read<AttackTarget>, ecs::Read<Targetable>, ecs::Read<PhysicsBody>, ecs::Read<Aggression>, ecs::Read<Owner>, ecs::Read<ExitIntent>,
-		ecs::Read<DropHoming>, ecs::Read<Garrison>, ecs::Read<Attitude>>;
+		ecs::Read<DropHoming>, ecs::Read<Garrison>, ecs::Read<Attitude>, ecs::Read<BlockedState>>;
 	using Resources = ecs::Resources<ecs::Read<DropSettings>, ecs::Read<BoardRequests>, ecs::Read<ExitRequests>, ecs::Read<RiderExits>, ecs::Read<DropExits>,
 		ecs::Read<PlacedExits>, ecs::Read<IntentExits>, ecs::Write<CargoManifest>, ecs::Read<GroundHeight>, ecs::Read<RandomSeed>>;
 
@@ -98,7 +99,10 @@ struct CargoTransferSystem
 			// Inside, it may fire only where its carrier allows it (isPassengerAllowedToFire).
 			const bool infantry = kind != nullptr && (kind->classes & target_class::Infantry) != 0;
 			const bool armed = transport->definition.passengersFire && (!transport->definition.infantryOnly || infantry);
-			commands.Add<OffMap>(request.passenger, OffMap{1, armed, {}, request.transport});
+			// OpenContain::addToContain: an enclosing container takes it out of the world (addOrRemoveObjFromWorld); one that
+			// does not (a fire base) leaves it there.
+			commands.Add<OffMap>(request.passenger, OffMap{transport->definition.enclosesRiders != 0 ? off_map_reason::Contained : off_map_reason::Stationed,
+				armed, {}, request.transport});
 			if (lookup.Get<MoveOrder>(request.passenger) != nullptr)
 				commands.Set<MoveOrder>(request.passenger, MoveOrder{});
 			if (lookup.Get<AttackTarget>(request.passenger) != nullptr)
@@ -115,8 +119,8 @@ struct CargoTransferSystem
 			}
 		});
 
-		std::uint32_t door = 0;
 		std::vector<ecs::Entity> doorsOpened; // carriers someone got out of this tick (exitObjectViaDoor)
+		std::vector<std::pair<ecs::Entity, std::uint32_t>> exitPathsTaken; // carriers' next exit path after this tick's
 		// The next passenger out of an unloading transport, then those let out by name (healed).
 		const std::uint64_t seed = context.Read<RandomSeed>().value ^ 0x6A77u;
 		// TransportContain::onRemoving: ExitBone puts it where that bone of the carrier is (turned with the carrier's
@@ -183,7 +187,7 @@ struct CargoTransferSystem
 					placed.position.y += placement->offset.y;
 					placed.position.z += placement->offset.z;
 					if (placement->moves && lookup.Get<MoveOrder>(passenger) != nullptr)
-						commands.Set<MoveOrder>(passenger, MoveToPoint(placement->moveTo));
+						commands.Set<MoveOrder>(passenger, Replanned(MoveToPoint(placement->moveTo)));
 					// DeliverPayloadAIUpdate: a smart bomb is told its spot (SmartBombTargetHomingUpdate::SetTargetPosition).
 					if (const DropHoming *homing = lookup.Get<DropHoming>(passenger))
 					{
@@ -227,21 +231,64 @@ struct CargoTransferSystem
 				const auto start = place(doorX, doorY);
 				commands.Set<Transform>(passenger, Transform{{start.x, start.y, from->position.z}, from->facing});
 				if (lookup.Get<MoveOrder>(passenger) != nullptr)
-					commands.Set<MoveOrder>(passenger, MoveToPoint(place(walkX, walkY)));
+					commands.Set<MoveOrder>(passenger, Replanned(MoveToPoint(place(walkX, walkY))));
 				return;
 			}
-			// Out beside the transport, stepping clear of it.
-			const auto side = Engine::Math::Direction(from->facing + Engine::Math::TurnAngle{0x40000000u * (++door % 4)});
-			const auto out = from->position.XY() + side * Engine::Math::Fixed::FromInt(15);
-			Transform placed{{out.x, out.y, ground.At(out)}, from->facing};
+			// GarrisonContain::exitObjectViaDoor bursting from its centre: from its position (on the ground when it encloses
+			// its riders; else where the rider stood), facing its way, walking to a free spot there (adjustToPossibleDestination).
+			// (The cliff bunkers' fallback to its front or back when that ground is no good for the rider is not ported.)
+			if (lookup.Get<Garrison>(carrier) != nullptr)
+			{
+				const Transform *stood = lookup.Get<Transform>(passenger);
+				Transform out = stood != nullptr ? *stood : *from;
+				if (transport->definition.enclosesRiders != 0)
+					out.position = {from->position.x, from->position.y, ground.At(from->position.XY())};
+				else
+					out.position.z = ground.At(out.position.XY()); // onRemoving: from its station down to the ground there
+				out.facing = from->facing;
+				commands.Set<Transform>(passenger, out);
+				if (lookup.Get<MoveOrder>(passenger) != nullptr)
+					commands.Set<MoveOrder>(passenger, Replanned(MoveToPoint(out.position.XY())));
+				return;
+			}
+			// OpenContain::exitObjectViaDoor: where it rode (onRemoving's ExitBone first); with NumberOfExitPaths, set at the
+			// path's ExitStart facing the carrier's way, walking to its ExitEnd and ignoring collisions a second
+			// (setIgnoreCollisionTime); the next one out takes the next path. Without: left where it is.
+			// (TunnelContain::onRemoving: out of a tunnel network, at the tunnel it leaves by.)
+			const Transform *rode = lookup.Get<Transform>(passenger);
+			Transform placed = rode != nullptr && !network ? *rode : *from;
 			std::optional<PhysicsBody> pushed;
 			if (const PhysicsBody *body = lookup.Get<PhysicsBody>(passenger))
 				pushed = *body;
 			if (removing(*transport, *from, passenger, placed, pushed, carrierVelocity(carrier)))
 				commands.Set<PhysicsBody>(passenger, *pushed);
+			const TransportDefinition &definition = transport->definition;
+			if (definition.exitPaths > 0)
+			{
+				auto taken = std::find_if(exitPathsTaken.begin(), exitPathsTaken.end(), [&](const auto &entry) { return entry.first == carrier; });
+				if (taken == exitPathsTaken.end())
+				{
+					exitPathsTaken.emplace_back(carrier, transport->nextExitPath);
+					taken = exitPathsTaken.end() - 1;
+				}
+				const std::uint32_t path = std::min(taken->second % definition.exitPaths, TransportDefinition::MaxExitPaths - 1);
+				taken->second = (taken->second + 1) % definition.exitPaths;
+				const Engine::Math::Fixed c = Engine::Math::Cos(from->facing), s = Engine::Math::Sin(from->facing);
+				const auto inWorld = [&](const Engine::Math::FixedVector3 &bone) {
+					return from->position + Engine::Math::FixedVector3{bone.x * c - bone.y * s, bone.x * s + bone.y * c, bone.z};
+				};
+				placed.position = inWorld(definition.exitStarts[path]);
+				placed.facing = from->facing;
+				if (lookup.Get<MoveOrder>(passenger) != nullptr)
+					commands.Set<MoveOrder>(passenger, Replanned(MoveToPoint(inWorld(definition.exitEnds[path]).XY())));
+				if (const BlockedState *blocked = lookup.Get<BlockedState>(passenger))
+				{
+					BlockedState ignoring = *blocked;
+					ignoring.ignoreUntil = tick + 30; // LOGICFRAMES_PER_SECOND
+					commands.Set<BlockedState>(passenger, ignoring);
+				}
+			}
 			commands.Set<Transform>(passenger, placed);
-			if (lookup.Get<MoveOrder>(passenger) != nullptr)
-				commands.Set<MoveOrder>(passenger, MoveToPoint(out + side * Engine::Math::Fixed::FromInt(20)));
 		};
 		exits.ForEach([&](const ExitRequest &request) { exit(request.transport, manifest.TakeNext(request.transport)); });
 		riderExits.ForEach([&](const RiderExit &request) { exit(request.transport, manifest.Take(request.transport, request.rider)); });
@@ -292,6 +339,9 @@ struct CargoTransferSystem
 				}
 				if (opened)
 					updated.doorOpenedTick = tick;
+				for (const auto &[carrier, next] : exitPathsTaken)
+					if (carrier == entity)
+						updated.nextExitPath = next;
 				commands.Set<Transport>(entity, updated);
 			}
 		}
@@ -302,6 +352,9 @@ struct CargoTransferSystem
 				{
 					Transport updated = *transport;
 					updated.doorOpenedTick = tick;
+					for (const auto &[taken, next] : exitPathsTaken)
+						if (taken == carrier)
+							updated.nextExitPath = next;
 					commands.Set<Transport>(carrier, updated);
 				}
 	}

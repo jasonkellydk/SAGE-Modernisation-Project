@@ -7,8 +7,9 @@ import Graphics.RHI;
 export import games.generalszh.presentation.rendering.shroud_pixels;
 
 // The level's standing water and rivers on the water renderer: each water
-// polygon is a translucent surface with the time of day's scrolling water
-// texture (Water.ini WaterSet), the sky as its reflected environment, and
+// polygon is a translucent surface with the scrolling StandingWaterTexture,
+// lit as drawTrapezoidWater (PickStandingWaterDiffuse: StandingWaterColor or the
+// terrain's lighting times the WaterSet DiffuseColor), the sky as its reflected environment, and
 // the WaterTransparency depth fade at the shoreline. The interface stays
 // light; the water renderer, asset and content imports live in the
 // implementation.

@@ -9,6 +9,7 @@ export import games.generalszh.content.effects.bone_fx_content;
 export import games.generalszh.presentation.objects.algorithms.chassis_motion;
 export import games.generalszh.presentation.effects.damage_effects;
 export import games.generalszh.presentation.effects.uplink_looks;
+export import games.generalszh.presentation.effects.laser_looks;
 export import games.generalszh.presentation.objects.components.object_presentation;
 import engine.ecs.system.system;
 
@@ -132,6 +133,18 @@ struct DefinitionLooks
 	bool topplesTrees{false};
 	bool policeLights{false};
 	bool mine{false}; // KINDOF_MINE: no heat vision
+	// Its exit (Object::getObjectExitInterface: the first behaviour module with one) as its rally line draws it
+	// (W3DWaypointBuffer::drawWaypoints): Production, a production exit (Default / Queue / SupplyCenter
+	// ProductionExitUpdate: its door, UnitCreatePoint, and NaturalRallyPoint in its frame); Helipad, a parking place (its
+	// helipad both door and natural rally point); None, no natural rally point (a spawn point's or flight deck's exit, or
+	// none). Its geometry's radii frame the corners the line wraps round.
+	enum class RallyExit : std::uint8_t { None, Production, Helipad };
+	RallyExit rallyExit{RallyExit::None};
+	std::array<float, 3> exitCreatePoint{};
+	std::array<float, 3> exitRallyPoint{};
+	float majorRadius{0.0f};
+	float minorRadius{0.0f};
+	bool revealsEnemyPaths{false}; // KINDOF_REVEALS_ENEMY_PATHS (the listening outpost)
 	// PartitionData::attachToObject: IMMOBILE and not drawn by W3DDefaultDraw, it leaves a ghost object: fogged, it still
 	// shows where it is neutral to the viewer or was seen before (not a mine).
 	bool ghost{false};
@@ -157,6 +170,7 @@ struct DefinitionLooks
 	float empSparksPerCubicFoot{0.001f};
 	bool boxFootprint{false}; // its geometry is a box (majorRadius by minorRadius), else a circle of majorRadius
 	bool structure{false};    // KINDOF_STRUCTURE
+	bool scoring{false};      // KINDOF_SCORE, SCORE_CREATE, SCORE_DESTROY or MP_COUNT_FOR_VICTORY (a potential occludee)
 	bool vehicle{false};      // KINDOF_VEHICLE
 	bool drone{false};        // KINDOF_DRONE
 	bool hugeVehicle{false};  // KINDOF_HUGE_VEHICLE
@@ -196,11 +210,52 @@ struct DefinitionLooks
 	std::string stealthOn;  // SoundStealthOn
 	std::string afterburnerSound; // UnitSpecificSounds Afterburner (JetAIUpdate's, while its afterburners burn)
 	std::string lowFuelVoice;     // UnitSpecificSounds VoiceLowFuel (circling a dead airfield)
+	std::string enterSound;       // its contain's EnterSound (OpenContain::doLoadSound: someone got in)
+	std::string exitSound;        // its contain's ExitSound (doUnloadSound: someone got out)
+	// Its SpecialAbilityUpdates' PrepSoundLoops, by their power (SpecialPower template): played while one prepares.
+	std::vector<std::pair<std::uint32_t, std::string>> prepLoops;
+	// Its SpecialAbilityUpdates' SpecialObjectAttachToBones, by their power: where their laser special objects stream from.
+	std::vector<std::pair<std::uint32_t, std::string>> laserBones;
+	// Its SpecialAbilityUpdates' DisableFXParticleSystems, by their power.
+	std::vector<std::pair<std::uint32_t, std::string>> disableFx;
+	std::string rotorWash; // ChinookAIUpdate RotorWashParticleSystem (under it as it lands, stands landed or takes off)
+	std::string gattlingStrafeFx; // SpectreGunshipUpdate GattlingStrafeFXParticleSystem (where its gattling's fire walks)
+	// BunkerBusterBehavior CrashThroughBunkerFX and CrashThroughBunkerFXFrequency (frames; parseDurationUnsignedInt, 4
+	// when not given).
+	std::string crashThroughFx;
+	// BattlePlanUpdate's plan sounds (Bombardment, HoldTheLine, SearchAndDestroy): each plan's unpack and pack sound, and
+	// Search and Destroy's idle loop.
+	std::array<std::string, 3> planUnpackSounds;
+	std::array<std::string, 3> planPackSounds;
+	std::string planIdleLoop;
+	std::string doorOpenIdleAudio; // MissileLauncherBuildingUpdate DoorOpenIdleAudio (while its door stands open)
+	// Radar::isPriorityVisible for its RadarPriority (none or INVALID: CAPTURABLE or a garrison shows; NOT_ON_RADAR never),
+	// its StealthUpdate's EnemyDetectionEvaEvent / OwnDetectionEvaEvent (EVA message indices; NoEva: none) and whether it is a
+	// mine, booby trap or demo trap (StealthDetectorUpdate only tries their neutralized event).
+	static constexpr std::uint32_t NoEva = 0xFFFFFFFFu;
+	bool onRadar{false};
+	std::array<std::uint32_t, 2> detectionEva{NoEva, NoEva};
+	bool trapLike{false};
+	// NeutronMissileUpdate's SpecialJitterDistance and SpecialSpeedTime (ticks): its drawing's launch shake.
+	float neutronJitter{0.0f};
+	// SlavedUpdate's RepairWeldingSys and RepairWeldingFXBone: a repairing drone's sparks.
+	std::string weldingSystem;
+	std::string weldingBone;
+	std::uint64_t neutronSpecialTicks{0};
+	std::string grantStealthSystem; // GrantStealthBehavior RadiusParticleSystemName (where the grantor stands, while it is)
+	std::uint32_t crashThroughTicks{4};
+	// A laser object's beam (W3DLaserDraw, its LaserUpdate's particle systems), when it is one.
+	std::optional<content::LaserLook> laser;
 	std::string rapidFireVoice;   // UnitSpecificSounds VoiceRapidFire (FiringTracker::speedUp to CONTINUOUS_FIRE_FAST)
 	std::string trainRunningSound; // a locomotive's RailroadBehavior RunningSound
+	// A flood wave's WaveGuideUpdate LoopingSound, RandomSplashSound and BridgeParticle.
+	std::string waveLoopingSound;
+	std::string waveSplashSound;
+	std::string waveBridgeParticle;
 	std::string stealthOff; // SoundStealthOff
 	std::array<std::string, 3> promotedSounds; // SoundPromotedVeteran, SoundPromotedElite, SoundPromotedHero
 	std::string turretLoop;   // TurretMoveLoop (UnitSpecificSounds), while its turret turns
+	std::string constructionLoop; // UnderConstruction (UnitSpecificSounds), while a builder works on it
 	std::string burningSound; // FlammableUpdate, while aflame
 	std::string crashSound;   // a crash death's loop, while falling
 	std::vector<content::ModelState::ParticleBone> crashTrail; // a crashing helicopter's smoke
@@ -209,8 +264,6 @@ struct DefinitionLooks
 	std::string suppliesDepletedVoice; // SupplyTruckAIUpdate: a warehouse emptied
 	// Its body rocking (its SET_NORMAL locomotor's calcPhysicsXform values) and its geometry's radii.
 	std::optional<ChassisTuning> chassis;
-	float majorRadius{0.0f};
-	float minorRadius{0.0f};
 	std::string toppleFX; // ToppleUpdate: falling over
 	std::string bounceFX; // and bouncing where it lands
 	// A stealth detector's scans (StealthDetectorUpdate), shown and heard.
@@ -284,6 +337,7 @@ struct LookBits
 	std::uint32_t afterburner{0}; // JETAFTERBURNER
 	std::uint32_t burned{0};
 	std::uint32_t toppled{0};
+	std::uint32_t beingConstructed{0}; // ACTIVELY_BEING_CONSTRUCTED
 };
 
 struct LookCatalog
@@ -301,6 +355,7 @@ struct LookCatalog
 	std::vector<std::string> armorNames; // by Health::armor (plain: empty)
 	std::vector<std::vector<std::pair<std::string, bool>>> partOverrides{{}}; // LookEntry::parts: (name, shown) in order
 	std::string crateSalvageSound; // MiscAudio CrateSalvage
+	std::string repairSparksSound; // MiscAudio RepairSparks (a drone's weld)
 	std::string crateMoneySound;   // MiscAudio CrateMoney
 	std::string crateFreeUnitSound; // MiscAudio CrateFreeUnit
 	std::string crateHealSound;     // MiscAudio CrateHeal
@@ -313,6 +368,7 @@ struct LookCatalog
 	std::string pilotSplatterSound;    // MiscAudio SplatterVehiclePilotsBrain
 	std::string defectorTickSound;     // MiscAudio DefectorTimerTickSound
 	std::string defectorDingSound;     // MiscAudio DefectorTimerDingSound
+	std::string aircraftWheelScreechSound; // MiscAudio AircraftWheelScreech (a jet touching down)
 	// GameData's SelectionFlashHouseColor and SelectionFlashSaturationFactor (flashAsSelected without a colour).
 	bool selectionFlashHouseColor{false};
 	float selectionFlashSaturation{0.5f};
@@ -335,6 +391,8 @@ struct LookCatalog
 	static constexpr std::uint32_t BareModel = 0xFFFFFFFFu;
 	static constexpr std::uint32_t NoLook = 0xFFFFFFFFu;
 	std::uint32_t moveHintLook{NoLook};
+	// W3DWaypointBuffer's waypoint node (the SCMNode model, still).
+	std::uint32_t waypointNodeLook{NoLook};
 
 	// A model shown instead of a definition's, playing an animation (0 none) in a mode.
 	static constexpr std::uint64_t ModelKey(std::uint32_t model, std::uint32_t animation = 0, std::uint8_t mode = 0) noexcept

@@ -39,26 +39,42 @@ struct AirfieldHealSystem
 				const std::uint32_t spaces = std::min<std::uint32_t>(fields[row].spaceCount, 32);
 				std::array<ecs::Entity, 32> healee{};
 				std::uint32_t healing = 0;
+				// Helicopters down by it (no space; setHealee while on the ground, idle or reloading).
+				std::vector<ecs::Entity> helicopters;
+				std::uint64_t signature = 0;
 				roster.ForEach([&](const DeckJet &jet) {
-					if (jet.carrier != entities[row] || jet.space >= spaces)
+					if (jet.carrier != entities[row])
 						return;
 					const auto state = static_cast<gp::JetState>(jet.state);
+					if (state == gp::JetState::HeliParked || state == gp::JetState::HeliReloading)
+					{
+						helicopters.push_back(jet.jet);
+						signature += (static_cast<std::uint64_t>(jet.jet.index) << 32 | jet.jet.generation) * 0x9E3779B97F4A7C15ull;
+						return;
+					}
+					if (jet.space >= spaces)
+						return;
 					if (state == gp::JetState::Parked || state == gp::JetState::Reloading)
 					{
 						healing |= 1u << jet.space;
 						healee[jet.space] = jet.jet;
 					}
 				});
-				if (healing != field.healing)
-					field.nextHeal = healing == 0 ? AirfieldHealing::Forever : now + 6;
+				const auto heliCount = static_cast<std::uint32_t>(helicopters.size());
+				if (healing != field.healing || heliCount != field.helicopters || signature != field.heliSignature)
+					field.nextHeal = healing == 0 && heliCount == 0 ? AirfieldHealing::Forever : now + 6;
 				field.healing = healing;
-				if (healing == 0 || now < field.nextHeal)
+				field.helicopters = heliCount;
+				field.heliSignature = signature;
+				if ((healing == 0 && heliCount == 0) || now < field.nextHeal)
 					continue;
 				field.nextHeal = now + 6;
 				const Engine::Math::Fixed amount = field.perSecond * Engine::Math::Fixed::FromInt(6) / Engine::Math::Fixed::FromInt(30);
 				for (std::uint32_t space = 0; space < spaces; ++space)
 					if ((healing & (1u << space)) != 0)
 						heals.push_back({healee[space], amount});
+				for (const ecs::Entity helicopter : helicopters)
+					heals.push_back({helicopter, amount});
 			}
 		});
 	}

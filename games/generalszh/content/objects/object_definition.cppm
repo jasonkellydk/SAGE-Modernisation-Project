@@ -87,6 +87,10 @@ struct ObjectDefinition
 	Engine::Math::Fixed instanceScaleFuzziness;
 	// FenceWidth: a fence's span (GameLogic::startNewGame: a CLEARED_BY_BUILD map object without one is fluff).
 	Engine::Math::Fixed fenceWidth;
+	// FactoryExitWidth / FactoryExtraBibWidth: the room kept clear in front of it (its exit) and all round it (its bib) when
+	// structures are placed (BuildAssistant::isLocationClearOfObjects).
+	Engine::Math::Fixed factoryExitWidth;
+	Engine::Math::Fixed factoryExtraBibWidth;
 	Engine::Math::Fixed visionRange;
 	// ShroudClearingRange as authored (ThingTemplate's -1: not given; see ClearingRange).
 	Engine::Math::Fixed shroudClearingRange{Engine::Math::Fixed::FromInt(-1)};
@@ -120,6 +124,9 @@ struct ObjectDefinition
 	// group's objects ("Object = A B" is one group); and sciences, all of them.
 	std::vector<std::vector<std::string>> prerequisiteObjects;
 	std::vector<std::string> prerequisiteSciences;
+	// Its Prerequisites lines in order (ThingTemplate::m_prereqInfo: one ProductionPrerequisite each): 'O' an Object
+	// line (the next of prerequisiteObjects), 'S' a Science line (the next of prerequisiteSciences).
+	std::string prerequisiteOrder;
 	Engine::Math::Fixed buildTimeSeconds;
 	std::int32_t transportSlots{0};
 	// What it can crush and what crushes it (0: crushes nothing; 255: nothing crushes it).
@@ -142,6 +149,10 @@ struct ObjectDefinition
 	Engine::Math::Fixed structureRubbleHeight;
 	std::vector<const engine::config::Node *> armorSets;
 	std::vector<const engine::config::Node *> weaponSets;
+	// The sets are still the ones copied from DefaultThingTemplate or the reskin source (m_armorCopiedFromDefault,
+	// m_weaponsCopiedFromDefault): the object's first own set replaces them all.
+	bool armorCopied{false};
+	bool weaponsCopied{false};
 	std::vector<const engine::config::Node *> locomotorSets;
 	// Creating this object creates one of these instead, chosen at random.
 	std::vector<std::string> buildVariations;
@@ -149,6 +160,9 @@ struct ObjectDefinition
 	// Sound events by role: "VoiceSelect", "SoundMoveLoop", "SoundAmbient", �
 	// and the UnitSpecificSounds entries (e.g. "TruckLandingSound").
 	std::map<std::string, std::string, std::less<>> sounds;
+	// UnitSpecificSounds alone (ThingTemplate::getPerUnitSound: m_perUnitSounds, apart from the audio array's VoiceEnter /
+	// VoiceGarrison of the same names; a name it lacks plays nothing).
+	std::map<std::string, std::string, std::less<>> unitSounds;
 	// UnitSpecificFX: FX lists by role (e.g. "CombatDropKillFX"), ThingTemplate::getPerUnitFX.
 	std::map<std::string, std::string, std::less<>> unitFx;
 
@@ -156,6 +170,12 @@ struct ObjectDefinition
 	{
 		const auto found = unitFx.find(role);
 		return found != unitFx.end() ? std::string_view(found->second) : std::string_view{};
+	}
+
+	std::string_view UnitSound(std::string_view role) const noexcept
+	{
+		const auto found = unitSounds.find(role);
+		return found != unitSounds.end() ? std::string_view(found->second) : std::string_view{};
 	}
 
 	std::string_view Sound(std::string_view role) const noexcept
@@ -182,4 +202,29 @@ struct ObjectDefinition
 		return nullptr;
 	}
 };
+
+// Object::isFactionStructure / isNonFactionStructure: KINDOFMASK_FS (KindOf.cpp's fsList), the 14 FS_ kinds but FS_POWER.
+inline constexpr std::array<std::string_view, 14> FactionStructureKinds{"FS_FACTORY", "FS_BASE_DEFENSE", "FS_TECHNOLOGY",
+	"FS_SUPPLY_DROPZONE", "FS_SUPERWEAPON", "FS_BLACK_MARKET", "FS_SUPPLY_CENTER", "FS_STRATEGY_CENTER", "FS_FAKE", "FS_INTERNET_CENTER",
+	"FS_ADVANCED_TECH", "FS_BARRACKS", "FS_WARFACTORY", "FS_AIRFIELD"};
+inline bool IsFactionStructure(const ObjectDefinition &object) noexcept
+{
+	return std::any_of(FactionStructureKinds.begin(), FactionStructureKinds.end(), [&](std::string_view kind) { return object.Is(kind); });
+}
+inline bool IsNonFactionStructure(const ObjectDefinition &object) noexcept
+{
+	return object.Is("STRUCTURE") &&
+		std::none_of(FactionStructureKinds.begin(), FactionStructureKinds.end(), [&](std::string_view kind) { return object.Is(kind); });
+}
+
+// ThingTemplate::calcTimeToBuild's / UpgradeTemplate::calcTimeToBuild's first step: Int(BuildTime *
+// LOGICFRAMES_PER_SECOND), the float product truncated (at least 1 here: none takes the one tick a production update
+// needs anyway). The seconds are read in fixed point, a little off the original's float (at most 2^-16 a second): 1/1024 of
+// a frame covers that and the float product's own rounding, so whole numbers of frames come out whole as the original's
+// do (0.1 s is 3 frames, not 4), and anything else truncates.
+inline std::uint64_t BuildFrames(Engine::Math::Fixed seconds, std::uint64_t ticksPerSecond) noexcept
+{
+	const Engine::Math::Fixed frames = seconds * Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(ticksPerSecond)) + Engine::Math::Fixed::FromRatio(1, 1024);
+	return static_cast<std::uint64_t>(std::max<std::int64_t>(frames.Floor(), 1));
+}
 }

@@ -28,6 +28,7 @@ export import engine.gameplay.common.health.components.health;
 export import engine.gameplay.common.status.components.ai_activity;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.rts.movement.components.move_away;
+export import engine.gameplay.rts.movement.components.formation_member;
 export import engine.gameplay.rts.blocking.resources.move_away_requests;
 
 // The units a moving ground unit runs into, as its AI weighs them (AIUpdateInterface::processCollision for a unit that is
@@ -60,7 +61,7 @@ struct UnitBlockingSystem
 	using Lookup = ecs::Lookup<ecs::Read<Transform>, ecs::Read<Locomotion>, ecs::Read<MoveOrder>, ecs::Read<BlockingUnit>, ecs::Read<BlockedState>,
 		ecs::Read<ObjectId>, ecs::Read<BoundingVolume>, ecs::Read<Collider>, ecs::Read<Route>, ecs::Read<PathfindGoal>, ecs::Read<Disabled>,
 		ecs::Read<Health>, ecs::Read<Owner>, ecs::Read<Squishable>, ecs::Read<BodyCollision>, ecs::Read<IgnoredObstacle>, ecs::Read<AiActivity>,
-		ecs::Read<MoveAway>, ecs::Read<AttackTarget>>;
+		ecs::Read<MoveAway>, ecs::Read<AttackTarget>, ecs::Read<FormationMember>>;
 	using Resources = ecs::Resources<ecs::Read<ColliderIndex>, ecs::Read<Relationships>, ecs::Write<MoveAwayRequests>, ecs::Write<UnitSettles>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context) const
@@ -137,17 +138,21 @@ struct UnitBlockingSystem
 		body.backwards = motion.backwards != 0;
 		body.goalCell = goal != nullptr && goal->x > 0 && goal->y > 0;
 		const bool planned = route != nullptr && route->planned;
-		body.waiting = (order.mode == MoveMode::Point && !planned) || state.replanAt != 0;
+		// Routed (a point, or a waypoint path's leg once it has a route): waiting for its route.
+		const bool routed = order.mode == MoveMode::Point || (RoutedMode(order.mode) && route != nullptr);
+		body.waiting = (routed && !planned) || state.replanAt != 0;
 		body.wanderer = motion.locomotor.wanderWidth > Fixed{};
 		body.panicking = order.mode == MoveMode::Panic;
+		if (const FormationMember *formation = lookup.template Get<FormationMember>(entity))
+			body.formation = formation->id;
 		seen.steering = order.destination;
-		if (order.mode == MoveMode::Point && planned && route->next < route->count && !(route->complete && route->next + 1u >= route->count && route->destination != order.destination))
+		if (routed && planned && route->next < route->count && !(route->complete && route->next + 1u >= route->count && route->destination != order.destination))
 			seen.steering = route->points[route->next];
 		seen.volume = lookup.template Get<BoundingVolume>(entity);
 		seen.collider = lookup.template Get<Collider>(entity);
 		seen.height = transform.position.z;
 		seen.ignored = collision != nullptr ? collision->ignored : ecs::Entity{};
-		seen.obstacle = obstacle != nullptr ? obstacle->obstacle : ecs::Entity{};
+		seen.obstacle = state.ignoring != ecs::Entity{} ? state.ignoring : obstacle != nullptr ? obstacle->obstacle : ecs::Entity{};
 		seen.player = owner != nullptr ? owner->player : 0u;
 		seen.unmanned = (disabledMask & disabled_type::Unmanned) != 0;
 		seen.squishable = lookup.template Get<Squishable>(entity) != nullptr;
@@ -156,6 +161,51 @@ struct UnitBlockingSystem
 		seen.idle = away == nullptr && order.mode == MoveMode::Idle && !seen.busy && (attack == nullptr || !attack->target.IsValid());
 		return seen;
 	}
+
+	// The partition's overlap of `self` and `entity`: footprints within reach, heights overlapping.
+	template<typename Lookups>
+	static bool Touching(const Lookups &lookup, const Seen &self, ecs::Entity entity)
+	{
+		return Touching(lookup, self.body.position, self.height, *self.volume, entity);
+	}
+	// The same from the unit's place, height and volume alone (before its whole view is worked out).
+	template<typename Lookups>
+	static bool Touching(const Lookups &lookup, FixedVector2 position, Fixed selfHeight, const BoundingVolume &selfVolume, ecs::Entity entity)
+	{
+		const Transform *at = lookup.template Get<Transform>(entity);
+		const BoundingVolume *volume = lookup.template Get<BoundingVolume>(entity);
+		if (at == nullptr || volume == nullptr)
+			return false;
+		const Fixed reach = selfVolume.circleRadius + volume->circleRadius;
+		if (Engine::Math::DistanceSquared(position, at->position.XY()) > reach * reach)
+			return false;
+		const Fixed height = at->position.z;
+		return !(selfHeight - selfVolume.below > height + volume->above || height - volume->below > selfHeight + selfVolume.above);
+	}
+
+	// A unit's own view, worked out once, when first needed (See only reads: when it is worked out never shows). Null: the
+	// unit is no grounded, living ground unit with a volume, and weighs nothing.
+	template<typename Lookups>
+	struct LazySelf
+	{
+		const Lookups &lookup;
+		ecs::Entity entity;
+		std::optional<Seen> seen{};
+		bool resolved{false};
+
+		const Seen *Get()
+		{
+			if (!resolved)
+			{
+				resolved = true;
+				seen = See(lookup, entity);
+				if (seen && (!seen->body.ground || seen->body.dead || seen->volume == nullptr))
+					seen.reset();
+			}
+			return seen ? &*seen : nullptr;
+		}
+		bool Rejected() const noexcept { return resolved && !seen; }
+	};
 
 	static bool Crushes(const Seen &crusher, const Seen &crushed, const Relationships &relationships, bool squish)
 	{
@@ -192,32 +242,39 @@ struct UnitBlockingSystem
 				moving[count] = static_cast<std::uint16_t>(row);
 				const MoveOrder &order = orderOf(row);
 				count += static_cast<std::size_t>(order.mode != MoveMode::Idle) & static_cast<std::size_t>(order.held == 0) &
-					static_cast<std::size_t>(states[row].ignoreUntil <= tick) & static_cast<std::size_t>(states[row].throughUnits == 0);
+					static_cast<std::size_t>(states[row].ignoreUntil <= tick) & static_cast<std::size_t>((states[row].throughUnits | states[row].docking) == 0);
 			}
 			for (std::size_t at = 0; at < count; ++at)
 			{
 				const std::size_t row = moving[at];
-				const std::optional<Seen> seenSelf = See(lookup, entities[row]);
-				if (!seenSelf || !seenSelf->body.ground || seenSelf->body.dead || seenSelf->volume == nullptr)
+				// Its place and volume first (a unit without either weighs nothing: See has no volume or nothing for it); its whole
+				// view only once something touches it.
+				const Transform *selfAt = lookup.template Get<Transform>(entities[row]);
+				const BoundingVolume *selfVolume = lookup.template Get<BoundingVolume>(entities[row]);
+				if (selfAt == nullptr || selfVolume == nullptr)
 					continue;
-				const Seen &self = *seenSelf;
+				const FixedVector2 selfPosition = selfAt->position.XY();
+				const Fixed selfHeight = selfAt->position.z;
+				LazySelf<decltype(lookup)> lazySelf{lookup, entities[row]};
 				BlockContact &contact = contacts[row];
-				index.ForEachWithin(self.body.position, self.volume->circleRadius + Fixed::FromInt(64), [&](const SpatialEntry &entry) {
+				index.ForEachWithin(selfPosition, selfVolume->circleRadius + Fixed::FromInt(64), [&](const SpatialEntry &entry) {
 					const ecs::Entity entity = entry.entity;
-					if (entity == entities[row])
+					if (lazySelf.Rejected() || entity == entities[row])
 						return;
+					// The partition's overlap first (footprints and heights, from two lookups), the unit's whole view only for
+					// what touches it.
+					if (!Touching(lookup, selfPosition, selfHeight, *selfVolume, entity))
+						return;
+					const Seen *selfSeen = lazySelf.Get();
+					if (selfSeen == nullptr)
+						return;
+					const Seen &self = *selfSeen;
 					const std::optional<Seen> seenOther = See(lookup, entity);
 					if (!seenOther || seenOther->volume == nullptr)
 						return;
 					const Seen &other = *seenOther;
 					// What either passes through.
 					if (self.ignored == entity || other.ignored == entities[row] || self.obstacle == entity || other.obstacle == entities[row])
-						return;
-					// The partition's overlap: footprints and heights.
-					const Fixed reach = self.volume->circleRadius + other.volume->circleRadius;
-					if (Engine::Math::DistanceSquared(self.body.position, other.body.position) > reach * reach)
-						return;
-					if (self.height - self.volume->below > other.height + other.volume->above || other.height - other.volume->below > self.height + self.volume->above)
 						return;
 					// The crush's own business while it moves (checkForOverlapCollision: TEST_CRUSH_ONLY either way).
 					if (self.body.speed != Fixed{} && (Crushes(other, self, relationships, false) || Crushes(self, other, relationships, false)))
@@ -234,19 +291,30 @@ struct UnitBlockingSystem
 				const MoveOrder &order = orderOf(row);
 				moving[count] = static_cast<std::uint16_t>(row);
 				count += static_cast<std::size_t>(order.mode == MoveMode::Idle || order.held != 0) & static_cast<std::size_t>(states[row].ignoreUntil <= tick) &
-					static_cast<std::size_t>(states[row].throughUnits == 0);
+					static_cast<std::size_t>((states[row].throughUnits | states[row].docking) == 0);
 			}
 			for (std::size_t at = 0; at < count; ++at)
 			{
 				const std::size_t row = moving[at];
-				const std::optional<Seen> seenSelf = See(lookup, entities[row]);
-				if (!seenSelf || !seenSelf->body.ground || seenSelf->body.dead || seenSelf->volume == nullptr)
+				// Its place first (none: See has nothing for it); its whole view only once something stands within half a cell.
+				const Transform *selfAt = lookup.template Get<Transform>(entities[row]);
+				if (selfAt == nullptr)
 					continue;
-				const Seen &self = *seenSelf;
-				index.ForEachWithin(self.body.position, self.volume->circleRadius + Fixed::FromInt(64), [&](const SpatialEntry &entry) {
+				const FixedVector2 selfPosition = selfAt->position.XY();
+				LazySelf<decltype(lookup)> lazySelf{lookup, entities[row]};
+				// Only what stands within half a cell can count (and the index was built before the tick: a margin for what
+				// moved since).
+				index.ForEachWithin(selfPosition, Fixed::FromInt(5 + 16), [&](const SpatialEntry &entry) {
 					const ecs::Entity entity = entry.entity;
-					if (entity == entities[row])
+					if (lazySelf.Rejected() || entity == entities[row])
 						return;
+					const Transform *at = lookup.template Get<Transform>(entity);
+					if (at == nullptr || Engine::Math::DistanceSquared(selfPosition, at->position.XY()) >= Fixed::FromInt(25))
+						return;
+					const Seen *selfSeen = lazySelf.Get();
+					if (selfSeen == nullptr)
+						return;
+					const Seen &self = *selfSeen;
 					const std::optional<Seen> seenOther = See(lookup, entity);
 					if (!seenOther || seenOther->volume == nullptr || !seenOther->body.ground || seenOther->body.moving)
 						return;
@@ -315,6 +383,10 @@ template<>
 struct SystemTraits<engine::gameplay::UnitBlockingSystem>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.unit_blocking";
+	// Its rows are independent: chunks are shared out in pieces of 8 rows (each piece its own output slot, in row order: the
+	// requests and settles come out in the same order however the rows are cut). Its cost sits in a few moving rows, so
+	// small pieces let the scheduler spread them.
+	static constexpr std::size_t PieceRows = 32;
 	// The partition's collisions at the end of the frame, once everything moved (the collider index, built before the tick,
 	// only finds the candidates: their positions are read as they are now).
 	static constexpr SystemPhase Phase = SystemPhase::PostSimulation;

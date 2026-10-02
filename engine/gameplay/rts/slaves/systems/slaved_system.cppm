@@ -240,7 +240,7 @@ struct SlavedSystem
 					const FixedVector2 spot = home + RandomReach(random, d.repairRange);
 					const Fixed height = ground.At(spot) + Engine::Math::UniformFixed(random, d.repairMinAltitude, d.repairMaxAltitude);
 					out.locomotors.push_back({self, height, SlaveLocomotorSet::Panic, 1, 1});
-					commands.Set<MoveOrder>(self, MoveToPoint(spot));
+					commands.Set<MoveOrder>(self, Replanned(MoveToPoint(spot)));
 				};
 				const auto setRepairState = [&](SlaveRepairState to) {
 					if (to == slave.repairState)
@@ -316,7 +316,7 @@ struct SlavedSystem
 						const Fixed sphere = extent != nullptr ? extent->sphereRadius * Fixed::FromInt(2) : Fixed{};
 						const Fixed height = master->position.z + Engine::Math::UniformFixed(random, d.repairMinAltitude, d.repairMaxAltitude);
 						out.locomotors.push_back({self, height, SlaveLocomotorSet::Keep, apart < sphere ? std::uint8_t{1} : std::uint8_t{0}, SlaveLocomotorOrder::Keep});
-						commands.Set<MoveOrder>(self, MoveToPoint(home));
+						commands.Set<MoveOrder>(self, Replanned(MoveToPoint(home)));
 						// Its arm retracts on the way, so it shows what it means to do.
 						if (slave.waitTicks == 0)
 							setRepairState(SlaveRepairState::Ready);
@@ -339,7 +339,7 @@ struct SlavedSystem
 						{
 							endRepair();
 							const Fixed away = BoundaryDistance(me, slave.radius, victim->position.XY());
-							commands.Set<MoveOrder>(self, MoveToPoint(Approach(slave, me, home, victim->position.XY(), d.attackRange, d.attackWanderRange, random)));
+							commands.Set<MoveOrder>(self, Replanned(MoveToPoint(Approach(slave, me, home, victim->position.XY(), d.attackRange, d.attackWanderRange, random))));
 							if (away < d.spottingRange)
 								spotting(slave.master, slave.definition.spottingBonus, true);
 							continue;
@@ -352,7 +352,7 @@ struct SlavedSystem
 						if (BoundaryDistance(home, slave.masterRadius, going->destination) > half)
 						{
 							endRepair();
-							commands.Set<MoveOrder>(self, MoveToPoint(Approach(slave, me, home, going->destination, d.scoutRange, d.scoutWanderRange, random)));
+							commands.Set<MoveOrder>(self, Replanned(MoveToPoint(Approach(slave, me, home, going->destination, d.scoutRange, d.scoutWanderRange, random))));
 							continue;
 						}
 					}
@@ -380,7 +380,7 @@ struct SlavedSystem
 						slave.guardOffset = RandomReach(random, d.guardMaxRange);
 						pinned = pinned + slave.guardOffset;
 					}
-					commands.Set<MoveOrder>(self, MoveToPoint(pinned));
+					commands.Set<MoveOrder>(self, Replanned(MoveToPoint(pinned)));
 				}
 			}
 		});

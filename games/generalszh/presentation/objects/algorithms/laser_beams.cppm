@@ -65,6 +65,14 @@ inline void AppendLaserBeams(LaserFrame &out, const content::LaserLook &l, const
 	}
 }
 
+// Weapon::createLaser: the beam ends where the victim was shot at, raised 10 over a ground target (not a projectile,
+// not airborne) so it does not hit its feet; fixed there (initLaser is given that end, so LaserUpdate never follows
+// the target).
+inline std::array<float, 3> WeaponLaserEnd(const std::array<float, 3> &aim, bool groundTarget) noexcept
+{
+	return {aim[0], aim[1], groundTarget ? aim[2] + 10.0f : aim[2]};
+}
+
 // LaserRadiusUpdate::updateRadius as a drawn frame sees it (the logic frame `now`): decaying, 1 less the part of the
 // decay gone (not below 0); widening, the part of the widening done (not above 1); else whole.
 inline float LaserWidthScale(bool widening, std::uint64_t widenStart, std::uint64_t widenFinish, bool decaying, std::uint64_t decayStart,

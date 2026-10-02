@@ -43,6 +43,11 @@ struct InGameMessages
 	std::u16string beaconPlacedText{u"%ls has placed a beacon."};
 	std::u16string tooManyBeaconsText{u"Too many beacons"};
 	std::u16string beaconFailedText{u"Beacon placement failed"};
+	// A builder's structure finished (DOZER:ConstructionComplete, with its name; INI:MissingDisplayName with the template
+	// name for one without) or repaired (DOZER:RepairComplete).
+	std::u16string constructionCompleteText{u"Construction complete: %ls"};
+	std::u16string missingDisplayNameText{u"MISSING: '%hs'"};
+	std::u16string repairCompleteText{u"Repair complete"};
 };
 }
 

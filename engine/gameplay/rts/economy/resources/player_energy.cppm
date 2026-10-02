@@ -171,6 +171,15 @@ struct EnergySettings
 			speed = (std::min)(speed, maxSpeed);
 		return speed > Fixed{} ? speed : Fixed::FromRatio(1, 100);
 	}
+
+	// ThingTemplate::calcTimeToBuild's power step: `frames` (its full-power Int) divided by the production speed,
+	// truncated (buildTime /= penaltyRate on an Int); at least 1.
+	static std::uint64_t FramesAtSpeed(std::uint64_t frames, Engine::Math::Fixed speed) noexcept
+	{
+		using Engine::Math::Fixed;
+		const std::int64_t stretched = (Fixed::FromInt(static_cast<std::int64_t>(frames)) / speed).Floor();
+		return static_cast<std::uint64_t>((std::max)(stretched, std::int64_t{1}));
+	}
 };
 }
 

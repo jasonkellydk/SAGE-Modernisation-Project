@@ -82,17 +82,29 @@ inline bool IsParked(const Locomotion &motion, bool idle) noexcept
 	return idle && motion.locomotor.appearance == LocomotorAppearance::Wings && motion.speed <= Fixed{};
 }
 
-// No goal: slow to a stop (flying wings keep flying and circle).
-inline void Coast(Transform &transform, Locomotion &motion) noexcept
+inline void CircleHeldPlace(Transform &transform, Locomotion &motion) noexcept;
+namespace ground_detail
+{
+inline std::int32_t TurnAbout(Transform &transform, Locomotion &motion, FixedVector2 goal, std::int64_t rate) noexcept;
+}
+
+// No goal: slow to a stop; wings above the ground hold the place they had when their goal went by circling it
+// (Locomotor::locoUpdate_maintainCurrentPosition, maintainCurrentPositionWings). `aloft`: above the ground under it
+// (Thing::isAboveTerrain).
+inline void Coast(Transform &transform, Locomotion &motion, bool aloft = true) noexcept
 {
 	const auto &locomotor = motion.locomotor;
-	if (locomotor.appearance == LocomotorAppearance::Wings)
+	if (motion.maintaining == 0)
 	{
-		motion.speed = Approach(motion.speed, std::max(locomotor.minSpeed, motion.speed), locomotor.acceleration, locomotor.braking);
-		transform.facing += TurnAngle{locomotor.turnRate.units / 2};
+		motion.maintainPos = transform.position.XY();
+		motion.maintaining = 1;
 	}
-	else
-		motion.speed = Approach(motion.speed, Fixed{}, locomotor.acceleration, locomotor.braking);
+	if (locomotor.appearance == LocomotorAppearance::Wings && aloft)
+	{
+		CircleHeldPlace(transform, motion);
+		return;
+	}
+	motion.speed = Approach(motion.speed, Fixed{}, locomotor.acceleration, locomotor.braking);
 	transform.position += Engine::Math::FixedVector3{Engine::Math::Cos(transform.facing) * motion.speed,
 		Engine::Math::Sin(transform.facing) * motion.speed, Fixed{}};
 }
@@ -121,10 +133,22 @@ inline bool Face(Transform &transform, Locomotion &motion, FixedVector2 goal) no
 		Steer(transform, motion, goal, false);
 		return false;
 	}
+	motion.maintaining = 0;
 	const auto limit = MaxTurnRate(motion);
-	const std::int64_t turn = std::clamp<std::int64_t>(wanted, -limit, limit);
-	motion.turning = static_cast<std::int8_t>(wanted > limit ? 1 : wanted < -limit ? -1 : 0);
-	transform.facing += TurnAngle{static_cast<std::uint32_t>(turn)};
+	if (locomotor.turnPivotOffset != Fixed{} && motion.braking == 0)
+	{
+		// About its pivot, toward a point 1000 off along the goal's bearing (locoUpdate_moveTowardsAngle's desiredPos).
+		const TurnAngle bearing = Engine::Math::Heading(toGoal);
+		const FixedVector2 ahead{transform.position.x + Engine::Math::Cos(bearing) * Fixed::FromInt(1000),
+			transform.position.y + Engine::Math::Sin(bearing) * Fixed::FromInt(1000)};
+		ground_detail::TurnAbout(transform, motion, ahead, limit);
+	}
+	else
+	{
+		const std::int64_t turn = std::clamp<std::int64_t>(wanted, -limit, limit);
+		motion.turning = static_cast<std::int8_t>(wanted > limit ? 1 : wanted < -limit ? -1 : 0);
+		transform.facing += TurnAngle{static_cast<std::uint32_t>(turn)};
+	}
 	motion.speed = Approach(motion.speed, Fixed{}, locomotor.acceleration, locomotor.braking);
 	return false;
 }
@@ -133,6 +157,7 @@ inline bool Face(Transform &transform, Locomotion &motion, FixedVector2 goal) no
 inline bool Steer(Transform &transform, Locomotion &motion, FixedVector2 goal, bool final) noexcept
 {
 	const auto &locomotor = motion.locomotor;
+	motion.maintaining = 0; // heading somewhere: the place it held is let go (MAINTAIN_POS_IS_VALID)
 	const FixedVector2 toGoal = goal - transform.position.XY();
 	const Fixed distance = Engine::Math::Length(toGoal);
 	if (distance <= ArrivalDistance(motion, final))
@@ -230,6 +255,32 @@ inline std::int32_t TurnToward(Transform &transform, Locomotion &motion, TurnAng
 	return wanted;
 }
 
+// Locomotor::rotateObjAroundLocoPivot: toward `goal` by at most `rate`. With a TurnPivotOffset, and not braking (braking
+// it moves exactly at its goal instead), it turns about the point that far along its facing, times its bounding circle
+// radius (-0.5: halfway to its rear), aiming from there, which moves it: its centre swings round that point. Within 0.1 of
+// the goal on both axes from that point it does not turn at all (against twitching; the original then leaves relAngle
+// unset, here 0). Returns the wanted turn (before turning).
+inline std::int32_t TurnAbout(Transform &transform, Locomotion &motion, FixedVector2 goal, std::int64_t rate) noexcept
+{
+	const Fixed offset = motion.braking != 0 ? Fixed{} : motion.locomotor.turnPivotOffset;
+	if (offset == Fixed{})
+		return TurnToward(transform, motion, Engine::Math::Heading(goal - transform.position.XY()), rate);
+	const Fixed reach = offset * motion.boundingRadius;
+	const FixedVector2 pivot{transform.position.x + Engine::Math::Cos(transform.facing) * reach,
+		transform.position.y + Engine::Math::Sin(transform.facing) * reach};
+	const FixedVector2 toGoal = goal - pivot;
+	const Fixed twitch = Fixed::FromRatio(1, 10);
+	if (Abs(toGoal.x) < twitch && Abs(toGoal.y) < twitch)
+	{
+		motion.turning = 0;
+		return 0;
+	}
+	const std::int32_t wanted = TurnToward(transform, motion, Engine::Math::Heading(toGoal), rate);
+	transform.position.x = pivot.x - Engine::Math::Cos(transform.facing) * reach;
+	transform.position.y = pivot.y - Engine::Math::Sin(transform.facing) * reach;
+	return wanted;
+}
+
 // calcSlowDownDist: ((speed - desired)^2 / braking) / 2, with 5% to spare; none when not faster.
 inline Fixed SlowDownDistance(Fixed speed, Fixed desired, Fixed braking) noexcept
 {
@@ -293,6 +344,7 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 {
 	using namespace ground_detail;
 	const auto &locomotor = motion.locomotor;
+	motion.maintaining = 0; // heading somewhere: the place it held is let go (MAINTAIN_POS_IS_VALID)
 	const FixedVector2 toGoal = goal - transform.position.XY();
 	const Fixed distance = Engine::Math::Length(toGoal);
 	if (distance <= ArrivalDistance(motion, final))
@@ -318,7 +370,7 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 		motion.speed = std::clamp(motion.speed, Fixed{} - desired, desired);
 		if (locomotor.wanderWidth == Fixed{})
 		{
-			TurnToward(transform, motion, heading, rate);
+			TurnAbout(transform, motion, goal, rate);
 			*blocked = motion.turning != 0;
 		}
 		if (motion.braking == 0)
@@ -328,13 +380,14 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 		}
 		return false;
 	}
+	std::optional<FixedVector2> slide; // pushed straight at the goal instead of along its facing
 	switch (locomotor.appearance)
 	{
 	case LocomotorAppearance::Treads:
 	{
 		// moveTowardsPositionTreads: turn toward it; the more it has to turn the slower (at pi/4 off, none); within two
 		// cells and not lined up, slowing to 0.6 of its speed; braking once it needs longer to stop than it has left.
-		const Fixed coefficient = AngleCoefficient(TurnToward(transform, motion, heading, rate));
+		const Fixed coefficient = AngleCoefficient(TurnAbout(transform, motion, goal, rate));
 		Fixed goalSpeed = (Fixed::One() - coefficient) * desired;
 		const Fixed actual = motion.speed;
 		const Fixed slowDownTime = locomotor.braking > Fixed{} ? actual / locomotor.braking : Fixed{};
@@ -415,7 +468,10 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 		// Its turn: its turn rate by how much of its turn speed it has.
 		const Fixed turnFactor = turnSpeed > Fixed{} ? std::min(Fixed::One(), Abs(actual) / turnSpeed) : Fixed::One();
 		const auto turnAmount = static_cast<std::int64_t>((turnFactor * Fixed::FromInt(rate)).Floor());
-		TurnToward(transform, motion, wantedHeading, turnAmount);
+		if (locomotor.turnPivotOffset != Fixed{} && motion.braking == 0)
+			TurnAbout(transform, motion, moveBackwards && motion.threePointTurn == 0 ? transform.position.XY() - toGoal : goal, turnAmount);
+		else
+			TurnToward(transform, motion, wantedHeading, turnAmount);
 		const Fixed factor = motion.braking != 0 ? motion.brakingFactor : Fixed::One();
 		if (moveBackwards)
 		{
@@ -456,7 +512,11 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 			motion.wanderOffset = static_cast<std::int32_t>(std::clamp<std::int64_t>(offset, std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max()));
 			aim += TurnAngle{static_cast<std::uint32_t>(motion.wanderOffset)};
 		}
-		TurnToward(transform, motion, aim, rate);
+		if (locomotor.turnPivotOffset != Fixed{} && motion.braking == 0)
+			TurnAbout(transform, motion,
+				{transform.position.x + Engine::Math::Cos(aim) * Fixed::FromInt(1000), transform.position.y + Engine::Math::Sin(aim) * Fixed::FromInt(1000)}, rate);
+		else
+			TurnToward(transform, motion, aim, rate);
 		const Fixed coefficient = AngleCoefficient(Engine::Math::DeltaTo(transform.facing, aim));
 		Fixed goalSpeed = (Fixed::One() - coefficient) * desired;
 		if (onPath < SlowDownDistance(motion.speed, locomotor.minSpeed, locomotor.braking))
@@ -467,9 +527,14 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 	default:
 	{
 		// moveTowardsPositionOther (hover and climbers too, as yet): turn toward it; its full speed, down to its least
-		// when it needs longer to stop than it has left.
-		TurnToward(transform, motion, heading, rate);
+		// when it needs longer to stop than it has left. Ultra-accurate within its SlideIntoPlaceTime's travel of the goal
+		// on both axes (at the speed it asks for), it does not turn but is pushed straight at it.
 		Fixed goalSpeed = desired;
+		const Fixed slideReach = goalSpeed * locomotor.slideIntoPlace;
+		if (motion.ultraAccurate != 0 && locomotor.slideIntoPlace > Fixed{} && Abs(toGoal.x) <= slideReach && Abs(toGoal.y) <= slideReach)
+			slide = FixedVector2{toGoal.x / distance, toGoal.y / distance};
+		else
+			TurnAbout(transform, motion, goal, rate);
 		if (onPath < SlowDownDistance(motion.speed, locomotor.minSpeed, locomotor.braking))
 			goalSpeed = locomotor.minSpeed;
 		Maintain(motion, goalSpeed, Fixed::One());
@@ -484,11 +549,12 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 		transform.position.x += toGoal.x * step / distance;
 		transform.position.y += toGoal.y * step / distance;
 	}
-	// PhysicsBehavior: not braking, it rolls along its facing.
+	// PhysicsBehavior: not braking, it rolls along its facing (or the way it is pushed).
 	if (motion.braking == 0)
 	{
-		transform.position.x += Engine::Math::Cos(transform.facing) * motion.speed;
-		transform.position.y += Engine::Math::Sin(transform.facing) * motion.speed;
+		const FixedVector2 way = slide ? *slide : FixedVector2{Engine::Math::Cos(transform.facing), Engine::Math::Sin(transform.facing)};
+		transform.position.x += way.x * motion.speed;
+		transform.position.y += way.y * motion.speed;
 	}
 	return false;
 }
@@ -497,5 +563,42 @@ inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 g
 inline bool SteerGround(Transform &transform, Locomotion &motion, FixedVector2 goal, bool final, Fixed onPath, std::uint64_t tick) noexcept
 {
 	return SteerGround(transform, motion, goal, final, onPath, tick, motion.locomotor.maxSpeed, nullptr);
+}
+
+// Locomotor::maintainCurrentPositionWings (a flying wing with no goal): it aims for the point its circling radius off the
+// place it holds, 7/8 of a half turn round from its bearing to that place (the far side of the circle; a negative radius
+// the other way round), and heads there at its least speed (moveTowardsPositionWings: moveTowardsPositionOther with no
+// distance left, turning toward it at its turn rate and accelerating or braking to MinSpeed), rolling along its facing.
+// A radius of 0 is its tightest turn: MinSpeed over its turn rate (calcMinTurnRadius; unable to turn: 99999).
+// The point a wing holding a place aims for: its circling radius off the place, PI - PI/8 round from its bearing to it.
+inline FixedVector2 CirclingAim(const Transform &transform, const Locomotion &motion) noexcept
+{
+	const auto &locomotor = motion.locomotor;
+	Fixed radius = locomotor.circlingRadius;
+	if (radius == Fixed{})
+	{
+		const Fixed perTick = Engine::Math::Radians(TurnAngle{static_cast<std::uint32_t>(MaxTurnRate(motion))});
+		radius = perTick > Fixed{} ? locomotor.minSpeed / perTick : Fixed::FromInt(99999);
+	}
+	std::uint32_t aim = 0x70000000u; // PI - PI/8
+	if (radius < Fixed{})
+	{
+		radius = Fixed{} - radius;
+		aim = 0u - aim;
+	}
+	const FixedVector2 toHeld = motion.maintainPos - transform.position.XY();
+	const Fixed tiny = Fixed::FromRatio(1, 1000); // isNearlyZero
+	TurnAngle bearing = Abs(toHeld.x) < tiny && Abs(toHeld.y) < tiny ? transform.facing : Engine::Math::Heading(toHeld);
+	bearing += TurnAngle{aim};
+	return {motion.maintainPos.x + Engine::Math::Cos(bearing) * radius, motion.maintainPos.y + Engine::Math::Sin(bearing) * radius};
+}
+
+inline void CircleHeldPlace(Transform &transform, Locomotion &motion) noexcept
+{
+	const auto &locomotor = motion.locomotor;
+	ground_detail::TurnAbout(transform, motion, CirclingAim(transform, motion), MaxTurnRate(motion));
+	ground_detail::Maintain(motion, std::min(locomotor.minSpeed, locomotor.maxSpeed), Fixed::One());
+	transform.position.x += Engine::Math::Cos(transform.facing) * motion.speed;
+	transform.position.y += Engine::Math::Sin(transform.facing) * motion.speed;
 }
 }

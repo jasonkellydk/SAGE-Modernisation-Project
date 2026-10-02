@@ -21,6 +21,11 @@ import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.spatial.components.off_map;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import games.generalszh.gameplay.aircraft.algorithms.airfields;
+import games.generalszh.gameplay.world.resources.deselections;
+import engine.gameplay.rts.mines.components.minefield;
+import engine.gameplay.common.identity.components.producer;
+import engine.ecs.query.query;
 
 // Selling structures (the original's BuildAssistant), between ticks:
 //   sellObject: a standing structure of its owner's, not already for sale,
@@ -29,7 +34,10 @@ import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
 //   (cancelAndRefundAllProduction); its occupants leave (onSelling: a
 //   garrison, or a player's last tunnel, puts everyone out at once; another
 //   tunnel hands them to the network; a transport unloads); it stops what
-//   it was doing (aiIdle);
+//   it was doing (aiIdle); it leaves every player's selection (deselectObject:
+//   OBJECT_STATUS_UNSELECTABLE from now on); an airfield's jets parked or
+//   taking off or landing are killed (killAllParkedUnits); the mines it made
+//   are destroyed at once (no death: destroyObject);
 //   update: a sale that is over pays its RefundValue, or SellPercentage of
 //   its cost, to its owner and removes it.
 export namespace generalszh::gameplay
@@ -56,6 +64,30 @@ inline void RefundProduction(GameWorld &game, ecs::Entity building)
 	gp::ProductionQueue emptied;
 	emptied.capacity = queue->capacity;
 	*queue = emptied;
+}
+
+// The mines `building` made (KINDOF_MINE whose producer it is): a minefield's maker, or any mine's producer.
+inline std::vector<ecs::Entity> MinesMadeBy(GameWorld &game, ecs::Entity building)
+{
+	namespace gp = engine::gameplay;
+	std::vector<ecs::Entity> mines;
+	ecs::Query<ecs::Read<gp::DefinitionRef>, ecs::Optional<gp::Minefield>, ecs::Optional<gp::Producer>> query(game.world);
+	query.ForEachChunk([&](auto chunk) {
+		const auto fields = chunk.template Get<gp::Minefield>();
+		const auto producers = chunk.template Get<gp::Producer>();
+		if (fields.empty() && producers.empty())
+			return;
+		const auto refs = chunk.template Get<gp::DefinitionRef>();
+		const auto entities = chunk.Entities();
+		for (std::size_t row = 0; row < refs.size(); ++row)
+		{
+			const bool made = (!fields.empty() && fields[row].producer == building) || (!producers.empty() && producers[row].entity == building);
+			if (made && game.templates.DefinitionAt(refs[row].index).Is("MINE"))
+				mines.push_back(entities[row]);
+		}
+	});
+	std::sort(mines.begin(), mines.end(), [](ecs::Entity a, ecs::Entity b) { return a.index < b.index; });
+	return mines;
 }
 
 // OpenContain::removeAllContained: everyone aboard out at once, where the container stands.
@@ -110,6 +142,18 @@ inline bool BeginSale(GameWorld &game, ecs::Entity building)
 			world.Get<gp::Transport>(building)->state = gp::TransportState::Unloading;
 	}
 	OrderStop(game, building, false, false);
+	// GameLogic::deselectObject(PLAYERMASK_ALL): out of every selection (the presentation's).
+	if (auto *deselections = world.FindResource<Deselections>())
+		deselections->list.push_back(building);
+	// ParkingPlaceBehavior::killAllParkedUnits.
+	if (game.templates.Content().parking.contains(game.templates.DefinitionAt(ref->index).name))
+	{
+		const std::array<ecs::Entity, 1> field{building};
+		KillJetsParkedAt(game, field);
+	}
+	// Its mines destroyed, now.
+	if (std::vector<ecs::Entity> mines = MinesMadeBy(game, building); !mines.empty())
+		RetireNow(game, std::move(mines));
 	return true;
 }
 

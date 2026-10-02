@@ -123,17 +123,17 @@ inline std::optional<BoneFxContent> ReadBoneFx(const ObjectDefinition &object, M
 			const std::string_view key = field.key;
 			if (Same(key, "DamageFXTypes"))
 			{
-				content.fxTypes = ParseDamageTypeFlags(field, content.fxTypes);
+				content.fxTypes = ParseDamageTypeFlags(field);
 				continue;
 			}
 			if (Same(key, "DamageOCLTypes"))
 			{
-				content.oclTypes = ParseDamageTypeFlags(field, content.oclTypes);
+				content.oclTypes = ParseDamageTypeFlags(field);
 				continue;
 			}
 			if (Same(key, "DamageParticleTypes"))
 			{
-				content.particleTypes = ParseDamageTypeFlags(field, content.particleTypes);
+				content.particleTypes = ParseDamageTypeFlags(field);
 				continue;
 			}
 			for (std::size_t state = 0; state < states.size(); ++state)

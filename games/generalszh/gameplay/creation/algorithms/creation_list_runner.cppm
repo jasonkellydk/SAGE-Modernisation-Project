@@ -10,6 +10,14 @@ import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.common.random.resources.random_seed;
 import games.generalszh.gameplay.objects.algorithms.object_factory;
 import games.generalszh.gameplay.world.algorithms.level_setup;
+import games.generalszh.gameplay.world.algorithms.position_search;
+import games.generalszh.gameplay.effects.resources.effect_cues;
+import engine.gameplay.common.spatial.algorithms.find_position;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
+import engine.gameplay.common.spatial.components.surface_layer;
+import engine.gameplay.rts.match.resources.match_outcome;
+import games.generalszh.content.combat.combat_catalog;
 import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.common.spatial.components.attitude;
 import engine.gameplay.common.physics.algorithms.forces;
@@ -145,6 +153,21 @@ FixedVector3 Rotate(const FixedVector3 &offset, TurnAngle facing)
 	return {offset.x * c - offset.y * s, offset.x * s + offset.y * c, offset.z};
 }
 
+// Object::setLayer: the deck it stands on (SurfaceLayer), or the ground.
+void SetLayer(GameWorld &game, ecs::Entity entity, std::uint8_t layer)
+{
+	auto &world = game.world;
+	if (layer == gameplay::GroundLayer)
+	{
+		if (world.Has<gameplay::SurfaceLayer>(entity))
+			world.Remove<gameplay::SurfaceLayer>(entity);
+		return;
+	}
+	if (!world.Has<gameplay::SurfaceLayer>(entity))
+		world.Add<gameplay::SurfaceLayer>(entity);
+	world.Get<gameplay::SurfaceLayer>(entity)->layer = layer;
+}
+
 // The original's doStuffToObj: lifetime, health, placement and throw.
 void Place(GameWorld &game, ecs::Entity entity, const content::CreationNugget &nugget, const CreationSource &source, bool debris)
 {
@@ -231,10 +254,16 @@ void Place(GameWorld &game, ecs::Entity entity, const content::CreationNugget &n
 		if (body != nullptr && source.position.z > game.ground.At(source.position.XY()))
 			body->Set(gameplay::physics_flag::AllowToFall, true);
 	}
+	// ON_GROUND_ALIGNED: on the highest surface there (getHighestLayerForDestination: a bridge deck over the ground, 1 above
+	// it for sloppy art), on that layer, turned at random.
 	if ((how & disposition::OnGroundAligned) != 0)
 	{
 		transform.facing = AnyAngle(random);
-		transform.position = {at.x, at.y, game.ground.At(at.XY())};
+		const auto *decks = world.FindResource<gameplay::DeckSurfaces>();
+		const std::uint8_t layer = decks != nullptr ? gameplay::LayerForDestination(*decks, game.ground, {at.x, at.y, Fixed::FromInt(99999)}) : gameplay::GroundLayer;
+		Fixed z = layer != gameplay::GroundLayer ? gameplay::LayerHeight(*decks, game.ground, at.XY(), layer) + Fixed::One() : game.ground.At(at.XY());
+		transform.position = {at.x, at.y, z};
+		SetLayer(game, entity, layer);
 	}
 	if ((how & disposition::SendItOut) != 0)
 	{
@@ -303,6 +332,31 @@ void Place(GameWorld &game, ecs::Entity entity, const content::CreationNugget &n
 }
 }
 
+// GenericObjectCreationNugget::doStuffToObj's DiesOnBadLand: under water, at most 10 above its surface, it takes huge water
+// damage, dying FLOODED; else, off the map or on a cliff, water or impassable pathfinding cell, it is killed (Object::kill).
+inline void DiesOnBadLand(GameWorld &game, ecs::Entity entity)
+{
+	namespace gp = engine::gameplay;
+	using Engine::Math::Fixed;
+	const auto *at = game.world.Get<gp::Transform>(entity);
+	if (at == nullptr)
+		return;
+	const Engine::Math::FixedVector2 spot = at->position.XY();
+	if (Fixed water; game.ground.Water(spot, water) && water > game.ground.At(spot) && at->position.z <= water + Fixed::FromInt(10))
+	{
+		DamageFrom(game, entity, {}, Fixed::FromInt(1000000), content::DamageTypeIndex("WATER").value_or(0), content::DeathTypeIndex("FLOODED").value_or(0));
+		return;
+	}
+	const auto &grid = game.world.Resource<gp::NavigationGrid>();
+	if (grid.Width() == 0)
+		return;
+	const auto cellX = static_cast<std::int32_t>((spot.x / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	const auto cellY = static_cast<std::int32_t>((spot.y / Fixed::FromInt(gp::PathfindCellSize)).Floor());
+	const gp::PathfindCellType type = grid.Contains(cellX, cellY) ? grid.Type(cellX, cellY) : gp::PathfindCellType::Impassable;
+	if (!grid.Contains(cellX, cellY) || type == gp::PathfindCellType::Cliff || type == gp::PathfindCellType::Water || type == gp::PathfindCellType::Impassable)
+		KillNow(game, entity);
+}
+
 // Returns the first object the list made (the original's ObjectCreationList::create; none: an empty entity).
 ecs::Entity RunCreationList(GameWorld &game, std::string_view listName, const CreationSource &source)
 {
@@ -350,6 +404,19 @@ ecs::Entity RunCreationList(GameWorld &game, std::string_view listName, const Cr
 		}
 		if (nugget.names.empty())
 			continue;
+		// RequiresLivePlayer: nothing for a source whose player is dead (killPlayer) or missing.
+		if (nugget.requiresLivePlayer)
+		{
+			const std::uint32_t player = source.team < game.roster.TeamCount() ? game.roster.TeamAt(source.team).owner : 0xFFFFFFFFu;
+			if (player >= game.roster.PlayerCount() || game.roster.PlayerAt(player).dead)
+				continue;
+			// VictoryConditions' killPlayer for a player beaten before this tick (one beaten by this tick's deaths is not
+			// dead yet: the original's victory check comes after).
+			if (const auto *outcome = game.world.FindResource<gameplay::MatchOutcome>())
+				if (const auto *standing = outcome->Of(player); standing != nullptr && standing->defeated &&
+					std::find(outcome->fallen.begin(), outcome->fallen.end(), player) == outcome->fallen.end())
+					continue;
+		}
 		if (nugget.skipIfSignificantlyAirborne && source.position.z - game.ground.At(source.position.XY()) > airborne)
 			continue;
 		const bool debris = nugget.kind == content::CreationKind::CreateDebris;
@@ -364,6 +431,8 @@ ecs::Entity RunCreationList(GameWorld &game, std::string_view listName, const Cr
 		}
 		if (first == ecs::Entity{} && game.world.IsAlive(container))
 			first = container;
+		// SpreadFormation's search sees the pieces already placed (the original's are in the partition as they are placed).
+		std::vector<std::pair<Engine::Math::FixedVector2, Fixed>> placed;
 		for (std::uint32_t piece = 0; piece < nugget.count; ++piece)
 		{
 			const auto pick = static_cast<std::size_t>(Engine::Math::UniformInt(game.random, 0, static_cast<std::int64_t>(nugget.names.size()) - 1));
@@ -378,9 +447,61 @@ ecs::Entity RunCreationList(GameWorld &game, std::string_view listName, const Cr
 				game.world.Add<gameplay::ModelOverride>(entity);
 				*game.world.Get<gameplay::ModelOverride>(entity) = {game.templates.Model(name)};
 			}
+			// PreserveLayer: on its source's deck, when it is not put in a container.
+			if (nugget.preserveLayer && !game.world.IsAlive(container) && game.world.IsAlive(source.entity))
+				if (const auto *deck = game.world.Get<gameplay::SurfaceLayer>(source.entity); deck != nullptr && deck->layer != gameplay::GroundLayer)
+					SetLayer(game, entity, deck->layer);
 			if (game.world.IsAlive(container))
 				PutInParachute(game, container, entity);
-			Place(game, entity, nugget, source, debris);
+			if (nugget.spreadFormation)
+			{
+				// findPositionAround(center, minRadius A..B, MaxDistanceFormation, FPF_USE_HIGHEST_LAYER), its start angle at
+				// random; a centre off the map is taken as it is; nothing found: the centre (the fork's deterministic fix).
+				const Fixed nearest = Engine::Math::UniformFixed(game.random, nugget.minDistanceA, nugget.minDistanceB);
+				CreationSource spread = source;
+				if (InPathfindExtent(game, source.position.XY()))
+				{
+					const Engine::Math::TurnAngle start{static_cast<std::uint32_t>(Engine::Math::UniformInt(game.random, 0, 0xFFFFFFFFll))};
+					const auto legal = SpotLegal(game);
+					const auto spot = gameplay::FindPositionAround(source.position.XY(), nearest, nugget.maxDistance, start, [&](Engine::Math::FixedVector2 point) {
+						for (const auto &[at, radius] : placed)
+						{
+							const Fixed apart = Fixed::FromInt(5) + radius;
+							if (Engine::Math::DistanceSquared(point, at) < apart * apart)
+								return false;
+						}
+						return legal(point);
+					});
+					if (spot)
+						spread.position = {spot->x, spot->y, game.ground.At(*spot)};
+				}
+				Place(game, entity, nugget, spread, debris);
+			}
+			else
+				Place(game, entity, nugget, source, debris);
+			if (const auto *at = game.world.Get<gameplay::Transform>(entity))
+			{
+				const auto *ref = game.world.Get<gameplay::DefinitionRef>(entity);
+				placed.emplace_back(at->position.XY(), ref != nullptr ? content::BoundingCircleRadius(game.templates.DefinitionAt(ref->index).geometry) : Fixed{});
+			}
+			// FadeIn / FadeOut: its drawable fades over FadeTime, FadeSound on the source.
+			if (nugget.fadeIn || nugget.fadeOut)
+				if (auto *cues = game.world.FindResource<EffectCues>())
+					for (const bool in : {true, false})
+						if (in ? nugget.fadeIn : nugget.fadeOut)
+						{
+							EffectCue cue;
+							cue.effect = nugget.fadeSound;
+							cue.at = source.position;
+							cue.on = entity;
+							cue.fade = in ? 1 : 2;
+							cue.fadeTicks = nugget.fadeTicks;
+							cues->list.push_back(std::move(cue));
+						}
+			// DiesOnBadLand (doStuffToObj): over water (on the ground, at most 10 above it) it drowns; on a cliff, water or
+			// impassable cell, or off the map, it is killed.
+			if (nugget.diesOnBadLand)
+				DiesOnBadLand(game, entity);
 			// GenericObjectCreationNugget::doStuffToObj / createDebris: setProducer(sourceObj).
 			if (game.world.IsAlive(source.entity))
 				SetProducer(game, entity, source.entity);

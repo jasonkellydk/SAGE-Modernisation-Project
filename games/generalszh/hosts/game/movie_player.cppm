@@ -115,8 +115,9 @@ private:
 class MoviePlayer
 {
 public:
-	// `mixer`: where its sound plays (none: silent).
-	explicit MoviePlayer(engine::audio::Mixer *mixer = nullptr)
+	// `mixer`: where its sound plays (none: silent). `texture`: its picture's texture id (each player shown at once needs
+	// its own, as a window's movie beside the display's).
+	explicit MoviePlayer(engine::audio::Mixer *mixer = nullptr, std::uint32_t texture = 0x7AD1001u) : m_texture(texture)
 	{
 		if (mixer != nullptr)
 		{
@@ -193,7 +194,7 @@ public:
 		if (m_pixels.empty() || m_width == 0 || m_height == 0)
 			return std::nullopt;
 		Engine::UI::WND::ImageRef picture;
-		picture.generated = renderer.Register_Texture({Graphics::TextureHandle(0x7AD1001u, 1), m_width, m_height, m_pitch, m_revision,
+		picture.generated = renderer.Register_Texture({Graphics::TextureHandle(m_texture, 1), m_width, m_height, m_pitch, m_revision,
 			std::span<const std::byte>(m_pixels)});
 		return picture;
 	}
@@ -211,6 +212,7 @@ public:
 	}
 
 private:
+	std::uint32_t m_texture{0x7AD1001u};
 	std::unique_ptr<MovieSound> m_sound; // before the player, which feeds it
 	Engine::Video::FFmpegPlayer m_player;
 	bool m_open{false};

@@ -27,7 +27,7 @@ export import engine.gameplay.common.healing.resources.heal_pulses;
 // its structure max health * RepairHealthPercentPerSecond / 30 a tick as its
 // sole healer for this tick and the next (attemptHealingFromSoleBenefactor);
 // if another holds it, or it is whole (or gone, or no longer standing), it
-// stops.
+// stops; found whole at work, its repair is complete (told to the game).
 export namespace engine::gameplay
 {
 struct ConstructionSystem
@@ -40,8 +40,7 @@ struct ConstructionSystem
 	// calcTimeToBuild's power part: the build ticks over the production speed, truncated (at least 1).
 	static std::uint64_t FramesToBuild(std::uint64_t buildTicks, Engine::Math::Fixed speed) noexcept
 	{
-		const std::int64_t frames = (Engine::Math::Fixed::FromInt(static_cast<std::int64_t>(buildTicks)) / speed).Floor();
-		return static_cast<std::uint64_t>(std::max<std::int64_t>(frames, 1));
+		return EnergySettings::FramesAtSpeed(buildTicks, speed);
 	}
 
 	void Execute(Query &query, ecs::SystemContext &context) const
@@ -50,7 +49,9 @@ struct ConstructionSystem
 		const PlayerEnergy &energy = context.Read<PlayerEnergy>();
 		const EnergySettings &settings = context.Read<EnergySettings>();
 		auto &done = context.Write<ConstructionsDone>().list;
+		auto &repaired = context.Write<ConstructionsDone>().repairs;
 		done.clear();
+		repaired.clear();
 		auto &commands = context.Commands();
 		const std::uint64_t tick = context.Tick();
 		// What this tick's builders did to each structure (several may share one).
@@ -81,6 +82,10 @@ struct ConstructionSystem
 					const Health *body = lookup.IsAlive(target) ? lookup.Get<Health>(target) : nullptr;
 					if (body == nullptr || IsDead(*body) || body->current >= body->maximum || lookup.Get<UnderConstruction>(target) != nullptr)
 					{
+						// Found whole at work (DozerActionDoActionState: health == max health): its repair is complete.
+						if (builder.atWork != 0 && body != nullptr && !IsDead(*body) && body->current >= body->maximum &&
+							lookup.Get<UnderConstruction>(target) == nullptr)
+							repaired.push_back({target, entities[row]});
 						commands.Remove<Builder>(entities[row]);
 						continue;
 					}
@@ -156,7 +161,7 @@ struct ConstructionSystem
 				done.push_back({item.structure, item.builder, item.progress.rebuild != 0});
 				// Off to its end dock point (aiMoveToPosition).
 				if (item.canMove)
-					commands.Set<MoveOrder>(item.builder, MoveToPoint(item.leave));
+					commands.Set<MoveOrder>(item.builder, Replanned(MoveToPoint(item.leave)));
 				continue;
 			}
 			commands.Set<ConstructionProgress>(item.structure, item.progress);

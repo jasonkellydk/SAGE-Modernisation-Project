@@ -91,6 +91,22 @@ BOOST_AUTO_TEST_CASE(the_shell_map_paradrop_resolves_on_the_command_center)
 	BOOST_TEST(!HasSpecialPowerCreate(*center)); // superweapons have it (their timer starts as they are built)
 	BOOST_TEST_REQUIRE(objects.Find("AmericaParticleCannonUplink") != nullptr);
 	BOOST_TEST(HasSpecialPowerCreate(*objects.Find("AmericaParticleCannonUplink")));
+
+	// SpecialPowerTemplate's InitiateSound / InitiateAtLocationSound (parseAudioEventRTS) and AcademyClassify
+	// (parseIndexList over TheAcademyClassificationTypeNames): the Scud Storm's ScudStormInitiated on its source, the
+	// neutron missile's AirRaidSiren at its target (its InitiateSound commented out), 47 superweapons ACT_SUPERPOWER.
+	const auto named = [&](std::string_view name) {
+		return std::find_if(templates.begin(), templates.end(), [&](const SpecialPowerTemplate &t) { return t.name == name; });
+	};
+	BOOST_TEST_REQUIRE((named("SuperweaponScudStorm") != templates.end()));
+	BOOST_TEST(named("SuperweaponScudStorm")->initiateSound == "ScudStormInitiated");
+	BOOST_TEST_REQUIRE((named("SuperweaponNeutronMissile") != templates.end()));
+	BOOST_TEST(named("SuperweaponNeutronMissile")->initiateSound.empty());
+	BOOST_TEST(named("SuperweaponNeutronMissile")->initiateAtLocationSound == "AirRaidSiren");
+	BOOST_TEST(named("SuperweaponNeutronMissile")->academyClassification == 2u);
+	BOOST_TEST(paradrop->academyClassification == 2u);
+	BOOST_TEST(std::count_if(templates.begin(), templates.end(), [](const SpecialPowerTemplate &t) { return t.academyClassification == 2u; }) == 47);
+	BOOST_TEST(std::none_of(templates.begin(), templates.end(), [](const SpecialPowerTemplate &t) { return t.academyClassification == 1u; }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -26,6 +26,9 @@ export struct ImageRef final
 	Graphics::Rect2D uv{0.0f, 0.0f, 1.0f, 1.0f};
 	// Caller-owned generated images remain alive until the UI frame is submitted.
 	Graphics::Renderer2DTexture generated{};
+	// Packed turned a quarter clockwise in its texture (a mapped image's Status ROTATED_90_CLOCKWISE): drawn with its
+	// UV corners turned back.
+	bool rotated = false;
 };
 
 // WND draw data is shared by the document parser and every control renderer.
@@ -2366,6 +2369,13 @@ export bool Draw_Image(
 		? image.generated : Resolve_Image_Texture(image.texture, renderer);
 	if (!texture.index.Is_Valid())
 		return false;
+	// W3DDisplay::drawImage with IMAGE_STATUS_ROTATED_90_CLOCKWISE: the screen corners (top-left, bottom-left, top-right,
+	// bottom-right) take the UV corners (right-top, left-top, right-bottom, left-bottom).
+	if (image.rotated)
+		return renderer.Add_Quad(
+			{{{screen.left, screen.top}, {screen.left, screen.bottom}, {screen.right, screen.top}, {screen.right, screen.bottom}}},
+			{{{image.uv.right, image.uv.top}, {image.uv.left, image.uv.top}, {image.uv.right, image.uv.bottom}, {image.uv.left, image.uv.bottom}}},
+			texture, color, blend, grayscale);
 	return renderer.Add_Quad(screen, image.uv, texture, color, blend, grayscale);
 }
 

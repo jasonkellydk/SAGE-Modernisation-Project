@@ -9,7 +9,8 @@ import engine.ecs.system.system;
 // An airfield's repair of its parked jets (ParkingPlaceBehavior HealAmountPerSecond): each jet of its own that stands idle
 // or reloading on the ground is a healee (JetAIUpdate's setHealee each update); a healee coming or going puts the next heal
 // HEAL_RATE_FRAMES (6) off (resetWakeFrame; none left: never); each heal gives every healee 6 x HealAmountPerSecond / 30.
-// `healing`: which of its spaces' jets were healees last tick. Simulation state: checkpointed.
+// `healing`: which of its spaces' jets were healees last tick; `helicopters` / `heliSignature`: how many helicopters down by
+// it (they hold no space) were healees, and which (a sum of their entities). Simulation state: checkpointed.
 // AirfieldHeals: the tick's heals, carried out after the step.
 export namespace generalszh::gameplay
 {
@@ -19,7 +20,8 @@ struct AirfieldHealing
 	Engine::Math::Fixed perSecond;
 	std::uint64_t nextHeal{Forever};
 	std::uint32_t healing{0};
-	std::uint32_t reserved{0};
+	std::uint32_t helicopters{0};
+	std::uint64_t heliSignature{0};
 };
 
 struct AirfieldHeal
@@ -40,7 +42,7 @@ template<>
 struct ComponentTraits<generalszh::gameplay::AirfieldHealing>
 {
 	static constexpr std::string_view StableName = "generalszh.gameplay.airfield_healing";
-	static constexpr std::uint32_t Version = 1;
+	static constexpr std::uint32_t Version = 2;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 template<>

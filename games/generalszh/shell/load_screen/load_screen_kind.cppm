@@ -48,6 +48,16 @@ constexpr LoadScreenKind LoadScreenFor(LoadGameMode mode, bool challengeCampaign
 	return LoadScreenKind::None;
 }
 
+// LoadScreen.cpp's sounds for a screen: the single-player and challenge screens add their "LoadScreenAmbient" loop at
+// the end of init (once their movie has played; neither has music: "No music in SinglePlayerLoadScreen") and remove it
+// in their destructors; the multiplayer screen plays the local faction's LoadScreenMusic after fading the music playing
+// and fades it in its destructor; the shell's screen plays nothing.
+constexpr std::string_view LoadScreenAmbientFor(LoadScreenKind kind) noexcept
+{
+	return kind == LoadScreenKind::SinglePlayer || kind == LoadScreenKind::Challenge ? std::string_view("LoadScreenAmbient") : std::string_view();
+}
+constexpr bool LoadScreenPlaysMusic(LoadScreenKind kind) noexcept { return kind == LoadScreenKind::MultiPlayer; }
+
 // GameLogic.cpp's LOAD_PROGRESS_* (MAX_SLOTS 8): where startNewGame's load stands as it reports it.
 namespace load_progress
 {

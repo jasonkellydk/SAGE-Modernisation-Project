@@ -12,6 +12,7 @@ import games.generalszh.presentation.objects.components.object_presentation;
 import games.generalszh.presentation.interaction.components.selected;
 import games.generalszh.presentation.audio.components.sound_loops;
 import games.generalszh.presentation.hud.algorithms.screen_fade_steps;
+import games.generalszh.presentation.camera.algorithms.screen_filters;
 import games.generalszh.presentation.hud.algorithms.radar_event_rules;
 import games.generalszh.presentation.hud.algorithms.named_timer_lines;
 import games.generalszh.presentation.hud.algorithms.cameo_flash_steps;
@@ -103,6 +104,14 @@ inline void ApplyClientScript(ecs::World &world, ScriptedPresentation &settings,
 	case Kind::BlackWhite:
 		settings.blackWhite = command.flag;
 		settings.blackWhiteFrames = command.percent;
+		// doBlackWhiteMode: the view's filter grey and fading in, or (while it is the grey one) fading out.
+		if (auto *filter = world.FindResource<ViewFilter>())
+		{
+			if (command.flag)
+				StartBlackWhite(*filter, static_cast<std::int32_t>(command.percent));
+			else
+				EndBlackWhite(*filter, static_cast<std::int32_t>(command.percent));
+		}
 		break;
 	case Kind::Fade:
 		// ScriptEngine::setFade, first stepped the tick after its script's.

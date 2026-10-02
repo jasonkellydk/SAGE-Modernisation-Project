@@ -55,6 +55,46 @@ inline GarrisonPointSets ReadGarrisonPoints(const ObjectDefinition &object, Mode
 	return points;
 }
 
+// Where a garrison that does not enclose its occupants (IsEnclosingContainer No: a fire base) keeps them
+// (GarrisonContain::loadStationGarrisonPoints: getMultiLogicalBonePosition("STATION", ContainMax) with the model switched
+// to pristine GARRISONED): its STATION01, STATION02 ... bones, at most ContainMax (and MAX_GARRISON_POINTS), in its own
+// frame. An enclosing garrison, or none: no stations.
+inline std::vector<Engine::Math::FixedVector3> ReadGarrisonStations(const ObjectDefinition &object, ModelRigs &rigs)
+{
+	std::vector<Engine::Math::FixedVector3> stations;
+	const ModuleEntry *garrison = nullptr;
+	for (const ModuleEntry &module : object.modules)
+		if (module.type == "GarrisonContain" && module.block != nullptr)
+			garrison = &module;
+	if (garrison == nullptr)
+		return stations;
+	const auto *encloses = garrison->block->Find("IsEnclosingContainer");
+	if (encloses == nullptr || encloses->Value().empty() || encloses->Value()[0] == 'Y' || encloses->Value()[0] == 'y')
+		return stations;
+	std::size_t most = 0;
+	if (const auto *room = garrison->block->Find("ContainMax"))
+		most = static_cast<std::size_t>(std::clamp<long long>(std::atoll(std::string(room->Value()).c_str()), 0, static_cast<long long>(MaxGarrisonPoints)));
+	const ModelStates states = ReadModelStates(object);
+	if (states.Empty())
+		return stations;
+	ConditionBits garrisoned{};
+	const std::uint32_t bit = ModelConditionBit("GARRISONED");
+	garrisoned[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	const std::string &model = states.states[SelectModelState(states, garrisoned)].model;
+	if (model.empty())
+		return stations;
+	for (std::size_t index = 1; index <= most; ++index)
+	{
+		char name[16];
+		std::snprintf(name, sizeof(name), "STATION%02d", static_cast<int>(index));
+		const auto bone = rigs.Bone(model, name);
+		if (!bone)
+			break;
+		stations.push_back(bone->position);
+	}
+	return stations;
+}
+
 // Where a transport's riders stand (OpenContain::putObjAtNextFirePoint): the FIREPOINT01 .. bones (MAX_FIRE_POINTS: 32)
 // of its model at rest, in its own frame; with PassengersInTurret, turning with its turret about its turret bone.
 struct TransportFirePointSet

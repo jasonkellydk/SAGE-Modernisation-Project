@@ -1,0 +1,333 @@
+#include <boost/test/unit_test.hpp>
+
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.session.session;
+import games.generalszh.session.setup.skirmish_level;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
+import engine.level.adapters.generals_map.map_reader;
+import games.generalszh.commands.game_commands;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
+import engine.gameplay.rts.economy.resources.player_money;
+import engine.gameplay.rts.economy.resources.player_energy;
+import engine.gameplay.common.identity.components.definition_ref;
+import engine.gameplay.common.identity.components.owner;
+import engine.ecs.query.query;
+
+// AcademyStats as the simulation keeps it (Core/GameEngine/Source/Common/RTS/AcademyStats.cpp: init, update,
+// recordProduction, recordIncome; Player::processSelectTeamGameMessage; Object's creation of a mine), on a skirmish of
+// the shipped Tournament Continent: player0 America, player1 the GLA.
+using namespace generalszh;
+namespace gp = engine::gameplay;
+namespace ga = generalszh::gameplay;
+
+namespace
+{
+struct Install
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+	content::GameContent game;
+	bool loaded{false};
+
+	Install()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+		game = content::LoadGameContent(*loader, engine::time::FixedStep{30});
+		loaded = true;
+	}
+};
+
+Install &Data()
+{
+	static Install install;
+	return install;
+}
+
+struct Skirmish
+{
+	session::setup::SkirmishLevel prepared;
+	session::SessionOptions options;
+	std::unique_ptr<session::Session> game;
+	std::uint32_t america{0}, gla{0};
+};
+
+// On the heap: the session keeps to the level it was made from.
+std::unique_ptr<Skirmish> StartSkirmish(Install &shell)
+{
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	if (!bytes)
+		return nullptr;
+	auto read = engine::level::generals_map::Read(*bytes);
+	if (!read)
+		return nullptr;
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 1234;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	auto skirmish = std::make_unique<Skirmish>();
+	skirmish->prepared = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	skirmish->options = session::SessionOptions{77, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish->prepared.players)
+		skirmish->options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	skirmish->game = std::make_unique<session::Session>(skirmish->prepared.level, shell.game, skirmish->options);
+	skirmish->america = *skirmish->game->Teams().FindPlayer("player0");
+	skirmish->gla = *skirmish->game->Teams().FindPlayer("player1");
+	return skirmish;
+}
+
+const ga::PlayerAcademy &Record(session::Session &game, std::uint32_t player)
+{
+	return *game.World().Resource<ga::AcademyStats>().Find(player);
+}
+
+// The player's objects of a kind (KindOf), as recordProduction tells them.
+std::uint32_t CountOwned(session::Session &game, std::uint32_t player, std::string_view kind)
+{
+	std::uint32_t count = 0;
+	ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>> query(game.World());
+	query.ForEachChunk([&](auto chunk) {
+		const auto owners = chunk.template Get<gp::Owner>();
+		const auto refs = chunk.template Get<gp::DefinitionRef>();
+		for (std::size_t row = 0; row < owners.size(); ++row)
+			if (owners[row].player == player && game.Definition(refs[row].index).Is(kind))
+				++count;
+	});
+	return count;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(academy)
+
+// Legacy parity (AcademyStats::init, AcademyStats::update): each player's record starts with its next update 30 frames
+// on (frame 0 + FRAMES_BETWEEN_UPDATES), its first update to come, a known side for USA and GLA base sides and none for
+// the neutral player (no template: m_unknownSide), the supply center's cost the default 1000 (findDozerCommandSet never
+// finds one). update's test `m_nextUpdateFrame >= now` holds every frame: frame 1 updates (next 31), frame 2 again (next
+// 32). The first update records every object the player has (recordProduction): America's dozer, the GLA's workers (DOZER
+// and HARVESTER: peons and gatherers), none a military unit (no last unit frame). Money over the cost (10000) marks no
+// early spending; power, sufficient or not, is noted (a gain with power from frame 0: out 1 frame).
+BOOST_AUTO_TEST_CASE(legacy_parity_academy_init_and_its_every_frame_update)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto skirmish = StartSkirmish(shell);
+	BOOST_TEST_REQUIRE(skirmish != nullptr);
+	session::Session &game = *skirmish->game;
+	for (const std::uint32_t player : {skirmish->america, skirmish->gla})
+	{
+		const ga::PlayerAcademy &record = Record(game, player);
+		BOOST_TEST(record.nextUpdateFrame == 30u);
+		BOOST_TEST(record.firstUpdate);
+		BOOST_TEST(!record.unknownSide);
+		BOOST_TEST(record.supplyCenterCost == 1000u);
+		BOOST_TEST(record.peonsBuilt == 0u);
+	}
+	const auto neutral = ga::NeutralPlayer(game.Game());
+	BOOST_TEST_REQUIRE(neutral.has_value());
+	const ga::PlayerAcademy *none = game.World().Resource<ga::AcademyStats>().Find(*neutral);
+	BOOST_TEST((none == nullptr || none->unknownSide));
+
+	game.Tick();
+	BOOST_TEST(game.CurrentTick() == 1u);
+	const auto &energy = game.World().Resource<gp::PlayerEnergy>();
+	for (const std::uint32_t player : {skirmish->america, skirmish->gla})
+	{
+		const ga::PlayerAcademy &record = Record(game, player);
+		BOOST_TEST(!record.firstUpdate);
+		BOOST_TEST(record.nextUpdateFrame == 31u);
+		BOOST_TEST(record.peonsBuilt == CountOwned(game, player, "DOZER"));
+		BOOST_TEST(record.gatherersBuilt == CountOwned(game, player, "HARVESTER"));
+		BOOST_TEST(record.lastUnitBuiltFrame == 0u);
+		BOOST_TEST(record.idleBuildingUnitsMaxFrames == 0u);
+		BOOST_TEST(!record.spentCashBeforeBuildingSupplyCenter);
+		BOOST_TEST(record.hadPowerLastCheck == energy.Sufficient(player));
+		BOOST_TEST(record.powerOutMaxFrames == (energy.Sufficient(player) ? 1u : 0u));
+	}
+	BOOST_TEST(Record(game, skirmish->america).peonsBuilt == 1u);
+	BOOST_TEST(Record(game, skirmish->america).gatherersBuilt == 0u);
+	BOOST_TEST(Record(game, skirmish->gla).peonsBuilt >= 1u);
+	BOOST_TEST(Record(game, skirmish->gla).gatherersBuilt == Record(game, skirmish->gla).peonsBuilt);
+	const std::uint32_t peons = Record(game, skirmish->america).peonsBuilt;
+	game.Tick();
+	BOOST_TEST(Record(game, skirmish->america).nextUpdateFrame == 32u);
+	BOOST_TEST(Record(game, skirmish->america).peonsBuilt == peons); // only the first update records what is there
+
+	// AcademyStats::update 2): money under the supply center's cost before any is built marks it, once.
+	auto &money = game.World().Resource<gp::PlayerMoney>();
+	money.Withdraw(skirmish->america, money.Balance(skirmish->america) - 999, false);
+	game.Tick();
+	BOOST_TEST(Record(game, skirmish->america).spentCashBeforeBuildingSupplyCenter);
+	BOOST_TEST(!Record(game, skirmish->gla).spentCashBeforeBuildingSupplyCenter);
+}
+
+// Legacy parity (AcademyStats::recordProduction, Object.cpp's creation of a MINE / BOOBY_TRAP / DEMOTRAP): a military unit
+// (INFANTRY or VEHICLE, not DOZER nor HARVESTER) records the wait since the last (now - last, the first from frame 0) at
+// its longest; a supply center counts; a barracks by frame 300 * 30 marks the barracks in time (frame 9000 yes, 9001 no).
+// A demo trap made counts on the neutral player's record, not its owner's.
+BOOST_AUTO_TEST_CASE(legacy_parity_academy_records_production_by_frame)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto skirmish = StartSkirmish(shell);
+	BOOST_TEST_REQUIRE(skirmish != nullptr);
+	session::Session &game = *skirmish->game;
+	const auto americaTeam = game.Teams().DefaultTeam(skirmish->america);
+	const auto glaTeam = game.Teams().DefaultTeam(skirmish->gla);
+	BOOST_TEST_REQUIRE(americaTeam.has_value());
+	BOOST_TEST_REQUIRE(glaTeam.has_value());
+	const Engine::Math::FixedVector2 spot{Engine::Math::Fixed::FromInt(500), Engine::Math::Fixed::FromInt(500)};
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", spot, {}, *americaTeam);
+	ga::RecordAcademyProduction(game.Game(), skirmish->america, ranger);
+	BOOST_TEST(Record(game, skirmish->america).lastUnitBuiltFrame == 5u);
+	BOOST_TEST(Record(game, skirmish->america).idleBuildingUnitsMaxFrames == 5u);
+	for (int tick = 0; tick < 7; ++tick)
+		game.Tick();
+	ga::RecordAcademyProduction(game.Game(), skirmish->america, ranger);
+	BOOST_TEST(Record(game, skirmish->america).lastUnitBuiltFrame == 12u);
+	BOOST_TEST(Record(game, skirmish->america).idleBuildingUnitsMaxFrames == 7u);
+	game.Tick();
+	ga::RecordAcademyProduction(game.Game(), skirmish->america, ranger);
+	BOOST_TEST(Record(game, skirmish->america).idleBuildingUnitsMaxFrames == 7u); // 1 is no longer wait
+	const ecs::Entity center = game.Place("AmericaSupplyCenter", spot + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(200), {}}, {}, *americaTeam);
+	ga::RecordAcademyProduction(game.Game(), skirmish->america, center);
+	BOOST_TEST(Record(game, skirmish->america).supplyCentersBuilt == 1u);
+
+	const auto neutral = ga::NeutralPlayer(game.Game());
+	BOOST_TEST_REQUIRE(neutral.has_value());
+	const auto minesBefore = [&] {
+		const auto *record = game.World().Resource<ga::AcademyStats>().Find(*neutral);
+		return record != nullptr ? record->mines : 0u;
+	}();
+	game.Place("GLADemoTrap", spot + Engine::Math::FixedVector2{{}, Engine::Math::Fixed::FromInt(200)}, {}, *glaTeam);
+	BOOST_TEST(game.World().Resource<ga::AcademyStats>().Find(*neutral)->mines == minesBefore + 1u);
+	BOOST_TEST(Record(game, skirmish->gla).mines == 0u);
+
+	while (game.CurrentTick() < 9000)
+		game.Tick();
+	const ecs::Entity barracks = game.Place("AmericaBarracks", spot + Engine::Math::FixedVector2{Engine::Math::Fixed::FromInt(-300), {}}, {}, *americaTeam);
+	ga::RecordAcademyProduction(game.Game(), skirmish->america, barracks);
+	BOOST_TEST(Record(game, skirmish->america).builtBarracksWithinFiveMinutes);
+	game.Tick();
+	BOOST_TEST(game.CurrentTick() == 9001u);
+	ga::RecordAcademyProduction(game.Game(), skirmish->gla, barracks);
+	BOOST_TEST(!Record(game, skirmish->gla).builtBarracksWithinFiveMinutes);
+}
+
+// Legacy parity (Money::deposit -> AcademyStats::recordIncome): an income's gap is last - now as an unsigned int: the
+// first after frame 0 wraps (0 - 5 = 4294967291) and stands as the longest; the next (5 - 9 = 4294967292) is longer
+// still. A deposit between frames is recorded at the frame it was made in.
+BOOST_AUTO_TEST_CASE(legacy_parity_academy_income_gaps_wrap)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto skirmish = StartSkirmish(shell);
+	BOOST_TEST_REQUIRE(skirmish != nullptr);
+	session::Session &game = *skirmish->game;
+	for (int tick = 0; tick < 5; ++tick)
+		game.Tick();
+	BOOST_TEST(Record(game, skirmish->america).lastIncomeFrame == 0u);
+	auto &money = game.World().Resource<gp::PlayerMoney>();
+	money.Deposit(skirmish->america, 100, false);
+	game.Tick();
+	BOOST_TEST(Record(game, skirmish->america).lastIncomeFrame == 5u);
+	BOOST_TEST(Record(game, skirmish->america).maxFramesBetweenIncome == 4294967291u);
+	BOOST_TEST(Record(game, skirmish->gla).lastIncomeFrame == 0u);
+	for (int tick = 0; tick < 3; ++tick)
+		game.Tick();
+	money.Deposit(skirmish->america, 100, false);
+	game.Tick();
+	BOOST_TEST(Record(game, skirmish->america).lastIncomeFrame == 9u);
+	BOOST_TEST(Record(game, skirmish->america).maxFramesBetweenIncome == 4294967292u);
+}
+
+// Legacy parity (Player::processSelectTeamGameMessage: recordControlGroupsUsed when the squad has live objects;
+// SelectionTranslator's MSG_SELECT_TEAMn sent when the hotkey's selection is performed): selecting an empty squad
+// counts nothing; one with the dozer counts once per selection, for the sender only. The record is checkpointed:
+// a restored game hashes the same, and a changed count changes the hash.
+BOOST_AUTO_TEST_CASE(legacy_parity_academy_counts_control_groups_and_is_checkpointed)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	auto skirmish = StartSkirmish(shell);
+	BOOST_TEST_REQUIRE(skirmish != nullptr);
+	session::Session &game = *skirmish->game;
+	game.Tick();
+	ecs::Entity dozer;
+	game.Visible().ForEach([&](const gp::VisibleObject &object) {
+		const auto *owner = game.World().Get<gp::Owner>(object.entity);
+		if (owner != nullptr && owner->player == skirmish->america && game.Definition(object.definition).Is("DOZER"))
+			dozer = object.entity;
+	});
+	BOOST_TEST_REQUIRE(game.World().IsAlive(dozer));
+	auto select = commands::Encode(commands::SelectTeam{1});
+	select.player = 0;
+	game.Tick(std::span(&select, 1));
+	BOOST_TEST(Record(game, skirmish->america).controlGroupsUsed == 0u);
+	std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::CreateTeam{1, {dozer}}), commands::Encode(commands::SelectTeam{1})};
+	for (auto &order : orders)
+		order.player = 0;
+	game.Tick(orders);
+	BOOST_TEST(Record(game, skirmish->america).controlGroupsUsed == 1u);
+	game.Tick(std::span(&select, 1));
+	BOOST_TEST(Record(game, skirmish->america).controlGroupsUsed == 2u);
+	auto theirs = commands::Encode(commands::SelectTeam{1});
+	theirs.player = 1;
+	game.Tick(std::span(&theirs, 1));
+	BOOST_TEST(Record(game, skirmish->gla).controlGroupsUsed == 0u);
+	BOOST_TEST(Record(game, skirmish->america).controlGroupsUsed == 2u);
+
+	const auto restored = session::Session::Restore(skirmish->prepared.level, shell.game, skirmish->options, game.Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST(restored->StateHash() == game.StateHash());
+	BOOST_TEST(Record(*restored, skirmish->america).controlGroupsUsed == 2u);
+	BOOST_TEST(Record(*restored, skirmish->america).peonsBuilt == Record(game, skirmish->america).peonsBuilt);
+	const auto before = game.StateHash();
+	game.World().Resource<ga::AcademyStats>().Of(skirmish->america).controlGroupsUsed += 1;
+	BOOST_TEST(!(game.StateHash() == before));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

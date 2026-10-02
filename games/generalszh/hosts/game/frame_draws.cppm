@@ -89,8 +89,23 @@ bool ExecuteFrameDraws(Graphics::Device &device, Graphics::CommandList &, const 
 			std::memcpy(rgba.data(), frame.pixels.data(), rgba.size());
 			for (std::size_t pixel = 3; pixel < rgba.size(); pixel += 4)
 				rgba[pixel] = 255;
-			scene.captured = stbi_write_png(scene.captureFile.string().c_str(), static_cast<int>(frame.width),
-				static_cast<int>(frame.height), 4, rgba.data(), static_cast<int>(frame.row_pitch)) != 0;
+			if (scene.captureFile.extension() == ".bmp")
+			{
+				// W3DDisplay::takeScreenShot's CreateBMPFile: 24-bit colour, no alpha.
+				std::vector<std::uint8_t> rgb;
+				rgb.reserve(static_cast<std::size_t>(frame.width) * frame.height * 3);
+				for (std::uint32_t y = 0; y < frame.height; ++y)
+					for (std::uint32_t x = 0; x < frame.width; ++x)
+					{
+						const std::uint8_t *pixel = rgba.data() + static_cast<std::size_t>(y) * frame.row_pitch + static_cast<std::size_t>(x) * 4;
+						rgb.insert(rgb.end(), {pixel[0], pixel[1], pixel[2]});
+					}
+				scene.captured = stbi_write_bmp(scene.captureFile.string().c_str(), static_cast<int>(frame.width), static_cast<int>(frame.height), 3,
+									 rgb.data()) != 0;
+			}
+			else
+				scene.captured = stbi_write_png(scene.captureFile.string().c_str(), static_cast<int>(frame.width),
+					static_cast<int>(frame.height), 4, rgba.data(), static_cast<int>(frame.row_pitch)) != 0;
 		}
 	}
 	return true;

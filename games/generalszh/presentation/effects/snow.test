@@ -1,0 +1,328 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+
+import games.generalszh.presentation.effects.snow;
+import games.generalszh.presentation.effects.weather_settings;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+
+using namespace generalszh;
+using namespace generalszh::presentation;
+
+namespace
+{
+struct WeatherInstall
+{
+	engine::filesystem::VirtualFileSystem files;
+	engine::config::Diagnostics grammarDiagnostics;
+	std::optional<content::ContentLoader> loader;
+
+	WeatherInstall()
+	{
+		const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+		if (install == nullptr || !std::filesystem::exists(install))
+			return;
+		content::MountInstall(files, install);
+		loader.emplace(files, content::ZeroHourIniGrammar(grammarDiagnostics));
+	}
+};
+
+WeatherSetting Bind(std::string text, engine::config::Diagnostics &diagnostics)
+{
+	engine::config::Diagnostics grammarDiagnostics;
+	const auto grammar = content::ZeroHourIniGrammar(grammarDiagnostics);
+	engine::config::Document document;
+	engine::config::ini::Read(document, document.AddSource("weather.ini", std::move(text)), grammar, diagnostics);
+	engine::config::BindContext context{diagnostics, engine::time::FixedStep{30}};
+	WeatherSetting setting;
+	BindWeatherSetting(document, setting, context);
+	return setting;
+}
+
+// A camera straight down from `eye` (right +X, up +Y, back +Z), its half fields of view `tangent` either way, clipping
+// at 1 and 1000, a 600 pixel high viewport, the terrain's lowest height 0.
+SnowView DownView(std::array<float, 3> eye, float tangent)
+{
+	return MakeSnowView(eye, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, tangent, tangent, 1.0f, 1000.0f, 600.0f, 0.0f);
+}
+
+// PresentationFrame's seconds for a frame at 30 a second.
+constexpr float FrameSeconds = 1.0f / 30.0f;
+}
+
+BOOST_AUTO_TEST_SUITE(snow)
+
+// WeatherSetting::WeatherSetting and m_weatherSettingFieldParseTable (Snow.h / Snow.cpp): the defaults, then a Weather
+// block's keys (Reals read as floats, Bools as yes/no); keys it leaves out keep their values (a map's override).
+BOOST_AUTO_TEST_CASE(legacy_parity_weather_blocks_bind_as_the_weather_setting_parse_table)
+{
+	const WeatherSetting defaults;
+	BOOST_TEST(defaults.snowTexture == "EXSnowFlake.tga");
+	BOOST_TEST(defaults.snowFrequencyScaleX == 0.0533f);
+	BOOST_TEST(defaults.snowFrequencyScaleY == 0.0275f);
+	BOOST_TEST(defaults.snowAmplitude == 5.0f);
+	BOOST_TEST(defaults.snowPointSize == 1.0f);
+	BOOST_TEST(defaults.snowQuadSize == 0.5f);
+	BOOST_TEST(defaults.snowBoxDimensions == 200.0f);
+	BOOST_TEST(defaults.snowBoxDensity == 1.0f);
+	BOOST_TEST(defaults.snowVelocity == 4.0f);
+	BOOST_TEST(defaults.usePointSprites);
+	BOOST_TEST(!defaults.snowEnabled);
+	BOOST_TEST(defaults.snowMaxPointSize == 64.0f);
+	BOOST_TEST(defaults.snowMinPointSize == 0.0f);
+
+	engine::config::Diagnostics diagnostics;
+	const WeatherSetting bound = Bind("Weather\n"
+									  " SnowEnabled = yes\n"
+									  " SnowTexture = ExSnowFlake1.tga\n"
+									  " SnowBoxDimensions = 100\n"
+									  " SnowBoxDensity = .5\n"
+									  " SnowAmplitude = 4.0\n"
+									  " SnowVelocity = 3.0\n"
+									  " SnowPointSize = .16\n"
+									  " SnowMaxPointSize = 10.0\n"
+									  " SnowPointSprites = no\n"
+									  "End\n",
+		diagnostics);
+	BOOST_TEST(diagnostics.ErrorCount() == 0u);
+	BOOST_TEST(bound.snowEnabled);
+	BOOST_TEST(bound.snowTexture == "ExSnowFlake1.tga");
+	BOOST_TEST(bound.snowBoxDimensions == 100.0f);
+	BOOST_TEST(bound.snowBoxDensity == 0.5f);
+	BOOST_TEST(bound.snowAmplitude == 4.0f);
+	BOOST_TEST(bound.snowVelocity == 3.0f);
+	BOOST_TEST(bound.snowPointSize == 0.16f);
+	BOOST_TEST(bound.snowMaxPointSize == 10.0f);
+	BOOST_TEST(!bound.usePointSprites);
+	// Left out: the defaults stay.
+	BOOST_TEST(bound.snowFrequencyScaleX == 0.0533f);
+	BOOST_TEST(bound.snowQuadSize == 0.5f);
+	BOOST_TEST(bound.snowMinPointSize == 0.0f);
+}
+
+// The shipped Data\INI\Weather.ini (snow off, its 200 box) and Bitter Winter's map.ini override (INI_LOAD_CREATE_OVERRIDES
+// in GameLogic::startNewGame): snow on, ExSnowFlake1.tga, a 100 box, amplitude 4, velocity 3, point size .16, at most
+// 10 pixels.
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_weather_and_a_maps_override)
+{
+	static WeatherInstall install;
+	if (!install.loader)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const WeatherSetting stock = LoadWeatherSetting(*install.loader);
+	BOOST_TEST(!stock.snowEnabled);
+	BOOST_TEST(stock.snowBoxDimensions == 200.0f);
+	BOOST_TEST(stock.snowVelocity == 4.0f);
+	BOOST_TEST(stock.snowMaxPointSize == 64.0f);
+	const WeatherSetting winter = LoadWeatherSetting(*install.loader, "Maps/Bitter Winter/Bitter Winter.map");
+	BOOST_TEST(winter.snowEnabled);
+	BOOST_TEST(winter.snowTexture == "ExSnowFlake1.tga");
+	BOOST_TEST(winter.snowBoxDimensions == 100.0f);
+	BOOST_TEST(winter.snowBoxDensity == 1.0f);
+	BOOST_TEST(winter.snowAmplitude == 4.0f);
+	BOOST_TEST(winter.snowVelocity == 3.0f);
+	BOOST_TEST(winter.snowPointSize == 0.16f);
+	BOOST_TEST(winter.snowMaxPointSize == 10.0f);
+	BOOST_TEST(winter.usePointSprites);
+	BOOST_TEST(winter.snowQuadSize == 0.5f);
+}
+
+// SnowManager::updateIniSettings: the 64 x 64 starting heights are rand() % (Int)SnowBoxDimensions row by row (the C
+// runtime's rand: 41, 18467, 6334, 26500, 19169 from its first seed), the emitter spacing 1 / SnowBoxDensity and the
+// full period SnowBoxDimensions / SnowVelocity (200 / 4 = 50 s; Bitter Winter 100 / 3).
+BOOST_AUTO_TEST_CASE(legacy_parity_update_ini_settings_draws_starting_heights_and_the_period)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	ApplyWeatherSetting(snow, setting);
+	BOOST_TEST(snow.startingHeights[0] == 41.0f);
+	BOOST_TEST(snow.startingHeights[1] == 67.0f);
+	BOOST_TEST(snow.startingHeights[2] == 134.0f);
+	BOOST_TEST(snow.startingHeights[3] == 100.0f);
+	BOOST_TEST(snow.startingHeights[4] == 169.0f);
+	for (const float height : snow.startingHeights)
+		BOOST_TEST_REQUIRE((height >= 0.0f && height < 200.0f));
+	BOOST_TEST(snow.fullTimePeriod == 50.0f);
+	BOOST_TEST(snow.emitterSpacing == 1.0f);
+	BOOST_TEST(!snow.enabled);
+	setting.snowBoxDimensions = 100.0f;
+	setting.snowVelocity = 3.0f;
+	setting.snowBoxDensity = 0.5f;
+	ApplyWeatherSetting(snow, setting);
+	BOOST_TEST(snow.fullTimePeriod == 100.0f / 3.0f);
+	BOOST_TEST(snow.emitterSpacing == 2.0f);
+}
+
+// W3DSnowManager::update: the clock gains each frame's time and wraps at the full period (fmod); a frame of 1/30 s
+// thirty times is 1.0000004 s in floats, as the original's sum.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_snow_clock_runs_on_frame_time_and_wraps_at_its_period)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	setting.snowBoxDimensions = 40.0f;
+	ApplyWeatherSetting(snow, setting);
+	BOOST_TEST(snow.fullTimePeriod == 10.0f);
+	AdvanceSnow(snow, FrameSeconds);
+	BOOST_TEST(snow.time == 0.033333335f);
+	for (int frame = 1; frame < 30; ++frame)
+		AdvanceSnow(snow, FrameSeconds);
+	BOOST_TEST(snow.time == 1.0000004f);
+	AdvanceSnow(snow, 9.5f); // 10.5 in floats: wrapped to 0.5
+	BOOST_TEST(snow.time == 0.5f);
+	AdvanceSnow(snow, 0.0f); // paused or frozen: no time
+	BOOST_TEST(snow.time == 0.5f);
+}
+
+// WWMath::Fast_Sin: the 1024-entry table read between neighbours: exact at its entries (sin 0 = 0, sin pi/2 = 1),
+// within the table's interpolation elsewhere (sin 1: 0.84147054, sin -2.5: -0.59846944).
+BOOST_AUTO_TEST_CASE(legacy_parity_fast_sin_reads_the_wwmath_table)
+{
+	BOOST_TEST(SnowFastSin(0.0f) == 0.0f);
+	BOOST_TEST(SnowFastSin(3.141592654f / 2.0f) == 1.0f);
+	BOOST_TEST(SnowFastSin(1.0f) == 0.84147054f);
+	BOOST_TEST(SnowFastSin(-2.5f) == -0.59846944f);
+}
+
+// W3DSnowManager::render and renderSubBox with point sprites: a 40 box at 1 emitter a unit around a camera at
+// (500.25, 600.75, 300) is emitters 480..519 by 580..619 (20 either side of its cell), one leaf (40 <= m_leafDim 45),
+// drawn row by row; the ceiling is 320 (camera + 20) and the fall so far time * 4 + fmod(300, 40). Emitter (483, 585)
+// (starting height 35) is at height 305 on frame 0, 304.86667 on frame 1, 301 on frame 30 and 293 on frame 90, swayed
+// 5 * Fast_Sin(height * 0.0533 + 483) in x and 5 * Fast_Sin(height * 0.0275 + 585) in y; it reaches the floor and
+// comes back to the top on frame 188 (280.06668 -> 319.93335). Its point size is 600 * 1 / distance (D3D's point scale
+// A 0, B 0, C 1) within 0..64 pixels. The tolerance covers float evaluation order only (relative 1e-6).
+BOOST_AUTO_TEST_CASE(legacy_parity_flakes_fall_and_sway_frame_by_frame_as_render_sub_box)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	setting.snowEnabled = true;
+	setting.snowBoxDimensions = 40.0f;
+	ApplyWeatherSetting(snow, setting);
+	const SnowView view = DownView({500.25f, 600.75f, 300.0f}, 10.0f);
+	SnowFlakes flakes;
+	const std::size_t row = (585 - 580) * 40 + (483 - 480);
+	struct Expected
+	{
+		int frame;
+		float x, y, z, size;
+	};
+	constexpr Expected expected[] = {
+		{0, 484.26968f, 586.82446f, 305.0f, 27.550455f},
+		{1, 484.30396f, 586.84143f, 304.86667f, 27.63454f},
+		{30, 485.2641f, 587.32434f, 301.0f, 29.7839f},
+		{90, 486.90518f, 588.2345f, 293.0f, 30.629711f},
+		{187, 487.99942f, 589.35986f, 280.06668f, 23.057333f},
+		{188, 480.43277f, 584.8145f, 319.93335f, 18.569527f},
+	};
+	int frame = 0;
+	for (const Expected &at : expected)
+	{
+		for (; frame < at.frame; ++frame)
+			AdvanceSnow(snow, FrameSeconds);
+		ExtractSnow(snow, true, view, flakes);
+		BOOST_TEST_REQUIRE(flakes.Size() == 1600u);
+		BOOST_TEST_CONTEXT("frame " << at.frame)
+		{
+			BOOST_TEST(flakes.x[row] == at.x, boost::test_tools::tolerance(1e-6f));
+			BOOST_TEST(flakes.y[row] == at.y, boost::test_tools::tolerance(1e-6f));
+			BOOST_TEST(flakes.z[row] == at.z, boost::test_tools::tolerance(1e-6f));
+			BOOST_TEST(flakes.size[row] == at.size, boost::test_tools::tolerance(1e-5f));
+		}
+	}
+	BOOST_TEST(flakes.pointSprites);
+	BOOST_TEST(flakes.texture == "EXSnowFlake.tga");
+	// Not shown (SHOW_WEATHER off) or not enabled: nothing drawn, the clock still runs.
+	ExtractSnow(snow, false, view, flakes);
+	BOOST_TEST(flakes.Size() == 0u);
+	snow.enabled = false;
+	ExtractSnow(snow, true, view, flakes);
+	BOOST_TEST(flakes.Size() == 0u);
+}
+
+// renderSubBox's culling: Bitter Winter's 100 box (amplitude 4, quads 0.5: an overscan of 4.5) under a camera at
+// (500, 500, 300) looking down with a half field of view of tan 0.2 is emitters 450..549 both ways (not clipped: the
+// visible box reaches +-60 at the ground); halved to 50s, then to 25s, the sub-boxes the frustum wholly leaves are
+// skipped (at the box's floor, 250, the frustum is +-10 across), leaving the four leaves around the camera, 2500 flakes,
+// in the order the halves are taken: upper left's lower right (475..499, 500..524) first, then upper right's lower
+// left (500, 500), lower left's upper right (475, 475), lower right's upper left (500, 475). Emitter (475, 500): at
+// (472.27115, 496.00183, 269), 2.2975485 pixels (600 * 0.16 / distance, at most 10).
+BOOST_AUTO_TEST_CASE(legacy_parity_sub_boxes_outside_the_frustum_are_culled_as_render_sub_box)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	setting.snowEnabled = true;
+	setting.snowBoxDimensions = 100.0f;
+	setting.snowAmplitude = 4.0f;
+	setting.snowPointSize = 0.16f;
+	setting.snowMaxPointSize = 10.0f;
+	ApplyWeatherSetting(snow, setting);
+	SnowFlakes flakes;
+	ExtractSnow(snow, true, DownView({500.0f, 500.0f, 300.0f}, 0.2f), flakes);
+	BOOST_TEST_REQUIRE(flakes.Size() == 2500u);
+	BOOST_TEST(flakes.x[0] == 472.27115f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.y[0] == 496.00183f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.z[0] == 269.0f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.size[0] == 2.2975485f, boost::test_tools::tolerance(1e-5f));
+	// Each leaf's first emitter, by where it sits on the grid (sway is at most the amplitude, 4).
+	const auto around = [&](std::size_t index, float x, float y) {
+		return std::abs(flakes.x[index] - x) <= 4.0f && std::abs(flakes.y[index] - y) <= 4.0f;
+	};
+	BOOST_TEST(around(624, 499.0f, 524.0f));
+	BOOST_TEST(around(625, 500.0f, 500.0f));
+	BOOST_TEST(around(1250, 475.0f, 475.0f));
+	BOOST_TEST(around(1875, 500.0f, 475.0f));
+}
+
+// render's clip to getMaximumVisibleBox: with a half field of view of tan 0.05 the frustum's edges reach the terrain's
+// lowest height (0) 300 below at +-15, grown by amplitude and quad size to +-19.5: the box of emitters 450..549 is cut
+// to floor(480.5) .. floor(519.5), 480..518, 39 by 39 = 1521 flakes in one leaf; emitter (480, 480) at
+// (480.3915, 476.00082, 309).
+BOOST_AUTO_TEST_CASE(legacy_parity_the_box_is_clipped_to_the_visible_terrain)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	setting.snowEnabled = true;
+	setting.snowBoxDimensions = 100.0f;
+	setting.snowAmplitude = 4.0f;
+	setting.snowPointSize = 0.16f;
+	setting.snowMaxPointSize = 10.0f;
+	ApplyWeatherSetting(snow, setting);
+	SnowFlakes flakes;
+	ExtractSnow(snow, true, DownView({500.0f, 500.0f, 300.0f}, 0.05f), flakes);
+	BOOST_TEST_REQUIRE(flakes.Size() == 1521u);
+	BOOST_TEST(flakes.x[0] == 480.3915f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.y[0] == 476.00082f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.z[0] == 309.0f, boost::test_tools::tolerance(1e-6f));
+}
+
+// renderAsQuads (SnowPointSprites = no): no sub-box culling, every emitter of the clipped box (100 x 100 = 10000),
+// each swayed along the camera's right and up (view space x and y; straight down they are world x and y), a quad
+// SnowQuadSize across (0.25 either side). Emitter (450, 450) at (453.97876, 449.63028, 312).
+BOOST_AUTO_TEST_CASE(legacy_parity_quads_draw_every_emitter_as_render_as_quads)
+{
+	SnowField snow;
+	WeatherSetting setting;
+	setting.snowEnabled = true;
+	setting.usePointSprites = false;
+	setting.snowBoxDimensions = 100.0f;
+	setting.snowAmplitude = 4.0f;
+	ApplyWeatherSetting(snow, setting);
+	SnowFlakes flakes;
+	ExtractSnow(snow, true, DownView({500.0f, 500.0f, 300.0f}, 0.2f), flakes);
+	BOOST_TEST_REQUIRE(flakes.Size() == 10000u);
+	BOOST_TEST(!flakes.pointSprites);
+	BOOST_TEST(flakes.x[0] == 453.97876f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.y[0] == 449.63028f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.z[0] == 312.0f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(flakes.size[0] == 0.25f);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

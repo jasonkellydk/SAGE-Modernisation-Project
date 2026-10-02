@@ -3,6 +3,7 @@ import games.generalszh.gameplay.containment.algorithms.transport_riders;
 import games.generalszh.session.composition.tick_events;
 import games.generalszh.session.composition.simulation;
 import games.generalszh.session.composition.simulation_setup;
+import engine.gameplay.rts.movement.components.pursuit;
 import games.generalszh.gameplay.containment.algorithms.railed_transports;
 import games.generalszh.gameplay.containment.systems.railed_transport_systems;
 import games.generalszh.gameplay.combat.systems.checkpoint_system;
@@ -47,12 +48,15 @@ import engine.gameplay.rts.economy.resources.player_bounties;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import games.generalszh.gameplay.powers.algorithms.special_power_launch;
 import games.generalszh.gameplay.powers.algorithms.shortcut_powers;
+import games.generalszh.gameplay.orders.algorithms.view_targets;
 import games.generalszh.gameplay.production.algorithms.rally_points;
 import std;
 import engine.gameplay.common.identity.components.captured;
 import games.generalszh.gameplay.construction.algorithms.build_legality;
 import games.generalszh.gameplay.construction.algorithms.building;
 import games.generalszh.gameplay.orders.algorithms.command_availability;
+import games.generalszh.gameplay.orders.algorithms.build_tooltip_facts;
+import games.generalszh.gameplay.orders.algorithms.move_hints;
 import engine.gameplay.rts.collision.systems.body_collision_system;
 import engine.gameplay.rts.containment.systems.rider_regen_system;
 import engine.gameplay.rts.movement.systems.wander_system;
@@ -63,6 +67,7 @@ export import engine.gameplay.rts.match.systems.victory_system;
 import games.generalszh.gameplay.ai.algorithms.ai_players;
 import games.generalszh.gameplay.ai.algorithms.ai_base_building;
 import games.generalszh.gameplay.ai.algorithms.ai_team_building;
+import games.generalszh.gameplay.ai.algorithms.team_path_follows;
 import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import engine.gameplay.rts.veterancy.resources.skill_point_awards;
 import engine.gameplay.common.identity.components.object_id;
@@ -203,6 +208,7 @@ import engine.gameplay.common.status.systems.disable_systems;
 import engine.gameplay.rts.slaves.systems.disable_follow_system;
 import games.generalszh.gameplay.mines.algorithms.minefields;
 import games.generalszh.gameplay.mines.algorithms.mine_clearing;
+import games.generalszh.gameplay.academy.algorithms.academy_records;
 import games.generalszh.gameplay.mines.systems.mine_clearing_detail_system;
 import games.generalszh.gameplay.construction.systems.builder_boredom_system;
 import games.generalszh.gameplay.construction.algorithms.builder_boredom;
@@ -256,6 +262,8 @@ import games.generalszh.gameplay.appearance.systems.extension_look_system;
 import games.generalszh.gameplay.appearance.systems.appearance_system;
 import games.generalszh.gameplay.world.algorithms.level_setup;
 import games.generalszh.gameplay.bridges.algorithms.bridges;
+import games.generalszh.gameplay.walls.algorithms.walls;
+import games.generalszh.gameplay.waveguide.algorithms.wave_guides;
 import games.generalszh.gameplay.hacking.algorithms.hack_events;
 import games.generalszh.gameplay.battleplans.algorithms.battle_plan_events;
 import games.generalszh.gameplay.crates.algorithms.hijacking;
@@ -265,6 +273,8 @@ import games.generalszh.gameplay.combat.algorithms.battle_bus;
 import games.generalszh.gameplay.combat.algorithms.weapon_bonus_pulses;
 import games.generalszh.gameplay.creation.algorithms.ocl_timers;
 import games.generalszh.gameplay.effects.algorithms.bone_fx_effects;
+import games.generalszh.gameplay.effects.algorithms.transition_creations;
+import games.generalszh.gameplay.containment.algorithms.parachute_landings;
 import games.generalszh.gameplay.effects.systems.radius_decal_system;
 import games.generalszh.gameplay.effects.resources.radius_decal_looks;
 import games.generalszh.gameplay.railroad.systems.railroad_system;
@@ -348,6 +358,8 @@ private:
 		};
 		if (content.aiData.forceIdleMs)
 			m_world.Resource<gameplay::MoodRanges>().forceIdleTicks = frames(*content.aiData.forceIdleMs);
+		m_world.Resource<gameplay::MoodRanges>().ignoreInsignificantBuildings = content.aiData.attackIgnoreInsignificantBuildings;
+		m_world.EmplaceResource<gameplay::ChaseRules>(gameplay::ChaseRules{content.aiData.aiCrushesInfantry});
 		m_world.EmplaceResource<domain::TunnelGuardRules>(domain::TunnelGuardRules{frames(content.aiData.guardEnemyScanRateMs), frames(content.aiData.guardChaseUnitsMs)});
 		m_world.EmplaceResource<domain::GuardRules>(domain::GuardRules{frames(content.aiData.guardEnemyScanRateMs), frames(content.aiData.guardEnemyReturnScanRateMs),
 			frames(content.aiData.guardChaseUnitsMs)});
@@ -400,6 +412,7 @@ private:
 		m_templates.weapons.targetFaerieFire = content::weapon_bonus::TargetFaerieFire;
 		m_templates.weapons.faerieFireStatus = content::ObjectStatusBit("FAERIE_FIRE");
 		m_templates.deaths.crushDamageType = *content::DamageTypeIndex("CRUSH");
+		m_templates.deaths.underConstructionStatus = std::uint64_t{1} << content::ObjectStatusBit("UNDER_CONSTRUCTION");
 		// ActiveBody::attemptDamage's handled damage types: KILL_PILOT takes no health (ApplyPilotKills carries it out).
 		m_templates.armors.SetHandled((std::uint64_t{1} << *content::DamageTypeIndex("KILL_PILOT")) | (std::uint64_t{1} << *content::DamageTypeIndex("KILL_GARRISONED")) |
 			(std::uint64_t{1} << *content::DamageTypeIndex("STATUS")));
@@ -466,6 +479,8 @@ private:
 					if (m_playerSides.size() <= player)
 						m_playerSides.resize(player + 1);
 					m_playerSides[player] = info.side;
+					// Player::init: its AcademyStats (m_academyStats.init) for its template's base side.
+					domain::InitAcademy(m_academy, player, info.baseSide, m_tick);
 					if (m_playerTemplates.size() <= player)
 						m_playerTemplates.resize(player + 1);
 					m_playerTemplates[player] = info.name;
@@ -548,12 +563,16 @@ private:
 			std::int64_t cash = templateMoney != 0 ? templateMoney : gameCash;
 			if (side != nullptr)
 				cash += side->properties.Get<std::int64_t>("playerStartMoney").value_or(0);
-			m_money.Deposit(player, cash);
+			// Starting cash (setStartingCash / deposit(.., FALSE, FALSE)): no deposit sound; a map's playerStartMoney is
+			// paid as the level loads, before anything is heard.
+			m_money.Deposit(player, cash, false);
 		}
 		if (place)
 		{
 			domain::PlaceBridges(m_game);
 			domain::PlaceBridgeLikeObjects(m_game);
+			// Pathfinder::newMap: the wall layer of the wall pieces placed.
+			domain::BuildWallLayer(m_game);
 			// The bridges' decks in the pathfinding: every clearance plane afresh.
 			domain::RebuildClearance(m_game);
 			domain::PlaceObjects(m_game);
@@ -561,7 +580,7 @@ private:
 				if (const auto *faction = m_templates.Content().playerTemplates.At(start.playerTemplate))
 					if (const auto team = m_roster.FindTeam(start.team))
 						domain::PlaceStartingObjects(m_game, *faction, start.startPosition, *team);
-			// Garrisons made with their occupants inside (InitialRoster) have them from the start.
+			// Garrisons made with their occupants inside (InitialRoster) take on their occupants' player from the start.
 			domain::TendGarrisons(m_game);
 			// A game with seats (skirmish, LAN; not a campaign or challenge mission): the seats see the map (observers for
 			// good; the rest fogged unless Multiplayer.ini's UseShroud).
@@ -574,7 +593,7 @@ private:
 					{
 						const auto *faction = m_templates.Content().playerTemplates.At(start.playerTemplate);
 						seated.push_back(*player);
-						observers.push_back(faction != nullptr && faction->name == "FactionObserver" ? 1 : 0);
+						observers.push_back(faction != nullptr && faction->observer ? 1 : 0); // Player::isPlayerObserver: IsObserver
 					}
 				domain::RevealSeatsAtStart(m_game, seated, observers, m_templates.Content().multiplayer.useShroud);
 			}
@@ -610,7 +629,13 @@ private:
 					if (participant.properties.Get<std::string>("playerName").value_or("") == m_roster.PlayerAt(player).name)
 						mine = &participant;
 				static const std::vector<engine::level::PlannedPlacement> none;
-				domain::SetUpAi(m_game, m_aiPlayers, player, 1, mine != nullptr ? mine->plan : none, m_roster.DefaultTeam(player).value_or(0));
+				// Player::setPlayerType: ForceSkirmishAI gives a map's computer player (a named one: the neutral player has no
+				// AI) the skirmish AI (AISkirmishPlayer::newMap: its side's skirmish build list) instead.
+				if (m_templates.Content().aiData.forceSkirmishAi && !m_roster.PlayerAt(player).name.empty())
+					domain::SetUpSkirmishAi(m_game, m_aiPlayers, player, 1, player < m_playerSides.size() ? m_playerSides[player] : std::string{},
+						m_roster.DefaultTeam(player).value_or(0));
+				else
+					domain::SetUpAi(m_game, m_aiPlayers, player, 1, mine != nullptr ? mine->plan : none, m_roster.DefaultTeam(player).value_or(0));
 			}
 		}
 		// GameLogic::startNewGame, a new single-player game (not a saved one: its checkpoint replaces all this): each human
@@ -628,7 +653,7 @@ private:
 				{
 					const auto *faction = m_templates.Content().playerTemplates.At(start.playerTemplate);
 					if (start.player == m_roster.PlayerAt(player).name && faction != nullptr && faction->name != "FactionCivilian" &&
-						faction->name != "FactionObserver")
+						!faction->observer)
 					{
 						m_outcome.players.push_back({player});
 						break;
@@ -734,6 +759,8 @@ public:
 			m_tickMark = std::chrono::steady_clock::now();
 		m_cameraCommands.clear();
 		m_clientCommands.clear();
+		// Money::deposit's recordIncome for what came in since the last tick (at that frame).
+		domain::RecordAcademyIncomes(m_game);
 		composition::ClearTickEvents(m_world);
 		++m_tick;
 		for (const engine::net::CommandEnvelope &envelope : commands)
@@ -828,9 +855,13 @@ public:
 		domain::ApplyRepulsions(m_game);
 		// Units whose squad has nobody left idle.
 		domain::ApplySquadsDone(m_game);
+		// Units following a path as a team: the team on to its next waypoint, the others after it.
+		domain::ApplyTeamPathFollows(m_game);
 		// Idle units on top of one another step clear (processCollision, not moving).
 		domain::ApplyUnitSettles(m_game);
 		domain::CarryOutDeathAftermath(m_game);
+		// DamDie::onDie (after the dam's creation lists): the flood waves enabled.
+		domain::ApplyDamDie(m_game, m_casualties.list);
 		// NeutronBlastBehavior::onDie: the tick's neutron deaths and neutron shells that died detonating.
 		domain::ApplyNeutronBlasts(m_game, m_casualties, m_world.Resource<gameplay::Detonations>());
 		// BunkerBusterBehavior::bustTheBunker: the tick's bunker busters that went off.
@@ -847,6 +878,10 @@ public:
 		domain::ApplyStickyBombEvents(m_game);
 		// BridgeBehavior: the bridges' damage-state transitions and due death effects, then those that died.
 		domain::ApplyBridgeEvents(m_game, m_casualties.list);
+		// The wall's pieces gone or fallen to rubble: out of the wall, what stood on them falling.
+		domain::ApplyWallEvents(m_game, m_casualties.list);
+		// WaveGuideUpdate: the flood waves set off, removed, their victims made wet and the bridges they broke replaced.
+		domain::ApplyWaveGuideEvents(m_game);
 		// HackInternetAIUpdate: the hackers' pay.
 		{
 			std::vector<domain::HackEvent> hacks;
@@ -871,6 +906,10 @@ public:
 		domain::ApplyOclTimers(m_game, m_playerSides);
 		// BoneFXUpdate: the FX lists and creation lists played at bones this tick.
 		domain::ApplyBoneFx(m_game);
+		// TransitionDamageFX: the creation lists of the hits that left their targets worse off.
+		domain::ApplyTransitionCreations(m_game);
+		// ParachuteContain::onRemoving: what the riders set down this tick do next.
+		domain::ApplyParachuteLandings(m_game);
 		domain::ApplyRailroadRequests(m_game);
 		domain::ApplyRailroadImpulses(m_game);
 		// DAMAGE_DISARM: the mines and traps disarmed this tick, and the clearers going on to the next.
@@ -918,6 +957,8 @@ public:
 			TickMark(TickPart::AiPlayers);
 			domain::UpdateGenericScripts(m_game, player, teamHooks);
 			TickMark(TickPart::GenericScripts);
+			// Player::update: its AcademyStats (update).
+			domain::UpdateAcademy(m_game, player);
 		}
 		domain::RunUpgradeCreations(m_game);
 		domain::TendMinefields(m_game);
@@ -931,6 +972,11 @@ public:
 		domain::ApplyBoobyTrapEntries(m_game);
 		// Internet Centers set the hackers they take in hacking (InternetHackContain::onContaining).
 		domain::ApplyInternetHackCargo(m_game);
+		// The academy's records of the tick: incomes, boardings into garrisons and tunnels, garrisons cleared, disguises.
+		domain::RecordAcademyIncomes(m_game);
+		domain::RecordAcademyCargo(m_game);
+		domain::RecordAcademyGarrisonClears(m_game);
+		domain::RecordAcademyDisguises(m_game);
 		TickMark(TickPart::Tending);
 	}
 
@@ -1026,6 +1072,7 @@ public:
 			return script != nullptr && script->oneShot;
 		};
 		hooks.exists = [this](const std::string &name) { return m_scripts->HasScript(name); };
+		hooks.destroying = [this](std::uint32_t team) { domain::AiPreTeamDestroy(m_aiPlayers, team); };
 		return hooks;
 	}
 
@@ -1149,10 +1196,16 @@ public:
 	{
 		return domain::CommandAvailability(m_game, entity, button);
 	}
-	bool CanBuildAt(ecs::Entity builder, std::string_view structure, Engine::Math::FixedVector2 at, Engine::Math::TurnAngle facing) override
+	domain::BuildTooltipFacts BuildTooltip(std::uint32_t player, ecs::Entity selected, const content::CommandButtonContent &button) override
+	{
+		return domain::ReadBuildTooltipFacts(m_game, player, selected, button);
+	}
+	bool QuickPathAvailable(ecs::Entity unit, Engine::Math::FixedVector2 to) override { return domain::QuickPathAvailable(m_game, unit, to); }
+	bool CanBuildAt(ecs::Entity builder, std::string_view structure, Engine::Math::FixedVector2 at, Engine::Math::TurnAngle facing,
+		bool specialPowerConstruct) override
 	{
 		const content::ObjectDefinition *what = m_templates.Content().objects.Find(structure);
-		return what != nullptr && domain::CanMakeUnit(m_game, builder, *what) == domain::CanMake::Ok &&
+		return what != nullptr && domain::CanMakeUnit(m_game, builder, *what, specialPowerConstruct) == domain::CanMake::Ok &&
 			domain::CheckBuildLocation(m_game, *what, at, facing, builder) == domain::LegalBuild::Ok;
 	}
 	bool CanCombatDropInto(ecs::Entity transport, ecs::Entity target) override
@@ -1186,6 +1239,8 @@ public:
 	{
 		return domain::PlayerObjectsOfType(m_game, player, object);
 	}
+	std::optional<ecs::Entity> CommandCenterToView(std::uint32_t player) override { return domain::CommandCenterToView(m_game, player); }
+	std::optional<ecs::Entity> HeroToSelect(std::uint32_t player) const override { return domain::FirstHero(m_game, player); }
 	std::optional<ecs::Entity> MostReadyPowerOfType(std::uint32_t player, const std::string &object) override
 	{
 		return domain::MostReadySpecialPowerForThing(m_game, player, object);
@@ -1418,6 +1473,7 @@ private:
 	domain::AttackSquads &m_attackSquadList{m_world.EmplaceResource<domain::AttackSquads>()};
 	domain::SoloPlay &m_soloPlay{m_world.EmplaceResource<domain::SoloPlay>()};
 	domain::ScoreKeepers &m_scoreKeepers{m_world.EmplaceResource<domain::ScoreKeepers>()};
+	domain::AcademyStats &m_academy{m_world.EmplaceResource<domain::AcademyStats>()};
 	domain::CommandBarOverrides &m_commandBarOverrides{m_world.EmplaceResource<domain::CommandBarOverrides>()};
 	domain::BuildableOverrides &m_buildableOverrides{m_world.EmplaceResource<domain::BuildableOverrides>()};
 	gameplay::HulkLifetime &m_hulkLifetime{m_world.EmplaceResource<gameplay::HulkLifetime>()};

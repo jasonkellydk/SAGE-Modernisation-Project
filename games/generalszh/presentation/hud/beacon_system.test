@@ -78,6 +78,7 @@ struct Match
 		options.presentationComponents = [](ecs::World &world) {
 			world.RegisterComponent<presentation::BeaconLook>();
 			world.RegisterComponent<presentation::BeaconCaption>();
+			world.RegisterComponent<presentation::ShroudSight>(); // BeaconSystem's smoke under the shroud
 		};
 		return options;
 	}

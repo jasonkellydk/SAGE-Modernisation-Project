@@ -4,6 +4,7 @@ import engine.gameplay.rts.docking.components.dock_look;
 import games.generalszh.gameplay.containment.components.railed_transport;
 import games.generalszh.gameplay.flight_deck.components.flight_deck;
 import engine.gameplay.rts.combat.components.attack_move;
+import engine.gameplay.rts.combat.components.attack_move_resume;
 import games.generalszh.gameplay.containment.components.rider_change;
 import std;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
@@ -12,6 +13,8 @@ import games.generalszh.gameplay.ai.components.tunnel_guard;
 import games.generalszh.gameplay.ai.components.attack_squad;
 import games.generalszh.gameplay.containment.components.scripted_evacuation;
 import games.generalszh.gameplay.ai.components.guard;
+import games.generalszh.gameplay.ai.components.team_path_follow;
+import engine.gameplay.rts.movement.components.desired_speed;
 import engine.gameplay.common.identity.components.definition_ref;
 import engine.gameplay.rts.construction.components.builder;
 
@@ -23,6 +26,7 @@ import engine.gameplay.common.identity.components.owner;
 import engine.gameplay.common.weapons.components.armament;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.systems.movement_system;
+import engine.gameplay.common.spatial.resources.deck_surfaces;
 import engine.gameplay.rts.combat.components.aggression;
 import engine.gameplay.rts.containment.components.transport;
 import engine.gameplay.rts.containment.components.mount;
@@ -53,10 +57,44 @@ namespace detail
 // Object::isMobile: not while disabled (any type); the AI's move orders return early then.
 // Its AI's machine is locked (StateMachine::lock: a scripted AIMoveAndEvacuateState / AIMoveAndDeleteState): no order
 // changes its state.
-inline bool Locked(const GameWorld &game, ecs::Entity unit)
+inline bool StateLocked(const GameWorld &game, ecs::Entity unit)
 {
 	const auto *evacuation = game.world.Get<ScriptedEvacuation>(unit);
 	return evacuation != nullptr && evacuation->locked != 0;
+}
+
+// AIUpdateInterface::isAllowedToRespondToAiCommands' mood test (getMoodMatrixValue): a unit of a computer player
+// (MM_Controller_AI) at ATTITUDE_SLEEP ignores every command (but AICMD_MOVE_TO_POSITION_EVEN_IF_SLEEPING).
+inline bool Asleep(const GameWorld &game, ecs::Entity unit)
+{
+	const auto *aggression = game.world.Get<gameplay::Aggression>(unit);
+	if (aggression == nullptr || aggression->attitude != gameplay::attitude::Sleep)
+		return false;
+	const auto *owner = game.world.Get<gameplay::Owner>(unit);
+	return owner != nullptr && owner->player < game.roster.PlayerCount() && !game.roster.PlayerAt(owner->player).human;
+}
+
+// No command reaches it: its machine locked, or asleep.
+inline bool Locked(const GameWorld &game, ecs::Entity unit) { return StateLocked(game, unit) || Asleep(game, unit); }
+
+// getMoodMatrixActionAdjustment(MM_Action_Move) for a computer player's unit at ATTITUDE_ALERT or ATTITUDE_AGGRESSIVE:
+// MAA_Action_To_AttackMove (AIMoveToState::update turns its move into aiAttackMoveToPosition, CMD_FROM_AI). Angry mob
+// members (INFANTRY and IGNORED_IN_GUI) take no mood.
+inline bool MovesAttackMove(const GameWorld &game, ecs::Entity unit)
+{
+	const auto *aggression = game.world.Get<gameplay::Aggression>(unit);
+	if (aggression == nullptr || (aggression->attitude != gameplay::attitude::Alert && aggression->attitude != gameplay::attitude::Aggressive))
+		return false;
+	const auto *owner = game.world.Get<gameplay::Owner>(unit);
+	if (owner == nullptr || owner->player >= game.roster.PlayerCount() || game.roster.PlayerAt(owner->player).human)
+		return false;
+	if (const auto *ref = game.world.Get<gameplay::DefinitionRef>(unit))
+	{
+		const content::ObjectDefinition &kind = game.templates.DefinitionAt(ref->index);
+		if (kind.Is("INFANTRY") && kind.Is("IGNORED_IN_GUI"))
+			return false;
+	}
+	return true;
 }
 
 inline bool Mobile(const GameWorld &game, ecs::Entity unit)
@@ -93,6 +131,17 @@ void TakeOver(GameWorld &game, ecs::Entity unit, bool fromPlayer)
 		world.Remove<gameplay::Builder>(unit);
 }
 
+// Following a path as a team ends (AIFollowWaypointPathState left), and with it the group's speed (the next move's
+// AIInternalMoveToState::onEnter: setDesiredSpeed(FAST_AS_POSSIBLE)).
+void EndTeamPathFollow(GameWorld &game, ecs::Entity unit)
+{
+	if (!game.world.Has<TeamPathFollow>(unit))
+		return;
+	game.world.Remove<TeamPathFollow>(unit);
+	if (game.world.Has<gameplay::DesiredSpeed>(unit))
+		game.world.Remove<gameplay::DesiredSpeed>(unit);
+}
+
 // A direct order ends guarding and hunting (holding stays), as the original.
 void EndStance(GameWorld &game, ecs::Entity unit)
 {
@@ -109,6 +158,10 @@ void EndStance(GameWorld &game, ecs::Entity unit)
 	// And attack-moving (AIAttackMoveToState left).
 	if (game.world.Has<gameplay::AttackMove>(unit))
 		game.world.Remove<gameplay::AttackMove>(unit);
+	// And attack-following a path (AIAttackFollowWaypointPathState left).
+	if (game.world.Has<gameplay::AttackMoveResume>(unit))
+		game.world.Remove<gameplay::AttackMoveResume>(unit);
+	EndTeamPathFollow(game, unit);
 }
 }
 
@@ -170,13 +223,33 @@ inline void AiBusyOn(GameWorld &game, ecs::Entity unit)
 		activity->busy = 1;
 }
 
+// TerrainLogic::getLayerForDestination for a spot at `height` (a player's click, MSG_DO_MOVETO's Coord3D): the ground
+// with no decks.
+inline std::uint8_t LayerAt(GameWorld &game, FixedVector2 at, Engine::Math::Fixed height)
+{
+	const auto *decks = game.world.FindResource<gameplay::DeckSurfaces>();
+	return decks != nullptr ? gameplay::LayerForDestination(*decks, game.ground, {at.x, at.y, height}) : gameplay::GroundLayer;
+}
+
+// A member's goal layer (AIGroup::computeIndividualDestination's dest.z = getLayerHeight(dest, the group's layer), then
+// AIUpdateInterface::computePath's getLayerForDestination(dest)).
+inline std::uint8_t MemberGoalLayer(GameWorld &game, FixedVector2 at, std::uint8_t groupLayer)
+{
+	const auto *decks = game.world.FindResource<gameplay::DeckSurfaces>();
+	return decks != nullptr ? gameplay::LayerForDestination(*decks, game.ground, {at.x, at.y, gameplay::LayerHeight(*decks, game.ground, at, groupLayer)})
+							: gameplay::GroundLayer;
+}
+
 // aiMoveToPosition: `commanded` from a player or a script (else CMD_FROM_AI: AiMove). Its goal adjusted and claimed
 // (AIMoveToState), unless the move is another state's (`claim`: aiEnter's AIEnterState claims nothing).
+// `evenIfSleeping`: aiMoveToPositionEvenIfSleeping (BuildAssistant::moveObjectsForConstruction). `goalLayer`: the layer
+// its destination is on (computePath's getLayerForDestination of the Coord3D it was given); NoGoalLayer: found by the
+// route from where it stands and where it goes.
 void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool fromPlayer = false, bool commanded = true,
-	gameplay::GoalClaim claim = gameplay::GoalClaim::Adjust)
+	gameplay::GoalClaim claim = gameplay::GoalClaim::Adjust, bool evenIfSleeping = false, std::uint8_t goalLayer = gameplay::NoGoalLayer)
 {
 	auto &world = game.world;
-	if (!world.IsAlive(unit) || detail::Locked(game, unit))
+	if (!world.IsAlive(unit) || (evenIfSleeping ? detail::StateLocked(game, unit) : detail::Locked(game, unit)))
 		return;
 	if (commanded)
 		Commanded(game, unit);
@@ -186,7 +259,7 @@ void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool
 		return;
 	detail::TakeOver(game, unit, fromPlayer);
 	if (auto *order = world.Get<gameplay::MoveOrder>(unit))
-		*order = gameplay::MoveToPoint(destination, claim);
+		*order = gameplay::MoveToPointOn(destination, goalLayer, claim);
 	if (auto *attack = world.Get<gameplay::AttackTarget>(unit))
 		*attack = {};
 	detail::EndStance(game, unit);
@@ -194,14 +267,14 @@ void OrderMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool
 
 // aiAttackMoveToPosition (CMD_FROM_PLAYER): a move there (ending what it did), as AIAttackMoveToState: taking on what it
 // comes across on the way.
-void OrderAttackMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination)
+void OrderAttackMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination, std::uint8_t goalLayer = gameplay::NoGoalLayer)
 {
 	auto &world = game.world;
 	if (DesignateFlightDeck(world, unit, DeckOrder::AttackMove, {}, destination, false))
 		return;
 	if (!world.IsAlive(unit) || world.Get<gameplay::MoveOrder>(unit) == nullptr || world.Get<gameplay::Aggression>(unit) == nullptr)
 		return;
-	OrderMove(game, unit, destination, true);
+	OrderMove(game, unit, destination, true, true, gameplay::GoalClaim::Adjust, false, goalLayer);
 	if (auto *assault = world.Get<AssaultTransport>(unit))
 	{
 		assault->attackMoveGoal = destination;
@@ -212,6 +285,19 @@ void OrderAttackMove(GameWorld &game, ecs::Entity unit, FixedVector2 destination
 	if (!world.Has<gameplay::AttackMove>(unit))
 		world.Add<gameplay::AttackMove>(unit);
 	*world.Get<gameplay::AttackMove>(unit) = gameplay::AttackMove{destination};
+}
+
+// aiMoveToPosition as AIMoveToState runs it (m_isMoveTo): a move there, which a computer player's alert or aggressive
+// unit turns into an attack move there on its first update (getMoodMatrixActionAdjustment: MAA_Action_To_AttackMove ->
+// aiAttackMoveToPosition), the same tick.
+void OrderMoveTo(GameWorld &game, ecs::Entity unit, FixedVector2 destination, bool fromPlayer = false, bool commanded = true,
+	std::uint8_t goalLayer = gameplay::NoGoalLayer)
+{
+	OrderMove(game, unit, destination, fromPlayer, commanded, gameplay::GoalClaim::Adjust, false, goalLayer);
+	const auto *order = game.world.IsAlive(unit) ? game.world.Get<gameplay::MoveOrder>(unit) : nullptr;
+	if (order == nullptr || order->mode != gameplay::MoveMode::Point || order->destination != destination || !detail::MovesAttackMove(game, unit))
+		return;
+	OrderAttackMove(game, unit, destination, goalLayer);
 }
 
 // An attack order. A TransportAIUpdate carrier whose passengers may fire passes it on to them
@@ -378,6 +464,30 @@ void OrderStop(GameWorld &game, ecs::Entity unit, bool fromPlayer = false, bool 
 }
 
 // Along the waypoint path labelled `label`, from its waypoint closest to `from`.
+// AIFollowWaypointPathState::update (m_isFollowWaypointPathState: not the attack, exact, wander or panic states): a
+// computer player's alert or aggressive unit following a path (getMoodMatrixActionAdjustment(MM_Action_Move):
+// MAA_Action_To_AttackMove; detail::MovesAttackMove) attack-follows it from its current waypoint instead
+// (aiAttackFollowWaypointPath / aiAttackFollowWaypointPathAsTeam, CMD_FROM_AI): AIAttackFollowWaypointPathState takes on
+// what it comes across as it goes (AttackMove: getNextMoodTarget on its timer) and, each fight over, goes back to its
+// path (AttackMoveResume: computeGoal, computePath). Checked when its path starts and when its attitude changes (the
+// original checks every update; nothing else changes the answer while it follows).
+void AttackFollowIfMoody(GameWorld &game, ecs::Entity unit)
+{
+	auto &world = game.world;
+	if (!world.IsAlive(unit) || world.Has<gameplay::AttackMove>(unit) || !detail::MovesAttackMove(game, unit))
+		return;
+	const auto *order = world.Get<gameplay::MoveOrder>(unit);
+	const bool team = world.Has<TeamPathFollow>(unit);
+	if (order == nullptr || (team ? order->mode == gameplay::MoveMode::Idle : order->mode != gameplay::MoveMode::Path))
+		return;
+	const gameplay::MoveOrder following = *order;
+	AiCommanded(game, unit);
+	world.Add<gameplay::AttackMove>(unit);
+	*world.Get<gameplay::AttackMove>(unit) = gameplay::AttackMove{following.destination};
+	world.Add<gameplay::AttackMoveResume>(unit);
+	*world.Get<gameplay::AttackMoveResume>(unit) = gameplay::AttackMoveResume{following, static_cast<std::uint8_t>(team ? 1 : 0)};
+}
+
 void OrderFollowPath(GameWorld &game, ecs::Entity unit, const std::string &label, std::optional<FixedVector2> from = std::nullopt, bool exact = false)
 {
 	auto &world = game.world;
@@ -388,6 +498,22 @@ void OrderFollowPath(GameWorld &game, ecs::Entity unit, const std::string &label
 		return;
 	const FixedVector2 near = from.value_or(world.Get<gameplay::Transform>(unit)->position.XY());
 	*order = gameplay::FollowPath(game.waypoints, game.waypoints.ClosestOnPath(near, label), exact);
+	// computeGoal's goal layer for its first leg; each leg routed afresh.
+	if (order->waypoint != gameplay::WaypointGraph::None)
+		if (const auto *decks = world.FindResource<gameplay::DeckSurfaces>())
+			order->goalLayer = gameplay::WaypointGoalLayer(*decks, game.waypoints.Position(order->waypoint).XY());
+	if (auto *route = world.Get<gameplay::Route>(unit))
+		route->planned = false;
+	detail::EndTeamPathFollow(game, unit);
+	// A new path state: attack-following one before ends (AIAttackFollowWaypointPathState left).
+	if (world.Has<gameplay::AttackMoveResume>(unit))
+	{
+		world.Remove<gameplay::AttackMoveResume>(unit);
+		if (world.Has<gameplay::AttackMove>(unit))
+			world.Remove<gameplay::AttackMove>(unit);
+	}
+	if (!exact)
+		AttackFollowIfMoody(game, unit);
 }
 
 // Held units may not move (they still shoot what comes into range).

@@ -1,6 +1,7 @@
 export module games.generalszh.session.script_bridge;
 import games.generalszh.gameplay.scripts.algorithms.value_groups;
 import games.generalszh.gameplay.world.resources.music_progress;
+import games.generalszh.gameplay.orders.algorithms.group_orders;
 import engine.gameplay.rts.containment.components.garrison;
 import games.generalszh.gameplay.world.algorithms.water_levels;
 import games.generalszh.gameplay.railroad.components.railcar;
@@ -107,7 +108,9 @@ public:
 		if (const auto at = Waypoint(waypoint))
 		{
 			domain::NormalLocomotors(m_game, m_game.names.Find(name));
-			domain::OrderMove(m_game, m_game.names.Find(name), *at);
+			// aiMoveToPosition(waypoint->getLocation()): the waypoint on the ground (TerrainLogic::addWaypoint), its layer
+			// found from that height (computePath's getLayerForDestination).
+			domain::OrderMoveTo(m_game, m_game.names.Find(name), *at, false, true, domain::LayerAt(m_game, *at, m_game.ground.At(*at)));
 		}
 	}
 
@@ -430,8 +433,9 @@ public:
 		const ecs::Entity victim = m_game.names.Find(unit);
 		if (!index || !m_game.world.IsAlive(victim))
 			return;
-		for (const ecs::Entity member : domain::button_target_detail::GroupOf(m_game, *index))
-			domain::OrderAttack(m_game, member, victim, 0, engine::gameplay::CommandSource::Script);
+		// doTeamAttackNamed: the team as an AIGroup (getTeamAsAIGroup) -> groupAttackObject(victim, NO_MAX_SHOTS_LIMIT,
+		// CMD_FROM_SCRIPT).
+		domain::GroupAttackObject(m_game, domain::button_target_detail::GroupOf(m_game, *index), victim, 0, engine::gameplay::CommandSource::Script);
 	}
 	void CreateObject(const std::string &name, const std::string &type, const std::string &team, Engine::Math::FixedVector3 at, Engine::Math::Fixed angle) override
 	{
@@ -562,7 +566,11 @@ public:
 		if (!index)
 			return;
 		auto &money = m_game.world.Resource<gameplay::PlayerMoney>();
-		money.Deposit(*index, amount < 0 ? -std::min(-amount, money.Balance(*index)) : amount);
+		// ScriptActions::doAddCash: a negative amount withdrawn (as much as there is), else deposited; both heard.
+		if (amount < 0)
+			money.WithdrawUpTo(*index, -amount);
+		else
+			money.Deposit(*index, amount);
 	}
 	// doSetMoney: all of it withdrawn, then the amount deposited.
 	bool InArea(std::size_t participant, AreaQuery test, const std::string &subject, const std::string &area, std::int64_t surfaces) override
@@ -788,7 +796,10 @@ public:
 		if (!index)
 			return;
 		auto &money = m_game.world.Resource<gameplay::PlayerMoney>();
-		money.Deposit(*index, std::max<std::int64_t>(0, amount) - money.Balance(*index));
+		// ScriptActions::doSetMoney as EA wrote it: withdraw(countMoney()), then deposit(money): both heard (the fork's
+		// deposit(money, FALSE, FALSE) silences the second; EA's is the authority).
+		money.WithdrawUpTo(*index, money.Balance(*index));
+		money.Deposit(*index, std::max<std::int64_t>(0, amount));
 	}
 	// Player::buildUpgrade -> AIPlayer::buildUpgrade (computer players only): at the first structure of its build list
 	// that may research it.
@@ -818,6 +829,19 @@ public:
 	{
 		if (const auto index = m_game.roster.FindPlayer(player))
 			m_game.roster.PlayerAt(*index).unitConstructionEnabled = false;
+	}
+	// ScriptActions::doSetCaveIndex: findCave looks for the object's CaveContain module; no Zero Hour object has one
+	// (module:CaveContain is not applicable: GLA tunnels are TunnelContain), so the action finds nothing to set.
+	void SetCaveIndex(const std::string &cave, std::int64_t) override
+	{
+		const ecs::Entity object = m_game.names.Find(cave);
+		const auto *ref = m_game.world.IsAlive(object) ? m_game.world.Get<gameplay::DefinitionRef>(object) : nullptr;
+		if (ref == nullptr)
+			return;
+		const auto &modules = m_game.templates.DefinitionAt(ref->index).modules;
+		if (std::none_of(modules.begin(), modules.end(), [](const content::ModuleEntry &module) { return module.type == "CaveContain"; }))
+			return;
+		// (A CaveContain would tryToSetCaveIndex here; none is ported, as none is shipped.)
 	}
 	void SetWarehouseValue(const std::string &warehouse, std::int64_t cash) override
 	{
@@ -1102,7 +1126,7 @@ public:
 	void FireSpecialPowerAtMostCost(std::uint32_t scriptPlayer, std::uint32_t player, const std::string &power) override
 	{
 		if (auto *ais = m_game.world.FindResource<domain::AiPlayers>())
-			domain::SkirmishFireSpecialPowerAtMostCost(m_game, *ais, scriptPlayer, player, power);
+			domain::SkirmishFireSpecialPowerAtMostCost(m_game, *ais, scriptPlayer, player, power, StartIndex(player));
 	}
 	bool TakeSpecialPowerEvent(int stage, std::uint32_t player, const std::string &power, const std::optional<std::string> &unit) override
 	{

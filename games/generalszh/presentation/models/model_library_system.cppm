@@ -78,6 +78,10 @@ inline void BindModelLibrary(ecs::World &world)
 			}
 			return lookup;
 		};
+	if (auto *poses = world.FindResource<BonePoses>())
+		poses->transform = [&world](std::uint32_t look, float seconds, float start, std::string_view bone) {
+			return FoundBoneTransformOf(world.Resource<ModelLibrary>(), look, seconds, start, bone);
+		};
 }
 
 // The load screen: every look of these instances asked for and waited on (the original loads the map's models before

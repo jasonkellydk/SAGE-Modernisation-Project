@@ -65,11 +65,15 @@ struct PlayerTemplateInfo
 	std::string baseSide;         // BaseSide: USA, China or GLA (the score screen's sides)
 	std::string scoreScreenImage; // ScoreScreenImage: the single-player score screen's backdrop
 	std::string sideIconImage;    // SideIconImage
+	std::string enabledImage;     // EnabledImage: its button on the observer's control bar
+	std::string flagWaterMark;    // FlagWaterMark: its flag on the observer's info window
 	std::string beaconName;       // BeaconName: the object its players' beacons are
 	std::string startingBuilding; // empty: not a faction a player can pick
 	std::string displayName;      // DisplayName: a label (INI:FactionAmerica)
 	std::string features;         // Features: the load screen's general features (a label)
+	std::string armyTooltip;      // ArmyTooltip: the faction boxes' tooltip (a label)
 	std::string loadScreenMusic;  // LoadScreenMusic: the multiplayer load screen's music
+	std::string scoreScreenMusic; // ScoreScreenMusic: the multiplayer score screen's music
 	std::array<std::string, 10> startingUnits; // StartingUnit0..9 (MAX_MP_STARTING_UNITS)
 	bool playable{false};
 	bool oldFaction{false};
@@ -94,6 +98,21 @@ struct PlayerTemplates
 	const PlayerTemplateInfo *At(int index) const noexcept
 	{
 		return index >= 0 && static_cast<std::size_t>(index) < templates.size() ? &templates[static_cast<std::size_t>(index)] : nullptr;
+	}
+
+	const PlayerTemplateInfo *Find(std::string_view name) const noexcept
+	{
+		for (const PlayerTemplateInfo &info : templates)
+			if (info.name == name)
+				return &info;
+		return nullptr;
+	}
+
+	// A game slot's template as the load and score screens take it (MultiPlayerLoadScreen::init, ScoreScreenUpdate): the
+	// slot's own when it names one (>= 0), else FactionObserver's.
+	const PlayerTemplateInfo *ForSlot(int playerTemplate) const noexcept
+	{
+		return playerTemplate >= 0 ? At(playerTemplate) : Find("FactionObserver");
 	}
 };
 
@@ -121,6 +140,8 @@ inline PlayerTemplates BindPlayerTemplates(const engine::config::Document &docum
 		for (const Node &field : root.children)
 			if (field.key == "Side")
 				info->side = ReadText(field);
+			else if (field.key == "ArmyTooltip")
+				info->armyTooltip = ReadText(field);
 			else if (field.key == "StartMoney")
 				info->startMoney = engine::config::values::ParseInt(field.Value()).value_or(0);
 			else if (field.key == "BaseSide")
@@ -129,6 +150,10 @@ inline PlayerTemplates BindPlayerTemplates(const engine::config::Document &docum
 				info->scoreScreenImage = ReadText(field);
 			else if (field.key == "SideIconImage")
 				info->sideIconImage = ReadText(field);
+			else if (field.key == "EnabledImage")
+				info->enabledImage = ReadText(field);
+			else if (field.key == "FlagWaterMark")
+				info->flagWaterMark = ReadText(field);
 			else if (field.key == "BeaconName")
 				info->beaconName = ReadText(field);
 			else if (field.key == "StartingBuilding")
@@ -139,6 +164,8 @@ inline PlayerTemplates BindPlayerTemplates(const engine::config::Document &docum
 				info->features = ReadText(field);
 			else if (field.key == "LoadScreenMusic")
 				info->loadScreenMusic = ReadText(field);
+			else if (field.key == "ScoreScreenMusic")
+				info->scoreScreenMusic = ReadText(field);
 			else if (field.key.starts_with("StartingUnit") && field.key.size() == 13 && field.key[12] >= '0' && field.key[12] <= '9')
 				info->startingUnits[static_cast<std::size_t>(field.key[12] - '0')] = ReadText(field);
 			else if (field.key == "PlayableSide")

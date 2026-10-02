@@ -71,10 +71,25 @@ struct AttackTarget
 	CommandSource source{CommandSource::Ai};
 	// It has fired in this attack (a weapon with ContinueAttackRange sees through stealth until then).
 	std::uint8_t fired{0};
-	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	// The weapon slot the attack locks for itself as it starts (setWeaponLock LOCKED_TEMPORARILY just before
+	// aiAttackObject), plus one; 0: none. The weapon system takes the lock before it next chooses a weapon, then clears it.
+	std::uint8_t lockSlot{0};
+	// AIAttackApproachTargetState::m_isInitialApproach, inverted: it has come within reach of its victim in this attack
+	// (its first approach is over).
+	std::uint8_t approached{0};
+	// Its AI is retaliating (AI_GUARD_RETALIATE: the attack is its guard-retaliate machine's): a human player's unit chases
+	// even a victim its own AI picked (AIAttackPursueTargetState::onEnter, AIAttackApproachTargetState::onEnter).
+	std::uint8_t retaliating{0};
 	std::uint32_t shotsLeft{0};
-	std::uint32_t reserved2{0};
+	// AIAttackPursueTargetState::m_isInitialApproach, inverted: its chase's first approach is over (it came within reach in
+	// a chase, or a chase ended) in this attack.
+	std::uint8_t chased{0};
+	std::uint8_t reserved2[3]{}; // no padding: checkpoints hold its bytes
 	Engine::Math::FixedVector3 position;
+	// During its first approach, the temporary target its AI gave the turret of its current weapon
+	// (AIAttackApproachTargetState::update: setTurretTargetObject(getNextMoodTarget(true, false))) and the tick it last did.
+	ecs::Entity temporary;
+	std::uint64_t temporaryTick{0};
 };
 }
 
@@ -108,7 +123,7 @@ template<>
 struct ComponentTraits<engine::gameplay::AttackTarget>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.attack_target";
-	static constexpr std::uint32_t Version = 4;
+	static constexpr std::uint32_t Version = 5; // 5: the first approach's temporary turret target
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::AttackTarget &value, StateHasher &hasher) noexcept
 	{
@@ -116,7 +131,9 @@ struct ComponentTraits<engine::gameplay::AttackTarget>
 		hasher.AppendU64(value.target.generation);
 		hasher.AppendU64((value.ordered ? 1u : 0u) | (std::uint64_t{value.atPosition} << 8) | (std::uint64_t{value.leech} << 16) |
 			(static_cast<std::uint64_t>(value.source) << 24) | (std::uint64_t{value.shotsLeft} << 32));
-		hasher.AppendU64(value.fired);
+		hasher.AppendU64(value.fired | (std::uint64_t{value.lockSlot} << 8) | (std::uint64_t{value.approached} << 16));
+		hasher.AppendU64((std::uint64_t{value.temporary.index} << 32) | value.temporary.generation);
+		hasher.AppendU64(value.temporaryTick);
 		if (value.atPosition != 0)
 		{
 			hasher.AppendU64(static_cast<std::uint64_t>(value.position.x.Raw()));

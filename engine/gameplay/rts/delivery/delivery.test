@@ -83,10 +83,17 @@ struct Run
 		world.RegisterComponent<PhysicsBody>();
 		world.RegisterComponent<Owner>();
 		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<Collider>();
+		world.RegisterComponent<Squishable>();
+		world.RegisterComponent<Pursuit>();
+		world.RegisterComponent<SightLooker>();
+		world.RegisterComponent<Slaved>();
+		world.RegisterComponent<SurfaceLayer>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
 		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Transport>();
+		world.RegisterComponent<BlockedState>();
 		world.RegisterComponent<Passenger>();
 		world.RegisterComponent<Boarding>();
 		world.RegisterComponent<ExitIntent>();

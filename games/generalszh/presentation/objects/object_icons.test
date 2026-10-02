@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 
 import games.generalszh.presentation.objects.algorithms.object_icon_layout;
 import games.generalszh.presentation.objects.systems.object_icon_systems;
@@ -11,6 +13,10 @@ import engine.gameplay.common.weapons.components.weapon_slots;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
 import engine.time.simulation_time;
+import games.generalszh.presentation.interaction.algorithms.selection_setup;
+import games.generalszh.content.install.install_mount;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.game_content;
 
 using namespace generalszh::presentation;
 namespace gp = engine::gameplay;
@@ -80,6 +86,53 @@ BOOST_AUTO_TEST_CASE(legacy_parity_ammo_pips_sit_under_the_health_bar_and_count_
 	BOOST_TEST(gp::RemainingAmmo(4, 2, gp::OutOfAmmo, true, 20) == 0u);
 }
 
+// Drawable::drawContained, worked by hand: container pips of a 6x13 image for a health region starting at x 373 sit at
+// 373, 380, 387 ... (1 apart), a full one's top at the projected top (y 250) moved by ContainerPipScreenOffset's y of the
+// bounding sphere radius (shipped: 0), an empty one's 1 lower.
+BOOST_AUTO_TEST_CASE(legacy_parity_container_pips_sit_under_the_health_bar)
+{
+	const IconRegion region = HealthRegion(400, 300, 60.0f, 1.0f);
+	const IconRect full = PlaceContainerPip(region, 250, 0.0f, 20.0f, 6, 13, 0, true);
+	BOOST_TEST(full.x == 373);
+	BOOST_TEST(full.y == 250);
+	BOOST_TEST(full.width == 6);
+	BOOST_TEST(full.height == 13);
+	const IconRect empty = PlaceContainerPip(region, 250, 0.0f, 20.0f, 6, 13, 2, false);
+	BOOST_TEST(empty.x == 387);
+	BOOST_TEST(empty.y == 251);
+	BOOST_TEST(PlaceContainerPip(region, 250, 1.0f, 20.0f, 6, 13, 0, true).y == 270);
+}
+
+// HelixContain::getContainerPipsToShow (HelixContain.h, ShouldDrawPips, default Yes): the shipped Spectre gunship hides
+// its pips (ShouldDrawPips = No); the Helix (none given) shows them, as do the Air Force General's gunships, which do not
+// set it. Other contains always do.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_draws_no_container_pips)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	generalszh::content::MountInstall(files, install);
+	engine::config::Diagnostics diagnostics;
+	generalszh::content::ContentLoader loader(files, generalszh::content::ZeroHourIniGrammar(diagnostics));
+	const auto game = generalszh::content::LoadGameContent(loader, engine::time::FixedStep{30});
+	const auto look = [&](std::string_view name) {
+		SelectionLook made;
+		if (const auto *object = game.objects.Find(name))
+			selection_setup_detail::KnowContain(made, *object);
+		return made;
+	};
+	const SelectionLook spectre = look("AmericaJetSpectreGunship");
+	BOOST_TEST((spectre.contain == ContainKind::Helix));
+	BOOST_TEST(!spectre.drawsPips);
+	BOOST_TEST(!look("SupW_AmericaJetSpectreGunship").drawsPips);
+	const SelectionLook helix = look("ChinaVehicleHelix");
+	BOOST_TEST((helix.contain == ContainKind::Helix));
+	BOOST_TEST(helix.drawsPips);
+	BOOST_TEST(look("AirF_AmericaJetSpectreGunship1").drawsPips);
+	BOOST_TEST(look("AmericaVehicleHumvee").drawsPips);
+}
+
 // Drawable::drawDisabled / drawEnthusiastic / drawBombed deciding each frame: an EMP'd tank's disabled icon is made on
 // the first frame and keeps its start; ENTHUSIASTIC then SUBLIMINAL draws the subliminal icon while the enthusiastic
 // one's animation is kept (killed only once neither holds); a car bomb shows only to its own player; with icon UI off
@@ -131,9 +184,13 @@ BOOST_AUTO_TEST_CASE(legacy_parity_object_icons_are_made_and_freed_as_draw_icon_
 	BOOST_TEST_REQUIRE(icons(tank) != nullptr);
 	BOOST_TEST(icons(tank)->Drawn(ObjectIcon::Disabled));
 	BOOST_TEST(icons(tank)->since[0] == 1.0);
+	// Its client random draw is taken once, when it is made (Anim2D::Anim2D's randomizeCurrentFrame), and kept.
+	const std::uint32_t roll = IconRoll(tank, ObjectIcon::Disabled, 1.0);
+	BOOST_TEST(icons(tank)->roll[0] == roll);
 	frame.clock = 2.0;
 	run();
 	BOOST_TEST(icons(tank)->since[0] == 1.0);
+	BOOST_TEST(icons(tank)->roll[0] == roll);
 
 	auto &bonus = world.Get<gp::WeaponBonusConditions>(tank)->flags;
 	bonus = generalszh::content::weapon_bonus::Enthusiastic;

@@ -4,6 +4,8 @@ import games.generalszh.gameplay.world.resources.match_rules;
 import engine.gameplay.common.random.resources.random_seed;
 import games.generalszh.gameplay.world.resources.map_scenery;
 import games.generalszh.gameplay.world.resources.music_progress;
+import games.generalszh.gameplay.world.resources.chat_inbox;
+import games.generalszh.gameplay.orders.resources.hotkey_squads;
 import games.generalszh.gameplay.world.resources.water_changes;
 export import games.generalszh.session.composition.simulation_setup;
 
@@ -20,6 +22,8 @@ inline void EmplaceWorldResources(ecs::World &world, [[maybe_unused]] const Simu
 {
 	world.EmplaceResource<generalszh::gameplay::WaterChanges>();
 	world.EmplaceResource<generalszh::gameplay::MusicProgress>();
+	world.EmplaceResource<generalszh::gameplay::ChatInbox>(); // chat lines through the command stream, for the host
+	world.EmplaceResource<generalszh::gameplay::HotkeySquads>();
 	world.EmplaceResource<generalszh::gameplay::MapSceneryRules>();
 	world.EmplaceResource<generalszh::gameplay::SceneryClearings>();
 	world.EmplaceResource<engine::gameplay::RandomSeed>(engine::gameplay::RandomSeed{setup.seed});

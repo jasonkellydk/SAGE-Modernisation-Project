@@ -34,6 +34,22 @@ struct LanguageFonts
 	LanguageFont namedTimerNormal{"", 0, false};
 	LanguageFont namedTimerReady{"", 0, false};
 	LanguageFont militaryCaption{"", 0, false};
+	// TooltipFontName: the mouse's tooltips (none named: Mouse.ini's own; Mouse::onResolutionChanged).
+	LanguageFont tooltip{"", 0, false};
+	// CopyrightFont (Display::update: GUI:EACopyright under the logo movie), DrawableCaptionFont (InGameUI::init: the
+	// drawables' captions and construction percent), DefaultWindowFont (GameWindowManager::winCreate's), NativeDebugDisplay
+	// (W3DDisplay's debug display) and DrawGroupInfoFont (GameClient::init: the control group numbers); none named: the
+	// original's own.
+	LanguageFont copyright{"", 0, false};
+	LanguageFont drawableCaption{"", 0, false};
+	LanguageFont defaultWindow{"", 0, false};
+	LanguageFont nativeDebugDisplay{"", 0, false};
+	LanguageFont drawGroupInfo{"", 0, false};
+	// UnicodeFontName (W3DFontLibrary::loadFontData: the glyphs past 255), UseHardWordWrap (W3DDisplayString: wrap
+	// anywhere, not only at spaces) and LocalFontFile (each pushed to the front of the fonts to register).
+	std::string unicodeFontName;
+	bool useHardWrap{false};
+	std::vector<std::string> localFontFiles;
 	int militaryCaptionSpeed{0};
 	int militaryCaptionDelayMs{750};
 };
@@ -82,6 +98,31 @@ inline LanguageFonts ReadLanguageFonts(const engine::config::Document &language)
 				font(field, fonts.militaryCaptionTitle);
 			else if (field.key == "MilitaryCaptionFont")
 				font(field, fonts.militaryCaption);
+			else if (field.key == "TooltipFontName")
+				font(field, fonts.tooltip);
+			else if (field.key == "CopyrightFont")
+				font(field, fonts.copyright);
+			else if (field.key == "DrawableCaptionFont")
+				font(field, fonts.drawableCaption);
+			else if (field.key == "DefaultWindowFont")
+				font(field, fonts.defaultWindow);
+			else if (field.key == "NativeDebugDisplay")
+				font(field, fonts.nativeDebugDisplay);
+			else if (field.key == "DrawGroupInfoFont")
+				font(field, fonts.drawGroupInfo);
+			else if (field.key == "UnicodeFontName" && !field.values.empty())
+			{
+				// INI::parseAsciiString: the next token, quotes and all joined ("Arial Unicode MS").
+				std::string name;
+				for (const std::string_view token : field.values)
+					name += (name.empty() ? "" : " ") + std::string(token);
+				std::erase(name, '"');
+				fonts.unicodeFontName = name;
+			}
+			else if (field.key == "UseHardWordWrap" && !field.values.empty())
+				fonts.useHardWrap = engine::config::values::ParseBool(field.values.front()).value_or(fonts.useHardWrap);
+			else if (field.key == "LocalFontFile" && !field.values.empty())
+				fonts.localFontFiles.insert(fonts.localFontFiles.begin(), std::string(field.values.front()));
 			else if (field.key == "MilitaryCaptionSpeed" && !field.values.empty())
 				fonts.militaryCaptionSpeed = std::atoi(std::string(field.values.front()).c_str());
 			else if (field.key == "MilitaryCaptionDelayMS" && !field.values.empty())

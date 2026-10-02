@@ -7,6 +7,7 @@ export import games.generalszh.content.global.multiplayer_settings;
 export import engine.level.model.level;
 export import engine.level.adapters.generals_map.map_reader;
 import games.generalszh.session.setup.script_qualify;
+import games.generalszh.session.setup.start_positions;
 import Engine.Core.Math.FixedRandom;
 
 // A map made ready for a skirmish or LAN game from its setup (the original's
@@ -16,8 +17,8 @@ import Engine.Core.Math.FixedRandom;
 // start spot, whether human, allied to slots on its team and enemy to the
 // rest, the setup's starting cash) with a team "teamplayer<slot>". Random
 // factions and start spots are settled here from the setup's seed
-// (populateRandomSideAndColor / populateRandomStartPosition). Observers do
-// not play.
+// (populateRandomSideAndColor / populateRandomStartPosition). An observer's
+// slot is a side too, of FactionObserver, on a start spot of its own.
 export namespace generalszh::session::setup
 {
 struct SkirmishPlayer
@@ -29,6 +30,7 @@ struct SkirmishPlayer
 	int startPosition{0}; // 0-based: Player_<n+1>_Start
 	int color{-1};        // its MultiplayerColor (-1: none given, as without `colors`)
 	bool human{false};
+	bool observer{false}; // an observer's slot: FactionObserver, watching
 };
 
 struct SkirmishLevel
@@ -87,10 +89,6 @@ inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const
 		if (info.playable && !info.observer && !info.startsLocked && !info.startingBuilding.empty())
 			playable.push_back(static_cast<int>(index));
 	}
-	std::vector<bool> taken(static_cast<std::size_t>(std::max(mapStartPositions, 0)), false);
-	for (const GameSlot &slot : setup.slots)
-		if (slot.Occupied() && slot.startPos >= 0 && slot.startPos < mapStartPositions)
-			taken[static_cast<std::size_t>(slot.startPos)] = true;
 
 	// populateRandomSideAndColor's colours: each occupied slot's (an observer's too) in slot order, a random one drawn
 	// again until no slot has it (GameInfo::isColorTaken). Drawn from a stream of their own, so a setup's sides and
@@ -120,10 +118,62 @@ inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const
 		}
 	}
 
+	// populateRandomSideAndColor's sides, in slot order, before populateRandomStartPosition's spots.
+	std::array<int, MaxSlots> slotTemplates{};
 	for (int index = 0; index < MaxSlots; ++index)
 	{
 		const GameSlot &slot = setup.slots[static_cast<std::size_t>(index)];
+		int &chosen = slotTemplates[static_cast<std::size_t>(index)];
+		chosen = slot.playerTemplate;
 		if (!slot.Occupied() || slot.Observer())
+			continue;
+		if (chosen < 0 && !playable.empty())
+			chosen = playable[static_cast<std::size_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(playable.size()) - 1))];
+	}
+	// populateRandomStartPosition over the map's Player_<n>_Start waypoints (those MapCache.ini records for it).
+	std::vector<std::optional<Engine::Math::FixedVector2>> spots(static_cast<std::size_t>(std::max(mapStartPositions, 0)));
+	for (const auto &marker : map.markers)
+		for (int spot = 0; spot < mapStartPositions; ++spot)
+			if (marker.name == "Player_" + std::to_string(spot + 1) + "_Start")
+				spots[static_cast<std::size_t>(spot)] = Engine::Math::FixedVector2{marker.position.x, marker.position.y};
+	std::array<int, MaxSlots> slotStarts = PopulateRandomStartPositions(setup, mapStartPositions, spots,
+		[&random](int high) { return static_cast<int>(Engine::Math::UniformInt(random, 0, high)); });
+	// populateRandomStartPosition, "now go back & assign observer spots": with no player in the game spot 0, else a spot
+	// drawn at random (GameLogicRandomValue(0, numPlayers - 1)) again while any slot holds it (isStartPositionTaken).
+	{
+		int playersInGame = 0;
+		for (const GameSlot &slot : setup.slots)
+			playersInGame += slot.Occupied() && !slot.Observer() ? 1 : 0;
+		// Until its turn an observer's slot still holds the spot it was set up with (isStartPositionTaken reads every slot).
+		for (int index = 0; index < MaxSlots; ++index)
+			if (setup.slots[static_cast<std::size_t>(index)].Occupied() && setup.slots[static_cast<std::size_t>(index)].Observer())
+				slotStarts[static_cast<std::size_t>(index)] = setup.slots[static_cast<std::size_t>(index)].startPos;
+		const auto held = [&](int candidate) { return std::ranges::find(slotStarts, candidate) != slotStarts.end(); };
+		for (int index = 0; index < MaxSlots; ++index)
+		{
+			const GameSlot &slot = setup.slots[static_cast<std::size_t>(index)];
+			if (!slot.Occupied() || !slot.Observer())
+				continue;
+			int spot = playersInGame == 0 ? 0 : -1;
+			if (spot == -1 && (mapStartPositions <= 0 || std::ranges::all_of(std::views::iota(0, mapStartPositions), held)))
+				spot = 0; // every spot held: the original would draw forever
+			while (spot == -1)
+			{
+				const int candidate = static_cast<int>(Engine::Math::UniformInt(random, 0, mapStartPositions - 1));
+				if (!held(candidate))
+					spot = candidate;
+			}
+			slotStarts[static_cast<std::size_t>(index)] = spot;
+		}
+	}
+	// GameLogic::startNewGame: an observer's slot is a player too, of FactionObserver (its side "player<slot>", human).
+	const content::PlayerTemplateInfo *observerTemplate = templates.Find("FactionObserver");
+	const int observerIndex = observerTemplate != nullptr ? static_cast<int>(observerTemplate - templates.templates.data()) : -1;
+
+	for (int index = 0; index < MaxSlots; ++index)
+	{
+		const GameSlot &slot = setup.slots[static_cast<std::size_t>(index)];
+		if (!slot.Occupied())
 			continue;
 		SkirmishPlayer player;
 		player.color = colors != nullptr ? slotColors[static_cast<std::size_t>(index)] : -1;
@@ -131,20 +181,9 @@ inline SkirmishLevel PrepareSkirmishLevel(const engine::level::Level &map, const
 		player.name = "player" + std::to_string(index);
 		player.team = "teamplayer" + std::to_string(index);
 		player.human = slot.Human();
-		player.playerTemplate = slot.playerTemplate;
-		if (player.playerTemplate < 0 && !playable.empty())
-			player.playerTemplate = playable[static_cast<std::size_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(playable.size()) - 1))];
-		player.startPosition = slot.startPos;
-		if (player.startPosition < 0 || player.startPosition >= mapStartPositions)
-		{
-			std::vector<int> free;
-			for (int spot = 0; spot < mapStartPositions; ++spot)
-				if (!taken[static_cast<std::size_t>(spot)])
-					free.push_back(spot);
-			player.startPosition = free.empty() ? 0 : free[static_cast<std::size_t>(Engine::Math::UniformInt(random, 0, static_cast<std::int64_t>(free.size()) - 1))];
-			if (!free.empty())
-				taken[static_cast<std::size_t>(player.startPosition)] = true;
-		}
+		player.playerTemplate = slot.Observer() ? observerIndex : slotTemplates[static_cast<std::size_t>(index)];
+		player.observer = slot.Observer();
+		player.startPosition = std::max(slotStarts[static_cast<std::size_t>(index)], 0);
 		out.players.push_back(player);
 	}
 	// prepareForMP_or_Skirmish: the standard scripts only when none of the map's skirmish sides (civilians aside) has any.

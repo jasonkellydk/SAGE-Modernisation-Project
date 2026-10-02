@@ -31,6 +31,9 @@ struct AiBuildSlot
 	bool supplyBuilding{false};
 	std::int32_t desiredGatherers{0};
 	std::int32_t currentGatherers{0};
+	// BuildListInfo's m_buildingName (what it is called once built) and m_rallyPointOffset.
+	std::string name;
+	Engine::Math::FixedVector2 rallyOffset;
 };
 
 // A unit a team being built still needs (WorkOrder): its type, the factory making one now (none: none is), how many are
@@ -168,6 +171,9 @@ struct AiPlayers
 				writer.U8(static_cast<std::uint8_t>((slot.priorityBuild ? 1 : 0) | (slot.underConstruction ? 2 : 0) | (slot.supplyBuilding ? 4 : 0)));
 				writer.I64(slot.desiredGatherers);
 				writer.I64(slot.currentGatherers);
+				writer.Text(slot.name);
+				fixed(slot.rallyOffset.x);
+				fixed(slot.rallyOffset.y);
 			}
 			fixed(ai.baseCenter.x);
 			fixed(ai.baseCenter.y);
@@ -272,8 +278,13 @@ struct AiPlayers
 				const auto builtTick = reader.U64();
 				const auto marks = reader.U8();
 				const auto desired = reader.I64(), current = reader.I64();
-				if (!structure || !x || !y || !angle || !rebuilds || !flags || !builtIndex || !builtGeneration || !builtTick || !marks || !desired || !current)
+				auto name = reader.Text();
+				const auto rallyX = fixed(), rallyY = fixed();
+				if (!structure || !x || !y || !angle || !rebuilds || !flags || !builtIndex || !builtGeneration || !builtTick || !marks || !desired || !current ||
+					!name || !rallyX || !rallyY)
 					return false;
+				slot.name = std::move(*name);
+				slot.rallyOffset = {*rallyX, *rallyY};
 				slot.supplyBuilding = (*marks & 4) != 0;
 				slot.desiredGatherers = static_cast<std::int32_t>(*desired);
 				slot.currentGatherers = static_cast<std::int32_t>(*current);

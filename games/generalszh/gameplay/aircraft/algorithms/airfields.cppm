@@ -21,17 +21,15 @@ import engine.gameplay.rts.construction.components.sale;
 // under construction nor being sold), as
 // the original's circling jets do, and flies there to land.
 // KillParkedJets (ParkingPlaceBehavior / FlightDeckBehavior::onDie: killAllParkedUnits): an airfield killed kills its
-// jets that are not flying free (on the ground, or taking off or landing), dying with the next tick's casualties.
+// jets that are not flying free (on the ground, or taking off or landing), dying with the next tick's casualties; a sold
+// one (BuildAssistant::sellObject) the same as its sale begins (KillJetsParkedAt).
 export namespace generalszh::gameplay
 {
-inline void KillParkedJets(GameWorld &game, std::span<const engine::gameplay::Casualty> casualties)
+// killAllParkedUnits for `fields`: each one's jets not flying free (on the ground, or taking off or landing) killed, dying
+// with the next casualties.
+inline void KillJetsParkedAt(GameWorld &game, std::span<const ecs::Entity> fields)
 {
 	namespace gp = engine::gameplay;
-	std::vector<ecs::Entity> fields;
-	for (const gp::Casualty &casualty : casualties)
-		if (casualty.departure == gp::Departure::Killed && casualty.definition < game.templates.DefinitionCount() &&
-			game.templates.Content().parking.contains(game.templates.DefinitionAt(casualty.definition).name))
-			fields.push_back(casualty.entity);
 	if (fields.empty())
 		return;
 	ecs::Query<ecs::Read<gp::Jet>> query(game.world);
@@ -40,7 +38,8 @@ inline void KillParkedJets(GameWorld &game, std::span<const engine::gameplay::Ca
 		const auto entities = chunk.Entities();
 		for (std::size_t row = 0; row < jets.size(); ++row)
 		{
-			if (std::ranges::find(fields, jets[row].airfield) == fields.end())
+			// (Its spaces' jets: a helicopter holds none.)
+			if (std::ranges::find(fields, jets[row].airfield) == fields.end() || jets[row].helicopter != 0)
 				continue;
 			const gp::JetState state = jets[row].state;
 			const bool free = state == gp::JetState::Flying || state == gp::JetState::Returning || state == gp::JetState::AwaitLanding ||
@@ -49,6 +48,17 @@ inline void KillParkedJets(GameWorld &game, std::span<const engine::gameplay::Ca
 				game.kills.entities.push_back(entities[row]);
 		}
 	});
+}
+
+inline void KillParkedJets(GameWorld &game, std::span<const engine::gameplay::Casualty> casualties)
+{
+	namespace gp = engine::gameplay;
+	std::vector<ecs::Entity> fields;
+	for (const gp::Casualty &casualty : casualties)
+		if (casualty.departure == gp::Departure::Killed && casualty.definition < game.templates.DefinitionCount() &&
+			game.templates.Content().parking.contains(game.templates.DefinitionAt(casualty.definition).name))
+			fields.push_back(casualty.entity);
+	KillJetsParkedAt(game, fields);
 }
 
 // An airfield's first parking space no jet holds, after skipping `skip` free ones (none: full).
@@ -123,7 +133,9 @@ void AssignAirfields(GameWorld &game)
 			if (!game.world.Resource<gameplay::Relationships>().Allies(jet.player, field.player))
 				continue;
 			const Engine::Math::Fixed distance = Engine::Math::DistanceSquared(jet.at, field.at);
-			if ((best == nullptr || distance < bestDistance) && FreeSpace(game, field.entity))
+			// hasAvailableSpaceFor: always for a helicopter (PRODUCED_AT_HELIPAD).
+			const bool helicopter = game.world.Get<gameplay::Jet>(jet.jet)->helicopter != 0;
+			if ((best == nullptr || distance < bestDistance) && (helicopter || FreeSpace(game, field.entity)))
 			{
 				best = &field;
 				bestDistance = distance;
@@ -133,7 +145,8 @@ void AssignAirfields(GameWorld &game)
 			continue;
 		gameplay::Jet &state = *game.world.Get<gameplay::Jet>(jet.jet);
 		state.airfield = best->entity;
-		state.space = *FreeSpace(game, best->entity);
+		if (state.helicopter == 0)
+			state.space = *FreeSpace(game, best->entity);
 	}
 }
 }

@@ -14,6 +14,15 @@ export namespace generalszh::content
 struct GameData
 {
 	Engine::Math::Fixed gravity{Engine::Math::Fixed::FromRatio(-64, 900)};
+	// The sky box (W3DWater's "new_skybox" while DrawSkyBox is on): the scale its model is made at (SkyBoxScale) and the
+	// height its centre sits at under the camera (SkyBoxPositionZ).
+	Engine::Math::Fixed skyBoxScale{Engine::Math::Fixed::FromRatio(9, 2)};
+	Engine::Math::Fixed skyBoxPositionZ{};
+	// Building occlusion: how long after it is made (or walks out of a building) a unit may show through buildings
+	// (DefaultOcclusionDelay, a thing's OcclusionDelay when it has none), and how dark its silhouette's colour is
+	// (OccludedColorLuminanceScale).
+	std::uint64_t defaultOcclusionDelayTicks{0};
+	Engine::Math::Fixed occludedLuminanceScale{Engine::Math::Fixed::FromRatio(1, 2)};
 	// GenerateMinefieldBehavior's defaults: StandardMinefieldDistance (feet) and StandardMinefieldDensity (mines per square foot).
 	Engine::Math::Fixed standardMinefieldDistance{Engine::Math::Fixed::FromInt(40)};
 	Engine::Math::Fixed standardMinefieldDensity{Engine::Math::Fixed::FromRatio(4, 1000)};
@@ -33,6 +42,9 @@ struct GameData
 		{Engine::Math::Fixed::One(), Engine::Math::Fixed::One(), Engine::Math::Fixed::One()}}};
 	Engine::Math::Fixed sellPercentage{Engine::Math::Fixed::FromRatio(1, 2)}; // SellPercentage: selling gives back this share of the cost
 	std::uint32_t maxTunnelCapacity{10};
+	// The road buffer's room (W3DRoadBuffer::allocateRoadBuffers): MaxRoadSegments segments, MaxRoadTypes road types.
+	std::uint32_t maxRoadSegments{4000};
+	std::uint32_t maxRoadTypes{100};
 	// Terrain tracks: how many vehicles may leave them at once (MaxTerrainTracks), and whether any do (MakeTrackMarks).
 	std::uint32_t maxTerrainTracks{0};
 	bool makeTrackMarks{false};
@@ -62,6 +74,9 @@ struct GameData
 	std::array<Engine::Math::Fixed, 3> ammoPipWorldOffset{};
 	std::array<Engine::Math::Fixed, 2> ammoPipScreenOffset{};
 	Engine::Math::Fixed ammoPipScaleFactor{Engine::Math::Fixed::One()};
+	// ContainerPipWorldOffset and ContainerPipScreenOffset, as the ammo pips' (Drawable::drawContained).
+	std::array<Engine::Math::Fixed, 3> containerPipWorldOffset{};
+	std::array<Engine::Math::Fixed, 2> containerPipScreenOffset{};
 	// The shroud's cells (PartitionCellSize) and how long a look lingers once its looker moves on (UnlookPersistDuration).
 	Engine::Math::Fixed partitionCellSize; // (none given: 1, PartitionManager::init)
 	// GroupMoveClickToGatherAreaFactor: a player's group order inside its members' area, grown by this, tightens the
@@ -74,10 +89,15 @@ struct GameData
 	Engine::Math::Fixed maxLowEnergyProductionSpeed{Engine::Math::Fixed::FromRatio(4, 5)};
 	// Models take the NIGHT condition (headlights on, night models) when the time of day is night.
 	bool forceModelsToFollowTimeOfDay{true};
+	// MaxFieldParticleCount (GlobalData default 30): on-screen ground-aligned AREA_EFFECT particles beyond which such
+	// particle systems make no more.
+	std::int32_t maxFieldParticleCount{30};
 	// How see-through a structure being placed is drawn (ObjectPlacementOpacity).
 	Engine::Math::Fixed objectPlacementOpacity{Engine::Math::Fixed::FromRatio(45, 100)};
 	// MoveHintName: the model (and its animation, "<name>.<name>") shown where a move is ordered.
 	std::string moveHintName{"SCMoveHint"};
+	// KeyboardCameraRotateSpeed: radians the view turns each client frame a keypad rotate key is held (default 0.1).
+	Engine::Math::Fixed keyboardCameraRotateSpeed{Engine::Math::Fixed::FromRatio(1, 10)};
 	// DownwindAngle (radians, default -0.785: north-east): which way the wind blows (the rally point flag faces it).
 	Engine::Math::Fixed downwindAngle{Engine::Math::Fixed::FromRatio(-785, 1000)};
 	// The control bar's power bar (PowerBarBase, PowerBarIntervals, PowerBarYellowRange): its length is the log to this
@@ -163,6 +183,19 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 				labeled("Z", data.ammoPipWorldOffset[2]);
 				continue;
 			}
+			if (key == "ContainerPipWorldOffset")
+			{
+				labeled("X", data.containerPipWorldOffset[0]);
+				labeled("Y", data.containerPipWorldOffset[1]);
+				labeled("Z", data.containerPipWorldOffset[2]);
+				continue;
+			}
+			if (key == "ContainerPipScreenOffset")
+			{
+				labeled("X", data.containerPipScreenOffset[0]);
+				labeled("Y", data.containerPipScreenOffset[1]);
+				continue;
+			}
 			if (key == "AmmoPipScreenOffset")
 			{
 				labeled("X", data.ammoPipScreenOffset[0]);
@@ -216,6 +249,14 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 				data.historicDamageLimitTicks = engine::config::ReadDurationTicks(field, context).value_or(data.historicDamageLimitTicks);
 			else if (key == "PartitionCellSize")
 				fixed(data.partitionCellSize);
+			else if (key == "SkyBoxScale")
+				fixed(data.skyBoxScale);
+			else if (key == "SkyBoxPositionZ")
+				fixed(data.skyBoxPositionZ);
+			else if (key == "DefaultOcclusionDelay")
+				data.defaultOcclusionDelayTicks = engine::config::ReadDurationTicks(field, context).value_or(data.defaultOcclusionDelayTicks);
+			else if (key == "OccludedColorLuminanceScale")
+				fixed(data.occludedLuminanceScale);
 			else if (key == "GroupMoveClickToGatherAreaFactor")
 				fixed(data.groupMoveClickToGatherFactor);
 			else if (key == "FramesPerSecondLimit" && !field.values.empty())
@@ -238,6 +279,10 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 				fixed(data.selectionFlashSaturationFactor);
 			else if (key == "SellPercentage")
 				data.sellPercentage = engine::config::ReadPercent(field, context).value_or(data.sellPercentage);
+			else if (key == "MaxRoadSegments")
+				data.maxRoadSegments = static_cast<std::uint32_t>(std::max<std::int64_t>(engine::config::ReadInt(field, context).value_or(data.maxRoadSegments), 0));
+			else if (key == "MaxRoadTypes")
+				data.maxRoadTypes = static_cast<std::uint32_t>(std::max<std::int64_t>(engine::config::ReadInt(field, context).value_or(data.maxRoadTypes), 0));
 			else if (key == "MaxTunnelCapacity")
 				data.maxTunnelCapacity = static_cast<std::uint32_t>(std::max<std::int64_t>(engine::config::ReadInt(field, context).value_or(data.maxTunnelCapacity), 0));
 			else if (key.starts_with("HumanSoloPlayerHealthBonus_") || key.starts_with("AISoloPlayerHealthBonus_"))
@@ -281,10 +326,14 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 				fixed(data.objectPlacementOpacity);
 			else if (key == "DownwindAngle")
 				fixed(data.downwindAngle);
+			else if (key == "KeyboardCameraRotateSpeed")
+				fixed(data.keyboardCameraRotateSpeed);
 			else if (key == "MoveHintName")
 				data.moveHintName = std::string(field.Value());
 			else if (key == "ForceModelsToFollowTimeOfDay")
 				data.forceModelsToFollowTimeOfDay = engine::config::ReadBool(field, context).value_or(data.forceModelsToFollowTimeOfDay);
+			else if (key == "MaxFieldParticleCount")
+				data.maxFieldParticleCount = static_cast<std::int32_t>(engine::config::ReadInt(field, context).value_or(data.maxFieldParticleCount));
 			else
 			{
 				constexpr std::array<std::string_view, 6> shakes{"ShakeSubtleIntensity", "ShakeNormalIntensity", "ShakeStrongIntensity",

@@ -6,6 +6,7 @@ export import engine.gameplay.rts.death.components.height_die;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.spatial.components.off_map;
 export import engine.gameplay.common.spatial.resources.ground_height;
+export import engine.gameplay.common.spatial.resources.deck_surfaces;
 export import engine.gameplay.rts.lifecycle.resources.kill_requests;
 export import engine.gameplay.common.spatial.components.body_extent;
 export import engine.gameplay.common.spatial.components.targetable;
@@ -16,7 +17,8 @@ export import engine.gameplay.common.spatial.resources.spatial_index;
 // carried, it only notes where it is. Its kill joins this tick's deaths (Object::kill). TargetHeightIncludesStructures:
 // the structures whose bounding spheres come within its bounding circle's radius of its own (FROM_BOUNDINGSPHERE_3D),
 // the tallest of them (getMaxHeightAbovePosition) above the ground under it is its target when taller than TargetHeight
-// (bridge layers are not in the port). Falling, or dead, below DestroyAttachedParticlesAtHeight its attached particle
+// (its ground, the bridge deck under it it is highest above when that is higher: getHighestLayerForDestination,
+// getLayerHeight; the ground it snaps to then too). Falling, or dead, below DestroyAttachedParticlesAtHeight its attached particle
 // systems go, once.
 export namespace engine::gameplay
 {
@@ -24,7 +26,7 @@ struct HeightDieSystem
 {
 	using Query = ecs::Query<ecs::Write<HeightDie>, ecs::Write<Transform>, ecs::Optional<OffMap>>;
 	using Lookup = ecs::Lookup<ecs::Read<BodyExtent>>;
-	using Resources = ecs::Resources<ecs::Read<GroundHeight>, ecs::Read<SpatialIndex>, ecs::Write<KillRequests>, ecs::Write<ParticleClears>>;
+	using Resources = ecs::Resources<ecs::Read<GroundHeight>, ecs::Read<DeckSurfaces>, ecs::Read<SpatialIndex>, ecs::Write<KillRequests>, ecs::Write<ParticleClears>>;
 
 	// The tallest structure whose bounding sphere comes within `range` of `self`'s (none: 0).
 	static Engine::Math::Fixed TallestStructure(const SpatialIndex &spatial, const auto &lookup, ecs::Entity self, const Engine::Math::FixedVector3 &at,
@@ -53,6 +55,7 @@ struct HeightDieSystem
 	void Execute(Query &query, ecs::SystemContext &context) const
 	{
 		const GroundHeight &ground = context.Read<GroundHeight>();
+		const DeckSurfaces &decks = context.Read<DeckSurfaces>();
 		const SpatialIndex &spatial = context.Read<SpatialIndex>();
 		const auto lookup = context.Lookup<Lookup>();
 		auto &kills = context.Write<KillRequests>().entities;
@@ -80,7 +83,11 @@ struct HeightDieSystem
 				if (die.died == 0)
 				{
 					directionOk = die.onlyWhenMovingDown == 0 || position.z < die.lastZ;
-					const Engine::Math::Fixed terrain = ground.At(position.XY());
+					Engine::Math::Fixed terrain = ground.At(position.XY());
+					// Including structures: a bridge under it is its ground.
+					if (die.includeStructures != 0)
+						if (const std::uint8_t layer = HighestLayerForDestination(decks, ground, position); layer != GroundLayer)
+							terrain = std::max(terrain, LayerHeight(decks, ground, position.XY(), layer));
 					Engine::Math::Fixed target = terrain + die.targetHeight;
 					if (die.includeStructures != 0)
 					{

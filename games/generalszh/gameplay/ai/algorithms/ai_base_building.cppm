@@ -44,9 +44,6 @@ namespace gp = engine::gameplay;
 using Engine::Math::Fixed;
 
 inline constexpr std::int32_t UnlimitedRebuilds = -1;
-inline constexpr std::array<std::string_view, 15> FactionStructureKinds{"FS_POWER", "FS_FACTORY", "FS_BASE_DEFENSE", "FS_TECHNOLOGY",
-	"FS_SUPPLY_DROPZONE", "FS_SUPERWEAPON", "FS_BLACK_MARKET", "FS_SUPPLY_CENTER", "FS_STRATEGY_CENTER", "FS_FAKE", "FS_INTERNET_CENTER",
-	"FS_ADVANCED_TECH", "FS_BARRACKS", "FS_WARFACTORY", "FS_AIRFIELD"};
 
 inline bool IsBuildable(const AiBuildSlot &slot) { return slot.rebuilds > 0 || slot.rebuilds == UnlimitedRebuilds; }
 inline void DecrementRebuilds(AiBuildSlot &slot)
@@ -105,8 +102,7 @@ inline std::vector<SafetyThreat> GatherSafetyThreats(const GameWorld &game, std:
 				continue;
 			// PartitionFilterInsignificantBuildings(allow non-buildings, not the insignificant): a structure of no faction
 			// that holds nobody (a container not a garrison, or empty) is no threat.
-			if (definition->Is("STRUCTURE") &&
-				std::none_of(FactionStructureKinds.begin(), FactionStructureKinds.end(), [&](std::string_view kind) { return definition->Is(kind); }))
+			if (content::IsNonFactionStructure(*definition))
 			{
 				const bool container = game.world.Get<gp::Garrison>(them) != nullptr || game.world.Get<gp::Transport>(them) != nullptr;
 				const bool garrisoned = game.world.Get<gp::Garrison>(them) != nullptr && game.manifest.Count(them) > 0;
@@ -347,6 +343,7 @@ inline ecs::Entity BuildStructureWithDozer(GameWorld &game, AiPlayer &ai, const 
 	const ecs::Entity built = BeginConstruction(game, dozer, plan.name, at, angle);
 	if (game.world.IsAlive(built))
 	{
+		ApplyBuildRallyOffset(game, slot, built); // buildStructureWithDozer: on the scaffold at once
 		slot.built = built;
 		slot.builtTick = game.tick + 1;
 		slot.underConstruction = true;

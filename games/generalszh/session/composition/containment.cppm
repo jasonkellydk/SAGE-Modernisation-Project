@@ -40,12 +40,14 @@ import games.generalszh.gameplay.railroad.systems.railroad_system;
 import engine.gameplay.rts.containment.systems.boarding_system;
 import engine.gameplay.rts.containment.systems.cargo_transfer_system;
 import engine.gameplay.rts.containment.systems.container_classes_system;
+import engine.gameplay.rts.containment.systems.contained_definitions_system;
 import engine.gameplay.rts.containment.systems.drop_homing_system;
 import engine.gameplay.rts.containment.systems.garrison_clear_system;
 import engine.gameplay.rts.containment.systems.garrison_kill_damage_system;
 import engine.gameplay.rts.containment.systems.heal_pad_system;
 import engine.gameplay.rts.containment.systems.passed_bonus_system;
 import engine.gameplay.rts.containment.systems.passenger_ride_system;
+import engine.gameplay.rts.containment.systems.garrison_station_system;
 import engine.gameplay.rts.containment.systems.rider_regen_system;
 import engine.gameplay.rts.containment.systems.unloading_system;
 import games.generalszh.gameplay.containment.systems.assault_transport_system;
@@ -86,6 +88,7 @@ inline void EmplaceContainmentResources(ecs::World &world, [[maybe_unused]] cons
 	world.EmplaceResource<engine::gameplay::RiderExits>();
 	world.EmplaceResource<engine::gameplay::IntentExits>();
 	world.EmplaceResource<generalszh::gameplay::AssaultOrders>();
+	world.EmplaceResource<engine::gameplay::GarrisonKillVictims>();
 }
 
 inline void RegisterContainmentComponents(ecs::World &world)
@@ -100,8 +103,10 @@ inline void RegisterContainmentComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::Tunnel>();
 	world.RegisterComponent<engine::gameplay::HealPad>();
 	world.RegisterComponent<engine::gameplay::GarrisonPoints>();
+	world.RegisterComponent<engine::gameplay::GarrisonStations>();
 	world.RegisterComponent<engine::gameplay::TransportFirePoints>();
 	world.RegisterComponent<engine::gameplay::Transport>();
+	world.RegisterComponent<engine::gameplay::ContainedDefinitions>();
 	world.RegisterComponent<engine::gameplay::ExitIntent>();
 	world.RegisterComponent<generalszh::gameplay::HealSeeker>();
 	world.RegisterComponent<engine::gameplay::Passenger>();
@@ -127,6 +132,8 @@ inline void RegisterContainmentSystems(ecs::SystemRegistry &registry)
 	registry.Register(garrisonKillDamage);
 	static engine::gameplay::ContainerClassesSystem containerClasses;
 	registry.Register(containerClasses);
+	static engine::gameplay::ContainedDefinitionsSystem containedDefinitions;
+	registry.Register(containedDefinitions);
 	static engine::gameplay::BoardingSystem boarding;
 	registry.Register(boarding);
 	static engine::gameplay::UnloadingSystem unloading;
@@ -149,6 +156,8 @@ inline void RegisterContainmentSystems(ecs::SystemRegistry &registry)
 	registry.Register(cargo);
 	static engine::gameplay::PassengerRideSystem passengerRide;
 	registry.Register(passengerRide);
+	static engine::gameplay::GarrisonStationSystem garrisonStations;
+	registry.Register(garrisonStations);
 }
 
 // What the containment domain's systems run after (and the few they must precede), within the tick.

@@ -117,6 +117,7 @@ inline void StartPendingMatch(HostParts &host, MatchStage &stage, MatchFlow &flo
 	{
 		ShowBriefingLoadScreen(host, plan, static_cast<int>(movie.FrameCount()));
 		host.loadScreen.SetVideoSource([&movie](Graphics::Renderer2D &renderer) { return movie.FrameImage(renderer); });
+		host.loadScreen.SetWindowMovieSource(videos, host.options.install);
 		flow.briefing = std::move(plan);
 	}
 	else

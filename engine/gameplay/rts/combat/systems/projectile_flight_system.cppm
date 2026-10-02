@@ -3,6 +3,7 @@ import engine.gameplay.common.health.components.health;
 import std;
 
 export import engine.ecs.system.system;
+export import engine.gameplay.rts.combat.components.sneaky_target;
 export import engine.gameplay.rts.combat.components.projectile;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.spatial.components.attitude;
@@ -28,6 +29,7 @@ struct ProjectileFlightSystem
 	using Query = ecs::Query<ecs::Write<ProjectileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>, ecs::Optional<DefinitionRef>, ecs::Optional<Health>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<GroundHeight>, ecs::Read<WeaponCatalog>, ecs::Read<Relationships>,
 		ecs::Write<Detonations>, ecs::Write<GarrisonHits>>;
+	using Lookup = ecs::Lookup<ecs::Read<SneakyTarget>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context)
 	{
@@ -114,7 +116,11 @@ struct ProjectileFlightSystem
 			++flight.step;
 			// Running into something on the way (projectileHandleCollision): it goes off there.
 			const WeaponDefinition &weapon = weapons.At(flight.shot.weapon);
-			if (const SpatialEntry *other = ProjectileCollision(weapon, flight.shot, entities[row], at, weapon.projectileRadius, spatial, relationships))
+			const auto sneaky = [&](ecs::Entity thing) {
+				const SneakyTarget *miss = context.Lookup<Lookup>().Get<SneakyTarget>(thing);
+				return miss != nullptr && miss->Active(context.Tick());
+			};
+			if (const SpatialEntry *other = ProjectileCollision(weapon, flight.shot, entities[row], at, weapon.projectileRadius, spatial, relationships, sneaky))
 			{
 				Shot landed = flight.shot;
 				landed.aim = at;

@@ -475,4 +475,73 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_crash_trail_sits_at_its_bone_or_location)
 	BOOST_TEST((boned->offset.x == Engine::Math::Fixed{}));
 }
 
+// FXListDie StartsActive (GeneralsMD/Code/GameEngine/Include/GameLogic/Module/FXListDie.h, FXListDieModuleData: m_initiallyActive
+// defaults to TRUE; Source/GameLogic/Object/Die/FXListDie.cpp, the FXListDie constructor calls giveSelfUpgrade when it is set and
+// onDie returns unless isUpgradeActive): with a TriggeredBy but no StartsActive the FX plays from the start; with StartsActive No
+// and no TriggeredBy it never plays (wouldUpgrade needs an activation mask); StartsActive No with a TriggeredBy waits for the
+// upgrade; a conflicting upgrade silences any of them. Shipped data has neither of the first two cases, so the INI is made up.
+BOOST_AUTO_TEST_CASE(legacy_parity_fx_list_die_starts_active_unless_told_not_to)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+	Document document;
+	ini::Read(document,
+		document.AddSource("death.ini",
+			"Upgrade Upgrade_Trigger\n"
+			"  Type = PLAYER\n"
+			"End\n"
+			"Upgrade Upgrade_Conflict\n"
+			"  Type = PLAYER\n"
+			"End\n"
+			"Object FxDieTester\n"
+			"  Behavior = FXListDie ModuleTag_01\n"
+			"    DeathFX = FX_TriggeredNoStartsActive\n"
+			"    TriggeredBy = Upgrade_Trigger\n"
+			"  End\n"
+			"  Behavior = FXListDie ModuleTag_02\n"
+			"    DeathFX = FX_NeverActive\n"
+			"    StartsActive = No\n"
+			"  End\n"
+			"  Behavior = FXListDie ModuleTag_03\n"
+			"    DeathFX = FX_WaitsForTrigger\n"
+			"    StartsActive = No\n"
+			"    TriggeredBy = Upgrade_Trigger\n"
+			"  End\n"
+			"  Behavior = FXListDie ModuleTag_04\n"
+			"    DeathFX = FX_Plain\n"
+			"    ConflictsWith = Upgrade_Conflict\n"
+			"  End\n"
+			"End\n"),
+		grammar, diagnostics);
+	const engine::time::FixedStep step{30};
+	BindContext context{diagnostics, step};
+	const auto objects = BuildObjectCatalog(document, context);
+	const auto upgrades = BuildUpgradeCatalog(document, step.TicksPerSecond());
+	std::vector<std::string> names;
+	const auto intern = [&](gameplay::DeathEffectKind, std::string_view name) {
+		names.emplace_back(name);
+		return static_cast<std::uint32_t>(names.size() - 1);
+	};
+	const auto *tester = objects.Find("FxDieTester");
+	BOOST_TEST_REQUIRE(tester != nullptr);
+	const auto death = ReadObjectDeath(*tester, step, intern, &upgrades);
+	const auto played = [&](const gameplay::UpgradeMask &owned) {
+		std::vector<std::string> out;
+		for (const auto &effect : death.atDeath)
+			if (effect.kind == gameplay::DeathEffectKind::Effect && effect.gate.Active(owned))
+				for (const std::uint32_t id : effect.candidates)
+					out.push_back(names.at(id));
+		return out;
+	};
+	const auto trigger = upgrades.Find("Upgrade_Trigger");
+	const auto conflict = upgrades.Find("Upgrade_Conflict");
+	BOOST_TEST_REQUIRE(trigger.has_value());
+	BOOST_TEST_REQUIRE(conflict.has_value());
+	BOOST_TEST((played({}) == std::vector<std::string>{"FX_TriggeredNoStartsActive", "FX_Plain"}));
+	BOOST_TEST((played(gameplay::UpgradeMask::Of(*trigger)) ==
+		std::vector<std::string>{"FX_TriggeredNoStartsActive", "FX_WaitsForTrigger", "FX_Plain"}));
+	BOOST_TEST((played(gameplay::UpgradeMask::Of(*conflict)) == std::vector<std::string>{"FX_TriggeredNoStartsActive"}));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

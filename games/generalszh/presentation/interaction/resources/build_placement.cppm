@@ -22,6 +22,11 @@ struct BuildPlacement
 	std::array<float, 2> anchorScreen{};
 	bool legal{false};
 	bool onGround{false}; // the pointer is over the ground
+	// Placed for a SPECIAL_POWER_CONSTRUCT button (ProductionUpdate's setSpecialPowerConstructionCommandButton: the sneak
+	// attack): its power and options; placed, the power fires there at the ghost's facing instead of a build. Empty: a
+	// builder's DOZER_CONSTRUCT.
+	std::string specialPower;
+	std::uint32_t options{0};
 };
 }
 

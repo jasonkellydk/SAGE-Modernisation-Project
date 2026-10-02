@@ -6,6 +6,7 @@ import Graphics.Renderer2D;
 import Assets.Cache;
 import Assets.Runtime;
 import games.generalszh.hosts.game.game_client;
+import games.generalszh.presentation.hud.algorithms.in_game_ui_layout;
 export import games.generalszh.content.global.language_fonts;
 
 // Draws the military caption (InGameUI::postDraw's military subtitle): from its position (authored for 800x600, scaled
@@ -28,7 +29,10 @@ public:
 	{
 		if (!caption.shown || caption.lines.empty() || !m_title || !m_line)
 			return true;
-		const float x = caption.at[0] * screenWidth / 800.0f, y = caption.at[1] * screenHeight / 600.0f;
+		// InGameUI::militarySubtitle: MilitaryCaptionPosition scaled from 800 x 600, cut to whole pixels.
+		const std::array<int, 2> origin = presentation::MilitaryCaptionOrigin({static_cast<int>(caption.at[0]), static_cast<int>(caption.at[1])},
+			static_cast<int>(screenWidth), static_cast<int>(screenHeight));
+		const float x = static_cast<float>(origin[0]), y = static_cast<float>(origin[1]);
 		m_list.Clear();
 		float lineY = y, blockX = x, blockY = y;
 		float blockHeight = 0.0f;

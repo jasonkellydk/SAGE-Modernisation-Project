@@ -5,6 +5,7 @@ export import engine.ecs.system.system;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.common.identity.components.owner;
 export import engine.gameplay.rts.aircraft.components.jet;
+export import engine.gameplay.rts.containment.components.transport;
 export import games.generalszh.presentation.audio.components.sound_loops;
 export import games.generalszh.presentation.audio.resources.audio_resources;
 export import games.generalszh.presentation.objects.resources.presentation_resources;
@@ -16,6 +17,9 @@ export import engine.gameplay.rts.combat.components.firing_tracker;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.common.spatial.components.transform;
 export import games.generalszh.gameplay.railroad.components.railcar;
+export import engine.gameplay.rts.construction.components.under_construction;
+export import games.generalszh.gameplay.battleplans.components.battle_plan;
+export import games.generalszh.gameplay.powers.components.launcher_door;
 import Engine.Core.Math.FixedPresentation;
 
 // What the player hears, as presentation systems each frame (one pass each:
@@ -39,7 +43,8 @@ struct SoundLoopSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using SideTables = ecs::SideTables<ecs::Write<SoundLoops>, ecs::Read<MotionEmission>>;
-	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Jet>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Owner>, ecs::Read<engine::gameplay::Jet>, ecs::Read<engine::gameplay::UnderConstruction>,
+		ecs::Read<engine::gameplay::Transport>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<PresentedObjects>, ecs::Read<LookCatalog>, ecs::Read<AudioState>,
 		ecs::Write<AudioHandle>, ecs::Read<MotionLooks>, ecs::Read<engine::gameplay::Relationships>>;
 
@@ -65,11 +70,16 @@ struct SoundLoopSystem
 			if (looks == nullptr)
 				return;
 			const bool aflame = object.appearance.Test(catalog.bits.aflame);
+			// DozerAIUpdate::startBuildingSound / finishBuildingSound: the structure's UnderConstruction loop on it while a
+			// builder at its dock works on it, until it stands. (The original started it as the builder got there and
+			// stopped it only on completion, so a builder called away left it playing for good: that retail leak is fixed,
+			// it stops once nobody works on it.)
+			const bool built = object.appearance.Test(catalog.bits.beingConstructed) && lookup.Get<engine::gameplay::UnderConstruction>(object.entity) != nullptr;
 			// Going down (dying, not yet down): its crash loop.
 			const bool falling = object.appearance.Test(catalog.bits.dying) && !object.appearance.Test(catalog.bits.specialDamaged);
 			const bool sounds = !looks->ambientSound.empty() || !looks->ambientDamaged.empty() || !looks->ambientReallyDamaged.empty() ||
 				!looks->ambientRubble.empty() || !looks->onDamaged.empty() || !looks->onReallyDamaged.empty() || !looks->moveLoop.empty() || !looks->moveStart.empty() || !looks->moveLoopDamaged.empty() || !looks->moveStartDamaged.empty() ||
-				(aflame && !looks->burningSound.empty()) || (falling && !looks->crashSound.empty()) || (object.turning && !looks->turretLoop.empty()) ||
+				(aflame && !looks->burningSound.empty()) || (built && !looks->constructionLoop.empty()) || (falling && !looks->crashSound.empty()) || (object.turning && !looks->turretLoop.empty()) ||
 				!looks->stealthOn.empty() || !looks->stealthOff.empty() || !looks->afterburnerSound.empty() || !looks->lowFuelVoice.empty() ||
 				(motionLooks.Of(object.definition) != nullptr && !motionLooks.Of(object.definition)->powerslideSound.empty());
 			SoundLoops *loops = loopsTable.Get(object.entity);
@@ -150,6 +160,7 @@ struct SoundLoopSystem
 			FollowLoop(player, content, state, loops->burning, looks->burningSound, aflame, at);
 			FollowLoop(player, content, state, loops->crashing, looks->crashSound, falling, at);
 			FollowLoop(player, content, state, loops->turret, looks->turretLoop, object.turning, at);
+			FollowLoop(player, content, state, loops->construction, looks->constructionLoop, built, at);
 			// JetAIUpdate::friend_enableAfterburners: lit, its Afterburner sound starts (unless still playing); out, it
 			// stops.
 			const bool burning = object.appearance.Test(catalog.bits.afterburner);
@@ -191,12 +202,24 @@ struct SoundLoopSystem
 				if (const auto *once = AllowedSound(content, state, looks->lowFuelVoice); once != nullptr && audible(*once))
 					PlaySound(player, state, *once, at);
 			loops->circling = circling ? 1u : 0u;
+			// OpenContain::doLoadSound / doUnloadSound: once a frame someone gets in (EnterSound) or out (ExitSound), at it.
+			if (const auto *contain = lookup.Get<engine::gameplay::Transport>(object.entity))
+			{
+				const auto hear = [&](std::uint64_t &last, std::uint64_t now, const std::string &sound) {
+					if (last != SoundLoops::Unheard && now != last && now != 0)
+						if (const auto *once = AllowedSound(content, state, sound); once != nullptr && audible(*once))
+							PlaySound(player, state, *once, at);
+					last = now;
+				};
+				hear(loops->entered, contain->enteredTick, looks->enterSound);
+				hear(loops->exited, contain->doorOpenedTick, looks->exitSound);
+			}
 			loops->wasMoving = object.moving ? 1u : 0u;
 		});
 		for (std::size_t index = 0; index < loopsTable.Size(); ++index)
 			if (SoundLoops &loops = loopsTable.Value(index); loops.seenFrame != serial)
 			{
-				for (engine::audio::SoundHandle *handle : {&loops.ambient, &loops.move, &loops.burning, &loops.crashing, &loops.turret, &loops.afterburner, &loops.powerslide})
+				for (engine::audio::SoundHandle *handle : {&loops.ambient, &loops.move, &loops.burning, &loops.crashing, &loops.turret, &loops.afterburner, &loops.powerslide, &loops.construction})
 				{
 					if (*handle != 0)
 						player.Stop(*handle);
@@ -242,7 +265,12 @@ struct AudioMixSystem
 				// The track replaces the current one and repeats until another is set (faded out when asked).
 				if (state.musicName == command.text && player.Playing(state.music))
 					break;
-				player.Stop(state.music, command.flag);
+				// MilesAudioManager::stopAudioEvent(AHSV_StopTheMusicFade): the old track fades over TimeToFadeAudio
+				// (processFadingList); AHSV_StopTheMusic: it is released at once.
+				if (command.flag)
+					player.FadeOut(state.music, FadeMixerFrames(content.settings, audio.mixer->SampleRate()));
+				else
+					player.Stop(state.music, false);
 				state.musicName = command.text;
 				state.music = 0;
 				state.musicCompletions = 0;
@@ -346,6 +374,11 @@ struct AudioMixSystem
 				state.zoomVolume = zoom;
 				ApplyLevels(*audio.mixer, content.settings, state);
 			}
+			// MilesAudioManager::update: the device listener, then processPlayingList's cull of world sounds too quiet
+			// at the microphone (MinSampleVolume).
+			player.SetListenerPosition(microphone.position);
+			const SoundLevels levels = LevelsFor(content.settings, state);
+			player.CullQuiet(levels.positional, levels.flat);
 		}
 		state.evaSpeaking = player.Playing(state.eva);
 		// Speech in turn; the music repeats.
@@ -504,6 +537,210 @@ struct TrainSoundSystem
 	}
 };
 
+// BattlePlanUpdate::setStatus's sounds on the Strategy Center (attached to it, stopped as the status they belong to ends):
+// unpacking a plan, its unpack sound; Search and Destroy active, its idle loop; packing a plan, its pack sound (only when
+// the plan has an unpack sound, as the original tests it).
+inline std::string_view PlanSound(const DefinitionLooks &looks, generalszh::gameplay::PlanTransition status, generalszh::gameplay::PlanStatus plan)
+{
+	using generalszh::gameplay::PlanTransition;
+	using generalszh::gameplay::PlanStatus;
+	if (plan == PlanStatus::None)
+		return {};
+	const auto index = static_cast<std::size_t>(plan) - 1;
+	if (index >= looks.planUnpackSounds.size())
+		return {};
+	switch (status)
+	{
+	case PlanTransition::Unpacking: return looks.planUnpackSounds[index];
+	case PlanTransition::Active: return plan == PlanStatus::SearchAndDestroy ? std::string_view(looks.planIdleLoop) : std::string_view{};
+	case PlanTransition::Packing: return looks.planUnpackSounds[index].empty() ? std::string_view{} : std::string_view(looks.planPackSounds[index]);
+	default: return {};
+	}
+}
+
+struct BattlePlanSoundSystem
+{
+	using Query = ecs::Query<ecs::Read<generalszh::gameplay::BattlePlan>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>>;
+	using SideTables = ecs::SideTables<ecs::Write<BattlePlanSound>>;
+	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Read<AudioState>, ecs::Write<AudioHandle>>;
+
+	void Execute(Query &query, ecs::SystemContext &context) const
+	{
+		AudioHandle &audio = context.Write<AudioHandle>();
+		if (audio.player == nullptr || audio.content == nullptr)
+			return;
+		engine::audio::SoundPlayer &player = *audio.player;
+		const AudioContent &content = *audio.content;
+		const AudioState &state = context.Read<AudioState>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		auto &sounds = context.Side<SideTables, BattlePlanSound>();
+		query.ForEachChunk([&](auto chunk) {
+			const auto plans = chunk.template Get<generalszh::gameplay::BattlePlan>();
+			const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < plans.size(); ++row)
+			{
+				const DefinitionLooks *looks = catalog.Of(definitions[row].index);
+				if (looks == nullptr)
+					continue;
+				const auto &plan = plans[row];
+				const auto key = static_cast<std::uint32_t>(plan.status) * 4u + static_cast<std::uint32_t>(plan.current) + 1u;
+				const auto &at = transforms[row].position;
+				const engine::audio::Vec3 where{Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)};
+				BattlePlanSound *sound = sounds.Get(entities[row]);
+				if (sound == nullptr)
+				{
+					if (PlanSound(*looks, plan.status, plan.current).empty())
+						continue;
+					sound = sounds.Emplace(entities[row]);
+				}
+				if (sound->key == key)
+				{
+					if (sound->handle != 0 && player.Playing(sound->handle))
+						player.Move(sound->handle, where);
+					continue;
+				}
+				if (sound->handle != 0)
+					player.Stop(sound->handle);
+				sound->handle = 0;
+				sound->key = key;
+				if (const auto *event = AllowedSound(content, state, PlanSound(*looks, plan.status, plan.current)))
+					sound->handle = PlaySound(player, state, *event, where);
+			}
+		});
+	}
+};
+
+// MissileLauncherBuildingUpdate::switchToState: entering DOOR_OPEN its DoorOpenIdleAudio starts on the building (unless still
+// playing), leaving it the audio stops.
+struct DoorIdleSoundSystem
+{
+	using Query = ecs::Query<ecs::Read<generalszh::gameplay::LauncherDoor>, ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>>;
+	using SideTables = ecs::SideTables<ecs::Write<DoorIdleSound>>;
+	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Read<AudioState>, ecs::Write<AudioHandle>>;
+
+	void Execute(Query &query, ecs::SystemContext &context) const
+	{
+		AudioHandle &audio = context.Write<AudioHandle>();
+		if (audio.player == nullptr || audio.content == nullptr)
+			return;
+		engine::audio::SoundPlayer &player = *audio.player;
+		const AudioContent &content = *audio.content;
+		const AudioState &state = context.Read<AudioState>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		auto &sounds = context.Side<SideTables, DoorIdleSound>();
+		query.ForEachChunk([&](auto chunk) {
+			const auto doors = chunk.template Get<generalszh::gameplay::LauncherDoor>();
+			const auto transforms = chunk.template Get<engine::gameplay::Transform>();
+			const auto definitions = chunk.template Get<engine::gameplay::DefinitionRef>();
+			const auto entities = chunk.Entities();
+			for (std::size_t row = 0; row < doors.size(); ++row)
+			{
+				const DefinitionLooks *looks = catalog.Of(definitions[row].index);
+				if (looks == nullptr || looks->doorOpenIdleAudio.empty())
+					continue;
+				const bool open = doors[row].state == generalszh::gameplay::LauncherDoorState::Open;
+				DoorIdleSound *sound = sounds.Get(entities[row]);
+				if (sound == nullptr)
+				{
+					if (!open)
+						continue;
+					sound = sounds.Emplace(entities[row]);
+				}
+				const auto &at = transforms[row].position;
+				const engine::audio::Vec3 where{Engine::Math::ToFloat(at.x), Engine::Math::ToFloat(at.y), Engine::Math::ToFloat(at.z)};
+				if (open && sound->open == 0 && (sound->handle == 0 || !player.Playing(sound->handle)))
+				{
+					sound->handle = 0;
+					if (const auto *event = AllowedSound(content, state, looks->doorOpenIdleAudio))
+						sound->handle = PlaySound(player, state, *event, where);
+				}
+				else if (!open && sound->handle != 0)
+				{
+					player.Stop(sound->handle);
+					sound->handle = 0;
+				}
+				else if (sound->handle != 0 && player.Playing(sound->handle))
+					player.Move(sound->handle, where);
+				sound->open = open ? 1u : 0u;
+			}
+		});
+	}
+};
+
+// SpecialAbilityUpdate's PrepSoundLoop (startPreparation: addAudioEvent on the unit; endPreparation / onExit:
+// removeAudioEvent): each start its cue asks for plays the ability's loop afresh on the unit (the one before stopped),
+// following it; no longer wanted, or the unit gone, it stops.
+struct PrepSoundSystem
+{
+	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
+	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Transform>>;
+	using SideTables = ecs::SideTables<ecs::Read<PrepSoundCue>, ecs::Write<PrepSoundLoop>>;
+	using Resources = ecs::Resources<ecs::Read<LookCatalog>, ecs::Read<AudioState>, ecs::Write<AudioHandle>>;
+
+	void Execute(Query &, ecs::SystemContext &context) const
+	{
+		const auto &cues = context.SideRead<SideTables, PrepSoundCue>();
+		auto &loops = context.Side<SideTables, PrepSoundLoop>();
+		AudioHandle &audio = context.Write<AudioHandle>();
+		if ((cues.Size() == 0 && loops.Size() == 0) || audio.player == nullptr || audio.content == nullptr)
+			return;
+		engine::audio::SoundPlayer &player = *audio.player;
+		const AudioContent &content = *audio.content;
+		const AudioState &state = context.Read<AudioState>();
+		const LookCatalog &catalog = context.Read<LookCatalog>();
+		const auto lookup = context.Lookup<Lookup>();
+		// The unit's SpecialAbilityUpdate for the power: its PrepSoundLoop.
+		const auto soundOf = [&](const engine::gameplay::DefinitionRef &ref, std::uint32_t power) -> std::string_view {
+			if (const DefinitionLooks *looks = catalog.Of(ref.index))
+				for (const auto &[which, sound] : looks->prepLoops)
+					if (which == power)
+						return sound;
+			return {};
+		};
+		for (std::size_t index = 0; index < loops.Size();)
+		{
+			const ecs::Entity entity = loops.Entities()[index];
+			const PrepSoundCue *cue = cues.Get(entity);
+			if (!lookup.IsAlive(entity) || cue == nullptr || cue->want == 0)
+			{
+				if (loops.Value(index).handle != 0)
+					player.Stop(loops.Value(index).handle);
+				loops.Erase(entity);
+				continue;
+			}
+			++index;
+		}
+		for (std::size_t index = 0; index < cues.Size(); ++index)
+		{
+			const ecs::Entity entity = cues.Entities()[index];
+			const PrepSoundCue &cue = cues.Value(index);
+			const auto *ref = lookup.IsAlive(entity) ? lookup.Get<engine::gameplay::DefinitionRef>(entity) : nullptr;
+			const auto *transform = ref != nullptr ? lookup.Get<engine::gameplay::Transform>(entity) : nullptr;
+			if (cue.want == 0 || transform == nullptr)
+				continue;
+			const engine::audio::Vec3 at{Engine::Math::ToFloat(transform->position.x), Engine::Math::ToFloat(transform->position.y),
+				Engine::Math::ToFloat(transform->position.z)};
+			PrepSoundLoop *loop = loops.Get(entity);
+			if (loop == nullptr)
+				loop = loops.Emplace(entity);
+			else if (loop->heard == cue.started)
+			{
+				if (loop->handle != 0 && player.Playing(loop->handle))
+					player.Move(loop->handle, at);
+				continue;
+			}
+			if (loop->handle != 0)
+				player.Stop(loop->handle);
+			loop->handle = 0;
+			loop->heard = cue.started;
+			if (const auto *sound = AllowedSound(content, state, soundOf(*ref, cue.power)))
+				loop->handle = PlaySound(player, state, *sound, at);
+		}
+	}
+};
+
 struct UplinkSoundSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
@@ -579,6 +816,33 @@ template<>
 struct SystemTraits<generalszh::presentation::TrainSoundSystem>
 {
 	static constexpr std::string_view StableName = "generalszh.presentation.train_sounds";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<generalszh::presentation::BattlePlanSoundSystem>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.battle_plan_sounds";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<generalszh::presentation::DoorIdleSoundSystem>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.door_idle_sounds";
+	static constexpr bool Batch = true;
+	static constexpr SystemPhase Phase = SystemPhase::Simulation;
+	using Before = SystemTypeList<>;
+	using After = SystemTypeList<>;
+};
+template<>
+struct SystemTraits<generalszh::presentation::PrepSoundSystem>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.prep_sounds";
 	static constexpr bool Batch = true;
 	static constexpr SystemPhase Phase = SystemPhase::Simulation;
 	using Before = SystemTypeList<>;

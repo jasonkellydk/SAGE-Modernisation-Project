@@ -51,6 +51,10 @@ public:
 	// The shell map shows (it stops, unseen, while the credits run).
 	bool ShellMapShown() const noexcept;
 	void Draw(Graphics::Renderer2D &renderer);
+	// The mouse's tooltip over the shell's windows this frame (GameWindowManager::winProcessMouseEvent: a window's
+	// TOOLTIPTEXT or the menus' tooltip callbacks; Mouse::createStreamMessages' delay), in Mouse.ini's look `look`;
+	// none in a game (the game's own).
+	GameClient::MouseTooltipFrame Tooltip(const content::MouseTooltipContent &look, std::uint32_t nowMs);
 	bool QuitRequested() const noexcept;
 	// A game the player started (the skirmish screen's Start), once; the host loads it and calls EnterGame.
 	std::optional<session::setup::GameSetup> TakeGameStart();

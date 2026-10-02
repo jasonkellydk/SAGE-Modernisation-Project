@@ -90,6 +90,7 @@ struct Scene
 		world.EmplaceResource<KillRequests>();
 		world.EmplaceResource<Casualties>();
 		world.EmplaceResource<ParachuteOpenings>();
+		world.EmplaceResource<ParachuteLandings>();
 		world.EmplaceResource<NavigationGrid>(150, 150);
 		world.EmplaceResource<ParachuteCatalog>().Add(AmericaParachute());
 		registry.Register(steering);

@@ -70,6 +70,17 @@ inline std::vector<ScienceInfo> BindSciences(const engine::config::Document &doc
 	return out;
 }
 
+// ScienceStore::getNameAndDescription (the control bar's science tooltip asks it): a science's DisplayName and
+// Description, as string labels (the original translates them as it reads them, parseAndTranslateLabel: the caller looks
+// the labels up); none for a science the store does not hold.
+inline std::optional<std::pair<std::string, std::string>> ScienceNameAndDescription(const std::vector<ScienceInfo> &sciences, std::string_view science)
+{
+	const auto found = std::find_if(sciences.begin(), sciences.end(), [&](const ScienceInfo &info) { return info.name == science; });
+	if (found == sciences.end())
+		return std::nullopt;
+	return std::pair<std::string, std::string>{found->displayName, found->description};
+}
+
 // Rank 1..n (RankInfoStore: they must come in order).
 inline std::vector<RankInfo> BindRanks(const engine::config::Document &document)
 {

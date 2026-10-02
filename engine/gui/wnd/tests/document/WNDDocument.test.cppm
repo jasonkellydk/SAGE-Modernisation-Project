@@ -159,3 +159,49 @@ BOOST_AUTO_TEST_CASE(parses_every_checked_in_generalsmd_wnd_fixture)
 	}
 	BOOST_REQUIRE_MESSAGE(checked >= 10u, "The checked-in fixture must cover the real WND menu set");
 }
+
+// Image.cpp, Image::parseImageCoords / Image::parseImageStatus (MappedImage block: Texture, TextureWidth,
+// TextureHeight, Coords, Status). Coords set the size from the packed rectangle and the UVs over the texture size;
+// Status ROTATED_90_CLOCKWISE swaps the size back. Shipped SCShellUserInterface512.INI: WatermarkGLA is packed at
+// Left:391 Top:163 Right:487 Bottom:323 and rotated, so it is 160 wide and 96 high. ControlButtonsPro.ini's
+// SSObserverUSA (Status = NONE, Left:54 Top:0 Right:144 Bottom:60) is 90 x 60 and replaces the generated
+// SSUserInterface512.INI entry of the same name.
+BOOST_AUTO_TEST_CASE(legacy_parity_shipped_mapped_images_parse_their_coords_and_rotation)
+{
+	GameData data;
+	const auto fixture = Load_Fixture(data);
+	BOOST_REQUIRE(fixture != nullptr);
+	ImageCatalog catalog;
+	BOOST_REQUIRE(Load_Game_Image_Catalog(*fixture, catalog));
+
+	const ImageDefinition *watermark = catalog.Find("WatermarkGLA");
+	BOOST_REQUIRE(watermark != nullptr);
+	BOOST_CHECK_EQUAL(watermark->texture, "SCShellUserInterface512_001.tga");
+	BOOST_CHECK_EQUAL(watermark->texture_width, 512u);
+	BOOST_CHECK_EQUAL(watermark->texture_height, 512u);
+	BOOST_CHECK(watermark->rotated);
+	BOOST_CHECK_EQUAL(watermark->width, 160u);
+	BOOST_CHECK_EQUAL(watermark->height, 96u);
+	BOOST_CHECK_CLOSE(watermark->uv.left, 391.0f / 512.0f, 0.0001f);
+	BOOST_CHECK_CLOSE(watermark->uv.top, 163.0f / 512.0f, 0.0001f);
+	BOOST_CHECK_CLOSE(watermark->uv.right, 487.0f / 512.0f, 0.0001f);
+	BOOST_CHECK_CLOSE(watermark->uv.bottom, 323.0f / 512.0f, 0.0001f);
+	BOOST_CHECK(catalog.Resolve("WatermarkGLA").rotated);
+
+	const ImageDefinition *observer = catalog.Find("SSObserverUSA");
+	BOOST_REQUIRE(observer != nullptr);
+	BOOST_CHECK_EQUAL(observer->texture, "ControlButtonsPro_512_512.tga");
+	BOOST_CHECK(!observer->rotated);
+	BOOST_CHECK_EQUAL(observer->width, 90u);
+	BOOST_CHECK_EQUAL(observer->height, 60u);
+	BOOST_CHECK(!catalog.Resolve("SSObserverUSA").rotated);
+
+	ImageCatalog authored;
+	BOOST_REQUIRE(Parse_Mapped_Image_INI(
+		"MappedImage Turned\n  Texture = t.tga\n  TextureWidth = 256\n  TextureHeight = 128\n"
+		"  Coords = Left:0 Top:0 Right:20 Bottom:50\n  Status = ROTATED_90_CLOCKWISE\nEnd\n",
+		authored));
+	BOOST_REQUIRE(authored.Find("Turned") != nullptr);
+	BOOST_CHECK_EQUAL(authored.Find("Turned")->width, 50u);
+	BOOST_CHECK_EQUAL(authored.Find("Turned")->height, 20u);
+}

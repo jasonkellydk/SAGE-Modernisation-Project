@@ -15,6 +15,7 @@ namespace stealth_detector_flag
 inline constexpr std::uint32_t Enabled = 1u << 0;
 inline constexpr std::uint32_t WhileGarrisoned = 1u << 1; // still detects inside a building it can fire out of
 inline constexpr std::uint32_t WhileContained = 1u << 2;  // still detects in a transport or tunnel
+inline constexpr std::uint32_t OwnRange = 1u << 3;        // DetectionRange given: its range, not its vision range
 }
 
 struct StealthDetector

@@ -5,10 +5,16 @@ import games.generalszh.presentation.objects.resources.detail_settings;
 import engine.gameplay.rts.sciences.resources.player_sciences;
 import engine.gameplay.rts.harvesting.components.resource_store;
 import games.generalszh.gameplay.railroad.components.railcar;
+import games.generalszh.presentation.objects.algorithms.draw_bones;
+import games.generalszh.presentation.objects.systems.fade_presentation_system;
+import games.generalszh.presentation.objects.algorithms.neutron_jitter;
+export import engine.gameplay.rts.combat.components.neutron_flight;
+export import engine.gameplay.common.appearance.components.draw_hidden;
 import std;
 export import engine.gameplay.rts.construction.components.sale;
 import engine.gameplay.common.weapons.components.weapon_slots;
 import engine.gameplay.common.appearance.components.indicator_color;
+import engine.gameplay.common.appearance.components.occlusion_safe;
 import engine.gameplay.common.weapons.resources.weapon_catalog;
 import engine.gameplay.rts.parachute.algorithms.parachute_rigging;
 export import games.generalszh.presentation.objects.algorithms.debris_animation;
@@ -112,8 +118,9 @@ struct PoseSampleSystem
 		const auto away = chunk.Get<engine::gameplay::OffMap>();
 		for (std::size_t row = 0; row < transforms.size(); ++row)
 		{
-			// Off the map only a mounted portable structure is drawn (on its carrier).
-			if (!away.empty() && away[row].reason != MountedReason)
+			// Off the map only a mounted portable structure is drawn (on its carrier), and a rider its container leaves in the
+			// world (a fire base's, at its station: its drawable is not hidden).
+			if (!away.empty() && away[row].reason != MountedReason && away[row].reason != engine::gameplay::off_map_reason::Stationed)
 				continue;
 			const auto at = Position(transforms[row]);
 			const std::uint32_t facing = transforms[row].facing.units;
@@ -172,11 +179,12 @@ struct ObjectPresentationSystem
 		ecs::Optional<engine::gameplay::Stealth>, ecs::Optional<engine::gameplay::DebrisLook>, ecs::Optional<engine::gameplay::Parachute>,
 		ecs::Optional<engine::gameplay::ParachuteRider>, ecs::Optional<engine::gameplay::ObjectShroud>, ecs::Optional<engine::gameplay::OffMap>,
 		ecs::Optional<engine::gameplay::PartOverrides>, ecs::Optional<engine::gameplay::Armament>, ecs::Optional<engine::gameplay::Sale>,
-		ecs::Optional<engine::gameplay::StructureTopple>, ecs::Optional<gameplay::Railcar>, ecs::Optional<engine::gameplay::ResourceStore>>;
+		ecs::Optional<engine::gameplay::StructureTopple>, ecs::Optional<gameplay::Railcar>, ecs::Optional<engine::gameplay::ResourceStore>,
+		ecs::Optional<engine::gameplay::NeutronFlight>, ecs::Optional<engine::gameplay::DrawHidden>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Parachute>, ecs::Read<engine::gameplay::Dying>, ecs::Read<engine::gameplay::Mounted>,
 		ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Appearance>,
-		ecs::Read<engine::gameplay::EmpPulse>, ecs::Read<engine::gameplay::IndicatorColor>>;
-	using SideTables = ecs::SideTables<ecs::Read<TickPose>, ecs::Write<ShownLook>, ecs::Read<TreadRoll>, ecs::Read<WheelRoll>, ecs::Read<WeaponPose>,
+		ecs::Read<engine::gameplay::EmpPulse>, ecs::Read<engine::gameplay::IndicatorColor>, ecs::Read<engine::gameplay::OcclusionSafe>>;
+	using SideTables = ecs::SideTables<ecs::Read<TickPose>, ecs::Write<ShownLook>, ecs::Read<ObjectFade>, ecs::Read<TreadRoll>, ecs::Read<WheelRoll>, ecs::Read<WeaponPose>,
 		ecs::Write<BarrelRecoil>, ecs::Read<ChassisMotion>, ecs::Write<TreeSway>, ecs::Read<TreeBend>, ecs::Write<HeatVision>,
 		ecs::Read<DebrisMotion>, ecs::Write<ShroudSight>, ecs::Read<TintEnvelope>, ecs::Read<SelectionFlash>, ecs::Read<BeaconLook>, ecs::Write<ExtraShownLooks>>;
 	using Resources = ecs::Resources<ecs::Read<PresentationFrame>, ecs::Read<LookCatalog>, ecs::Read<LookClips>, ecs::Read<engine::gameplay::Relationships>, ecs::Read<engine::gameplay::Detections>, ecs::Read<engine::gameplay::ParachuteCatalog>, ecs::Read<Breeze>, ecs::Read<TreeBreeze>, ecs::Read<BonePoses>, ecs::Write<ObjectInstances>, ecs::Write<MountedInstances>,
@@ -213,6 +221,7 @@ struct ObjectPresentationSystem
 		auto &shownLooks = context.Side<SideTables, ShownLook>();
 		auto &extraLooks = context.Side<SideTables, ExtraShownLooks>();
 		const auto &treads = context.SideRead<SideTables, TreadRoll>();
+		const auto &fades = context.SideRead<SideTables, ObjectFade>();
 		const auto &wheels = context.SideRead<SideTables, WheelRoll>();
 		const auto &weaponPoses = context.SideRead<SideTables, WeaponPose>();
 		auto &recoils = context.Side<SideTables, BarrelRecoil>();
@@ -243,6 +252,8 @@ struct ObjectPresentationSystem
 		const auto armaments = chunk.Get<engine::gameplay::Armament>();
 		const auto sales = chunk.Get<engine::gameplay::Sale>();
 		const auto topples = chunk.Get<engine::gameplay::StructureTopple>();
+		const auto neutrons = chunk.Get<engine::gameplay::NeutronFlight>();
+		const auto drawHidden = chunk.Get<engine::gameplay::DrawHidden>();
 		const BonePoses &bones = context.Read<BonePoses>();
 		const auto entities = chunk.Entities();
 		const float alpha = frame.alpha;
@@ -257,7 +268,7 @@ struct ObjectPresentationSystem
 						static_cast<float>(custom->argb & 0xFF) / 255.0f, 1.0f};
 				return catalog.ColorOf(owner);
 			};
-			if (!away.empty() && away[row].reason != MountedReason)
+			if (!away.empty() && away[row].reason != MountedReason && away[row].reason != engine::gameplay::off_map_reason::Stationed)
 				continue;
 			const TickPose *pose = poses.Get(entity);
 			// StealthUpdate::changeVisualDisguise: disguised, it is drawn as the disguise's definition (everyone sees it so).
@@ -388,6 +399,18 @@ struct ObjectPresentationSystem
 					at[0] += shudder * (static_cast<float>(mixed & 0xFFFFu) / 32767.5f - 1.0f);
 					at[1] += shudder * (static_cast<float>(mixed >> 16) / 32767.5f - 1.0f);
 				}
+			}
+			// A superweapon missile shaking as its climb begins (NeutronMissileUpdate::doAttack's instance transform, set each tick).
+			if (!neutrons.empty() && looks->neutronJitter > 0.0f && neutrons[row].state == engine::gameplay::NeutronState::Attack &&
+				frame.tick > neutrons[row].launchTick)
+			{
+				const auto &forward = neutrons[row].forward;
+				const std::uint32_t roll = ModelStateRolls::Mix(Key(entity) ^ (frame.tick * 0xC2B2AE3D27D4EB4Full));
+				const auto shake = NeutronJitter(looks->neutronJitter, looks->neutronSpecialTicks, frame.tick - neutrons[row].launchTick,
+					{Engine::Math::ToFloat(forward.x), Engine::Math::ToFloat(forward.y), Engine::Math::ToFloat(forward.z)},
+					static_cast<float>(pose->currentFacing) * RadiansPerUnit, roll);
+				for (std::size_t axis = 0; axis < 3; ++axis)
+					at[axis] += shake[axis];
 			}
 			// W3DModelDraw::adjustTransformMtx (ADJUST_HEIGHT_BY_CONSTRUCTION_PERCENT): sunk by what is left to build, per draw
 			// module by its own state's flag (getConstructionPercent: below zero once built).
@@ -598,6 +621,9 @@ struct ObjectPresentationSystem
 			const auto facingOf = [](float radians) {
 				return Engine::Math::TurnAngle{static_cast<std::uint32_t>(static_cast<std::int64_t>(std::llround(radians / RadiansPerUnit)))};
 			};
+			// Hidden by the simulation (setDrawableHidden: a guided missile gone off, holding its KILL_SELF state).
+			if (!drawHidden.empty())
+				continue;
 			// RailroadBehavior: a train car in the wings or past the end of the line is hidden (setDrawableHidden).
 			if (!railcars.empty() && railcars[row].hidden != 0)
 				continue;
@@ -725,14 +751,16 @@ struct ObjectPresentationSystem
 			// setShadowsEnabled(look != STEALTHLOOK_VISIBLE_DETECTED)), or once it is infantry dying a death that sinks it
 			// (SlowDeathBehavior::beginSlowDeath: no floating shadow over the sunk body), or once toppling (ToppleUpdate::update:
 			// setShadowsEnabled(false) from its first fall on), or shrubbery burned by a blast's scorch wave
-			// (NeutronMissileSlowDeathBehavior::doScorchBlast).
+			// (NeutronMissileSlowDeathBehavior::doScorchBlast), or once a flood wave flooded it (WaveGuideUpdate::doDamage:
+			// MODELCONDITION_FLOODED and setShadowsEnabled(FALSE), for good).
 			const engine::gameplay::Dying *dying = looks->infantry ? parachuteLookup.Get<engine::gameplay::Dying>(entity) : nullptr;
 			const bool sinks = dying != nullptr && dying->sinkRate > Engine::Math::Fixed{};
 			// EA's W3DVolumetricShadow / W3DProjectedShadow: a SHADOW_VOLUME draws only while UseShadowVolumes is on, a
 			// decal or projection only while UseShadowDecals is.
 			const bool shadowKindOn = looks->shadowKind == 0 || (looks->shadowKind == 2u ? detail.useShadowVolumes : detail.useShadowDecals);
 			instance.castsShadow = looks->castsShadow && shadowKindOn && !sinks && !(appearance.Test(catalog.bits.stealthed) && appearance.Test(catalog.bits.detected)) &&
-				!appearance.Test(catalog.bits.toppled) && !(looks->shrubbery && appearance.Test(catalog.bits.burned));
+				!appearance.Test(catalog.bits.toppled) && !(looks->shrubbery && appearance.Test(catalog.bits.burned)) &&
+				!appearance.Test(content::ModelConditionBit("FLOODED"));
 			instance.receivesDynamicLights = looks->receivesDynamicLights;
 			instance.infantry = looks->infantry;
 			instance.lightSphere = {at[0], at[1], at[2] + looks->constructionHeight * 0.5f, looks->lightRadius};
@@ -797,6 +825,9 @@ struct ObjectPresentationSystem
 					instance.opacity = std::abs(1.0f - factor * 2.0f);
 				}
 			}
+			// Its drawable's fade (Drawable::fadeIn / fadeOut), over whatever opacity its stealth gives it.
+			if (const ObjectFade *fade = fades.Get(entity))
+				instance.opacity *= FadeOpacity(*fade, frame.clock);
 			if (const TreadRoll *tread = treads.Get(entity))
 				instance.treads = tread->offsets;
 			if (const WheelRoll *wheel = wheels.Get(entity))
@@ -808,6 +839,18 @@ struct ObjectPresentationSystem
 				instance.cab = wheel->cab;
 				instance.trailer = wheel->trailer;
 			}
+			// RTS3DScene::renderOneObject's sorting for building occlusion (whether it is on is the renderer's): a structure
+			// seen whole may hide what is behind it (a potential occluder; a translucent one is not); a scoring thing past its
+			// safe occlusion frame (OcclusionDelay after it was made) shows through it in its player's colour.
+			if (looks->structure)
+				instance.occlusion = instance.opacity >= 1.0f ? 1u : 0u;
+			else if (looks->scoring && !owners.empty())
+				if (const auto *safe = parachuteLookup.Get<engine::gameplay::OcclusionSafe>(entity); safe != nullptr && safe->tick <= frame.tick)
+				{
+					instance.occlusion = 2u;
+					instance.occludedPlayer = owners[row].player;
+					instance.occludedColor = catalog.ColorOf(owners[row].player); // getControllingPlayer()->getPlayerColor()
+				}
 			const bool drawn = (treeBend == nullptr || treeBend->state != tree_bend_state::Gone) && !hiddenByStealth;
 			const auto emit = [&](const ObjectInstance &shown) {
 				if (mountedOn != nullptr)
@@ -865,14 +908,16 @@ struct ObjectPresentationSystem
 					ObjectInstance other = instance;
 					other.look = extraShown.look;
 					other.clipLook = extraShown.look;
+					// AttachToBoneInAnotherModule: at that bone of its own model as drawn now (not found: where it is).
+					if (!extra.states.attachToBone.empty() && bones.transform)
+						if (const auto bone = bones.transform(instance.look, instance.animationSeconds, instance.animationStart, extra.states.attachToBone))
+							other.world = AttachedDrawWorld(instance.world, *bone);
 					other.animationSeconds = static_cast<float>((frame.clock - extraShown.since) * extraShown.speed);
 					other.animationStart = extraShown.start;
 					const bool sunk = extraShown.shown < extra.states.states.size() && extra.states.states[extraShown.shown].adjustHeightByConstruction;
 					other.world[11] += (sunk ? constructionSink : 0.0f) - ownSink;
-					other.muzzleFlash = false;
-					other.flashBarrels = 0;
-					other.recoil = {};
-					other.turret = other.turretPitch = other.altTurret = other.altTurretPitch = 0.0f;
+					// Each W3DModelDraw turns its own turret bones by the object's turret angles and handles its own
+					// barrels' recoil and muzzle flashes (a Technical's gun is its second draw).
 					emit(other);
 				}
 				if (kept == nullptr)

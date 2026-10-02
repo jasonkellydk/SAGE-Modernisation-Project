@@ -67,6 +67,8 @@ inline std::optional<Shot> FireCurrentWeaponAt(SpotFirer &firer, Engine::Math::F
 		aim.y += offset.y * weapon.scatterTargetScalar;
 		aim.z = ground.At(aim.XY());
 	}
+	// fireWeaponTemplate's victimPos (the spot, after the ScatterTarget pattern, before the scatter): its delay's end.
+	const Engine::Math::FixedVector3 victimAt = aim;
 	if (weapon.scatterRadius > Fixed{})
 	{
 		auto scatterRandom = Engine::Math::Stream(seed ^ 0x5CA77E4u, {tick, firer.entity.index, firer.entity.generation});
@@ -79,8 +81,7 @@ inline std::optional<Shot> FireCurrentWeaponAt(SpotFirer &firer, Engine::Math::F
 			aim.z = ground.At(aim.XY());
 		}
 	}
-	const Fixed distance = Engine::Math::Length(aim.XY() - transform.position.XY());
-	const std::uint64_t travel = weapon.speed > Fixed{} ? static_cast<std::uint64_t>((distance / weapon.speed).Ceil()) : 0;
+	const std::uint64_t travel = weapon.laser && !weapon.projectile ? 0 : HitDelayTicks(transform.position, victimAt, weapon.speed);
 	Shot shot;
 	shot.source = firer.entity;
 	shot.weapon = armament.weapon;

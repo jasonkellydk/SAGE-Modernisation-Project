@@ -9,8 +9,8 @@ import Engine.UI.WND.Document;
 // (ButtonCommand01..14: shown, enabled, their art (drawn by overlay states: grey while unavailable, dimmed for the
 // structure inventory's), an inventory rider's rank over it, clicked), the money readout (MoneyDisplay), and the production queue
 // (ProductionQueueWindow with ButtonQueue01..09) in place of the unit's portrait (WinUnitSelected) while something is
-// queued; the under-construction and OCL timer panels. The bar's other panels (observers, beacons) stay hidden until they
-// are ported.
+// queued; the under-construction and OCL timer panels. The beacon panel stays hidden until it is ported; the observer
+// panels are bound by the ObserverPanelView.
 // This table is the whole view: no control bar logic here.
 export namespace generalszh::hud
 {
@@ -47,6 +47,8 @@ public:
 			bindings.BindOverlay(name, viewModel.commandOverlay[slot], resolve);
 			// The structure inventory's buttons dim rather than grey while disabled (WIN_STATUS_ALWAYS_COLOR).
 			bindings.BindFlag(name, WindowFlag::AlwaysColor, viewModel.commandAlwaysColor[slot]);
+			// ControlBar::setCommandBarBorder: its kind's border colour (GadgetButtonSetBorder).
+			bindings.BindBorder(name, viewModel.commandBorder[slot]);
 			// ControlBar::init: command buttons draw by overlay states (their art, grey while unavailable).
 			document.Set_Window_Flag(name, WindowFlag::UseOverlayStates, true);
 		}
@@ -89,8 +91,8 @@ public:
 		document.Set_Window_Flag("ControlBar.wnd:OCLTimerSellButton", WindowFlag::UseOverlayStates, true);
 		bindings.BindEnabled("ControlBar.wnd:ButtonIdleWorker", viewModel.idleWorkerEnabled);
 		bindings.BindCommand("ControlBar.wnd:ButtonIdleWorker", viewModel.idleWorkerClicked);
-		for (const char *panel : {"ControlBar.wnd:ObserverPlayerListWindow", "ControlBar.wnd:ObserverPlayerInfoWindow", "ControlBar.wnd:BeaconWindow"})
-			document.Set_Window_Flag(panel, WindowFlag::Hidden, true);
+		// The observer panels are the ObserverPanelView's (observer_panel_view.cppm).
+		document.Set_Window_Flag("ControlBar.wnd:BeaconWindow", WindowFlag::Hidden, true);
 	}
 };
 }

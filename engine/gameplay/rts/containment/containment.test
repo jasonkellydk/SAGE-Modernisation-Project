@@ -2,6 +2,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
@@ -13,7 +14,9 @@ import engine.gameplay.rts.containment.systems.boarding_system;
 import engine.gameplay.rts.containment.systems.unloading_system;
 import engine.gameplay.rts.containment.systems.cargo_transfer_system;
 import engine.gameplay.rts.containment.systems.passenger_ride_system;
+import engine.gameplay.rts.containment.algorithms.garrison_stations;
 import engine.gameplay.common.spatial.systems.spatial_index_system;
+import engine.gameplay.rts.containment.systems.container_classes_system;
 import engine.ecs.core.world;
 import engine.ecs.scheduler.scheduler;
 import engine.jobs.job_system;
@@ -62,11 +65,19 @@ struct Airfield
 		world.RegisterComponent<PhysicsBody>();
 		world.RegisterComponent<Owner>();
 		world.RegisterComponent<Locomotion>();
+		world.RegisterComponent<Collider>();
+		world.RegisterComponent<Squishable>();
+		world.RegisterComponent<Pursuit>();
+		world.RegisterComponent<SightLooker>();
+		world.RegisterComponent<Slaved>();
+		world.RegisterComponent<SurfaceLayer>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
 		world.RegisterComponent<MoveEnded>();
 		world.RegisterComponent<Transport>();
+		world.RegisterComponent<BlockedState>();
 		world.RegisterComponent<GarrisonPoints>();
+		world.RegisterComponent<GarrisonStations>();
 		world.RegisterComponent<TransportFirePoints>();
 		world.RegisterComponent<Turret>();
 		world.RegisterComponent<Passenger>();
@@ -162,6 +173,55 @@ struct Airfield
 }
 
 BOOST_AUTO_TEST_SUITE(containment)
+
+// legacy_parity: PartitionFilterInsignificantBuildings::allow (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/
+// PartitionManager.cpp) as ContainerClassesSystem keeps it: a structure of no faction (isNonFactionStructure) whose
+// contain is no garrison (isGarrisonable false) is insignificant full or empty; a garrison only while it holds nobody;
+// a faction structure never.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_empty_or_non_garrison_civilian_container_is_insignificant)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<Transport>();
+	world.RegisterComponent<Targetable>();
+	world.RegisterComponent<Garrison>();
+	world.RegisterComponent<Armament>();
+	world.RegisterComponent<UnderConstruction>();
+	world.RegisterComponent<Sale>();
+	world.FinalizeComponents();
+	const auto make = [&](bool nonFaction, bool garrison, std::uint32_t occupied) {
+		const ecs::Entity entity = world.Create();
+		world.Add<Transport>(entity);
+		world.Add<Targetable>(entity);
+		world.Get<Transport>(entity)->occupied = occupied;
+		world.Get<Targetable>(entity)->classes = target_class::Structure | (nonFaction ? target_class::NonFactionStructure : 0u);
+		if (garrison)
+			world.Add<Garrison>(entity);
+		return entity;
+	};
+	const ecs::Entity emptyGarrison = make(true, true, 0);
+	const ecs::Entity heldGarrison = make(true, true, 2);
+	const ecs::Entity emptyOther = make(true, false, 0);
+	const ecs::Entity heldOther = make(true, false, 2);
+	const ecs::Entity factionEmpty = make(false, true, 0);
+	ContainerClassesSystem classes;
+	ecs::SystemRegistry registry;
+	registry.Register(classes);
+	registry.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, registry, engine::jobs::JobSystemConfig{1});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	scheduler.Execute(engine::time::SimulationTime{1, engine::time::FixedStep{30}});
+	const auto insignificant = [&](ecs::Entity entity) { return (world.Get<Targetable>(entity)->classes & target_class::Insignificant) != 0; };
+	BOOST_TEST(insignificant(emptyGarrison));
+	BOOST_TEST(!insignificant(heldGarrison));
+	BOOST_TEST(insignificant(emptyOther));
+	BOOST_TEST(insignificant(heldOther));
+	BOOST_TEST(!insignificant(factionEmpty));
+	// Someone goes in: no longer.
+	world.Get<Transport>(emptyGarrison)->occupied = 1;
+	scheduler.Execute(engine::time::SimulationTime{2, engine::time::FixedStep{30}});
+	BOOST_TEST(!insignificant(emptyGarrison));
+}
+
 
 // OpenContain::redeployOccupants (no fire points in the art): passengers ride at the transport's position; and
 // TransportContain::isPassengerAllowedToFire: with PassengersAllowedToFire only infantry may fire from inside.
@@ -393,6 +453,53 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_lost_tunnel_hands_its_riders_to_the_first_l
 	BOOST_TEST(gone.size() == 3u);
 	BOOST_TEST(manifest.Network(7).empty());
 	BOOST_TEST(manifest.Count(other) == 1u);
+}
+
+// GarrisonContain's station points (a fire base: IsEnclosingContainer No). redeployOccupants (on addToContain, and on a
+// model condition change: OpenContain::update) forgets every occupant (loadStationGarrisonPoints), then
+// positionObjectsAtStationGarrisonPoints gives each, in contain-list order, the first free station (pickAStationForMe);
+// onRemoving frees only the leaver's (removeObjectFromStationPoint), the others keeping theirs; occupants past the
+// stations have none. A station stands where the container's frame puts its bone (within 2 raw units: fixed-point
+// sine and cosine of a quarter turn).
+BOOST_AUTO_TEST_CASE(legacy_parity_fire_base_stations_are_given_in_order_of_entry)
+{
+	const ecs::Entity a{1, 1}, b{2, 1}, c{3, 1}, d{4, 1};
+	GarrisonStations stations;
+	stations.count = 3;
+	// a and b get in: stations 0 and 1.
+	std::vector<ecs::Entity> aboard{a, b};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == a && stations.occupants[1] == b && stations.occupants[2] == ecs::Entity{}));
+	// a leaves: b keeps station 1, 0 is free.
+	aboard = {b};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == b));
+	// The same again: nothing moves.
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == b));
+	// c gets in: everyone is redeployed in order of entry (b at 0, c at 1).
+	aboard = {b, c};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == b && stations.occupants[1] == c && stations.occupants[2] == ecs::Entity{}));
+	// b leaves, then the model condition changes: c moves to 0.
+	aboard = {c};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == ecs::Entity{} && stations.occupants[1] == c));
+	stations.occupants = CurrentStations(stations, aboard, true);
+	BOOST_TEST((stations.occupants[0] == c && stations.occupants[1] == ecs::Entity{}));
+	// Four in for three stations: the last has none.
+	aboard = {c, a, b, d};
+	stations.occupants = CurrentStations(stations, aboard, false);
+	BOOST_TEST((stations.occupants[0] == c && stations.occupants[1] == a && stations.occupants[2] == b));
+	// A station's place: the container's frame on the bone.
+	stations.points[1] = {Fixed::FromInt(10), {}, Fixed::FromInt(5)};
+	Transform frame;
+	frame.position = {Fixed::FromInt(100), Fixed::FromInt(200), Fixed::FromInt(3)};
+	frame.facing = Engine::Math::TurnAngle::Quarter_Turn();
+	const auto at = StationPosition(stations, 1, frame);
+	BOOST_TEST(std::abs((at.x - Fixed::FromInt(100)).Raw()) <= 2);
+	BOOST_TEST(std::abs((at.y - Fixed::FromInt(210)).Raw()) <= 2);
+	BOOST_TEST((at.z == Fixed::FromInt(8)));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

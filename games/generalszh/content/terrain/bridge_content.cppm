@@ -7,8 +7,10 @@ import engine.config.binding.values;
 export import engine.config.document.document;
 
 // Roads.ini's Bridge blocks (TerrainRoadType as a bridge, TerrainRoadCollection::findBridge by name): its scale, its
-// models by damage state (the pristine one's BRIDGE_LEFT mesh sets how wide the bridge is), its towers, scaffolding,
-// transition effects and sounds.
+// models and textures by damage state (the pristine model's BRIDGE_LEFT mesh sets how wide the bridge is), its radar
+// colour, its towers, scaffolding, transition effects and sounds. A Bridge block starts from the DefaultBridge block
+// written before it, when there is one (TerrainRoadCollection::newBridge: its texture, scale, models, damaged textures,
+// TransitionEffectsHeight and NumFXPerType).
 export namespace generalszh::content
 {
 // BodyDamageType: PRISTINE, DAMAGED, REALLYDAMAGED, RUBBLE.
@@ -24,6 +26,8 @@ struct BridgeContent
 	std::string name;
 	Engine::Math::Fixed scale{Engine::Math::Fixed::One()}; // BridgeScale
 	std::array<std::string, BodyDamageStates> models;      // BridgeModelName, ...Damaged, ...ReallyDamaged, ...Broken
+	std::array<std::string, BodyDamageStates> textures;    // Texture, TextureDamaged, TextureReallyDamaged, TextureBroken
+	std::array<std::uint8_t, 3> radarColor{};               // RadarColor (R:, G:, B: 0..255; the original keeps them / 255)
 	std::array<std::string, BridgeTowers> towers;          // TowerObjectNameFromLeft ...
 	std::string scaffold, scaffoldSupport;                  // ScaffoldObjectName, ScaffoldSupportObjectName
 	Engine::Math::Fixed transitionEffectsHeight;            // TransitionEffectsHeight
@@ -103,8 +107,19 @@ inline BridgeCatalog BindBridges(const engine::config::Document &document)
 	{
 		if (root.key != "Bridge" || root.values.empty())
 			continue;
+		BridgeContent fresh;
+		// newBridge: the defaults of a DefaultBridge already made.
+		if (const auto defaults = catalog.find("DefaultBridge"); defaults != catalog.end())
+		{
+			const BridgeContent &from = defaults->second;
+			fresh.textures = from.textures;
+			fresh.scale = from.scale;
+			fresh.models = from.models;
+			fresh.transitionEffectsHeight = from.transitionEffectsHeight;
+			fresh.fxPerType = from.fxPerType;
+		}
 		BridgeContent &bridge = catalog[std::string(root.Value())];
-		bridge = {};
+		bridge = std::move(fresh);
 		bridge.name = std::string(root.Value());
 		for (const engine::config::Node &field : root.children)
 		{
@@ -130,6 +145,24 @@ inline BridgeCatalog BindBridges(const engine::config::Document &document)
 				bridge.models[2] = text;
 			else if (key == "BridgeModelNameBroken")
 				bridge.models[3] = text;
+			else if (key == "Texture")
+				bridge.textures[0] = text;
+			else if (key == "TextureDamaged")
+				bridge.textures[1] = text;
+			else if (key == "TextureReallyDamaged")
+				bridge.textures[2] = text;
+			else if (key == "TextureBroken")
+				bridge.textures[3] = text;
+			else if (key == "RadarColor")
+			{
+				// INI::parseRGBColor: R, G and B in that order, each 0..255.
+				const std::vector<std::string_view> tokens(field.values.begin(), field.values.end());
+				constexpr std::array<std::string_view, 3> names{"R", "G", "B"};
+				for (std::size_t channel = 0; channel < names.size(); ++channel)
+					if (const auto value = SubToken(tokens, names[channel]))
+						if (const auto number = engine::config::values::ParseInt(*value); number && *number >= 0 && *number <= 255)
+							bridge.radarColor[channel] = static_cast<std::uint8_t>(*number);
+			}
 			else if (key == "TowerObjectNameFromLeft")
 				bridge.towers[0] = text;
 			else if (key == "TowerObjectNameFromRight")

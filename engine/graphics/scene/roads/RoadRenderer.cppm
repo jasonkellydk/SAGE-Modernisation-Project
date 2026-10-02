@@ -23,4 +23,24 @@ export bool Draw_Road(SurfaceRenderer &renderer, CommandList &commands,
     style.blend = RHIBlendMode::Multiply;
     return renderer.Draw(commands, mesh, style, parameters, textures);
 }
+
+// The same with the viewer's shroud (slot 3, parameters.shroud): the road pass multiplies its colour by the shroud as it
+// blends; the masked light-map pass, which multiplies what is already drawn, does not take it again.
+export bool Draw_Road(SurfaceRenderer &renderer, CommandList &commands,
+    SurfaceMeshHandle mesh, SurfaceParameters parameters,
+    const std::array<RHITextureHandle, 4> &textures, bool linear_filter)
+{
+    SurfaceStyle style;
+    style.linear_filter = linear_filter;
+    const bool masked_lightmap = parameters.textured > 0.5f
+        && parameters.cloud > 0.5f && parameters.lightmap > 0.5f;
+    if (masked_lightmap) parameters.lightmap = 0;
+    parameters.masked_modulation = 0;
+    if (!renderer.Draw(commands, mesh, style, parameters, textures)) return false;
+    if (!masked_lightmap) return true;
+    parameters.masked_modulation = 1;
+    parameters.shroud = 0;
+    style.blend = RHIBlendMode::Multiply;
+    return renderer.Draw(commands, mesh, style, parameters, textures);
+}
 }

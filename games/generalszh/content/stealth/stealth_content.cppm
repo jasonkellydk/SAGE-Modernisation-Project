@@ -175,7 +175,10 @@ std::optional<engine::gameplay::StealthDetector> ReadObjectStealthDetector(const
 			{
 				const auto range = engine::config::ReadFixed(field, bind).value_or(Engine::Math::Fixed{});
 				if (range > Engine::Math::Fixed{})
+				{
 					detector.range = range;
+					detector.flags |= gameplay::stealth_detector_flag::OwnRange;
+				}
 			}
 			else if (Same(key, "InitiallyDisabled"))
 				detector.flags = engine::config::ReadBool(field, bind).value_or(false) ? (detector.flags & ~gameplay::stealth_detector_flag::Enabled)

@@ -3,6 +3,10 @@ import std;
 import games.generalszh.gameplay.production.algorithms.build_cost;
 
 export import games.generalszh.gameplay.ai.algorithms.ai_players;
+import games.generalszh.gameplay.ai.algorithms.ai_base_building;
+import games.generalszh.gameplay.construction.algorithms.build_legality;
+import games.generalszh.content.powers.special_powers;
+import engine.gameplay.rts.navigation.resources.waypoint_graph;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import games.generalszh.gameplay.powers.algorithms.special_power_launch;
 import engine.gameplay.common.identity.components.definition_ref;
@@ -10,7 +14,8 @@ import engine.gameplay.common.spatial.components.transform;
 import engine.gameplay.rts.navigation.definitions.pathfind_cell;
 
 // A computer player aiming its special powers (ScriptActions::doSkirmishFireSpecialPowerAtMostCost,
-// AIPlayer::computeSuperweaponTarget, getPlayerSuperweaponValue).
+// AIPlayer::computeSuperweaponTarget, getPlayerSuperweaponValue, calcClosestConstructionZoneLocation;
+// AISkirmishPlayer::computeSuperweaponTarget's cluster mines).
 export namespace generalszh::gameplay
 {
 namespace ai_superweapon_detail
@@ -159,11 +164,63 @@ inline std::optional<Engine::Math::FixedVector2> ComputeSuperweaponTarget(GameWo
 	return veryBest;
 }
 
+// AIPlayer::calcClosestConstructionZoneLocation: where the power's final product (its ReferenceObject, facing its
+// PlacementViewAngle) may stand at or nearest `location`: the spot itself when nothing is in the way, else the AI's
+// wiggle (rings out to 40 cells: a clear path, legal terrain, nothing in the way); none: nowhere (the original zeroes the
+// spot). (The retail code never marked the spot itself valid, so a spot clear at once was zeroed and the power not fired;
+// fixed: it is taken, as the check intends.)
+inline std::optional<Engine::Math::FixedVector2> ClosestConstructionZoneLocation(GameWorld &game, const content::ObjectDefinition &plan,
+	Engine::Math::FixedVector2 location)
+{
+	const Engine::Math::TurnAngle angle = Engine::Math::TurnFromDegrees(plan.placementViewAngleDegrees);
+	if (CheckBuildLocation(game, plan, location, angle, {}, build_check::NoObjectOverlap) == LegalBuild::Ok)
+		return location;
+	return WiggleForLegalSpot(game, plan, location, angle);
+}
+
+// AISkirmishPlayer::computeSuperweaponTarget for cluster mines (SPECIAL_CLUSTER_MINES, NUKE_SPECIAL_CLUSTER_MINES): the
+// entrances to its own base mined: at random (0..2) its "Center", "Flank" or "Backdoor" path (by its start position,
+// 1-based), the waypoint of it closest to the base's middle (none: the middle of its enemy's structures, the enemy being
+// its current one or else the first human player), and the spot the base's reach out from the middle towards it.
+inline Engine::Math::FixedVector2 ClusterMinesTarget(GameWorld &game, const AiPlayer &ai, std::int64_t startIndex)
+{
+	using Engine::Math::Fixed;
+	const std::int64_t mode = Engine::Math::UniformInt(game.random, 0, 2);
+	const std::string label = (mode == 1 ? std::string("Flank") : mode == 2 ? std::string("Backdoor") : std::string("Center")) + std::to_string(startIndex + 1);
+	Engine::Math::FixedVector2 goal = ai.baseCenter;
+	if (const std::uint32_t way = game.waypoints.ClosestOnPath(ai.baseCenter, label); way != engine::gameplay::WaypointGraph::None)
+		goal = game.waypoints.Position(way).XY();
+	else
+	{
+		std::optional<std::uint32_t> enemy = ai.enemy;
+		for (std::uint32_t player = 0; !enemy && player < game.roster.PlayerCount(); ++player)
+			if (game.roster.PlayerAt(player).human)
+				enemy = player;
+		const auto bounds = enemy ? PlayerStructureBounds(game, *enemy) : std::array<Engine::Math::FixedVector2, 2>{};
+		goal = {bounds[0].x + (bounds[1].x - bounds[0].x) / Fixed::FromInt(2), bounds[0].y + (bounds[1].y - bounds[0].y) / Fixed::FromInt(2)};
+	}
+	return ai.baseCenter + Engine::Math::Normalize(goal - ai.baseCenter) * ai.baseRadius;
+}
+
+// Player::computeSuperweaponTarget for the named player: only a computer player aims (none: nothing); a skirmish one
+// mines its own base's entrances with cluster mines, else the most valuable spot of the enemy's.
+inline std::optional<Engine::Math::FixedVector2> AiSuperweaponTarget(GameWorld &game, const AiPlayer *ai, const content::SpecialPowerTemplate &power,
+	std::uint32_t enemy, Engine::Math::Fixed radius, std::int64_t startIndex)
+{
+	if (ai == nullptr)
+		return std::nullopt;
+	if (ai->skirmish && (power.type == "SPECIAL_CLUSTER_MINES" || power.type == "NUKE_SPECIAL_CLUSTER_MINES"))
+		return ClusterMinesTarget(game, *ai, startIndex);
+	return ComputeSuperweaponTarget(game, power.type == "SPECIAL_SNEAK_ATTACK", enemy, radius);
+}
+
 // doSkirmishFireSpecialPowerAtMostCost: against the script's player's skirmish enemy, each of the named player's objects
-// with the power ready fires it (as a script) at the most valuable spot within max(50, its RadiusCursorRadius) (the
-// original breaks out of a team's members after one, not out of its teams). A sneak attack is not fired (its tunnel
-// placement, calcClosestConstructionZoneLocation, is not ported yet).
-inline void SkirmishFireSpecialPowerAtMostCost(GameWorld &game, AiPlayers &ais, std::uint32_t scriptPlayer, std::uint32_t player, const std::string &name)
+// with the power ready fires it (as a script) at the spot its player aims at within max(50, its RadiusCursorRadius) (the
+// original breaks out of a team's members after one, not out of its teams); a sneak attack (SPECIAL_SNEAK_ATTACK) goes
+// where its ReferenceObject may stand nearest that spot (calcClosestConstructionZoneLocation), and is not fired when
+// there is no such place. `startIndex`: the named player's start position (0-based, getMpStartIndex).
+inline void SkirmishFireSpecialPowerAtMostCost(GameWorld &game, AiPlayers &ais, std::uint32_t scriptPlayer, std::uint32_t player, const std::string &name,
+	std::int64_t startIndex = 0)
 {
 	namespace gp = engine::gameplay;
 	using Engine::Math::Fixed;
@@ -189,10 +246,18 @@ inline void SkirmishFireSpecialPowerAtMostCost(GameWorld &game, AiPlayers &ais, 
 			gp::SpecialPowerTimer *timer = timers != nullptr ? timers->Find(*power) : nullptr;
 			if (timer == nullptr || !gp::IsReady(*timer, ClockFor(game, player)))
 				continue;
-			const auto location = ComputeSuperweaponTarget(game, sneakAttack, *enemy, radius);
+			auto location = AiSuperweaponTarget(game, ais.Of(player), info, *enemy, radius, startIndex);
+			if (location && sneakAttack)
+			{
+				// mod->getReferenceThingTemplate(): the OCLSpecialPower module's ReferenceObject (none: the spot as aimed).
+				const auto *ref = game.world.Get<gp::DefinitionRef>(*it);
+				const auto ocl = ref != nullptr ? content::FindOclPower(game.templates.DefinitionAt(ref->index), name) : std::nullopt;
+				if (const content::ObjectDefinition *product = ocl ? game.templates.Content().objects.Find(ocl->referenceObject) : nullptr)
+					location = ClosestConstructionZoneLocation(game, *product, *location);
+			}
 			// location.lengthSqr() > 0 (its z the ground height there).
 			const bool somewhere = location && (location->x != Fixed{} || location->y != Fixed{} || game.ground.At(*location) != Fixed{});
-			if (somewhere && !sneakAttack)
+			if (somewhere)
 				FireSpecialPower(game, *it, name, *location, true);
 			break;
 		}

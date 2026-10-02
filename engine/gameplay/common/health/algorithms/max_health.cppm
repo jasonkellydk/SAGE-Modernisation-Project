@@ -26,7 +26,7 @@ inline void SetMaxHealth(Health &health, Engine::Math::Fixed maximum, MaxHealthC
 	{
 	case MaxHealthChange::PreserveRatio:
 		if (previous > Fixed{})
-			health.current = clip(maximum * (health.current / previous));
+			health.current = clip(maximum * health.current / previous); // the new maximum times the old ratio (multiplied first: exact)
 		break;
 	case MaxHealthChange::AddCurrentToo:
 		health.current = clip(health.current + (maximum - previous));

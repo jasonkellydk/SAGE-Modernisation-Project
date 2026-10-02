@@ -1,0 +1,201 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+import games.generalszh.content.effects.bone_fx_content;
+import games.generalszh.content.objects.object_catalog;
+import games.generalszh.content.objects.model_conditions;
+import games.generalszh.content.combat.combat_catalog;
+import games.generalszh.content.ini.zero_hour_grammar;
+import games.generalszh.content.loading.content_loader;
+import games.generalszh.content.install.install_mount;
+import engine.filesystem.core.virtual_file_system;
+
+using namespace generalszh::content;
+using namespace engine::config;
+using Engine::Math::Fixed;
+
+namespace
+{
+constexpr std::array<const char *, BoneFxStateCount> States{"Pristine", "Damaged", "ReallyDamaged", "Rubble"};
+
+std::uint64_t Bit(std::string_view type)
+{
+	return std::uint64_t{1} << *DamageTypeIndex(type);
+}
+
+// Every slot of every table and state, each with its own bone, name and delays (state * 1000 + slot * 100 ms; the max
+// 50 ms more), OnlyOnce alternating.
+std::string EveryField()
+{
+	std::string text = "Object Tower\n  Behavior = BoneFXUpdate ModuleTag_01\n"
+		"    DamageFXTypes = ALL -WATER\n"
+		"    DamageOCLTypes = NONE +EXPLOSION +FLAME\n"
+		"    DamageParticleTypes = -CRUSH\n";
+	const std::array<std::pair<const char *, const char *>, 3> kinds{{{"FXList", "FXList"}, {"OCL", "OCL"}, {"ParticleSystem", "PSys"}}};
+	for (std::size_t state = 0; state < BoneFxStateCount; ++state)
+		for (const auto &[key, kind] : kinds)
+			for (std::size_t slot = 0; slot < BoneFxSlots; ++slot)
+			{
+				const std::string tag = std::string(States[state]) + key + std::to_string(slot + 1);
+				const int minMs = static_cast<int>(state * 1000 + slot * 100);
+				text += "    " + tag + " = bone:B" + tag + " OnlyOnce:" + (slot % 2 == 0 ? "Yes" : "No") + " " +
+					std::to_string(minMs) + " " + std::to_string(minMs + 50) + " " + kind + ":N" + tag + "\n";
+			}
+	return text + "  End\nEnd\n";
+}
+}
+
+BOOST_AUTO_TEST_SUITE(bone_fx_content)
+
+// Legacy parity (BoneFXUpdate.h buildFieldParse and BoneFXUpdate.cpp parseFXList / parseObjectCreationList /
+// parseParticleSystem / parseGameLogicRandomDelay; INI.cpp parseDurationReal and parseDamageTypeFlags): all 99 fields
+// of BoneFXUpdateModuleData land in their own state and slot: <State>FXList<n>, <State>OCL<n> and
+// <State>ParticleSystem<n> for Pristine, Damaged, ReallyDamaged and Rubble, n 1 to 8, as "Bone:<b> OnlyOnce:<bool>
+// <min ms> <max ms> <kind>:<name>" with the delays in logic frames as reals (ms * 30 / 1000, unrounded: 150 ms is 4.5);
+// DamageFXTypes, DamageOCLTypes and DamageParticleTypes from ALL each time they are read (so "-CRUSH" alone is all but
+// crush), ALL by default.
+BOOST_AUTO_TEST_CASE(legacy_parity_every_bone_fx_field_lands_in_its_state_and_slot)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	Document document;
+	ini::Read(document, document.AddSource("Object.ini", EveryField()), ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ObjectDefinition *tower = objects.Find("Tower");
+	BOOST_TEST_REQUIRE(tower != nullptr);
+	engine::filesystem::VirtualFileSystem files;
+	ModelRigs rigs(files);
+	const auto content = ReadBoneFx(*tower, rigs, 30);
+	BOOST_TEST_REQUIRE(content.has_value());
+
+	BOOST_TEST(content->fxTypes == (~std::uint64_t{0} & ~Bit("WATER")));
+	BOOST_TEST(content->oclTypes == (Bit("EXPLOSION") | Bit("FLAME")));
+	BOOST_TEST(content->particleTypes == (~std::uint64_t{0} & ~Bit("CRUSH")));
+
+	const std::array<std::pair<const BoneFxTable *, const char *>, 3> tables{
+		{{&content->fx, "FXList"}, {&content->ocl, "OCL"}, {&content->particles, "ParticleSystem"}}};
+	int checked = 0;
+	for (const auto &[table, key] : tables)
+		for (std::size_t state = 0; state < BoneFxStateCount; ++state)
+			for (std::size_t slot = 0; slot < BoneFxSlots; ++slot)
+			{
+				const std::string tag = std::string(States[state]) + key + std::to_string(slot + 1);
+				const BoneFxEntry &entry = (*table)[state][slot];
+				BOOST_TEST_CONTEXT(tag)
+				{
+					BOOST_TEST(entry.Used());
+					BOOST_TEST(entry.bone == "B" + tag);
+					BOOST_TEST(entry.name == "N" + tag);
+					BOOST_TEST(entry.onlyOnce == (slot % 2 == 0));
+					// (state * 1000 + slot * 100) ms at 30 frames a second: state * 30 + slot * 3 frames; 50 ms more is 1.5.
+					const Fixed min = Fixed::FromInt(static_cast<std::int64_t>(state * 30 + slot * 3));
+					BOOST_TEST(entry.minDelay.Raw() == min.Raw());
+					BOOST_TEST(entry.maxDelay.Raw() == (min + Fixed::FromRatio(3, 2)).Raw());
+					// No model: the bone is at the object's origin (getPristineBonePositions finds nothing).
+					BOOST_TEST(entry.at.x.Raw() == 0);
+					BOOST_TEST(entry.at.y.Raw() == 0);
+					BOOST_TEST(entry.at.z.Raw() == 0);
+				}
+				++checked;
+			}
+	BOOST_TEST(checked == 96); // + the three damage type fields: all 99
+}
+
+// Legacy parity (BoneFXUpdateModuleData constructor): no fields: every slot unused, OnlyOnce true, all damage types.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_empty_bone_fx_block_uses_nothing_for_any_damage)
+{
+	Diagnostics diagnostics;
+	Diagnostics grammarDiagnostics;
+	Document document;
+	ini::Read(document, document.AddSource("Object.ini", "Object Tower\n  Behavior = BoneFXUpdate ModuleTag_01\n  End\nEnd\n"),
+		ZeroHourIniGrammar(grammarDiagnostics), diagnostics);
+	BindContext context{diagnostics, engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	engine::filesystem::VirtualFileSystem files;
+	ModelRigs rigs(files);
+	const auto content = ReadBoneFx(*objects.Find("Tower"), rigs, 30);
+	BOOST_TEST_REQUIRE(content.has_value());
+	BOOST_TEST(content->fxTypes == ~std::uint64_t{0});
+	BOOST_TEST(content->oclTypes == ~std::uint64_t{0});
+	BOOST_TEST(content->particleTypes == ~std::uint64_t{0});
+	for (const BoneFxTable *table : {&content->fx, &content->ocl, &content->particles})
+		for (const auto &state : *table)
+			for (const BoneFxEntry &entry : state)
+			{
+				BOOST_TEST(!entry.Used());
+				BOOST_TEST(entry.onlyOnce);
+			}
+}
+
+// Legacy parity (CivilianBuilding.ini MogadishuTower04's BoneFXUpdate; BoneFXUpdate::resolveBoneLocations): as rubble
+// it plays FX_DefaultStructureSecondary at Smoke02 and StructureToppleSmokeTrail at Fire02, once each, 3000 ms (90
+// frames) after, for any damage but water; at the bones where they rest in the model its RUBBLE condition draws (the
+// origin for a bone that model lacks).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_mogadishu_tower_smokes_and_burns_as_rubble)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+		return;
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/Object", "Data/INI/Object"});
+	BindContext context{loader.DiagnosticsFor(document), engine::time::FixedStep{30}};
+	const auto objects = BuildObjectCatalog(document, context);
+	const ObjectDefinition *tower = objects.Find("MogadishuTower04");
+	BOOST_TEST_REQUIRE(tower != nullptr);
+	ModelRigs rigs(files);
+	const auto content = ReadBoneFx(*tower, rigs, 30);
+	BOOST_TEST_REQUIRE(content.has_value());
+	BOOST_TEST(content->fxTypes == (~std::uint64_t{0} & ~Bit("WATER")));
+	BOOST_TEST(content->particleTypes == (~std::uint64_t{0} & ~Bit("WATER")));
+	BOOST_TEST(content->oclTypes == ~std::uint64_t{0});
+
+	constexpr std::size_t Rubble = 3;
+	const BoneFxEntry &smoke = content->fx[Rubble][0];
+	const BoneFxEntry &fire = content->particles[Rubble][0];
+	BOOST_TEST(smoke.bone == "Smoke02");
+	BOOST_TEST(smoke.name == "FX_DefaultStructureSecondary");
+	BOOST_TEST(fire.bone == "Fire02");
+	BOOST_TEST(fire.name == "StructureToppleSmokeTrail");
+	for (const BoneFxEntry *entry : {&smoke, &fire})
+	{
+		BOOST_TEST(entry->onlyOnce);
+		BOOST_TEST(entry->minDelay.Raw() == Fixed::FromInt(90).Raw());
+		BOOST_TEST(entry->maxDelay.Raw() == Fixed::FromInt(90).Raw());
+	}
+	int used = 0;
+	for (const BoneFxTable *table : {&content->fx, &content->ocl, &content->particles})
+		for (const auto &state : *table)
+			for (const BoneFxEntry &entry : state)
+				used += entry.Used() ? 1 : 0;
+	BOOST_TEST(used == 2);
+
+	// Smoke02 at rest in the RUBBLE model (CBTower04_E), at the tower's scale; Fire02 is not in it, so
+	// getPristineBonePositions finds nothing and the position stays as constructed: the origin.
+	const ModelStates looks = ReadModelStates(*tower);
+	ConditionBits rubble{};
+	const std::uint32_t bit = ModelConditionBit("RUBBLE");
+	rubble[bit / 64] |= std::uint64_t{1} << (bit % 64);
+	const std::string &model = looks.states[SelectModelState(looks, rubble)].model;
+	BOOST_TEST(model == "CBTower04_E");
+	const auto bone = rigs.Bone(model, "Smoke02");
+	BOOST_TEST_REQUIRE(bone.has_value());
+	BOOST_TEST(smoke.at.x.Raw() == (bone->position.x * tower->scale).Raw());
+	BOOST_TEST(smoke.at.y.Raw() == (bone->position.y * tower->scale).Raw());
+	BOOST_TEST(smoke.at.z.Raw() == (bone->position.z * tower->scale).Raw());
+	BOOST_TEST(smoke.at.z.Raw() != 0);
+	BOOST_TEST(!rigs.Bone(model, "Fire02").has_value());
+	BOOST_TEST(fire.at.x.Raw() == 0);
+	BOOST_TEST(fire.at.y.Raw() == 0);
+	BOOST_TEST(fire.at.z.Raw() == 0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

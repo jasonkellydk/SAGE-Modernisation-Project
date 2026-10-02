@@ -70,6 +70,9 @@ inline void Blast(GameWorld &game, const NeutronBlastConfig &blast, Engine::Math
 			continue;
 		}
 		unmanned_detail::SetDisabledFlag(game, victim, gp::disabled_type::Unmanned, true);
+		// setDisabled(DISABLED_UNMANNED): its pilot's splatter (already unmanned, again).
+		if (auto *notices = world.FindResource<UnmannedNotices>())
+			notices->list.push_back({victim, ref->index});
 		if (pilot_kill_detail::HasCarBombSet(kind))
 		{
 			kills.push_back(victim);

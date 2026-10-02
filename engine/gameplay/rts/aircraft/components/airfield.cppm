@@ -15,6 +15,8 @@ import engine.ecs.core.component_registry;
 // creation points a new one comes out of the hangar by (the first is the hangar itself); its deck stands `deckHeight`
 // over the terrain (LandingDeckHeightOffset: jets on it stand there), and only the front row takes off (`frontRow`: a
 // jet further back waits to be moved up).
+// Its helipad (the HeliPark01 bone: where a helicopter it makes appears, facing its turn; `hasHelipad`) and its
+// ApproachHeight (how high over its landing spot a helicopter comes in and climbs to).
 export namespace engine::gameplay
 {
 struct ParkingSpace
@@ -25,8 +27,16 @@ struct ParkingSpace
 	Engine::Math::TurnAngle hangarFacing;
 	Engine::Math::TurnAngle parkingFacing;
 	std::uint32_t runway{0};
-	std::uint32_t reserved{0};
+	Engine::Math::TurnAngle apronFacing; // its RunwayNParkingM bone's turn (m_orientation), even when it parks in its hangar
 };
+
+// reserveSpace's parking spot for a jet with ParkingOffset: its space's, moved that far along the apron's turn.
+inline Engine::Math::FixedVector3 ParkingSpot(const ParkingSpace &space, Engine::Math::Fixed offset) noexcept
+{
+	if (offset == Engine::Math::Fixed{})
+		return space.parking;
+	return {space.parking.x + offset * Engine::Math::Cos(space.apronFacing), space.parking.y + offset * Engine::Math::Sin(space.apronFacing), space.parking.z};
+}
 
 struct RunwayPath
 {
@@ -55,7 +65,11 @@ struct Airfield
 	std::uint32_t runwayCount{0};
 	Engine::Math::Fixed deckHeight;
 	std::uint32_t frontRow{0}; // a flight deck: only spaces below runwayCount take off
+	std::uint32_t hasHelipad{0};
+	Engine::Math::FixedVector3 helipad;
+	Engine::Math::TurnAngle helipadFacing;
 	std::uint32_t reserved{0};
+	Engine::Math::Fixed approachHeight;
 };
 }
 
@@ -65,7 +79,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Airfield>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.airfield";
-	static constexpr std::uint32_t Version = 2;
+	static constexpr std::uint32_t Version = 3;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 };
 }
