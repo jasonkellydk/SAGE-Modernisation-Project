@@ -321,6 +321,11 @@ Schema<ObjectDefinition> ObjectSchema(const ParseMode &mode)
 	schema.String("Side", &ObjectDefinition::side)
 		.String("CommandSet", &ObjectDefinition::commandSet)
 		.String("RadarPriority", &ObjectDefinition::radarPriority)
+		.String("ShadowTexture", &ObjectDefinition::shadowTexture)
+		.Fixed("ShadowSizeX", &ObjectDefinition::shadowSizeX)
+		.Fixed("ShadowSizeY", &ObjectDefinition::shadowSizeY)
+		.Fixed("ShadowOffsetX", &ObjectDefinition::shadowOffsetX)
+		.Fixed("ShadowOffsetY", &ObjectDefinition::shadowOffsetY)
 		.On("Shadow", [](const Node &node, ObjectDefinition &out, BindContext &) {
 			constexpr std::array<std::string_view, 7> names{"SHADOW_DECAL", "SHADOW_VOLUME", "SHADOW_PROJECTION", "SHADOW_DYNAMIC_PROJECTION",
 				"SHADOW_DIRECTIONAL_PROJECTION", "SHADOW_ALPHA_DECAL", "SHADOW_ADDITIVE_DECAL"};

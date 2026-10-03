@@ -4,6 +4,7 @@
 #include <vector>
 
 import games.generalszh.presentation.interaction.algorithms.select_keys;
+import games.generalszh.presentation.interaction.algorithms.force_select;
 
 using namespace generalszh::presentation;
 
@@ -242,6 +243,41 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_drag_stops_at_the_selection_cap_and_warns_o
 	capped = CapSelection(adding, 100, 0, fresh);
 	BOOST_TEST(capped.taken.size() == 3u);
 	BOOST_TEST(!fresh);
+}
+
+// ScriptActions::doForceObjectSelection: of the team's members, only those whose thing is the one asked; among them the
+// lowest object ID (`obj->getID() < bestGuess->getID()`, whatever the comment says), whatever the member order; another
+// type, or none at all: nothing.
+BOOST_AUTO_TEST_CASE(legacy_parity_force_select_takes_the_lowest_id_of_the_type)
+{
+	ecs::World world{ecs::WorldConfig{1}};
+	world.RegisterComponent<engine::gameplay::ObjectId>();
+	world.FinalizeComponents();
+	std::vector<ecs::Entity> members;
+	std::vector<std::string> types;
+	const auto make = [&](std::uint32_t id, std::string type) {
+		const ecs::Entity entity = world.Create();
+		world.Add<engine::gameplay::ObjectId>(entity);
+		world.Get<engine::gameplay::ObjectId>(entity)->value = id;
+		members.push_back(entity);
+		types.push_back(std::move(type));
+		return entity;
+	};
+	make(30, "AmericaInfantryRanger");
+	const ecs::Entity oldest = make(12, "AmericaInfantryRanger");
+	make(5, "AmericaVehicleHumvee");
+	make(20, "AmericaInfantryRanger");
+	const auto typeOf = [&](ecs::Entity entity) -> std::string_view {
+		for (std::size_t index = 0; index < members.size(); ++index)
+			if (members[index] == entity)
+				return types[index];
+		return {};
+	};
+	const auto pick = ForceSelectPick(world, members, "AmericaInfantryRanger", typeOf);
+	BOOST_TEST_REQUIRE(pick.has_value());
+	BOOST_TEST((*pick == oldest));
+	BOOST_TEST(!ForceSelectPick(world, members, "ChinaTankBattleMaster", typeOf).has_value());
+	BOOST_TEST(!ForceSelectPick(world, {}, "AmericaInfantryRanger", typeOf).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

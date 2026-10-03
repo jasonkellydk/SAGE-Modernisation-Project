@@ -15,13 +15,16 @@ export namespace engine::gameplay
 struct HealingSystem
 {
 	using Query = ecs::Query<ecs::Write<Health>, ecs::OptionalWrite<HealLock>>;
-	using Resources = ecs::Resources<ecs::Read<HealPulses>>;
+	using Resources = ecs::Resources<ecs::Read<HealPulses>, ecs::Write<BurstHeals>>;
+
+	void BeforeChunks(Query &query, ecs::SystemContext &context) const { context.Write<BurstHeals>().Reset(query.PreparedChunkCount()); }
 
 	void Execute(Query::Chunk chunk, ecs::SystemContext &context) const
 	{
 		const HealPulses &pulses = context.Read<HealPulses>();
 		if (pulses.All().empty())
 			return;
+		auto &bursts = context.Write<BurstHeals>().Slot(context);
 		const std::uint64_t tick = context.Tick();
 		auto healths = chunk.Get<Health>();
 		auto locks = chunk.Get<HealLock>();
@@ -35,6 +38,8 @@ struct HealingSystem
 			{
 				if (health.current >= health.maximum)
 					break;
+				if (pulse.burst != 0)
+					bursts.push_back(entities[row]);
 				if (pulse.lockTicks > 0 && !locks.empty())
 				{
 					HealLock &lock = locks[row];

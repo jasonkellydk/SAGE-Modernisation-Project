@@ -9,6 +9,8 @@ import Engine.Core.Math.FixedPresentation;
 import games.generalszh.presentation.objects.resources.breeze;
 import games.generalszh.presentation.objects.resources.look_catalog;
 import games.generalszh.presentation.objects.components.object_presentation;
+import games.generalszh.presentation.objects.components.object_icons;
+import games.generalszh.presentation.objects.resources.presentation_resources;
 import games.generalszh.presentation.interaction.components.selected;
 import games.generalszh.presentation.audio.components.sound_loops;
 import games.generalszh.presentation.hud.algorithms.screen_fade_steps;
@@ -209,6 +211,31 @@ inline void ApplyClientScript(ecs::World &world, ScriptedPresentation &settings,
 				*existing = flash;
 			else
 				flashes.Insert(target, &flash);
+		}
+		break;
+	}
+	case Kind::Emoticon:
+	{
+		// Drawable::setEmoticon: the old emoticon goes; a known Animation2D is made now, kept through the script's frame
+		// plus the duration (a negative one: FOREVER). The overlay leaves out a name the game has no animation for.
+		std::vector<ecs::Entity> targets;
+		if (command.flag)
+			targets = host.game.TeamMembers(command.subject);
+		else
+			targets.push_back(host.game.Named(command.subject));
+		const auto *frame = world.FindResource<PresentationFrame>();
+		const double clock = frame != nullptr ? frame->clock : 0.0;
+		auto &emoticons = world.Side<ObjectEmoticon>();
+		for (const ecs::Entity target : targets)
+		{
+			if (!world.IsAlive(target))
+				continue;
+			ObjectEmoticon emoticon{command.text, clock, IconRoll(target, static_cast<ObjectIcon>(ObjectIconCount), clock),
+				command.percent >= 0 ? host.scriptTick + static_cast<std::uint64_t>(command.percent) : ~std::uint64_t{0}};
+			if (auto *existing = emoticons.Get(target))
+				*existing = std::move(emoticon);
+			else
+				emoticons.Insert(target, &emoticon);
 		}
 		break;
 	}

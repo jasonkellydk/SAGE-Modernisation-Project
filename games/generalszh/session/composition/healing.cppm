@@ -29,6 +29,7 @@ inline void EmplaceHealingResources(ecs::World &world, [[maybe_unused]] const Si
 {
 	world.EmplaceResource<engine::gameplay::HealOffers>();
 	world.EmplaceResource<engine::gameplay::HealPulses>();
+	world.EmplaceResource<engine::gameplay::BurstHeals>();
 }
 
 inline void RegisterHealingComponents(ecs::World &world)

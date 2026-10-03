@@ -884,3 +884,27 @@ BOOST_AUTO_TEST_CASE(legacy_parity_streaks_run_only_through_particles_inside_the
 	BOOST_TEST(world.X()[culled[1].second] == 10.0f);
 	BOOST_TEST(presentation::StreakParticles(world, std::nullopt).size() == 3u);
 }
+
+// FXList.cpp RayEffectFXNugget (TheGameClient->createRayEffectByTemplate between the two points): no shipped FXList
+// (Default\FXList, FXList, either archive) has a RayEffect nugget, so it never plays in the shipped game.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_shipped_fx_list_draws_a_ray_effect)
+{
+	Install &install = Data();
+	if (!install.effects)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const engine::config::Document &document = install.loader->Load({"Data/INI/Default/FXList", "Data/INI/FXList"});
+	std::size_t lists = 0, rays = 0;
+	for (const engine::config::Node &root : document.Roots())
+	{
+		if (root.key != "FXList")
+			continue;
+		++lists;
+		for (const engine::config::Node &nugget : root.children)
+			rays += nugget.key == "RayEffect" ? 1u : 0u;
+	}
+	BOOST_TEST(lists > 400u);
+	BOOST_TEST(rays == 0u);
+}

@@ -38,17 +38,34 @@ inline Engine::Math::Fixed LobSpeed(const WeaponDefinition &weapon, Engine::Math
 
 struct ProjectileLaunchSystem
 {
-	static void Launch(ecs::CommandBuffer &commands, const Shot &shot, const WeaponDefinition &weapon, std::uint64_t decoyTick = 0)
+	// A guided missile's object as it leaves (its launch point facing along its flight, its projectile kind, its
+	// shooter's player's), flying.
+	struct MissileParts
+	{
+		Transform transform;
+		DefinitionRef definition;
+		Owner owner;
+		Attitude attitude;
+		MissileFlight flight;
+	};
+	static MissileParts PartsOf(const Shot &shot, const WeaponDefinition &weapon, std::uint64_t decoyTick = 0)
 	{
 		MissileFlight flight = LaunchMissile(shot, weapon);
 		flight.decoyTick = decoyTick;
 		const Engine::Math::FixedVector3 direction = flight.forward;
+		return {Transform{shot.origin, Engine::Math::Heading(direction.XY())}, DefinitionRef{weapon.projectileDefinition}, Owner{shot.sourcePlayer},
+			Attitude{-Engine::Math::Heading({Engine::Math::Length(direction.XY()), direction.z}), {}}, flight};
+	}
+
+	static void Launch(ecs::CommandBuffer &commands, const Shot &shot, const WeaponDefinition &weapon, std::uint64_t decoyTick = 0)
+	{
+		const MissileParts parts = PartsOf(shot, weapon, decoyTick);
 		const auto missile = commands.Create();
-		commands.Add<Transform>(missile, Transform{shot.origin, Engine::Math::Heading(direction.XY())});
-		commands.Add<DefinitionRef>(missile, DefinitionRef{weapon.projectileDefinition});
-		commands.Add<Owner>(missile, Owner{shot.sourcePlayer});
-		commands.Add<Attitude>(missile, Attitude{-Engine::Math::Heading({Engine::Math::Length(direction.XY()), direction.z}), {}});
-		commands.Add<MissileFlight>(missile, flight);
+		commands.Add<Transform>(missile, parts.transform);
+		commands.Add<DefinitionRef>(missile, parts.definition);
+		commands.Add<Owner>(missile, parts.owner);
+		commands.Add<Attitude>(missile, parts.attitude);
+		commands.Add<MissileFlight>(missile, parts.flight);
 	}
 
 	using Query = ecs::Query<ecs::Read<ProjectileFlight>>;
@@ -69,6 +86,9 @@ struct ProjectileLaunchSystem
 			const WeaponDefinition &weapon = weapons.At(shot.weapon);
 			// A projectile flying itself is the game's to make (a full object: its death is its detonation).
 			if (weapon.objectFlown)
+				return;
+			// A script's shot: its projectile is out already.
+			if (shot.launched != 0)
 				return;
 			if (weapon.guided)
 			{

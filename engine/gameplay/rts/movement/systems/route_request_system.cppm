@@ -159,6 +159,8 @@ inline void PlanRoute(Route &route, const NavigationGrid &grid, const ClearanceP
 	route.destination = destination;
 	route.planned = true;
 	route.plannedTick = tick;
+	route.start = from;
+	route.hasStart = true;
 	// The first point is where the mover stands: it walks from the second.
 	const std::size_t available = planned.points.size() > 1 ? planned.points.size() - 1 : 0;
 	const std::size_t kept = std::min(available, RoutePoints);
@@ -169,8 +171,11 @@ inline void PlanRoute(Route &route, const NavigationGrid &grid, const ClearanceP
 	}
 	route.count = static_cast<std::uint8_t>(kept);
 	route.blockedByAlly = planned.blockedByAlly;
-	// Cut short by the budget: walked, then planned on from its end; with nowhere better to go, the move is done.
-	route.complete = kept == available && (!planned.exhausted || kept == 0);
+	// Cut short by the budget: walked, then planned on from its end; with nowhere better to go (no point, or none past the
+	// cell beside where it stands: findClosestPath's route, walked, ends the move), the move is done.
+	const Engine::Math::Fixed nearby = Engine::Math::Fixed::FromInt(PathfindCellSize * 3 / 2);
+	const bool stuckInPlace = kept == 1 && !planned.reachedGoal && Engine::Math::DistanceSquared(route.points[0], from) <= nearby * nearby;
+	route.complete = kept == available && (!planned.exhausted || kept == 0 || stuckInPlace);
 }
 
 struct RouteRequestSystem

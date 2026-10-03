@@ -61,8 +61,33 @@ public:
 		const auto found = m_actions.find(name);
 		return found == m_actions.end() ? nullptr : &found->second;
 	}
+	// The format's codes in order, for calls stored without a name (an old map's chunks keep only the code): code ->
+	// name.
+	void SetConditionKinds(std::vector<std::string> names) { m_conditionKinds = std::move(names); }
+	void SetActionKinds(std::vector<std::string> names) { m_actionKinds = std::move(names); }
+	// A call's name: its stored one, else its code's (none for an unknown code).
+	std::string_view ConditionName(const level::ScriptCall &call) const noexcept { return NameOf(call, m_conditionKinds); }
+	std::string_view ActionName(const level::ScriptCall &call) const noexcept { return NameOf(call, m_actionKinds); }
+	// How the game reads its stored calls (its format's fix-ups for old files, its checks): given a call with its name
+	// filled in, it may change it in place (its name, its parameters).
+	using CallHealer = std::function<void(level::ScriptCall &call)>;
+	void SetConditionHealer(CallHealer healer) { m_conditionHealer = std::move(healer); }
+	void SetActionHealer(CallHealer healer) { m_actionHealer = std::move(healer); }
+	const CallHealer &ConditionHealer() const noexcept { return m_conditionHealer; }
+	const CallHealer &ActionHealer() const noexcept { return m_actionHealer; }
 
 private:
+	static std::string_view NameOf(const level::ScriptCall &call, const std::vector<std::string> &kinds) noexcept
+	{
+		if (!call.name.empty())
+			return call.name;
+		return call.kind < kinds.size() ? std::string_view{kinds[call.kind]} : std::string_view{};
+	}
+
+	std::vector<std::string> m_conditionKinds;
+	std::vector<std::string> m_actionKinds;
+	CallHealer m_conditionHealer;
+	CallHealer m_actionHealer;
 	std::map<std::string, ConditionHandler, std::less<>> m_conditions;
 	std::map<std::string, ActionHandler, std::less<>> m_actions;
 };
@@ -548,6 +573,32 @@ private:
 		bool countdown{false};
 	};
 
+	// The call as the game reads it: named, then healed; the stored one when that changes nothing, else a copy kept
+	// for the runtime's life.
+	const level::ScriptCall &Healed(const level::ScriptCall &call, std::string_view name, const Vocabulary::CallHealer &healer)
+	{
+		if (name == call.name && !healer)
+			return call;
+		level::ScriptCall read = call;
+		read.name = std::string(name);
+		if (healer)
+			healer(read);
+		if (read.name == call.name && read.kind == call.kind && SameParameters(read.parameters, call.parameters))
+			return call;
+		return m_healedCalls.emplace_back(std::move(read));
+	}
+
+	static bool SameParameters(const std::vector<level::ScriptParameter> &a, const std::vector<level::ScriptParameter> &b) noexcept
+	{
+		if (a.size() != b.size())
+			return false;
+		for (std::size_t index = 0; index < a.size(); ++index)
+			if (a[index].kind != b[index].kind || a[index].integer != b[index].integer || a[index].number != b[index].number ||
+				a[index].text != b[index].text || a[index].position != b[index].position)
+				return false;
+		return true;
+	}
+
 	void AddScript(const level::Script &script, std::size_t participant, std::optional<std::size_t> group)
 	{
 		ScriptSlot slot{&script, participant, group, script.active};
@@ -560,19 +611,21 @@ private:
 			auto &compiled = slot.conditions.emplace_back();
 			for (const level::ScriptCall &call : clause)
 			{
-				const ConditionHandler *handler = m_vocabulary.FindCondition(call.name);
+				const level::ScriptCall &read = Healed(call, m_vocabulary.ConditionName(call), m_vocabulary.ConditionHealer());
+				const ConditionHandler *handler = m_vocabulary.FindCondition(read.name);
 				if (handler == nullptr)
-					m_unknownConditions.insert(call.name);
-				compiled.push_back({&call, handler, nullptr});
+					m_unknownConditions.insert(read.name);
+				compiled.push_back({&read, handler, nullptr});
 			}
 		}
 		const auto compileActions = [&](const std::vector<level::ScriptCall> &calls, std::vector<CompiledCall> &out) {
 			for (const level::ScriptCall &call : calls)
 			{
-				const ActionHandler *handler = m_vocabulary.FindAction(call.name);
+				const level::ScriptCall &read = Healed(call, m_vocabulary.ActionName(call), m_vocabulary.ActionHealer());
+				const ActionHandler *handler = m_vocabulary.FindAction(read.name);
 				if (handler == nullptr)
-					m_unknownActions.insert(call.name);
-				out.push_back({&call, nullptr, handler});
+					m_unknownActions.insert(read.name);
+				out.push_back({&read, nullptr, handler});
 			}
 		};
 		compileActions(script.actions, slot.actions);
@@ -804,6 +857,7 @@ private:
 	std::set<std::string, std::less<>> m_signals;
 	std::set<std::string, std::less<>> m_unknownConditions;
 	std::set<std::string, std::less<>> m_unknownActions;
+	std::deque<level::ScriptCall> m_healedCalls; // calls the game's reading changed (stable addresses)
 	std::vector<std::string> m_warnings;
 	std::uint64_t m_tick{0};
 	std::vector<std::deque<Sequence>> m_sequences; // chains of sequential scripts, each's front running (a deque: its

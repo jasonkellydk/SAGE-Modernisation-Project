@@ -150,6 +150,7 @@ struct ScriptCall
 {
 	std::uint32_t kind{0};
 	std::string name; // the format's internal name for the kind, when stored
+	std::uint16_t version{0}; // the format's version of the chunk it was stored in (old ones lack the name)
 	std::vector<ScriptParameter> parameters;
 };
 

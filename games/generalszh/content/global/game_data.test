@@ -18,6 +18,29 @@ using namespace engine::config;
 
 BOOST_AUTO_TEST_SUITE(game_data)
 
+// GlobalData's Weather (parseIndexList over WeatherNames: NORMAL, SNOWY) and ForceModelsToFollowWeather (default Yes):
+// the shipped GameData.ini says NORMAL, Yes (no snow condition); a SNOWY block turns it on, and No keeps models out of it.
+BOOST_AUTO_TEST_CASE(legacy_parity_weather_and_models_following_it_bind)
+{
+	const auto bind = [](std::string text) {
+		Diagnostics diagnostics, grammarDiagnostics;
+		const auto grammar = ZeroHourIniGrammar(grammarDiagnostics);
+		Document document;
+		ini::Read(document, document.AddSource("GameData.ini", std::move(text)), grammar, diagnostics);
+		BindContext context{diagnostics, engine::time::FixedStep{30}};
+		return BindGameData(document, context);
+	};
+	const GameData normal = bind("GameData\n  Weather = NORMAL\n  ForceModelsToFollowWeather = Yes\nEnd\n");
+	BOOST_TEST(!normal.snowyWeather);
+	BOOST_TEST(normal.forceModelsToFollowWeather);
+	const GameData snowy = bind("GameData\n  Weather = SNOWY\nEnd\n");
+	BOOST_TEST(snowy.snowyWeather);
+	BOOST_TEST(snowy.forceModelsToFollowWeather);
+	const GameData unfollowed = bind("GameData\n  Weather = SNOWY\n  ForceModelsToFollowWeather = No\nEnd\n");
+	BOOST_TEST(!unfollowed.forceModelsToFollowWeather);
+}
+
+
 BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
 {
 	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
@@ -37,6 +60,25 @@ BOOST_AUTO_TEST_CASE(the_shipped_globals_bind)
 	BOOST_TEST((data.unitDamaged == Engine::Math::Fixed::FromRatio(7, 10)));
 	BOOST_TEST((data.unitReallyDamaged == Engine::Math::Fixed::FromRatio(35, 100)));
 	BOOST_TEST(data.defaultStartingCash == 10000);
+	// GameData.ini's body particle sets (ActiveBody::updateBodyParticleSystems).
+	BOOST_TEST(data.fireSmall.prefix == "FireS");
+	BOOST_TEST(data.fireSmall.system == "FireFactionSmall");
+	BOOST_TEST(data.fireSmall.max == 2);
+	BOOST_TEST(data.smokeSmall.prefix == "SmokeS");
+	BOOST_TEST(data.smokeSmall.max == 4);
+	BOOST_TEST(data.smokeLarge.system == "SmokeFactionLarge");
+	BOOST_TEST(data.aflame.prefix == "Aflame");
+	BOOST_TEST(data.aflame.system == "FireBuildingSmall");
+	BOOST_TEST(data.aflame.max == 4);
+	// InGameUI's scrolling, the stealthed friend's opacity, health bars and the single-burst heal's animation.
+	BOOST_TEST((data.horizontalScrollFactor == Engine::Math::Fixed::FromRatio(16, 10)));
+	BOOST_TEST((data.verticalScrollFactor == Engine::Math::Fixed::FromInt(2)));
+	BOOST_TEST((data.keyboardDefaultScrollFactor == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST((data.stealthFriendlyOpacity == Engine::Math::Fixed::FromRatio(1, 2)));
+	BOOST_TEST(data.showObjectHealth);
+	BOOST_TEST(data.getHealedAnimation == "GetHealedAnimation");
+	BOOST_TEST((data.getHealedSeconds == Engine::Math::Fixed::FromInt(4)));
+	BOOST_TEST((data.getHealedRise == Engine::Math::Fixed::FromInt(15)));
 	BOOST_TEST(data.shellMapName == "Maps\\ShellMapMD\\ShellMapMD.map");
 	BOOST_TEST((data.minLowEnergyProductionSpeed == Engine::Math::Fixed::FromRatio(1, 2)));
 	BOOST_TEST((data.maxLowEnergyProductionSpeed == Engine::Math::Fixed::FromRatio(8, 10)));

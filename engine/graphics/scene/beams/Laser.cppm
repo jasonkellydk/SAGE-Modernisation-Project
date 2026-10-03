@@ -94,7 +94,9 @@ Vec3 Normalize(Vec3 value) noexcept
 	const float length_squared = Dot(value, value);
 	if (!(length_squared > 1.0e-12f) || !std::isfinite(length_squared))
 		return {};
-	return value * (1.0f / std::sqrt(length_squared));
+	// Divided by the length (not times its reciprocal: one rounding, so axis-aligned results stay exact).
+	const float length = std::sqrt(length_squared);
+	return {value.x / length, value.y / length, value.z / length};
 }
 
 void Write_Vertex(LaserVertex &vertex, Vec3 position, Color4 color,

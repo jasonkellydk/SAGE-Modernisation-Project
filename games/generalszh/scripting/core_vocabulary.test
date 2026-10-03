@@ -256,6 +256,47 @@ BOOST_AUTO_TEST_CASE(set_tree_sway_hands_the_presentation_a_breeze)
 	BOOST_TEST((commands[0].numbers[4] == Engine::Math::Fixed::FromRatio(5, 10)));
 }
 
+// ScriptActions::doNamedEmoticon / doTeamEmoticon (and AIGroup::groupSetEmoticon): the duration in seconds becomes
+// (Int)(seconds x LOGICFRAMES_PER_SECOND) frames for Drawable::setEmoticon, truncated toward zero (2.5 s: 75; 0.04 s:
+// 1.2, so 1; -1 s: -30, which keeps it for good), for the named unit or each member of the team.
+BOOST_AUTO_TEST_CASE(legacy_parity_set_emoticon_hands_the_presentation_its_frames)
+{
+	level::Level map;
+	auto &participant = map.scenario.participants.emplace_back();
+	level::Script start;
+	start.name = "start";
+	start.oneShot = true;
+	start.conditions = {{Call("CONDITION_TRUE")}};
+	const auto emoticon = [](std::string action, std::string who, Engine::Math::Fixed seconds) {
+		level::ScriptCall call;
+		call.name = std::move(action);
+		level::ScriptParameter subject, name, duration;
+		subject.text = std::move(who);
+		name.text = "EmoticonAngry";
+		duration.number = seconds;
+		call.parameters = {subject, name, duration};
+		return call;
+	};
+	start.actions = {emoticon("NAMED_SET_EMOTICON", "Hero", Engine::Math::Fixed::FromRatio(5, 2)),
+		emoticon("TEAM_SET_EMOTICON", "Squad", Engine::Math::Fixed::FromRatio(1, 25)),
+		emoticon("NAMED_SET_EMOTICON", "Hero", Engine::Math::Fixed::FromInt(-1))};
+	participant.scripts.scripts.push_back(start);
+	std::vector<generalszh::scripting::ClientScriptCommand> commands;
+	Vocabulary vocabulary;
+	generalszh::scripting::AddCoreVocabulary(vocabulary);
+	generalszh::scripting::AddPresentationVocabulary(vocabulary, commands);
+	ScriptRuntime runtime(map.scenario, vocabulary);
+	runtime.Tick(1);
+	using Kind = generalszh::scripting::ClientScriptCommand::Kind;
+	BOOST_TEST_REQUIRE(commands.size() == 3u);
+	BOOST_TEST((commands[0].kind == Kind::Emoticon && commands[0].subject == "Hero" && commands[0].text == "EmoticonAngry"));
+	BOOST_TEST(!commands[0].flag);
+	BOOST_TEST(commands[0].percent == 75);
+	BOOST_TEST((commands[1].kind == Kind::Emoticon && commands[1].subject == "Squad" && commands[1].flag));
+	BOOST_TEST(commands[1].percent == 1);
+	BOOST_TEST(commands[2].percent == -30);
+}
+
 // ScriptActions' sound actions: SOUND_ENABLE_TYPE and AUDIO_RESTORE_VOLUME_TYPE take the event's override away,
 // SOUND_ENABLE_ALL and AUDIO_RESTORE_VOLUME_ALL_TYPE every one; SOUND_REMOVE_TYPE, SOUND_REMOVE_ALL_DISABLED; the effects
 // played: the local player's, at a waypoint (none without it), from a named unit; SHOW_MILITARY_CAPTION with its time.

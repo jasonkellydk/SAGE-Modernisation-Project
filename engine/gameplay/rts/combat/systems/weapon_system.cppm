@@ -128,9 +128,9 @@ struct WeaponSystem
 	// What it shoots at is marked (FAERIE_FIRE) or not.
 	// (And how tall its victim stands, for a weapon's pitch limits.)
 	using Lookup = ecs::Lookup<ecs::Read<StatusFlags>, ecs::Read<BodyExtent>, ecs::Read<Health>, ecs::Read<Subdual>, ecs::Read<UnderConstruction>, ecs::Read<Experience>,
-		ecs::Read<SneakyTarget>>;
+		ecs::Read<SneakyTarget>, ecs::Read<Locomotion>>;
 	using Resources = ecs::Resources<ecs::Read<RandomSeed>, ecs::Read<SpatialIndex>, ecs::Read<WeaponCatalog>, ecs::Read<LaunchLayouts>,
-		ecs::Write<FiredShots>, ecs::Write<TemporaryWeaponFires>, ecs::Read<GroundHeight>, ecs::Read<ArmorCatalog>, ecs::Write<Disarms>,
+		ecs::Write<FiredShots>, ecs::Write<TemporaryWeaponFires>, ecs::Write<ScriptShots>, ecs::Read<GroundHeight>, ecs::Read<ArmorCatalog>, ecs::Write<Disarms>,
 		ecs::Read<DirectShots>>;
 
 	// The tick's shots start empty, with one slot after the chunks' for the shots fired straight from their weapons by
@@ -148,6 +148,9 @@ struct WeaponSystem
 		const auto lookup = context.Lookup<Lookup>();
 		// The shots behaviours fired from their objects' own weapons earlier this tick (DirectShots), as they were.
 		context.Read<DirectShots>().ForEach([&](const Shot &shot) { fired.SlotAt(chunks).push_back(shot); });
+		// The shots scripts fired before the systems (their projectiles already out).
+		for (const Shot &shot : context.Write<ScriptShots>().Take())
+			fired.SlotAt(chunks).push_back(shot);
 		for (const TemporaryWeaponFire &fire : context.Write<TemporaryWeaponFires>().Take())
 		{
 			if (fire.weapon == WeaponCatalog::None)
@@ -279,6 +282,10 @@ struct WeaponSystem
 				const std::int64_t magnitude = std::llabs(static_cast<std::int64_t>(off));
 				if (magnitude > tolerance)
 				{
+					// m_canTurnInPlace (its locomotor's MinSpeed 0): else it does not turn here but flies at its victim
+					// (setLocomotorGoalPositionExplicit: the targeting gives that goal) until it faces it.
+					if (const Locomotion *own = lookup.Get<Locomotion>(entities[row]); own != nullptr && own->locomotor.minSpeed > Engine::Math::Fixed{})
+						continue;
 					const auto limit = static_cast<std::int64_t>(armament.turnRate.units);
 					const std::int64_t turn = limit == 0 ? off : std::clamp<std::int64_t>(off, -limit, limit);
 					transform.facing += Engine::Math::TurnAngle{static_cast<std::uint32_t>(turn)};
@@ -426,7 +433,7 @@ struct WeaponSystem
 				const bool turned = armament.turret && aimer != nullptr;
 				out.push_back({entities[row], shotVictim, armament.weapon, owners[row].player, origin, aim, tick,
 					weapon.lobbed || weapon.guided || weapon.objectFlown ? LandsWithProjectile : tick + travel, transform.facing + (turned ? aimer->angle : Engine::Math::TurnAngle{}),
-					turned ? aimer->pitch : Engine::Math::TurnAngle{}, ecs::Entity{}, slotIndex, {}, shelter, experiences.empty() ? std::uint8_t{0} : experiences[row].level, 0, {}, bonus.Get(WeaponBonusField::Damage),
+					turned ? aimer->pitch : Engine::Math::TurnAngle{}, ecs::Entity{}, slotIndex, 0, {}, shelter, experiences.empty() ? std::uint8_t{0} : experiences[row].level, 0, {}, bonus.Get(WeaponBonusField::Damage),
 					bonus.Get(WeaponBonusField::Radius)});
 
 				const std::uint64_t spread = weapon.delayMax > weapon.delayMin ? weapon.delayMax - weapon.delayMin : 0;

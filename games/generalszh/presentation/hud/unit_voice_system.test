@@ -20,6 +20,7 @@ import games.generalszh.presentation.objects.resources.presentation_resources;
 import games.generalszh.presentation.interaction.resources.mouse_tooltip;
 import games.generalszh.presentation.objects.algorithms.look_setup;
 import games.generalszh.session.session;
+import engine.gameplay.rts.navigation.resources.navigation_grid;
 import games.generalszh.session.setup.skirmish_level;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -168,7 +169,7 @@ struct Voices
 BOOST_AUTO_TEST_SUITE(unit_voice_system)
 
 // pickAndPlayUnitVoiceResponse on the shipped AmericaInfantryRanger (VoiceSelect RangerVoiceSelect, VoiceMove
-// RangerVoiceMove, UnitSpecificSounds VoiceGarrison RangerVoiceGarrison, VoiceSecondaryWeaponMode RangerVoiceModeFlashBang,
+// RangerVoiceMove, UnitSpecificSounds VoiceGetHealed RangerVoiceMove and VoiceGarrison RangerVoiceGarrison, VoiceSecondaryWeaponMode RangerVoiceModeFlashBang,
 // its SpecialAbility's InitiateSound RangerVoiceCapture): two of America's Rangers selected one after the other, the
 // one selected last answers (InGameUI's list: newest first), on itself (setObjectID: where it stands, America's): a
 // selection, a move, garrisoning America's own barracks, the flash-bang mode, the capture power. A GLA Rebel selected
@@ -187,8 +188,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_last_selected_ranger_answers_on_the_shipp
 	const ecs::Entity first = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
 	const ecs::Entity second = game.Place("AmericaInfantryRanger", {Fixed::FromInt(930), Fixed::FromInt(500)}, {}, TeamOf(game, america));
 	const ecs::Entity barracks = game.Place("AmericaBarracks", {Fixed::FromInt(1100), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	const ecs::Entity powerPlant = game.Place("AmericaPowerPlant", {Fixed::FromInt(1100), Fixed::FromInt(700)}, {}, TeamOf(game, america));
 	const ecs::Entity rebel = game.Place("GLAInfantryRebel", {Fixed::FromInt(960), Fixed::FromInt(500)}, {}, TeamOf(game, gla));
-	for (const ecs::Entity entity : {first, second, barracks, rebel})
+	for (const ecs::Entity entity : {first, second, barracks, powerPlant, rebel})
 		BOOST_TEST_REQUIRE(game.World().IsAlive(entity));
 	game.Tick();
 	Voices voices(shell, game, america);
@@ -203,10 +205,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_the_last_selected_ranger_answers_on_the_shipp
 	heard = voices.Answer(presentation::UnitVoiceCue{presentation::VoiceOrder::Move});
 	BOOST_TEST_REQUIRE(heard.size() == 1u);
 	BOOST_TEST(heard[0].sound == "RangerVoiceMove");
+	// MSG_ENTER: a heal pad first (America's barracks is KINDOF_HEAL_PAD: VoiceGetHealed, RangerVoiceMove), then another
+	// structure of its own (VoiceGarrison).
 	presentation::UnitVoiceCue garrison{presentation::VoiceOrder::Enter};
 	garrison.target = barracks;
-	BOOST_TEST_REQUIRE(game.World().IsAlive(barracks)); // DEBUG-TEMP
-	BOOST_TEST_REQUIRE(game.World().Get<engine::gameplay::DefinitionRef>(barracks) != nullptr); // DEBUG-TEMP
+	heard = voices.Answer(garrison);
+	BOOST_TEST_REQUIRE(heard.size() == 1u);
+	BOOST_TEST(heard[0].sound == "RangerVoiceMove");
+	garrison.target = powerPlant;
 	heard = voices.Answer(garrison);
 	BOOST_TEST_REQUIRE(heard.size() == 1u);
 	BOOST_TEST(heard[0].sound == "RangerVoiceGarrison");
@@ -402,15 +408,21 @@ BOOST_AUTO_TEST_CASE(legacy_parity_waypoint_paths_show_in_waypoint_mode)
 	session::Session &game = *made->game;
 	const std::uint32_t america = *game.Teams().FindPlayer("player0");
 	game.Tick();
-	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", {Fixed::FromInt(900), Fixed::FromInt(500)}, {}, TeamOf(game, america));
+	// On land by America's start (the map's (900, 500) is sea).
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : made->read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	const auto near = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	const ecs::Entity ranger = game.Place("AmericaInfantryRanger", near(-150, -250), {}, TeamOf(game, america));
 	game.Tick();
 	const auto order = [&](Engine::Math::FixedVector2 spot) {
 		std::vector<engine::net::CommandEnvelope> orders{commands::Encode(commands::AddWaypoint{{ranger}, spot})};
 		orders.front().player = 0;
 		game.Tick(std::span(orders));
 	};
-	order({Fixed::FromInt(900), Fixed::FromInt(600)});
-	order({Fixed::FromInt(1000), Fixed::FromInt(600)});
+	order(near(-150, -150));
+	order(near(-50, -150));
 	auto &world = game.World();
 	world.Side<presentation::Selected>().Emplace(ranger);
 	auto &looks = world.EmplaceResource<presentation::LookCatalog>();
@@ -420,7 +432,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_waypoint_paths_show_in_waypoint_mode)
 	auto &pointer = world.EmplaceResource<presentation::PointerInput>();
 	world.EmplaceResource<presentation::TerrainHeightHandle>();
 	auto &paths = world.EmplaceResource<presentation::WaypointPaths>();
-	world.EmplaceResource<presentation::PresentationFrame>();
+	// Seen through America's eyes (drawWaypoints: the local player's own units).
+	world.EmplaceResource<presentation::PresentationFrame>().viewer = america;
 	if (world.FindResource<presentation::MouseTooltip>() == nullptr)
 		world.EmplaceResource<presentation::MouseTooltip>();
 	presentation::WaypointPathSystem system;
@@ -436,8 +449,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_waypoint_paths_show_in_waypoint_mode)
 	pointer.alt = true;
 	scheduler.Execute(engine::time::SimulationTime{++frame, engine::time::FixedStep{30}});
 	BOOST_TEST_REQUIRE(paths.segments.size() == 2u);
-	BOOST_TEST(paths.segments[1].end[0] == 1000.0f);
-	BOOST_TEST(paths.segments[1].end[1] == 600.0f);
+	BOOST_TEST(paths.segments[1].end[0] == Engine::Math::ToFloat(near(-50, -150).x));
+	BOOST_TEST(paths.segments[1].end[1] == Engine::Math::ToFloat(near(-50, -150).y));
 	BOOST_TEST_REQUIRE(paths.nodes.size() == 2u);
 	BOOST_TEST(paths.nodes[0].look == looks.waypointNodeLook);
 	// The same points as a way out of a factory (AI_FOLLOW_EXITPRODUCTION_PATH): friend_getWaypointGoalPathSize is 0, nothing drawn.

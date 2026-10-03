@@ -77,6 +77,15 @@ inline IconRect PlaceIcon(ObjectIcon icon, const IconRegion &region, int frameWi
 	return {};
 }
 
+// Drawable::drawEmoticon: its current image (`frameWidth` by `frameHeight`) centred on the bar, its bottom on the bar's
+// bottom.
+inline IconRect PlaceEmoticon(const IconRegion &region, int frameWidth, int frameHeight) noexcept
+{
+	const int barWidth = region.hiX - region.loX;
+	const int x = static_cast<int>(static_cast<float>(region.loX) + static_cast<float>(barWidth) * 0.5f - static_cast<float>(frameWidth) * 0.5f);
+	return {x, region.hiY - frameHeight, frameWidth, frameHeight};
+}
+
 // drawVeterancy's rectangle for its image (`imageWidth` by `imageHeight`).
 // Drawable::drawAmmo: its `index`th ammo pip (image `width` by `height`), left-aligned with its health bar and 1 apart,
 // its top 1 under the screen height of its top (plus AmmoPipWorldOffset) moved by AmmoPipScreenOffset's y of its

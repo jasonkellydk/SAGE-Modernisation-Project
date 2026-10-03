@@ -47,6 +47,8 @@ std::shared_ptr<const Assets::ModelRigDesc> ModelRigOf(Assets::AssetCache &cache
 	const auto handle = cache.Request_Model(model + ".w3d");
 	cache.Wait(handle);
 	const Assets::ModelAsset *asset = cache.Try_Get_Model(handle);
+	if (asset == nullptr)
+		BOOST_TEST_MESSAGE("model " << model << " did not load: " << cache.Get_Error(handle));
 	return asset != nullptr ? std::make_shared<const Assets::ModelRigDesc>(asset->Rig()) : nullptr;
 }
 
@@ -308,11 +310,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_infantry_landing_clip_plays_to_its_end)
 		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
 		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
 			name = name.substr(name.find('.') + 1) + ".w3d";
+		// Textures from Art/Textures (a .tga shipped as .dds), as the game's own source reads them.
+		if (identity.type == Assets::AssetType::Texture)
+		{
+			if (auto bytes = shell.files.Read("Art/Textures/" + name))
+				return std::move(*bytes);
+			return shell.files.Read("Art/Textures/" + std::filesystem::path(name).stem().string() + ".dds").value_or(std::vector<std::byte>{});
+		}
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
-	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	std::set<std::string> checked;
 	std::vector<std::string> failures;
 	for (const auto &[name, index] : infantry)
@@ -392,11 +401,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_manual_clip_holds_its_start_frame_and_the_u
 		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
 		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
 			name = name.substr(name.find('.') + 1) + ".w3d";
+		// Textures from Art/Textures (a .tga shipped as .dds), as the game's own source reads them.
+		if (identity.type == Assets::AssetType::Texture)
+		{
+			if (auto bytes = shell.files.Read("Art/Textures/" + name))
+				return std::move(*bytes);
+			return shell.files.Read("Art/Textures/" + std::filesystem::path(name).stem().string() + ".dds").value_or(std::vector<std::byte>{});
+		}
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
-	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	std::string error;
 	const auto modelRig = ModelRigOf(cache, std::string("ABSDILink_A1"));
 	const auto clipRig = cache.Load_Rig(Assets::AssetType::Animation, "ABSDILink_A1.ABSDILink_A1", error);
@@ -448,11 +464,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_every_explosive_death_look_is_posed_through_f
 		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
 		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
 			name = name.substr(name.find('.') + 1) + ".w3d";
+		// Textures from Art/Textures (a .tga shipped as .dds), as the game's own source reads them.
+		if (identity.type == Assets::AssetType::Texture)
+		{
+			if (auto bytes = shell.files.Read("Art/Textures/" + name))
+				return std::move(*bytes);
+			return shell.files.Read("Art/Textures/" + std::filesystem::path(name).stem().string() + ".dds").value_or(std::vector<std::byte>{});
+		}
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
-	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	const auto bits = [](std::initializer_list<std::uint32_t> list) {
 		content::ConditionBits flags{};
 		for (const std::uint32_t bit : list)
@@ -543,11 +566,18 @@ BOOST_AUTO_TEST_CASE(legacy_parity_helicopter_rotor_bones_turn_every_frame)
 		std::string name = lower(std::filesystem::path(identity.canonical_name).filename().string());
 		if (identity.type == Assets::AssetType::Animation && name.find('.') != std::string::npos)
 			name = name.substr(name.find('.') + 1) + ".w3d";
+		// Textures from Art/Textures (a .tga shipped as .dds), as the game's own source reads them.
+		if (identity.type == Assets::AssetType::Texture)
+		{
+			if (auto bytes = shell.files.Read("Art/Textures/" + name))
+				return std::move(*bytes);
+			return shell.files.Read("Art/Textures/" + std::filesystem::path(name).stem().string() + ".dds").value_or(std::vector<std::byte>{});
+		}
 		if (std::filesystem::path(name).extension().empty())
 			name += ".w3d";
 		return shell.files.Read("Art/W3D/" + name).value_or(std::vector<std::byte>{});
-	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	});
+	cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>());
 	for (const std::string model : {"AVChinook", "AVComanche"})
 	{
 		std::string error;

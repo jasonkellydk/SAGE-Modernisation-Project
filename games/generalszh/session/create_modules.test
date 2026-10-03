@@ -55,6 +55,7 @@ import engine.gameplay.common.health.components.pending_damage;
 import engine.gameplay.rts.movement.components.move_order;
 import engine.gameplay.rts.movement.components.locomotion;
 import engine.gameplay.rts.movement.components.locomotor_choice;
+import engine.gameplay.rts.containment.components.tunnel;
 import engine.gameplay.rts.collision.components.collider;
 import engine.gameplay.rts.collision.components.collide_weapon;
 import engine.gameplay.common.fire.components.flammable;
@@ -578,9 +579,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_turret_takes_a_temporary_target_on_the_firs
 		Run out;
 		session::Session game(match->skirmish.level, shell.game, match->Options(1));
 		auto &world = game.World();
-		const ecs::Entity tank = game.Place(unit, match->At(0, -200), {}, match->Team(game, 0));
-		const ecs::Entity victim = game.Place("GLATankScorpion", match->At(victimX, -200), {}, match->Team(game, 1));
-		const ecs::Entity bystander = game.Place("GLAVehicleTechnical", match->At(bystanderX, -140), {}, match->Team(game, 1));
+		// Westward over the land by the start (east of it the ground ends in a cliff over the sea).
+		const ecs::Entity tank = game.Place(unit, match->At(400, -200), {}, match->Team(game, 0));
+		const ecs::Entity victim = game.Place("GLATankScorpion", match->At(400 - victimX, -200), {}, match->Team(game, 1));
+		const ecs::Entity bystander = game.Place("GLAVehicleTechnical", match->At(400 - bystanderX, -140), {}, match->Team(game, 1));
 		for (const ecs::Entity enemy : {victim, bystander})
 		{
 			auto &health = *world.Get<gp::Health>(enemy);
@@ -1349,19 +1351,20 @@ BOOST_AUTO_TEST_CASE(legacy_parity_built_tunnels_take_rebels_in_and_out_by_order
 		rebels.push_back(game.Place("GLAInfantryRebel", match->At(380 + index * 12, 380), {}, team));
 	game.Tick();
 	auto enter = commands::Encode(commands::Enter{rebels, first});
-	enter.player = gla;
+	enter.player = 1; // the command's seat (player1's)
 	game.Tick(std::span(&enter, 1));
 	const auto &manifest = world.Resource<gp::CargoManifest>();
 	for (int tick = 0; tick < 30 * 30 && manifest.Count(first) < rebels.size(); ++tick)
 		game.Tick();
+	// One network: in through the first, counted by both (TunnelTracker's list).
 	BOOST_TEST(manifest.Count(first) == rebels.size());
-	BOOST_TEST(manifest.Count(second) == rebels.size());
+	BOOST_TEST(world.Get<gp::Transport>(second)->occupied == rebels.size());
 	auto out = commands::Encode(commands::Evacuate{{second}});
-	out.player = gla;
+	out.player = 1;
 	game.Tick(std::span(&out, 1));
-	for (int tick = 0; tick < 30 * 30 && manifest.Count(second) > 0u; ++tick)
+	for (int tick = 0; tick < 30 * 30 && manifest.Count(first) + manifest.Count(second) > 0u; ++tick)
 		game.Tick();
-	BOOST_TEST(manifest.Count(second) == 0u);
+	BOOST_TEST(manifest.Count(first) + manifest.Count(second) == 0u);
 	for (const ecs::Entity rebel : rebels)
 	{
 		BOOST_TEST(!world.Has<gp::Passenger>(rebel));
@@ -1391,9 +1394,12 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_combat_cycle_takes_its_cliff_locomotor_on_c
 	const auto &choice = *world.Get<gp::LocomotorChoice>(bike);
 	BOOST_TEST(choice.count == 2u);
 	BOOST_TEST(choice.options[1].surfaces == gp::locomotor_surface::Cliff);
-	BOOST_TEST(world.Get<gp::NavigationAgent>(bike)->surfaces == (gp::locomotor_surface::Ground | gp::locomotor_surface::Cliff));
+	// Routed over both locomotors' surfaces: the ground one's GROUND RUBBLE and the cliff one's CLIFF.
+	const std::uint8_t surfaces = choice.options[0].surfaces | choice.options[1].surfaces;
+	BOOST_TEST((surfaces & gp::locomotor_surface::Cliff) != 0);
+	BOOST_TEST(world.Get<gp::NavigationAgent>(bike)->surfaces == surfaces);
 	const auto &grid = world.Resource<gp::NavigationGrid>();
-	BOOST_TEST_REQUIRE(grid.ClearanceFor(gp::locomotor_surface::Ground | gp::locomotor_surface::Cliff) != nullptr);
+	BOOST_TEST_REQUIRE(grid.ClearanceFor(surfaces) != nullptr);
 	// A cliff cell, and a clear one, of the map.
 	std::optional<Engine::Math::FixedVector2> cliff, clear;
 	for (std::int32_t y = 0; y < grid.Height() && (!cliff || !clear); ++y)
@@ -1407,14 +1413,14 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_combat_cycle_takes_its_cliff_locomotor_on_c
 		}
 	BOOST_TEST_REQUIRE((cliff.has_value() && clear.has_value()));
 	game.Tick();
-	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Ground);
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == choice.options[0].surfaces);
 	world.Get<gp::Transform>(bike)->position = {cliff->x, cliff->y, game.Game().ground.At(*cliff)};
 	game.Tick();
-	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Cliff);
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == choice.options[1].surfaces);
 	BOOST_TEST(world.Get<gp::LocomotorChoice>(bike)->current == 1u);
 	world.Get<gp::Transform>(bike)->position = {clear->x, clear->y, game.Game().ground.At(*clear)};
 	game.Tick();
-	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == gp::locomotor_surface::Ground);
+	BOOST_TEST(world.Get<gp::Locomotion>(bike)->locomotor.surfaces == choice.options[0].surfaces);
 	BOOST_TEST(world.Get<gp::LocomotorChoice>(bike)->current == 0u);
 }
 
@@ -2363,12 +2369,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_factory_exits_stay_clear)
 	BOOST_TEST((plant->geometry.majorRadius == Fixed::FromInt(22)));
 	BOOST_TEST((plant->geometry.minorRadius == Fixed::FromInt(30)));
 	const std::uint32_t team = match->Team(game, 0);
-	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", match->At(250, 250), {}, team);
-	game.Place("AmericaWarFactory", match->At(450, 250), {}, team);
-	game.Place("AmericaWarFactory", match->At(450, 650), Engine::Math::TurnAngle::Half_Turn(), team);
+	// Over open ground south-west of the start, clear of structures within the check's reach (the start's command centre
+	// and riverside houses would otherwise be in the way).
+	const auto at = [&](int dx, int dy) { return match->At(dx - 1050, dy - 500); };
+	const ecs::Entity dozer = game.Place("AmericaVehicleDozer", at(250, 250), {}, team);
+	game.Place("AmericaWarFactory", at(450, 250), {}, team);
+	game.Place("AmericaWarFactory", at(450, 650), Engine::Math::TurnAngle::Half_Turn(), team);
 	game.Tick();
 	const auto why = [&](int dx, int dy) {
-		return generalszh::gameplay::CheckBuildLocation(game.Game(), *plant, match->At(dx, dy), {}, dozer, bc::NoObjectOverlap);
+		return generalszh::gameplay::CheckBuildLocation(game.Game(), *plant, at(dx, dy), {}, dozer, bc::NoObjectOverlap);
 	};
 	BOOST_TEST((why(450 + 80, 250) == LegalBuild::ObjectsInTheWay));
 	BOOST_TEST((why(450 + 101, 250) == LegalBuild::Ok));
@@ -2378,7 +2387,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_factory_exits_stay_clear)
 	BOOST_TEST((why(450 + 76, 650) == LegalBuild::Ok));
 	BOOST_TEST((why(450, 250 + 140) == LegalBuild::Ok)); // a human's: no extra width
 	// Only enemies (NO_ENEMY_OBJECT_OVERLAP alone) never looks at exits.
-	BOOST_TEST((generalszh::gameplay::CheckBuildLocation(game.Game(), *plant, match->At(450 + 80, 250), {}, dozer, bc::NoEnemyObjectOverlap) ==
+	BOOST_TEST((generalszh::gameplay::CheckBuildLocation(game.Game(), *plant, at(450 + 80, 250), {}, dozer, bc::NoEnemyObjectOverlap) ==
 		LegalBuild::Ok));
 	// The same builder's player made a skirmish AI.
 	const std::uint32_t america = world.Get<gp::Owner>(dozer)->player;
@@ -4683,6 +4692,48 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_burning_tree_burns_those_who_run_into_it)
 	(void)green;
 }
 
+// FireWeaponUpdate (FireFieldSmall: SmallFireFieldWeapon, 5 FLAME within 30, DelayBetweenShots 250 ms = 8 frames) and
+// FlammableUpdate::onDamage (FlameDamageLimit unset: 20; TruckArmor takes FLAME whole): a napalm fire field dropped on a
+// GLA Technical sets it alight with its fourth shot (20 of flame damage).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_fire_field_sets_a_technical_alight)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	session::Session game(match->skirmish.level, shell.game, match->Options(1));
+	auto &world = game.World();
+	namespace gp = engine::gameplay;
+	game.Tick();
+	const ecs::Entity technical = game.Place("GLAVehicleTechnicalChassisOne", match->At(0, -200), {}, match->Team(game, 1));
+	BOOST_TEST_REQUIRE(world.Get<gp::Flammable>(technical) != nullptr);
+	const Fixed start = world.Get<gp::Health>(technical)->current;
+	const ecs::Entity field = game.Place("FireFieldSmall", match->At(0, -200), {}, match->Team(game, 0));
+	BOOST_TEST_REQUIRE(world.IsAlive(field));
+	const std::uint64_t placed = game.CurrentTick();
+	std::vector<std::uint64_t> hurt;
+	std::uint64_t alight = 0;
+	Fixed last = start;
+	for (int tick = 0; tick < 60 && alight == 0; ++tick)
+	{
+		game.Tick();
+		const Fixed now = world.Get<gp::Health>(technical)->current;
+		if (now < last)
+			hurt.push_back(game.CurrentTick() - placed);
+		last = now;
+		if (world.Get<gp::Flammable>(technical)->state == gp::FlameState::Aflame)
+			alight = game.CurrentTick() - placed;
+	}
+	// Its first shot on its first update (the tick after it is made), then every 8 frames.
+	BOOST_TEST((hurt == std::vector<std::uint64_t>{1, 9, 17, 25}));
+	BOOST_TEST(alight == 25u);
+	BOOST_TEST(((start - last).Raw() == Fixed::FromInt(20).Raw()));
+}
+
 // ParachuteContain::onDie (AmericaMiscUnit.ini AmericaParachute: FreeFallDamagePercent unset, so the module's 50%): a
 // Comanche pilot's chute killed well above the ground lets it go where it hangs (removeAllContained -> onRemoving: no
 // longer HELD, allowed to fall) in free fall (setIsInFreeFall: DISABLED_FREEFALL and FREEFALL while it is up), and it
@@ -4723,8 +4774,19 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_whose_chute_is_shot_away_falls_hurt)
 	{
 		game.Tick();
 	}
-	// Ejected low (the Comanche comes down first): lifted well up, where the rider hangs from it after the next tick.
+	// Wherever it was ejected (the Comanche's crash decides that): lifted well up, then set so the rider, hanging from its
+	// harness, is 251.6 above the ground under it after the next tick.
 	world.Get<gp::Transform>(chute)->position.z += Fixed::FromInt(200);
+	game.Tick();
+	const Fixed before = world.Get<gp::Transform>(pilot)->position.z;
+	game.Tick();
+	{
+		// (It sinks with its chute as it hangs: one tick's sinking on top, as the next tick hangs it lower.)
+		const auto &hanging = world.Get<gp::Transform>(pilot)->position;
+		const Fixed sinking = before - hanging.z;
+		auto &at = world.Get<gp::Transform>(chute)->position;
+		at.z = game.Game().ground.At(hanging.XY()) + Fixed::FromRatio(2516, 10) + sinking + (at.z - hanging.z);
+	}
 	game.Tick();
 	BOOST_TEST_REQUIRE(world.Get<gp::ParachuteRider>(pilot) != nullptr);
 	const Fixed up = world.Get<gp::Transform>(pilot)->position.z;
@@ -4759,8 +4821,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_pilot_whose_chute_is_shot_away_falls_hurt)
 	BOOST_TEST_REQUIRE(down.has_value());
 	BOOST_TEST(world.Get<gp::Transform>(pilot)->position.z.Raw() <= (up - Fixed::FromInt(50)).Raw());
 	BOOST_TEST((world.Get<gp::Disabled>(pilot)->mask & gp::disabled_type::Freefall) == 0u);
-	// Down 84 frames after it was let go, from 251.6 above the ground at Gravity -64/s^2 (from rest: n(n+1)/2 * 64/900 >=
-	// 251.6), landing at 84 * 64/900 = 5.973 a frame; less MinFallHeightForDamage 40's speed (sqrt(2 * 64/900 * 40) =
+	// Down 84 frames after it was let go, from 249.3 above the ground (it hangs at 251.6 and sinks with its chute until let
+	// go) at Gravity -64/s^2 (from rest: n(n+1)/2 * 64/900 >= 249.3), landing at 84 * 64/900 = 5.973 a frame; less MinFallHeightForDamage 40's speed (sqrt(2 * 64/900 * 40) =
 	// 2.385) times Mass 5 is 17.94 falling damage (HumanArmor: FALLING 100%). Fixed point lands within 0.01 of it.
 	BOOST_TEST(*down - released == 84u);
 	const double left = world.Get<gp::Health>(pilot)->current.Raw() / 65536.0;
@@ -4930,7 +4992,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_crashing_helicopter_comes_down_in_a_tree)
 	const ecs::Entity tree = game.Place("GenericTree", match->At(-300, -300), {}, neutral);
 	BOOST_TEST_REQUIRE(world.Get<gp::BoundingVolume>(tree) != nullptr);
 	BOOST_TEST(world.Get<gp::BoundingVolume>(tree)->snag == 1u);
-	const ecs::Entity snagged = copter(-300), open = copter(300);
+	// (Away from the tree until its wreck is put over it below: no collision before.)
+	const ecs::Entity snagged = copter(-150), open = copter(300);
 	game.Tick();
 	world.Resource<gp::KillRequests>().entities.push_back(snagged);
 	world.Resource<gp::KillRequests>().entities.push_back(open);

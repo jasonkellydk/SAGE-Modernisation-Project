@@ -9,6 +9,7 @@ export import engine.gameplay.rts.combat.components.sneaky_target;
 export import engine.gameplay.rts.combat.components.countermeasures;
 export import engine.gameplay.rts.combat.algorithms.countermeasure_decoys;
 export import engine.gameplay.rts.combat.components.missile;
+export import engine.gameplay.rts.combat.components.missile_waypoint_path;
 export import engine.gameplay.rts.combat.algorithms.thrust;
 export import engine.gameplay.rts.combat.systems.projectile_flight_system;
 export import engine.gameplay.common.physics.resources.physics_settings;
@@ -66,7 +67,7 @@ inline MissileFlight LaunchMissile(const Shot &shot, const WeaponDefinition &wea
 
 struct MissileFlightSystem
 {
-	using Query = ecs::Query<ecs::Write<MissileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>>;
+	using Query = ecs::Query<ecs::Write<MissileFlight>, ecs::Write<Transform>, ecs::OptionalWrite<Attitude>, ecs::Optional<MissileWaypointPath>>;
 	using Resources = ecs::Resources<ecs::Read<SpatialIndex>, ecs::Read<GroundHeight>, ecs::Read<WeaponCatalog>, ecs::Read<PhysicsSettings>,
 		ecs::Read<Relationships>, ecs::Write<MissileDetonations>, ecs::Write<MissileGarrisonHits>>;
 	// Whether a victim that left the fight still exists (dying, its hulk still there) or is gone; a decoyed victim's
@@ -91,6 +92,7 @@ struct MissileFlightSystem
 		auto missiles = chunk.Get<MissileFlight>();
 		auto transforms = chunk.Get<Transform>();
 		auto attitudes = chunk.Get<Attitude>();
+		const auto paths = chunk.Get<MissileWaypointPath>();
 		const auto entities = chunk.Entities();
 		const std::uint64_t tick = context.Tick();
 		const auto lookup = context.Lookup<Lookup>();
@@ -159,6 +161,9 @@ struct MissileFlightSystem
 					}
 			}
 			const SpatialEntry *victim = m.tracking ? spatial.Find(m.shot.target) : nullptr;
+			// Its AI's goal position (getGoalPosition): its waypoint path state's, when it flies one, else where it steers.
+			const MissileWaypointPath *path = paths.empty() ? nullptr : &paths[row];
+			const FixedVector3 aiGoal = path != nullptr && path->waypoint != MissileWaypointPath::None ? path->lockGoal : m.goal;
 			if (victim != nullptr)
 				m.goal = victim->position; // aiMoveToObject: its victim's position
 			else if (m.tracking && lookup.IsAlive(m.shot.target))
@@ -214,13 +219,16 @@ struct MissileFlightSystem
 					turnCap = turnOk ? Unlimited : 0;
 				if (d.lockDistance > Fixed{})
 				{
-					const FixedVector3 to = victim != nullptr ? victim->position : m.goal;
+					const FixedVector3 to = victim != nullptr ? victim->position : aiGoal;
 					const Fixed distance = Engine::Math::DistanceSquared(position.XY(), to.XY());
 					const Fixed lock = m.tracking ? d.lockDistance : d.lockDistance / Fixed::FromInt(2);
 					if (distance < lock * lock)
 					{
 						if (!m.tracking)
 							m.goal = m.originalGoal;
+						// aiMoveToPosition: a waypoint path it flew is over.
+						if (path != nullptr)
+							context.Commands().Remove<MissileWaypointPath>(entities[row]);
 						m.state = MissileState::Kill;
 						m.stateTick = tick;
 						break;
@@ -228,7 +236,7 @@ struct MissileFlightSystem
 				}
 				if (d.preferredHeight > Fixed{})
 				{
-					const FixedVector3 to = victim != nullptr ? victim->position : m.goal;
+					const FixedVector3 to = victim != nullptr ? victim->position : aiGoal;
 					if (Engine::Math::DistanceSquared(position.XY(), to.XY()) < d.diveDistance * d.diveDistance)
 						m.preciseZ = true;
 				}

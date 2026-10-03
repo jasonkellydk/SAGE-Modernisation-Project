@@ -45,6 +45,8 @@ public:
 					? presentation::PlaceAmmoPip(image.region, image.pipCenterY, image.pipOffset, image.pipBounding, width, height, image.pip)
 					: image.placement == OverlayImage::Placement::ContainerPip
 					? presentation::PlaceContainerPip(image.region, image.pipCenterY, image.pipOffset, image.pipBounding, width, height, image.pip, image.pipFull)
+					: image.placement == OverlayImage::Placement::Emoticon
+					? presentation::PlaceEmoticon(image.region, width, height)
 					: presentation::PlaceIcon(image.icon, image.region, width, height, image.iconScale);
 				const float left = static_cast<float>(rect.x), top = static_cast<float>(rect.y);
 				m_list.Add_Image(m_catalog.Resolve(image.image), {left, top, left + static_cast<float>(rect.width), top + static_cast<float>(rect.height)},

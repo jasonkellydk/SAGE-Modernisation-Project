@@ -18,9 +18,17 @@ struct HealPulse
 	Engine::Math::Fixed amount;
 	std::uint64_t lockTicks{0}; // how long the target then accepts only this healer
 	Engine::Math::FixedVector3 position;
+	// From a single-burst healer (AutoHealBehavior SingleBurst): the presentation marks each one it reaches hurt.
+	std::uint8_t burst{0};
 };
 
 struct HealOffers : ecs::ChunkOutputs<HealPulse>
+{
+};
+
+// The ones a single-burst heal reached this tick while hurt (AutoHealBehavior::update: getHealth() < getMaxHealth()
+// before pulseHealObject), per chunk.
+struct BurstHeals : ecs::ChunkOutputs<ecs::Entity>
 {
 };
 
@@ -70,6 +78,11 @@ template<>
 struct ResourceTraits<engine::gameplay::HealOffers>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.heal_offers";
+};
+template<>
+struct ResourceTraits<engine::gameplay::BurstHeals>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.burst_heals";
 };
 template<>
 struct ResourceTraits<engine::gameplay::HealPulses>

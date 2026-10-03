@@ -1,0 +1,186 @@
+#include <boost/test/unit_test.hpp>
+
+#include <array>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.legacy_calls;
+
+using namespace engine::scripting;
+namespace level = engine::level;
+namespace zh = generalszh::scripting;
+
+namespace
+{
+constexpr std::array<std::string_view, 4> KindOfs{"OBSTACLE", "SELECTABLE", "IMMOBILE", "SMALL_MISSILE"};
+
+std::uint32_t CodeOf(std::span<const zh::LegacyCallTemplate> templates, std::string_view name)
+{
+	for (std::uint32_t index = 0; index < templates.size(); ++index)
+		if (templates[index].name == name)
+			return index;
+	return ~0u;
+}
+
+level::ScriptParameter Parameter(std::uint32_t kind, std::string text = {}, std::int64_t integer = 0)
+{
+	level::ScriptParameter parameter;
+	parameter.kind = kind;
+	parameter.text = std::move(text);
+	parameter.integer = integer;
+	return parameter;
+}
+}
+
+BOOST_AUTO_TEST_SUITE(legacy_calls)
+
+// Scripts.h ScriptAction::ScriptActionType / Condition::ConditionType with ScriptEngine::init's templates: the codes
+// old chunks store, in enum order (DEBUG_MESSAGE_BOX 0, SET_FLAG 1 ...; CONDITION_FALSE 0, COUNTER 1, FLAG 2,
+// CONDITION_TRUE 3), 344 actions and 109 conditions (NUM_ITEMS), each template's parameter count.
+BOOST_AUTO_TEST_CASE(legacy_parity_the_code_tables_follow_the_enums)
+{
+	BOOST_TEST(zh::LegacyActionTemplates.size() == 344u);
+	BOOST_TEST(zh::LegacyConditionTemplates.size() == 109u);
+	BOOST_TEST(zh::LegacyActionTemplates[0].name == "DEBUG_MESSAGE_BOX");
+	BOOST_TEST(zh::LegacyActionTemplates[1].name == "SET_FLAG");
+	BOOST_TEST(zh::LegacyActionTemplates[1].parameters == 2u);
+	BOOST_TEST(zh::LegacyActionTemplates[5].name == "NO_OP");
+	BOOST_TEST(zh::LegacyConditionTemplates[0].name == "CONDITION_FALSE");
+	BOOST_TEST(zh::LegacyConditionTemplates[3].name == "CONDITION_TRUE");
+	BOOST_TEST(zh::LegacyConditionTemplates[1].parameters == 3u); // COUNTER(counter, comparison, value)
+	BOOST_TEST(zh::LegacyActionTemplates.back().name == "AI_PLAYER_BUILD_TYPE_NEAREST_TEAM");
+}
+
+// ScriptAction::ParseAction (version 1: the code alone, read as that enum value) and its "heal old files":
+// TEAM_FOLLOW_WAYPOINTS with two parameters gains its third, a BOOLEAN 1; the runtime then runs it by that name.
+BOOST_AUTO_TEST_CASE(legacy_parity_an_old_unnamed_action_runs_by_its_code_healed)
+{
+	level::Scenario scenario;
+	level::Script script;
+	script.name = "old";
+	script.oneShot = true;
+	level::ScriptCall always;
+	always.kind = CodeOf(zh::LegacyConditionTemplates, "CONDITION_TRUE");
+	always.version = 1;
+	script.conditions = {{always}};
+	level::ScriptCall follow;
+	follow.kind = CodeOf(zh::LegacyActionTemplates, "TEAM_FOLLOW_WAYPOINTS");
+	follow.version = 1;
+	follow.parameters = {Parameter(3, "Raiders"), Parameter(24, "Path1")};
+	script.actions = {follow};
+	scenario.participants.emplace_back().scripts.scripts.push_back(script);
+	Vocabulary vocabulary;
+	zh::AddCoreVocabulary(vocabulary);
+	zh::UseLegacyCallReading(vocabulary, KindOfs);
+	std::vector<std::string> ran;
+	vocabulary.AddAction("TEAM_FOLLOW_WAYPOINTS", [&](ScriptCallContext &c) {
+		BOOST_TEST_REQUIRE(c.call.parameters.size() == 3u);
+		ran.push_back(c.call.parameters[0].text + " " + c.call.parameters[1].text + " " + std::to_string(c.call.parameters[2].integer) + " " +
+			std::to_string(c.call.parameters[2].kind));
+	});
+	ScriptRuntime runtime(scenario, vocabulary);
+	runtime.Tick(1);
+	BOOST_TEST(ran == std::vector<std::string>{"Raiders Path1 1 8"}, boost::test_tools::per_element());
+	BOOST_TEST(runtime.UnknownActions().empty());
+	BOOST_TEST(runtime.UnknownConditions().empty());
+}
+
+// ParseAction's last check: an action whose parameter count is not its template's is NO_OP with none ("Invalid script
+// action. Making it noop."); SKIRMISH_BUILD_BASE_DEFENSE_FRONT's old flank flag (1) makes it ..._FLANK, (0) stays.
+BOOST_AUTO_TEST_CASE(legacy_parity_old_actions_heal_or_become_no_op)
+{
+	level::ScriptCall wrong;
+	wrong.name = "SET_FLAG";
+	wrong.parameters = {Parameter(5, "Flag")};
+	zh::HealLegacyAction(wrong);
+	BOOST_TEST(wrong.name == "NO_OP");
+	BOOST_TEST(wrong.parameters.empty());
+
+	level::ScriptCall unknown;
+	unknown.name = "NAMED_RECEIVE_UPGRADE"; // no template: any parameters at all are a mismatch
+	unknown.parameters = {Parameter(14, "Unit"), Parameter(32, "Upgrade")};
+	zh::HealLegacyAction(unknown);
+	BOOST_TEST(unknown.name == "NO_OP");
+
+	level::ScriptCall front;
+	front.name = "SKIRMISH_BUILD_BASE_DEFENSE_FRONT";
+	front.parameters = {Parameter(8, {}, 1)};
+	zh::HealLegacyAction(front);
+	BOOST_TEST(front.name == "SKIRMISH_BUILD_BASE_DEFENSE_FLANK");
+	BOOST_TEST(front.parameters.empty());
+	front.name = "SKIRMISH_BUILD_BASE_DEFENSE_FRONT";
+	front.parameters = {Parameter(8, {}, 0)};
+	zh::HealLegacyAction(front);
+	BOOST_TEST(front.name == "SKIRMISH_BUILD_BASE_DEFENSE_FRONT");
+
+	level::ScriptCall look;
+	look.name = "CAMERA_LOOK_TOWARD_WAYPOINT";
+	look.parameters = {Parameter(7, "Waypoint"), Parameter(1)};
+	zh::HealLegacyAction(look);
+	BOOST_TEST_REQUIRE(look.parameters.size() == 5u);
+	BOOST_TEST(look.parameters[2].kind == 1u);
+	BOOST_TEST(look.parameters[4].kind == 8u);
+	BOOST_TEST(look.parameters[4].integer == 0);
+
+	level::ScriptCall attitude;
+	attitude.name = "TEAM_SET_ATTITUDE";
+	attitude.parameters = {Parameter(3, "Team"), Parameter(0, {}, 2)};
+	zh::HealLegacyAction(attitude);
+	BOOST_TEST(attitude.parameters[1].kind == 20u); // AI_MOOD
+	BOOST_TEST(attitude.parameters[1].integer == 2);
+}
+
+// Condition::ParseConditionDataChunk: a version 1 chunk's area conditions gain SURFACES_ALLOWED 3 as their third; a
+// later one does not (and with two parameters is then CONDITION_FALSE); an old SKIRMISH_SPECIAL_POWER_READY gains
+// "<This Player>" first.
+BOOST_AUTO_TEST_CASE(legacy_parity_old_conditions_heal_or_become_false)
+{
+	level::ScriptCall area;
+	area.name = "TEAM_INSIDE_AREA_PARTIALLY";
+	area.version = 1;
+	area.parameters = {Parameter(3, "Team"), Parameter(9, "Area")};
+	zh::HealLegacyCondition(area);
+	BOOST_TEST(area.name == "TEAM_INSIDE_AREA_PARTIALLY");
+	BOOST_TEST_REQUIRE(area.parameters.size() == 3u);
+	BOOST_TEST(area.parameters[2].kind == 36u);
+	BOOST_TEST(area.parameters[2].integer == 3);
+
+	level::ScriptCall later = area;
+	later.version = 4;
+	later.parameters.resize(2);
+	zh::HealLegacyCondition(later);
+	BOOST_TEST(later.name == "CONDITION_FALSE");
+	BOOST_TEST(later.parameters.empty());
+
+	level::ScriptCall ready;
+	ready.name = "SKIRMISH_SPECIAL_POWER_READY";
+	ready.version = 4;
+	ready.parameters = {Parameter(29, "SuperweaponScudStorm")};
+	zh::HealLegacyCondition(ready);
+	BOOST_TEST_REQUIRE(ready.parameters.size() == 2u);
+	BOOST_TEST(ready.parameters[0].text == "<This Player>");
+	BOOST_TEST(ready.parameters[1].text == "SuperweaponScudStorm");
+}
+
+// Parameter::ReadParameter: Fundamentalist object types are GLA's, the obsolete capture upgrades the infantry one, a
+// KindOf name (any case) its bit; CRUSHER is bit 0, MISSILE "SMALL_MISSILE" at bit 0 (the original's search slips).
+BOOST_AUTO_TEST_CASE(legacy_parity_old_parameters_are_renamed)
+{
+	level::ScriptCall call;
+	call.parameters = {Parameter(15, "FundamentalistTankHunter"), Parameter(32, "Upgrade_GLARebelCaptureBuilding"),
+		Parameter(27, "immobile"), Parameter(27, "CRUSHER", 7), Parameter(27, "MISSILE", 7), Parameter(27, "", 2)};
+	zh::HealLegacyParameters(call, KindOfs);
+	BOOST_TEST(call.parameters[0].text == "GLATankHunter");
+	BOOST_TEST(call.parameters[1].text == "Upgrade_InfantryCaptureBuilding");
+	BOOST_TEST(call.parameters[2].integer == 2);
+	BOOST_TEST(call.parameters[3].integer == 0);
+	BOOST_TEST(call.parameters[4].text == "SMALL_MISSILE");
+	BOOST_TEST(call.parameters[4].integer == 0);
+	BOOST_TEST(call.parameters[5].integer == 2);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

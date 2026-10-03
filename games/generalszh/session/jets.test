@@ -240,6 +240,75 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_aurora_goes_supersonic_and_is_missed_while
 	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
 }
 
+// AIAttackAimAtTargetState::onEnter / update (EA AIStates.cpp: m_canTurnInPlace = its locomotor's MinSpeed is 0): a MiG
+// (MIGLocomotor MinSpeed 60, TurnRate 120 a second) cannot turn in place, so with a Scorpion in its NapalmMissileWeapon's
+// reach (320) but off its nose it flies straight at it (setLocomotorGoalPositionExplicit at the victim) and fires once
+// it faces it within AcceptableAimDelta (30 degrees); it never turns in place to aim.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_jet_flies_at_its_victim_to_aim)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	const auto match = Prepare(shell);
+	BOOST_TEST_REQUIRE(match.has_value());
+	struct Game
+	{
+		std::unique_ptr<session::Session> game;
+		ecs::Entity mig, scorpion;
+	};
+	const auto stage = [&](std::size_t workers) {
+		Game made;
+		made.game = std::make_unique<session::Session>(match->skirmish.level, shell.game, match->Options(workers));
+		made.game->Tick();
+		made.mig = made.game->Place("ChinaJetMIG", match->At(0, 0), {}, match->Team(*made.game, 0));
+		made.scorpion = made.game->Place("GLATankScorpion", match->At(0, 250), {}, match->Team(*made.game, 1));
+		for (int tick = 0; tick < 30; ++tick)
+			made.game->Tick();
+		return made;
+	};
+	Game one = stage(1), four = stage(4);
+	auto &world = one.game->World();
+	BOOST_TEST_REQUIRE((world.Get<gp::Jet>(one.mig)->state == gp::JetState::Flying));
+	for (Game *g : {&one, &four})
+	{
+		std::vector<engine::net::CommandEnvelope> envelopes{commands::Encode(commands::Attack{{g->mig}, g->scorpion})};
+		envelopes.front().player = 0;
+		g->game->Tick(std::span(envelopes));
+	}
+	const std::uint64_t ordered = one.game->CurrentTick();
+	const auto turnRate = world.Get<gp::Locomotion>(one.mig)->locomotor.turnRate;
+	BOOST_TEST((Engine::Math::Degrees(turnRate) == Fixed::FromInt(4))); // 120 a second
+	std::vector<std::uint64_t> shots;
+	for (int tick = 0; tick < 40 && shots.size() < 2; ++tick)
+	{
+		const auto facing = world.Get<gp::Transform>(one.mig)->facing;
+		one.game->Tick();
+		four.game->Tick();
+		const std::uint64_t now = one.game->CurrentTick() - ordered;
+		const auto &order = *world.Get<gp::MoveOrder>(one.mig);
+		// Straight at its victim, explicitly (no claim, never ended by its movement), turning at its full rate.
+		BOOST_TEST((order.mode == gp::MoveMode::Direct));
+		BOOST_TEST(order.explicitGoal == 1u);
+		BOOST_TEST((order.destination == world.Get<gp::Transform>(one.scorpion)->position.XY()));
+		if (now <= 22)
+			BOOST_TEST(((world.Get<gp::Transform>(one.mig)->facing - facing).units == turnRate.units));
+		if (world.Get<gp::Armament>(one.mig)->firedTick == one.game->CurrentTick())
+			shots.push_back(now);
+	}
+	// Its first shot the tick it comes within 30 degrees of its victim (82 off as ordered, 4 a tick), the next
+	// DelayBetweenShots 300 ms (9 frames) on.
+	BOOST_TEST_REQUIRE(shots.size() == 2u);
+	BOOST_TEST(shots[0] == 15u);
+	BOOST_TEST(shots[1] == 24u);
+	const auto restored = session::Session::Restore(match->skirmish.level, shell.game, match->Options(1), one.game->Checkpoint());
+	BOOST_TEST_REQUIRE(restored != nullptr);
+	BOOST_TEST((restored->StateHash() == one.game->StateHash()));
+	BOOST_TEST((one.game->StateHash() == four.game->StateHash()));
+}
+
 // Legacy parity (AIUpdateInterface::isAllowedToRespondToAiCommands, AmericaJetSpectreGunship's AIUpdateInterface
 // ForbidPlayerCommands Yes): its player's move order is refused (CMD_FROM_PLAYER), while a Raptor's is taken.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_spectre_gunship_takes_no_orders_from_its_player)

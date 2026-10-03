@@ -46,6 +46,37 @@ BOOST_AUTO_TEST_CASE(the_shipped_factions_prefer_their_colours)
 	BOOST_TEST(SideColor(std::nullopt, colors, "FactionGLAToxinGeneral") == 0x00FF00u);
 }
 
+// PlayerTemplate.cpp's ProductionCostChange, ProductionTimeChange and ProductionVeterancyLevel (Player::
+// getProductionCostChangePercent / getProductionTimeChangePercent / getProductionVeterancyLevel for the listed things):
+// no shipped PlayerTemplate (Default and PlayerTemplate.ini, every archive) lists one, so every player builds everything
+// at its own cost, time and veterancy.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_shipped_faction_changes_production)
+{
+	const char *install = std::getenv("GENERALSZH_INSTALL_DIR");
+	if (install == nullptr || !std::filesystem::exists(install))
+	{
+		BOOST_TEST_MESSAGE("SKIPPED: set GENERALSZH_INSTALL_DIR to a Zero Hour install");
+		return;
+	}
+	engine::filesystem::VirtualFileSystem files;
+	MountInstall(files, install);
+	Diagnostics grammarDiagnostics;
+	ContentLoader loader(files, ZeroHourIniGrammar(grammarDiagnostics));
+	const Document &document = loader.Load({"Data/INI/Default/PlayerTemplate", "Data/INI/PlayerTemplate"});
+	std::size_t factions = 0, changes = 0;
+	for (const Node &root : document.Roots())
+	{
+		if (root.key != "PlayerTemplate")
+			continue;
+		++factions;
+		for (const Node &field : root.children)
+			if (field.key == "ProductionCostChange" || field.key == "ProductionTimeChange" || field.key == "ProductionVeterancyLevel")
+				++changes;
+	}
+	BOOST_TEST(factions > 10u);
+	BOOST_TEST(changes == 0u);
+}
+
 // CampaignManager (Campaign.ini): names lowercased; TRAINING's one mission; CHALLENGE_0 plays its seven maps in order
 // (getNextMission: NextMission, lowercased) and ends after the last (no NextMission); USA's first mission's briefing.
 BOOST_AUTO_TEST_CASE(legacy_parity_the_shipped_campaigns)

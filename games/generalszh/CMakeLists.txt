@@ -208,6 +208,7 @@ endif()
 engine_add_module_library(generalszh_scripting
 	MODULES
 		scripting/core_vocabulary.cppm
+		scripting/legacy_calls.cppm
 		scripting/script_parameters.cppm
 		scripting/camera_vocabulary.cppm
 		scripting/unit_vocabulary.cppm
@@ -215,7 +216,7 @@ engine_add_module_library(generalszh_scripting
 		scripting/match_vocabulary.cppm
 		scripting/player_vocabulary.cppm
 	DEPENDS engine_scripting engine_level
-	TESTS scripting/core_vocabulary.test scripting/unit_vocabulary.test scripting/match_vocabulary.test scripting/player_vocabulary.test
+	TESTS scripting/core_vocabulary.test scripting/legacy_calls.test scripting/unit_vocabulary.test scripting/match_vocabulary.test scripting/player_vocabulary.test
 	TEST_DEPENDS generalszh_content_install engine_level)
 if(TARGET generalszh_scripting_tests)
 	set_tests_properties(generalszh_scripting_tests PROPERTIES PASS_REGULAR_EXPRESSION "No errors detected")
@@ -505,6 +506,7 @@ engine_add_module_library(generalszh_gameplay
 		gameplay/combat/components/cleanup_hazard.cppm
 		gameplay/combat/algorithms/flares.cppm
 		gameplay/combat/algorithms/object_flown_launches.cppm
+		gameplay/combat/algorithms/waypoint_weapon_fire.cppm
 		gameplay/powers/algorithms/visible_payloads.cppm
 		gameplay/powers/resources/spy_vision_catalog.cppm
 		gameplay/powers/components/launcher_door.cppm
@@ -743,6 +745,7 @@ engine_add_module_library(generalszh_presentation_objects
 		presentation/objects/components/object_presentation.cppm
 		presentation/objects/components/effect_attachments.cppm
 		presentation/objects/resources/presentation_resources.cppm
+		presentation/objects/algorithms/shadow_decals.cppm
 		presentation/objects/resources/look_catalog.cppm
 		presentation/objects/resources/floating_texts.cppm
 		presentation/objects/systems/vehicle_motion_systems.cppm
@@ -922,6 +925,7 @@ engine_add_module_library(generalszh_presentation_interaction
 		presentation/interaction/algorithms/meta_events.cppm
 		presentation/interaction/algorithms/hotkey_teams.cppm
 		presentation/interaction/algorithms/select_keys.cppm
+		presentation/interaction/algorithms/force_select.cppm
 	DEPENDS engine_ecs generalszh_content generalszh_session generalszh_commands engine_gameplay_spatial engine_gameplay_identity engine_gameplay_health engine_gameplay_weapons engine_gameplay_slaves engine_gameplay_teams engine_gameplay_appearance generalszh_gameplay
 	TESTS presentation/interaction/interaction.test presentation/interaction/mouse_tooltip.test presentation/interaction/meta_events.test presentation/interaction/hotkey_teams.test presentation/interaction/unit_voices.test presentation/interaction/select_keys.test)
 

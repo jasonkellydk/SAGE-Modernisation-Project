@@ -365,6 +365,13 @@ void WorldScene::Draw(GameClient &game, Graphics::CameraState &camera, const eng
 	m_renderers->bridges.Draw(device.Immediate_Command_List(), viewProjection, game.Bridges(), game.BridgeModels(), lighting, &shroud,
 		cloudProjection ? &*cloudProjection : nullptr, m_renderers->terrain.CloudTexture());
 	m_renderers->terrain.DrawTracks(device.Immediate_Command_List(), viewProjection, game.Tracks(), &shroud);
+	// The objects' decal shadows (W3DProjectedShadowManager's SHADOW_DECAL list).
+	{
+		std::vector<presentation::TerrainRendering::ShadowDecalDraw> shadowDecals;
+		for (const auto &[texture, at] : game.ShadowDecals())
+			shadowDecals.push_back({texture, at.center, at.uAxis, at.vAxis, at.uvOffset, at.extent});
+		m_renderers->terrain.DrawShadowDecals(device.Immediate_Command_List(), viewProjection, shadowDecals, &shroud);
+	}
 	// The objects' radius decals (a superweapon's target), then InGameUI's radius cursor under the pointer.
 	if (const presentation::RadiusDecalViews *decals = game.RadiusDecals())
 		for (const presentation::RadiusDecalView &decal : decals->decals)

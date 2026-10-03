@@ -20,6 +20,9 @@ public:
 	virtual void DeleteNamed(const std::string &name) = 0;
 	virtual void KillNamed(const std::string &name) = 0;
 	virtual void NamedFollowWaypoints(const std::string &name, const std::string &pathLabel) = 0;
+	// doNamedFireWeaponFollowingWaypointPath: the unit force-fires its waypoint-following weapon, its missile flying the path
+	// from the path's waypoint nearest the unit.
+	virtual void NamedFireWeaponFollowingWaypointPath(const std::string &name, const std::string &pathLabel) = 0;
 	virtual void MoveNamedTo(const std::string &name, const std::string &waypoint) = 0;
 
 	// Teams.
@@ -307,6 +310,9 @@ inline void AddUnitVocabulary(engine::scripting::Vocabulary &vocabulary, UnitScr
 	vocabulary.AddAction("NAMED_KILL", [units](ScriptCallContext &c) { units->KillNamed(Arg(units, c, 0)); });
 	// NAMED_FOLLOW_WAYPOINTS(name, path label): from the path's closest waypoint.
 	vocabulary.AddAction("NAMED_FOLLOW_WAYPOINTS", [units](ScriptCallContext &c) { units->NamedFollowWaypoints(Arg(units, c, 0), Arg(units, c, 1)); });
+	// NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH(unit, waypoint path).
+	vocabulary.AddAction("NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH",
+		[units](ScriptCallContext &c) { units->NamedFireWeaponFollowingWaypointPath(Arg(units, c, 0), Arg(units, c, 1)); });
 	vocabulary.AddAction("MOVE_NAMED_UNIT_TO", [units](ScriptCallContext &c) { units->MoveNamedTo(Arg(units, c, 0), Arg(units, c, 1)); });
 
 	// CREATE_REINFORCEMENT_TEAM(team, waypoint)

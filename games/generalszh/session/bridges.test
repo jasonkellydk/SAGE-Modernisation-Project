@@ -483,8 +483,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_no_more_than_two_hundred_map_bridges)
 // AIUpdate::computePath / Pathfinder::findPath's destinationLayer (TerrainLogic::getLayerForDestination of the goal): a
 // Ranger on the ground past one end of a Winding River bridge sent to the middle of its deck with its goal on the deck's
 // layer walks on at an entry and stops on the deck (on its layer, at its height); sent to the same point with its goal on
-// the ground (a waypoint's: snapped to the ground), it does not go onto the deck (the river under it is no place to
-// stand: it stops on the ground).
+// the ground (a waypoint's: snapped to the ground), the river under it is no place to stand: findClosestPath ends it on
+// the deck over its goal (EA AIPathfind.cpp, pathCostFactor 0), and the move is done.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_move_order_goes_to_its_goal_layer)
 {
 	Install &shell = Data();
@@ -532,7 +532,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_move_order_goes_to_its_goal_layer)
 			BOOST_TEST((Engine::Math::Abs(at.z - ga::BridgeHeight(bridge, at.XY())) <= Fixed::FromInt(1)));
 		}
 		else
-			BOOST_TEST((layer == nullptr || layer->layer == gp::GroundLayer));
+		{
+			// Under the deck is the river (water: no goal for a Ranger, and no adjustDestination cell within 400): findPath
+			// fails and computePath's findClosestPath (pathCostFactor 0) ends at the reached cell nearest the goal on any
+			// layer, the deck's over it; walked, the move is done.
+			BOOST_TEST(ticks < 900);
+			BOOST_TEST_REQUIRE(layer != nullptr);
+			BOOST_TEST(layer->layer == bridge.layer);
+			BOOST_TEST((Engine::Math::Length(at.XY() - middle) <= Fixed::FromInt(20)));
+		}
 	}
 }
 
@@ -540,8 +548,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_move_order_goes_to_its_goal_layer)
 // dest.z = getLayerHeight(dest, layer): computeIndividualDestination) -> AIUpdateInterface::computePath
 // (getLayerForDestination(destination)): a player's move to the middle of a Winding River bridge clicked on its deck (the
 // click's height the deck's: W3DView::screenToTerrain's pickBridge) has its goal on the deck's layer and the Ranger stops
-// on the deck; clicked at the same x, y at the ground's height (under the bridge), its goal is on the ground and it stays
-// off the deck. The order's goal layer is set the tick the command applies.
+// on the deck; clicked at the same x, y at the ground's height (under the bridge), its goal is on the ground (the river:
+// findClosestPath ends it on the deck over it, as above). The order's goal layer is set the tick the command applies.
 BOOST_AUTO_TEST_CASE(legacy_parity_a_clicked_height_picks_the_goal_layer)
 {
 	Install &shell = Data();
@@ -592,7 +600,15 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_clicked_height_picks_the_goal_layer)
 			BOOST_TEST(ga::PointOnBridge(bridge, at.XY()));
 		}
 		else
-			BOOST_TEST((layer == nullptr || layer->layer == gp::GroundLayer));
+		{
+			// Under the deck is the river (water: no goal for a Ranger, and no adjustDestination cell within 400): findPath
+			// fails and computePath's findClosestPath (pathCostFactor 0) ends at the reached cell nearest the goal on any
+			// layer, the deck's over it; walked, the move is done.
+			BOOST_TEST(ticks < 900);
+			BOOST_TEST_REQUIRE(layer != nullptr);
+			BOOST_TEST(layer->layer == bridge.layer);
+			BOOST_TEST((Engine::Math::Length(at.XY() - middle) <= Fixed::FromInt(20)));
+		}
 	}
 }
 

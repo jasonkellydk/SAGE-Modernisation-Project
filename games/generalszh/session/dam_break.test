@@ -13,6 +13,7 @@ import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
 import games.generalszh.content.loading.game_content;
 import engine.level.adapters.generals_map.map_reader;
+import games.generalszh.scripting.legacy_calls;
 import games.generalszh.session.session;
 import games.generalszh.session.setup.skirmish_level;
 import games.generalszh.content.water.wave_guide_content;
@@ -197,6 +198,64 @@ BOOST_AUTO_TEST_CASE(the_maps_that_break_a_dam)
 	BOOST_TEST(scanned > 50);
 }
 
+
+// Which shipped maps' scripts (top level and groups) call the script actions the port took last
+// (NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH, the emoticons, OBJECT_FORCE_SELECT): a record of what they must play.
+BOOST_AUTO_TEST_CASE(the_maps_that_use_the_last_script_actions)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const std::array<std::string_view, 4> wanted{"NAMED_FIRE_WEAPON_FOLLOWING_WAYPOINT_PATH", "NAMED_SET_EMOTICON", "TEAM_SET_EMOTICON", "OBJECT_FORCE_SELECT"};
+	std::array<int, 4> uses{};
+	int scanned = 0, unnamed = 0, voided = 0;
+	for (const std::string &path : shell.files.List("maps"))
+	{
+		if (!path.ends_with(".map"))
+			continue;
+		const auto bytes = shell.files.Read(path);
+		if (!bytes)
+			continue;
+		auto read = engine::level::generals_map::Read(*bytes);
+		if (!read)
+			continue;
+		++scanned;
+		const auto look = [&](const std::vector<engine::level::Script> &scripts) {
+			for (const auto &script : scripts)
+				for (const auto *calls : {&script.actions, &script.falseActions})
+				for (const auto &stored : *calls)
+				{
+					// As the script runtime reads it (ScriptAction::ParseAction): an old unnamed call by its code, healed.
+					engine::level::ScriptCall call = stored;
+					if (call.name.empty())
+					{
+						++unnamed;
+						if (call.kind < generalszh::scripting::LegacyActionTemplates.size())
+							call.name = std::string(generalszh::scripting::LegacyActionTemplates[call.kind].name);
+					}
+					generalszh::scripting::HealLegacyAction(call);
+					if (call.name == "NO_OP" && stored.name != "NO_OP")
+						++voided;
+					for (std::size_t index = 0; index < wanted.size(); ++index)
+						if (call.name == wanted[index])
+						{
+							++uses[index];
+							BOOST_TEST_MESSAGE(path << ": " << call.name << " in " << script.name);
+						}
+				}
+		};
+		for (const auto &participant : read->level.scenario.participants)
+		{
+			look(participant.scripts.scripts);
+			for (const auto &group : participant.scripts.groups)
+				look(group.scripts);
+		}
+	}
+	for (std::size_t index = 0; index < wanted.size(); ++index)
+		BOOST_TEST_MESSAGE(wanted[index] << ": " << uses[index] << " calls");
+	BOOST_TEST_MESSAGE(unnamed << " actions stored by code alone, " << voided << " made NO_OP on reading");
+	BOOST_TEST(scanned > 50);
+}
 
 // TensileFormationUpdate (GeneralsMD/Code/GameEngine/Source/GameLogic/Object/Update/TensileFormationUpdate.cpp): only
 // AvalancheChunk and AvalancheLeadChunk carry it (Enabled No, CrackSound AvalancheCrack), and nothing shipped makes
@@ -623,3 +682,75 @@ BOOST_AUTO_TEST_CASE(legacy_parity_shore_splash_points)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// UpgradeMuxData::performUpgradeFX (Module.cpp: an upgrade module's FXListUpgrade played on its object as it upgrades):
+// no shipped object's module (Default\Object and Object, every archive) sets FXListUpgrade, so no upgrade plays one.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_shipped_upgrade_module_plays_an_fx_list_upgrade)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	std::size_t modules = 0, fxUpgrades = 0;
+	for (const auto &[name, definition] : shell.game.objects)
+		for (const auto &module : definition.modules)
+		{
+			++modules;
+			if (module.block != nullptr && module.block->Find("FXListUpgrade") != nullptr)
+			{
+				BOOST_TEST_MESSAGE(name << ": " << module.type);
+				++fxUpgrades;
+			}
+		}
+	BOOST_TEST(modules > 10000u);
+	BOOST_TEST(fxUpgrades == 0u);
+}
+
+// ActiveBody::setCorrectDamageState: a structure turned to rubble takes its own StructureRubbleHeight, or GameData's
+// DefaultStructureRubbleHeight when that is 0. No shipped object sets its own, so every rubble takes the default.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_shipped_object_sets_its_own_rubble_height)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	std::size_t objects = 0, own = 0;
+	for (const auto &[name, definition] : shell.game.objects)
+	{
+		++objects;
+		if (definition.structureRubbleHeight != Fixed{})
+		{
+			BOOST_TEST_MESSAGE(name);
+			++own;
+		}
+	}
+	BOOST_TEST(objects > 1000u);
+	BOOST_TEST(own == 0u);
+}
+
+// BuildAssistant::buildObjectLineNow / InGameUI's line placement (GameData MaxLineBuildObjects): only a KINDOF_LINEBUILD
+// thing is placed as a dragged line. Construction buttons for the walls exist, but no shipped command set offers a
+// button that builds a LINEBUILD thing, so no player ever drags one out.
+BOOST_AUTO_TEST_CASE(legacy_parity_no_shipped_command_set_builds_a_line)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	std::size_t slots = 0, lines = 0;
+	for (const auto &[name, set] : shell.game.commands.sets)
+		for (const std::string &button : set.buttons)
+		{
+			if (button.empty())
+				continue;
+			++slots;
+			const auto *found = shell.game.commands.Button(button);
+			if (found == nullptr || found->object.empty())
+				continue;
+			const content::ObjectDefinition *object = shell.game.objects.Find(found->object);
+			if (object != nullptr && object->Is("LINEBUILD"))
+			{
+				BOOST_TEST_MESSAGE(name << ": " << button);
+				++lines;
+			}
+		}
+	BOOST_TEST(slots > 500u);
+	BOOST_TEST(lines == 0u);
+}

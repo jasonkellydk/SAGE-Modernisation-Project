@@ -38,6 +38,7 @@ import games.generalszh.content.ini.zero_hour_grammar;
 import games.generalszh.content.loading.game_content;
 import engine.level.adapters.generals_map.map_reader;
 import engine.gameplay.rts.vision.systems.object_shroud_system;
+import games.generalszh.gameplay.academy.resources.academy_stats;
 
 using namespace generalszh;
 
@@ -474,6 +475,21 @@ BOOST_AUTO_TEST_CASE(a_restored_checkpoint_continues_exactly)
 					differs += name + " ";
 			}
 			BOOST_TEST_MESSAGE("components differing: " << differs << (mine.size() != theirs.size() ? "(component sets differ)" : ""));
+			const auto ours = original.ResourceHashes(), restoredOnes = restored->ResourceHashes();
+			std::string resources;
+			for (std::size_t index = 0; index < ours.size() && index < restoredOnes.size(); ++index)
+				if (ours[index].second != restoredOnes[index].second)
+					resources += ours[index].first + " ";
+			BOOST_TEST_MESSAGE("resources differing: " << resources);
+			engine::core::serialization::ByteWriter mineAcademy, theirAcademy;
+			original.World().Resource<generalszh::gameplay::AcademyStats>().Save(mineAcademy);
+			restored->World().Resource<generalszh::gameplay::AcademyStats>().Save(theirAcademy);
+			for (std::size_t at = 0; at < mineAcademy.Bytes().size() && at < theirAcademy.Bytes().size(); ++at)
+				if (mineAcademy.Bytes()[at] != theirAcademy.Bytes()[at])
+				{
+					BOOST_TEST_MESSAGE("academy differs at byte " << at << " of " << mineAcademy.Bytes().size());
+					break;
+				}
 		}
 		BOOST_TEST_REQUIRE(restored->StateHash() == original.StateHash(), "diverged " << tick << " ticks after restoring");
 	}

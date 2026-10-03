@@ -10,6 +10,7 @@ export import games.generalszh.presentation.objects.algorithms.chassis_motion;
 export import games.generalszh.presentation.effects.damage_effects;
 export import games.generalszh.presentation.effects.uplink_looks;
 export import games.generalszh.presentation.effects.laser_looks;
+export import games.generalszh.presentation.objects.algorithms.shadow_decals;
 export import games.generalszh.presentation.objects.components.object_presentation;
 import engine.ecs.system.system;
 
@@ -151,6 +152,9 @@ struct DefinitionLooks
 	bool castsShadow{false};
 	// Its Shadow: 1 SHADOW_DECAL, 2 SHADOW_VOLUME, 4 SHADOW_PROJECTION (the managers EA's W3DShadowManager::addShadow
 	// hands it to draw it only while UseShadowVolumes, resp. UseShadowDecals, is on); 0 a tree buffer's own.
+	// Its decal shadow (SHADOW_DECAL): its index in the catalog's shadowDecals (none: NoShadowDecal).
+	static constexpr std::uint32_t NoShadowDecal = 0xFFFFFFFFu;
+	std::uint32_t shadowDecal{NoShadowDecal};
 	std::uint8_t shadowKind{0}; // W3DShadowManager::addShadow: its Shadow is exactly SHADOW_DECAL, SHADOW_VOLUME or SHADOW_PROJECTION // W3DPoliceCarDraw: its light bar's clip runs at a quarter frame per 1/30 s
 	bool ignoredInGui{false}; // KINDOF_IGNORED_IN_GUI: no promotion feedback
 	bool infantry{false};     // KINDOF_INFANTRY: a sinking body casts no shadow (SlowDeathBehavior::beginSlowDeath)
@@ -334,6 +338,7 @@ struct LookBits
 	std::uint32_t reallyDamaged{0};
 	std::uint32_t rubble{0};
 	std::uint32_t night{0};
+	std::uint32_t snow{0};
 	std::uint32_t afterburner{0}; // JETAFTERBURNER
 	std::uint32_t burned{0};
 	std::uint32_t toppled{0};
@@ -374,12 +379,30 @@ struct LookCatalog
 	float selectionFlashSaturation{0.5f};
 	// GameData's promotion animation: LevelGainAnimationName, LevelGainAnimationTime (s), LevelGainAnimationZRise (a second).
 	std::string levelGainAnimation;
+	// ActiveBody::updateBodyParticleSystems' sets (GameData Auto*Particle*): fire small/medium/large, smoke
+	// small/medium/large, aflame; each its bone prefix, particle system and most systems.
+	struct BodyParticles
+	{
+		std::string prefix;
+		std::string system;
+		std::int32_t max{0};
+	};
+	std::array<BodyParticles, 7> bodyParticles{};
+	// The decal shadows of the things that cast one (DefinitionLooks::shadowDecal).
+	std::vector<ShadowDecalLook> shadowDecals;
 	float levelGainSeconds{0.0f};
 	float levelGainRise{0.0f};
+	// GameData's single-burst heal animation: GetHealedAnimationName, GetHealedAnimationTime (s), GetHealedAnimationZRise.
+	std::string getHealedAnimation;
+	float getHealedSeconds{0.0f};
+	float getHealedRise{0.0f};
 	LookBits bits;
 	// The time of day is night and models follow it (GameData's
 	// ForceModelsToFollowTimeOfDay): every object shows its NIGHT condition.
 	bool night{false};
+	// The weather is snowy and models follow it (GameData's Weather SNOWY, ForceModelsToFollowWeather): every object shows
+	// its SNOW condition.
+	bool snow{false};
 
 	const DefinitionLooks *Of(std::uint32_t definition) const noexcept
 	{

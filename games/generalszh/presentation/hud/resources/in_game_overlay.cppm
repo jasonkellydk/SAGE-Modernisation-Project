@@ -71,6 +71,7 @@ struct OverlayImage
 		Veterancy,
 		AmmoPip, // Drawable::drawAmmo's `pip`th pip, placed by PlaceAmmoPip once its image's size is known
 		ContainerPip, // Drawable::drawContained's `pip`th pip (`pipFull`), placed by PlaceContainerPip
+		Emoticon, // Drawable::drawEmoticon, placed by PlaceEmoticon against `region`
 	};
 	Placement placement{Placement::Centred};
 	ObjectIcon icon{ObjectIcon::Disabled};

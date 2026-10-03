@@ -24,6 +24,9 @@ import games.generalszh.gameplay.combat.systems.deploy_system;
 import games.generalszh.gameplay.walls.systems.wall_piece_system;
 import games.generalszh.gameplay.economy.systems.warehouse_crippling_system;
 import games.generalszh.gameplay.orders.systems.formation_speed_system;
+import engine.gameplay.rts.harvesting.systems.harvest_system;
+import engine.gameplay.rts.movement.systems.locomotor_choice_system;
+import games.generalszh.gameplay.railroad.systems.railroad_system;
 
 // Orderings between systems of different domains that touch the same data, set after every domain's own (the
 // scheduler refuses a conflict left unordered).
@@ -54,5 +57,8 @@ inline void OrderCrossDomainSystems(ecs::SystemRegistry &registry)
 	registry.OrderBefore<domain::CombatDropSystem, gameplay::ContainedDefinitionsSystem>();
 	// A wall piece reads its body's health after the tick's crippling changed it.
 	registry.OrderBefore<domain::WarehouseCripplingSystem, domain::WallPieceSystem>();
+	// AIUpdateInterface::update: the unit's AI states first, then doLocomotor (chooseGoodLocomotorFromCurrentSet).
+	registry.OrderBefore<gameplay::HarvestSystem, gameplay::LocomotorChoiceSystem>();
+	registry.OrderBefore<domain::RailroadSystem, gameplay::LocomotorChoiceSystem>();
 }
 }

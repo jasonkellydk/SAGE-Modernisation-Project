@@ -19,6 +19,7 @@ module games.generalszh.hosts.game.game_client;
 import games.generalszh.presentation.objects.algorithms.scenery_setup;
 import games.generalszh.presentation.objects.systems.rope_view_systems;
 import games.generalszh.gameplay.beacons.resources.beacons;
+import games.generalszh.presentation.interaction.algorithms.force_select;
 import games.generalszh.presentation.models.model_library_system;
 import games.generalszh.presentation.scripted.algorithms.client_script_effects;
 import games.generalszh.presentation.scripted.algorithms.camera_script_effects;
@@ -44,6 +45,8 @@ import games.generalszh.hud.superweapon_timers;
 import games.generalszh.presentation.hud.systems.eva_system;
 import games.generalszh.content.eva.eva_content;
 import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.legacy_calls;
+import games.generalszh.content.objects.kind_of;
 import games.generalszh.scripting.presentation_vocabulary;
 import games.generalszh.scripting.match_vocabulary;
 import engine.gameplay.common.appearance.components.indicator_color;
@@ -263,8 +266,9 @@ struct GameClient::State
 		}, [this](std::string_view model, std::string_view bone, bool family) { return bones.Find(model, bone, family); },
 			[this](std::string_view model, std::string_view bone, std::string_view ancestor) { return bones.Descends(model, bone, ancestor); }};
 		composition::EmplaceObjectResources(world, Game(),
-			{playerColors, night && content.gameData.forceModelsToFollowTimeOfDay, particles.get(), &effects, std::move(poses), addCashText, loseCashText,
-				&bridgeArt, &roads});
+			{playerColors, night && content.gameData.forceModelsToFollowTimeOfDay,
+				content.gameData.snowyWeather && content.gameData.forceModelsToFollowWeather, particles.get(), &effects, std::move(poses), addCashText,
+				loseCashText, &bridgeArt, &roads});
 		if (weather)
 			presentation::ApplyWeatherSetting(world.Resource<presentation::SnowField>(), *weather);
 		// InGameUI.ini's floating text timing (FloatingTextTimeOut, FloatingTextMoveUpSpeed, FloatingTextVanishRate).
@@ -367,6 +371,34 @@ struct GameClient::State
 			sounds->pending.push_back(std::move(request));
 			break;
 		}
+		case Kind::ForceSelect:
+		{
+			// doForceObjectSelection: the team's oldest `text` selected alone, its sound the local player's, the view onto
+			// it at once when asked.
+			ecs::World &world = Game().World();
+			const std::vector<ecs::Entity> members = Game().TeamMembers(command.subject);
+			const auto pick = presentation::ForceSelectPick(world, members, command.text, [&](ecs::Entity entity) -> std::string_view {
+				const auto definition = Game().DefinitionOf(entity);
+				return definition ? std::string_view(Game().Definition(*definition).name) : std::string_view{};
+			});
+			if (!pick)
+				break;
+			auto &selected = world.Side<presentation::Selected>();
+			selected.Clear();
+			selected.Emplace(*pick);
+			if (auto *sounds = world.FindResource<presentation::SoundRequests>(); sounds != nullptr && !command.detail.empty())
+			{
+				presentation::SoundRequest request{command.detail};
+				const auto &local = world.Resource<presentation::LocalPlayer>();
+				request.owner = local.valid ? local.player : presentation::SoundRequest::NoOwner;
+				request.positioned = false;
+				sounds->pending.push_back(std::move(request));
+			}
+			if (command.flag)
+				if (const auto *transform = world.Get<engine::gameplay::Transform>(*pick))
+					camera.LookAt(Ground(transform->position));
+			break;
+		}
 		default: break;
 		}
 	}
@@ -399,12 +431,19 @@ struct GameClient::State
 	presentation::ViewBookmarks bookmarks;
 	bool trackingDrawable{false};
 
+	// The player's scroll speed (OptionPreferences ScrollFactor over 100; none: GameData's KeyboardDefaultScrollSpeedFactor).
+	float scrollFactor{-1.0f};
+
 	void LookAround(double gameSeconds)
 	{
 		if (!simulation)
 			return;
-		constexpr float scrollMultiplier = 2.0f, scrollAmount = 100.0f * scrollMultiplier, scrollFactor = 0.5f;
-		constexpr float horizontalFactor = 1.6f, verticalFactor = 2.0f;
+		// InGameUI::update's scroll: SCROLL_MULTIPLIER 2, SCROLL_AMT 100 x it; the player's scroll speed
+		// (OptionPreferences::getScrollFactor: m_keyboardScrollFactor) and GameData's Horizontal/VerticalScrollSpeedFactor.
+		constexpr float scrollMultiplier = 2.0f, scrollAmount = 100.0f * scrollMultiplier;
+		const float scrollFactor = this->scrollFactor >= 0.0f ? this->scrollFactor : Engine::Math::ToFloat(content.gameData.keyboardDefaultScrollFactor);
+		const float horizontalFactor = Engine::Math::ToFloat(content.gameData.horizontalScrollFactor);
+		const float verticalFactor = Engine::Math::ToFloat(content.gameData.verticalScrollFactor);
 		// InGameUI::update: a held keypad key turns the view by KeyboardCameraRotateSpeed or zooms it by 10 each client
 		// frame (here each 1/30 s of the frame's time).
 		{
@@ -1599,6 +1638,7 @@ void GameClient::UseMatchScripts(std::vector<engine::level::ScriptList> lists)
 		local->scenario.participants.emplace_back().scripts = std::move(scripts);
 	local->host = std::make_unique<LocalMatch>(*this, local->recorded);
 	scripting::AddCoreVocabulary(local->vocabulary);
+	scripting::UseLegacyCallReading(local->vocabulary, generalszh::content::KindOfNames);
 	scripting::AddPresentationVocabulary(local->vocabulary, local->commands);
 	scripting::AddMatchVocabulary(local->vocabulary, local->host.get());
 	local->runtime.emplace(local->scenario, local->vocabulary, engine::scripting::ScriptHooks{},
@@ -1812,6 +1852,12 @@ std::vector<presentation::TrackView> GameClient::Tracks() const
 	return views;
 }
 
+void GameClient::SetScrollFactor(int percent)
+{
+	// OptionPreferences::getScrollFactor (EA's): clamped to 0..100, over 100.
+	m_state->scrollFactor = static_cast<float>(std::clamp(percent, 0, 100)) / 100.0f;
+}
+
 void GameClient::SetUserVolumes(int music, int sound2D, int sound3D, int speech)
 {
 	State &state = *m_state;
@@ -1929,6 +1975,29 @@ const presentation::RadiusDecalViews *GameClient::RadiusDecals() const
 {
 	State &state = *m_state;
 	return state.simulation ? state.Game().World().FindResource<presentation::RadiusDecalViews>() : nullptr;
+}
+
+std::vector<std::pair<std::string, presentation::ShadowDecalPlacement>> GameClient::ShadowDecals() const
+{
+	State &state = *m_state;
+	std::vector<std::pair<std::string, presentation::ShadowDecalPlacement>> decals;
+	if (!state.simulation)
+		return decals;
+	const auto *catalog = state.Game().World().FindResource<presentation::LookCatalog>();
+	if (catalog == nullptr)
+		return decals;
+	for (const presentation::ObjectInstance &instance : state.instances)
+	{
+		if (instance.shadowDecal >= catalog->shadowDecals.size())
+			continue;
+		const presentation::ShadowDecalLook &look = catalog->shadowDecals[instance.shadowDecal];
+		// (A template with no size takes its model's box: not known here yet, so none is laid; see the ledger.)
+		if (look.sizeX == 0.0f || look.sizeY == 0.0f)
+			continue;
+		const auto &w = instance.world;
+		decals.emplace_back(look.texture, presentation::PlaceShadowDecal(look, {w[3], w[7]}, {w[0], w[4]}, {w[1], w[5]}, {0.0f, 0.0f}));
+	}
+	return decals;
 }
 
 const presentation::ScorchMarks *GameClient::Scorches() const

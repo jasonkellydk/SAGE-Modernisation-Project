@@ -1044,8 +1044,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_unit_says_one_voice_at_a_time)
 	BOOST_TEST(stage.Count("attack") == 1u);
 	BOOST_TEST(stage.Count("cry") == 1u);
 	BOOST_TEST(stage.Count("creak") == 1u);
-	// Played out (10 frames, mixed before the next frame): the unit speaks again.
-	stage.Frame(false);
+	// Played out (its 10 mixer frames mixed, the player told it ended): the unit speaks again.
+	for (int frame = 0; frame < 4; ++frame)
+		stage.Frame(false);
+	BOOST_TEST(!stage.player.Playing(stage.world.Side<SpeakingVoice>().Get(stage.entity)->handle));
 	say("Attack", stage.entity);
 	stage.Frame(false);
 	BOOST_TEST(stage.Count("attack") == 2u);

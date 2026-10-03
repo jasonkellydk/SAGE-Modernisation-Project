@@ -400,7 +400,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_players_group_order_moves_apart_or_tightens
 // AIGroup::friend_computeGroundPath and friend_moveInfantryToPos (EA AIGroup.cpp) with the shipped AIData (MinInfantryForGroup
 // 3, MinVehiclesForGroup 3, MinDistanceForGroup 100, DistanceRequiresGroup 500) and GroupMovementPriority (Ranger
 // BasicHumanLocomotor MOVES_FRONT, Missile Defender MissileDefenderLocomotor MOVES_MIDDLE): a Ranger, a Missile Defender
-// and a Ranger 20 apart across, ordered 400 straight ahead, go as three columns from the one nearest their centre (the
+// and a Ranger 20 apart across, ordered 300 straight ahead, go as three columns from the one nearest their centre (the
 // Defender). Sorted across the path (startVectorNormal) they take columns 1, 0, -1 from left to right; evened out by
 // priority (the Rangers first) they keep them; at the end each stands 2.2 cells across the last leg per column off the
 // point (endVectorNormal (-1, 0): the right Ranger 22 right, the left 22 left), the Defender on it but a cell back (its
@@ -431,7 +431,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_infantry_move_as_columns_by_group_movement_pr
 		if (withDefender)
 			group.push_back(game.Place("AmericaInfantryMissileDefender", centre, {}, *team));
 		group.push_back(game.Place("AmericaInfantryRanger", centre + FixedVector2{Fixed::FromInt(20), Fixed{}}, {}, *team));
-		const FixedVector2 to = centre + FixedVector2{Fixed{}, Fixed::FromInt(400)};
+		// (Clear ground all the way: a building stands 340 on.)
+		const FixedVector2 to = centre + FixedVector2{Fixed{}, Fixed::FromInt(300)};
 		gameplay::ApplyCommand(game.Game(), player, commands::MoveTo{group, to});
 		std::vector<FixedVector2> goals;
 		for (const ecs::Entity unit : group)
@@ -449,7 +450,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_infantry_move_as_columns_by_group_movement_pr
 		const FixedVector2 left = to - FixedVector2{Fixed::FromInt(22), Fixed{}};
 		const FixedVector2 back = to - FixedVector2{Fixed{}, Fixed::FromInt(10)};
 		const FixedVector2 right = to + FixedVector2{Fixed::FromInt(22), Fixed{}};
-		BOOST_TEST((CellOf(goals[0]) == CellOf(left)));
+		// (A Ranger's footprint is two cells across, uncentred (getRadiusAndCenter): adjustDestination takes the cell half a
+		// cell on from its goal.)
+		BOOST_TEST((CellOf(goals[0]) == CellOf(left + FixedVector2{Fixed::FromInt(5), Fixed::FromInt(5)})));
 		BOOST_TEST((CellOf(goals[1]) == CellOf(back)));
 		BOOST_TEST((CellOf(goals[2]) == CellOf(right)));
 	}

@@ -47,6 +47,7 @@ struct Field
 		world.EmplaceResource<SecondLives>();
 		world.EmplaceResource<HealOffers>();
 		world.EmplaceResource<HealPulses>();
+		world.EmplaceResource<BurstHeals>();
 		registry.Register(index);
 		registry.Register(health);
 		registry.Register(self);

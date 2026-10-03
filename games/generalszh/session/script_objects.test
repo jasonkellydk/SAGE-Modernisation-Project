@@ -930,7 +930,13 @@ BOOST_AUTO_TEST_CASE(legacy_parity_civilians_wander_in_place_and_panic)
 	BOOST_TEST(goals >= 2u);
 
 	BOOST_TEST(generalszh::gameplay::ChooseLocomotorSet(game.Game(), civilian, sets::Panic));
-	generalszh::gameplay::OrderWander(game.Game(), civilian, 0, true);
+	// Panicking along the path from the waypoint nearest it (one it can reach: a path it cannot have fails the state).
+	std::uint32_t nearest = 0;
+	for (std::uint32_t way = 1; way < game.Game().waypoints.Size(); ++way)
+		if (Engine::Math::DistanceSquared(game.Game().waypoints.Position(way).XY(), origin) <
+			Engine::Math::DistanceSquared(game.Game().waypoints.Position(nearest).XY(), origin))
+			nearest = way;
+	generalszh::gameplay::OrderWander(game.Game(), civilian, nearest, true);
 	game.Tick();
 	constexpr std::uint32_t panicking = generalszh::content::ModelConditionBit("PANICKING");
 	BOOST_TEST(world.Get<gp::Appearance>(civilian)->Test(panicking));

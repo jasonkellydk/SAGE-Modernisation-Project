@@ -135,6 +135,8 @@ struct SceneryDrawSystem
 		engine::gameplay::Appearance appearance;
 		if (catalog.night)
 			appearance.Set(catalog.bits.night);
+		if (catalog.snow)
+			appearance.Set(catalog.bits.snow);
 		auto &slot = instances.SlotAt(instances.SlotCount() - 2);
 		// getPropShroudStatusForPlayer: a prop whose four cells about it are all shrouded to the viewer is not drawn.
 		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
@@ -175,6 +177,10 @@ struct SceneryDrawSystem
 			const bool shadowKindOn = looks->shadowKind == 0 || (looks->shadowKind == 2u ? detail.useShadowVolumes : detail.useShadowDecals);
 			// drawTrees: a falling or fallen tree casts no shadow.
 			instance.castsShadow = looks->castsShadow && shadowKindOn && bend.state == tree_bend_state::Upright;
+			// A SHADOW_DECAL's is its texture laid on the terrain, not a cast one.
+			instance.shadowDecal = instance.castsShadow ? looks->shadowDecal : DefinitionLooks::NoShadowDecal;
+			if (looks->shadowDecal != DefinitionLooks::NoShadowDecal)
+				instance.castsShadow = false;
 			instance.receivesDynamicLights = looks->receivesDynamicLights;
 			instance.lightSphere = {at[0], at[1], at[2] + looks->constructionHeight * 0.5f, looks->lightRadius};
 			slot.push_back(instance);

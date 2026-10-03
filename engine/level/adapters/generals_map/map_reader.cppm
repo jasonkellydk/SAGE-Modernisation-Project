@@ -274,9 +274,10 @@ inline void ReadBlendTiles(ChunkCursor data, const ChunkHeader &header, const He
 // Script parameter type whose value is stored as a position.
 constexpr std::uint32_t PositionParameter = 16;
 
-inline ScriptCall ReadCall(ChunkCursor &data, bool hasName)
+inline ScriptCall ReadCall(ChunkCursor &data, bool hasName, std::uint16_t version)
 {
 	ScriptCall call;
+	call.version = version;
 	call.kind = data.ReadU32();
 	if (hasName)
 		call.name = std::string(data.NameOf(data.ReadU32() >> 8));
@@ -327,14 +328,14 @@ inline Script ReadScript(ChunkCursor data, const ChunkHeader &header)
 				ChunkCursor call = content.OpenChunk(condition);
 				if (condition.name != "Condition")
 					throw FormatError("unexpected '" + std::string(condition.name) + "' in OrCondition");
-				clause.push_back(ReadCall(call, condition.version >= 4));
+				clause.push_back(ReadCall(call, condition.version >= 4, static_cast<std::uint16_t>(condition.version)));
 			}
 			script.conditions.push_back(std::move(clause));
 		}
 		else if (child.name == "ScriptAction")
-			script.actions.push_back(ReadCall(content, child.version >= 2));
+			script.actions.push_back(ReadCall(content, child.version >= 2, static_cast<std::uint16_t>(child.version)));
 		else if (child.name == "ScriptActionFalse")
-			script.falseActions.push_back(ReadCall(content, child.version >= 2));
+			script.falseActions.push_back(ReadCall(content, child.version >= 2, static_cast<std::uint16_t>(child.version)));
 		else
 			throw FormatError("unexpected '" + std::string(child.name) + "' in Script");
 	}

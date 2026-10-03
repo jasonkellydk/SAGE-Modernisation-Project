@@ -859,7 +859,17 @@ struct TargetingSystem
 					// victim (AIAttackAimAtTargetState::onEnter: setTurretTargetObject).
 					target.approached = 1;
 					target.temporary = {};
-					if (move->mode == MoveMode::Point)
+					// AIAttackAimAtTargetState::update: one that cannot turn in place (m_canTurnInPlace: its locomotor's MinSpeed
+					// 0) and aims with its body flies straight at its victim (setLocomotorGoalPositionExplicit) to face it.
+					const Locomotion *own = lookup.IsAlive(entities[row]) ? lookup.template Get<Locomotion>(entities[row]) : nullptr;
+					if (!armaments[row].turret && own != nullptr && own->locomotor.minSpeed > Engine::Math::Fixed{})
+					{
+						MoveOrder aim{current->position.XY(), 0xFFFFFFFFu, MoveMode::Direct};
+						aim.claim = GoalClaim::None;
+						aim.explicitGoal = 1;
+						*move = aim;
+					}
+					else if (move->mode == MoveMode::Point)
 						move->mode = MoveMode::Idle;
 				}
 			}

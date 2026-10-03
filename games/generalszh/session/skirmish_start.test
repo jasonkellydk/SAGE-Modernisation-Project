@@ -51,6 +51,10 @@ import games.generalszh.gameplay.construction.algorithms.build_legality;
 import engine.gameplay.rts.radar.resources.player_radar;
 import engine.gameplay.rts.vision.systems.vision_system;
 import engine.gameplay.rts.construction.components.builder;
+import engine.gameplay.rts.movement.components.locomotion;
+import engine.gameplay.common.status.components.disabled;
+import engine.gameplay.rts.blocking.components.blocked_state;
+import engine.gameplay.rts.construction.components.under_construction;
 import games.generalszh.session.script_bridge;
 import engine.gameplay.rts.navigation.resources.waypoint_graph;
 import games.generalszh.gameplay.world.resources.map_scenery;
@@ -588,8 +592,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_gla_worker_harvests_and_its_shoes_pay)
 
 // Issue #51 (SupplyTruckAIUpdate / WorkerAIUpdate's supply states, DockUpdate's approach queue: a SupplyDock is a
 // boneless dock any number may approach (NumberApproachPositions -1), the GLA Supply Stash queues on its 5 approach
-// bones): eight workers sent to one dock (aiDock, the player's order) all keep harvesting; one that stops (its queue
-// lost, left waiting for good) is the bug the issue reports.
+// bones): eight workers sent to one dock (aiDock, the player's order) all keep harvesting, sharing the docks evenly (26 or
+// 27 deliveries each in four minutes). A worker waiting its turn or between docks is not idle (AIUpdateInterface::isIdle;
+// the supply truck machine runs in its own AI update), so nothing moves it aside and off its round.
 BOOST_AUTO_TEST_CASE(gla_workers_sent_together_all_keep_harvesting)
 {
 	Install &shell = Data();
@@ -655,7 +660,19 @@ BOOST_AUTO_TEST_CASE(gla_workers_sent_together_all_keep_harvesting)
 		line += " " + std::to_string(count);
 	BOOST_TEST_MESSAGE("deposits per worker in 4 minutes:" << line);
 	for (std::size_t index = 0; index < workers.size(); ++index)
-		BOOST_TEST(deposits[index] >= 4, "worker " << index << " made " << deposits[index] << " deliveries");
+	{
+		const auto *harvester = world.Get<engine::gameplay::Harvester>(workers[index]);
+		const auto *docking = world.Get<engine::gameplay::Docking>(workers[index]);
+		const auto *move = world.Get<engine::gameplay::MoveOrder>(workers[index]);
+		const auto at = world.Get<engine::gameplay::Transform>(workers[index])->position;
+		BOOST_TEST_MESSAGE("worker " << index << ": state " << int(harvester->state) << " boxes " << harvester->boxes << " dock phase "
+									 << (docking ? int(docking->phase) : -1) << " slot " << (docking ? int(docking->slot) : -9) << " reached "
+									 << (docking ? int(docking->reached) : -1) << " granted " << (docking ? int(docking->granted) : -1) << " queued "
+									 << (docking ? docking->queued : 0) << " move " << (move ? int(move->mode) : -1) << " at " << (at.x.Raw() >> 16) << ","
+									 << (at.y.Raw() >> 16));
+	}
+	for (std::size_t index = 0; index < workers.size(); ++index)
+		BOOST_TEST(deposits[index] >= 20, "worker " << index << " made " << deposits[index] << " deliveries");
 }
 
 // ChinookAIUpdate is a SupplyTruckAIUpdate that flies: told to harvest, a supply Chinook brings its full load to its
@@ -1522,6 +1539,65 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_builds_its_teams)
 	BOOST_TEST(restored->StateHash() == again.StateHash());
 }
 
+// Issue #49, the player's half (MSG_DO_ATTACK_OBJECT -> aiAttackObject: AIAttackState approaches, aims and fires): on a
+// real skirmish, a player's Crusader told to attack an enemy Scorpion out of its reach drives in and destroys it; a Ranger
+// told to attack an enemy Rebel shoots it dead.
+BOOST_AUTO_TEST_CASE(a_players_units_ordered_to_attack_an_enemy_destroy_it)
+{
+	Install &shell = Data();
+	if (!shell.loaded)
+		return;
+	const auto bytes = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
+	BOOST_TEST_REQUIRE(bytes.has_value());
+	auto read = engine::level::generals_map::Read(*bytes);
+	BOOST_TEST_REQUIRE(read.has_value());
+	const auto templateOf = [&](std::string_view name) {
+		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
+			if (shell.game.playerTemplates.templates[index].name == name)
+				return static_cast<int>(index);
+		return -1;
+	};
+	session::setup::GameSetup setup;
+	setup.seed = 11;
+	setup.startingCash = 10000;
+	setup.slots[0].SetState(session::setup::SlotState::Player, u"Jason");
+	setup.slots[0].playerTemplate = templateOf("FactionAmerica");
+	setup.slots[0].startPos = 0;
+	setup.slots[1].SetState(session::setup::SlotState::Player, u"Other");
+	setup.slots[1].playerTemplate = templateOf("FactionGLA");
+	setup.slots[1].startPos = 2;
+	const auto skirmish = session::setup::PrepareSkirmishLevel(read->level, setup, shell.game.playerTemplates, 4);
+	session::SessionOptions options{11, 1, {}, {"player0", "player1"}};
+	for (const auto &player : skirmish.players)
+		options.starts.push_back({player.name, player.team, player.playerTemplate, player.startPosition});
+	session::Session game(skirmish.level, shell.game, options);
+	auto &world = game.World();
+	const std::uint32_t mine = *game.Teams().FindTeam(skirmish.players[0].team);
+	const std::uint32_t theirs = *game.Teams().FindTeam(skirmish.players[1].team);
+	Engine::Math::FixedVector2 start;
+	for (const auto &marker : read->level.markers)
+		if (marker.name == "Player_1_Start")
+			start = marker.position.XY();
+	using Engine::Math::Fixed;
+	const auto at = [&](int dx, int dy) { return Engine::Math::FixedVector2{start.x + Fixed::FromInt(dx), start.y + Fixed::FromInt(dy)}; };
+	const auto attack = [&](const std::string &attackerKind, const std::string &victimKind, int apart) {
+		const ecs::Entity attacker = game.Place(attackerKind, at(-150, -250), {}, mine);
+		const ecs::Entity victim = game.Place(victimKind, at(-150 + apart, -250), {}, theirs);
+		game.Tick();
+		auto order = commands::Encode(commands::Attack{{attacker}, victim});
+		order.player = 0; // the command's seat (player0's)
+		game.Tick(std::span(&order, 1));
+		int tick = 0;
+		for (; tick < 30 * 40 && world.IsAlive(victim) && !world.Has<engine::gameplay::Dying>(victim); ++tick)
+			game.Tick();
+		BOOST_TEST_MESSAGE(attackerKind << " on " << victimKind << ": " << (world.IsAlive(victim) && !world.Has<engine::gameplay::Dying>(victim) ? "survived" : "destroyed")
+										 << " after " << tick << " ticks");
+		return !world.IsAlive(victim) || world.Has<engine::gameplay::Dying>(victim);
+	};
+	BOOST_TEST(attack("AmericaTankCrusader", "GLATankScorpion", 400));
+	BOOST_TEST(attack("AmericaInfantryRanger", "GLAInfantryRebel", 120));
+}
+
 // Issue #49 (AIPlayer / AISkirmishPlayer: the skirmish scripts' production teams, built at the player's factories): each
 // side as a medium computer player on Tournament Continent, at the standard 10000 starting cash, has fielded fighting
 // units (not structures, workers, dozers or harvesters) within six minutes.
@@ -1531,18 +1607,22 @@ BOOST_AUTO_TEST_CASE(computer_players_of_every_side_field_an_army)
 	if (!shell.loaded)
 		return;
 	const auto scb = shell.files.Read("Data/Scripts/SkirmishScripts.scb");
-	const auto map = shell.files.Read("Maps/Tournament Continent/Tournament Continent.map");
 	const auto file = engine::level::generals_map::ReadScriptFile(*scb);
-	auto read = engine::level::generals_map::Read(*map);
-	BOOST_TEST_REQUIRE((file.has_value() && read.has_value()));
+	BOOST_TEST_REQUIRE(file.has_value());
 	const auto templateOf = [&](std::string_view name) {
 		for (std::size_t index = 0; index < shell.game.playerTemplates.templates.size(); ++index)
 			if (shell.game.playerTemplates.templates[index].name == name)
 				return static_cast<int>(index);
 		return -1;
 	};
+	for (const std::string_view mapName : {"Tournament Continent", "Twilight Flame"})
 	for (const std::string_view side : {"FactionAmerica", "FactionChina", "FactionGLA"})
 	{
+		const std::string path = "Maps/" + std::string(mapName) + "/" + std::string(mapName) + ".map";
+		const auto map = shell.files.Read(path);
+		BOOST_TEST_REQUIRE(map.has_value());
+		auto read = engine::level::generals_map::Read(*map);
+		BOOST_TEST_REQUIRE(read.has_value());
 		session::setup::GameSetup setup;
 		setup.seed = 7;
 		setup.startingCash = 10000;
@@ -1587,10 +1667,10 @@ BOOST_AUTO_TEST_CASE(computer_players_of_every_side_field_an_army)
 					line += " " + name + "x" + std::to_string(count);
 					units += count;
 				}
-				BOOST_TEST_MESSAGE(side << " " << second << "s: $" << game.World().Resource<engine::gameplay::PlayerMoney>().Balance(ai) << line);
+				BOOST_TEST_MESSAGE(mapName << " " << side << " " << second << "s: $" << game.World().Resource<engine::gameplay::PlayerMoney>().Balance(ai) << line);
 			}
 		}
-		BOOST_TEST(units >= 3, side << " fielded " << units << " fighting units in six minutes");
+		BOOST_TEST(units >= 3, mapName << " " << side << " fielded " << units << " fighting units in six minutes");
 	}
 }
 
@@ -2346,7 +2426,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_computer_player_builds_nearest_a_team)
 // Player::killPlayer): two humans on one team against a hard AI. The first surrenders: on that tick its command centre
 // and dozer go to its ally (onto its default team) with all its money, the ally's own money not counted as earned, and it
 // has nothing left: the next victory check beats it. Then the ally surrenders with no ally left standing: everything of
-// its (its own and what it was given) dies on that tick (what their deaths leave, their debris, is still its).
+// its (its own and what it was given) dies on that tick (what their deaths leave, their debris, is still its), and its
+// money goes to nothing (killPlayer).
 BOOST_AUTO_TEST_CASE(legacy_parity_a_surrender_hands_everything_to_an_ally_else_kills_it)
 {
 	Install &shell = Data();
@@ -2433,7 +2514,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_surrender_hands_everything_to_an_ally_else_
 		BOOST_TEST((!world.IsAlive(entity) || world.Has<engine::gameplay::Dying>(entity)));
 	for (const ecs::Entity entity : seconds)
 		BOOST_TEST((!world.IsAlive(entity) || world.Has<engine::gameplay::Dying>(entity)));
-	BOOST_TEST(money.Balance(second) == secondMoney + firstMoney); // killPlayer takes no money
+	BOOST_TEST(money.Balance(second) == 0); // Player::killPlayer: m_money.withdraw(countMoney()), "force $$$ to 0 on death"
 }
 
 // The kill-all-enemies cheat (MSG_META_DEMO_KILL_ALL_ENEMIES, a debug build's) on a skirmish against an easy AI:

@@ -29,6 +29,8 @@ export import engine.gameplay.common.status.components.ai_activity;
 export import engine.gameplay.common.weapons.components.armament;
 export import engine.gameplay.rts.movement.components.move_away;
 export import engine.gameplay.rts.movement.components.formation_member;
+export import engine.gameplay.rts.docking.components.docking;
+export import engine.gameplay.rts.harvesting.components.harvester;
 export import engine.gameplay.rts.blocking.resources.move_away_requests;
 
 // The units a moving ground unit runs into, as its AI weighs them (AIUpdateInterface::processCollision for a unit that is
@@ -61,7 +63,7 @@ struct UnitBlockingSystem
 	using Lookup = ecs::Lookup<ecs::Read<Transform>, ecs::Read<Locomotion>, ecs::Read<MoveOrder>, ecs::Read<BlockingUnit>, ecs::Read<BlockedState>,
 		ecs::Read<ObjectId>, ecs::Read<BoundingVolume>, ecs::Read<Collider>, ecs::Read<Route>, ecs::Read<PathfindGoal>, ecs::Read<Disabled>,
 		ecs::Read<Health>, ecs::Read<Owner>, ecs::Read<Squishable>, ecs::Read<BodyCollision>, ecs::Read<IgnoredObstacle>, ecs::Read<AiActivity>,
-		ecs::Read<MoveAway>, ecs::Read<AttackTarget>, ecs::Read<FormationMember>>;
+		ecs::Read<MoveAway>, ecs::Read<AttackTarget>, ecs::Read<FormationMember>, ecs::Read<Docking>, ecs::Read<Harvester>>;
 	using Resources = ecs::Resources<ecs::Read<ColliderIndex>, ecs::Read<Relationships>, ecs::Write<MoveAwayRequests>, ecs::Write<UnitSettles>>;
 
 	void BeforeChunks(Query &query, ecs::SystemContext &context) const
@@ -158,7 +160,15 @@ struct UnitBlockingSystem
 		seen.squishable = lookup.template Get<Squishable>(entity) != nullptr;
 		seen.busy = activity != nullptr && activity->Occupied();
 		const AttackTarget *attack = lookup.template Get<AttackTarget>(entity);
-		seen.idle = away == nullptr && order.mode == MoveMode::Idle && !seen.busy && (attack == nullptr || !attack->target.IsValid());
+		// AIUpdateInterface::isIdle: not while its dock machine runs (a mover waiting its turn at a dock stands still but is
+		// docking: nothing moves it aside), nor while a supply truck's round has it wanting, docking or regrouping (its
+		// SupplyTruckStateMachine runs in its own AI update: done docking, it is off to its next dock at once).
+		const Docking *docking = lookup.template Get<Docking>(entity);
+		const Harvester *harvester = lookup.template Get<Harvester>(entity);
+		const bool onRound = harvester != nullptr && (harvester->state == HarvesterState::Wanting || harvester->state == HarvesterState::Docking ||
+			harvester->state == HarvesterState::Regrouping);
+		seen.idle = away == nullptr && order.mode == MoveMode::Idle && !seen.busy && (attack == nullptr || !attack->target.IsValid()) &&
+			(docking == nullptr || !IsDocking(*docking)) && !onRound;
 		return seen;
 	}
 

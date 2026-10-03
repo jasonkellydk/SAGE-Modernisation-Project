@@ -550,7 +550,9 @@ inline bool StepRunwayJet(const RunwayJetContext &context, Jet &jet, Locomotion 
 	}
 	case JetState::Flying:
 	{
-		const bool idle = order.mode == MoveMode::Idle && (target == nullptr || !target->target.IsValid());
+		// AIUpdateInterface::isIdle: its AI idle, whatever goal its locomotor kept (the explicit one its aim at a victim
+		// left: AIAttackAimAtTargetState::onExit leaves a wings flyer's goal).
+		const bool idle = (order.mode == MoveMode::Idle || order.explicitGoal != 0) && (target == nullptr || !target->target.IsValid());
 		if (!idle)
 			jet.idleSince = tick;
 		const bool idleTooLong = jet.idleReturnTicks != 0 && tick > jet.idleSince + jet.idleReturnTicks;

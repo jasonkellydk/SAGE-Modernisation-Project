@@ -49,6 +49,7 @@ import engine.gameplay.rts.combat.systems.damage_reaction_system;
 import engine.gameplay.rts.combat.systems.firing_tracker_system;
 import engine.gameplay.rts.combat.systems.impact_system;
 import engine.gameplay.rts.combat.systems.missile_flight_system;
+import engine.gameplay.rts.combat.systems.missile_waypoint_path_system;
 import engine.gameplay.rts.combat.systems.missile_jam_system;
 import engine.gameplay.rts.combat.systems.neutron_flight_system;
 import engine.gameplay.rts.combat.systems.point_defense_system;
@@ -114,6 +115,7 @@ inline void EmplaceCombatResources(ecs::World &world, [[maybe_unused]] const Sim
 	world.EmplaceResource<engine::gameplay::MissileDetonations>();
 	world.EmplaceResource<engine::gameplay::PointDefenseShots>();
 	world.EmplaceResource<engine::gameplay::DirectShots>();
+	world.EmplaceResource<engine::gameplay::ScriptShots>();
 	world.EmplaceResource<engine::gameplay::AutoShots>();
 	world.EmplaceResource<generalszh::gameplay::BattleBusEvents>();
 	world.EmplaceResource<generalszh::gameplay::BattleBusCues>();
@@ -138,6 +140,7 @@ inline void RegisterCombatComponents(ecs::World &world)
 	world.RegisterComponent<engine::gameplay::PointDefense>();
 	world.RegisterComponent<engine::gameplay::ProjectileFlight>();
 	world.RegisterComponent<engine::gameplay::MissileFlight>();
+	world.RegisterComponent<engine::gameplay::MissileWaypointPath>();
 	world.RegisterComponent<engine::gameplay::Aggression>();
 	world.RegisterComponent<engine::gameplay::AttackMove>();
 	world.RegisterComponent<engine::gameplay::AttackMoveResume>();
@@ -175,6 +178,8 @@ inline void RegisterCombatSystems(ecs::SystemRegistry &registry)
 	registry.Register(projectiles);
 	static engine::gameplay::ProjectileLaunchSystem launches;
 	registry.Register(launches);
+	static engine::gameplay::MissileWaypointPathSystem missilePaths;
+	registry.Register(missilePaths);
 	static engine::gameplay::MissileFlightSystem missiles;
 	registry.Register(missiles);
 	static engine::gameplay::PointDefenseSystem pointDefense;
@@ -297,6 +302,7 @@ inline void OrderCombatSystems(ecs::SystemRegistry &registry)
 	// Projectiles fly on from where the tick's shots left them.
 	registry.OrderBefore<gameplay::WeaponSystem, gameplay::ProjectileFlightSystem>();
 	registry.OrderBefore<gameplay::WeaponSystem, gameplay::MissileFlightSystem>();
+	registry.OrderBefore<gameplay::WeaponSystem, gameplay::MissileWaypointPathSystem>();
 	registry.OrderBefore<gameplay::ProjectileFlightSystem, gameplay::ImpactSystem>();
 	registry.OrderBefore<gameplay::SpatialIndexSystem, gameplay::ProjectileFlightSystem>();
 	registry.OrderBefore<gameplay::ProjectileFlightSystem, gameplay::AutoFireSystem>();

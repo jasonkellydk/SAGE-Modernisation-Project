@@ -21,6 +21,7 @@ struct RecordingHost final : generalszh::scripting::UnitScriptHost
 	void DeleteNamed(const std::string &) override {}
 	void KillNamed(const std::string &) override {}
 	void NamedFollowWaypoints(const std::string &, const std::string &) override {}
+	void NamedFireWeaponFollowingWaypointPath(const std::string &unit, const std::string &path) override { calls.push_back(unit + " fires down " + path); }
 	void MoveNamedTo(const std::string &, const std::string &) override {}
 	void CreateReinforcements(const std::string &, const std::string &) override {}
 	void TeamFollowWaypoints(const std::string &, const std::string &, bool) override {}

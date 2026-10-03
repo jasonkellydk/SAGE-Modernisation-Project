@@ -29,6 +29,7 @@ import games.generalszh.presentation.objects.resources.floating_texts;
 import games.generalszh.presentation.objects.resources.world_animations;
 import games.generalszh.presentation.interaction.resources.interaction_resources;
 import games.generalszh.presentation.interaction.components.selected;
+import games.generalszh.presentation.interaction.resources.mouse_tooltip;
 import games.generalszh.presentation.hud.resources.in_game_messages;
 import games.generalszh.presentation.hud.resources.named_timers;
 import games.generalszh.presentation.hud.resources.screen_fade;
@@ -255,7 +256,8 @@ inline void ExtractContainerPips(ecs::World &world, session::SessionView &game, 
 	}
 }
 
-// Drawable::drawHealthBar for the selected (computeHealthRegion: the health box position projected, its width over the
+// Drawable::drawHealthBar while GameData's ShowObjectHealth is on, for the selected and the one the mouse is over
+// (InGameUI::getMousedOverDrawableID) (computeHealthRegion: the health box position projected, its width over the
 // zoom, 3 high, starting 0.45 of its width left of centre; none at no health or for FORCEATTACKABLE), then its ammo.
 inline void ExtractSelectedMarkers(ecs::World &world, session::SessionView &game, const OverlaySource &source, InGameOverlay &overlay)
 {
@@ -263,7 +265,13 @@ inline void ExtractSelectedMarkers(ecs::World &world, session::SessionView &game
 	const auto &catalog = world.Resource<SelectionCatalog>();
 	const auto &data = game.Content().gameData;
 	const float zoom = std::max(source.zoom, 0.01f);
-	for (const ecs::Entity entity : world.Side<Selected>().Entities())
+	if (!data.showObjectHealth)
+		return;
+	std::vector<ecs::Entity> shown(world.Side<Selected>().Entities().begin(), world.Side<Selected>().Entities().end());
+	if (const auto *mouse = world.FindResource<MouseTooltip>(); mouse != nullptr && world.IsAlive(mouse->mousedOver) &&
+		std::find(shown.begin(), shown.end(), mouse->mousedOver) == shown.end())
+		shown.push_back(mouse->mousedOver);
+	for (const ecs::Entity entity : shown)
 	{
 		const auto *transform = world.Get<engine::gameplay::Transform>(entity);
 		const auto *definition = world.Get<engine::gameplay::DefinitionRef>(entity);
@@ -306,6 +314,8 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 	const double clock = world.Resource<PresentationFrame>().clock;
 	const auto *looks = world.FindResource<LookCatalog>();
 	const auto &iconTable = world.Side<ObjectIcons>();
+	const auto *emoticons = world.Components().TryGet<ObjectEmoticon>() != ecs::InvalidComponentId ? &world.Side<ObjectEmoticon>() : nullptr;
+	const std::uint64_t tick = world.Resource<PresentationFrame>().tick;
 	const content::Anim2DTemplates &animations = *source.animations;
 	// The beacons' side tables, where the world has them.
 	const bool captioned = world.Components().TryGet<BeaconCaption>() != ecs::InvalidComponentId;
@@ -345,6 +355,17 @@ inline void ExtractObjectIcons(ecs::World &world, const OverlaySource &source, I
 			return;
 		const int screenX = static_cast<int>(sx), screenY = static_cast<int>(sy);
 		const DefinitionLooks *kind = looks != nullptr ? looks->Of(object.definition) : nullptr;
+		// drawEmoticon (dead things too): a script's emoticon until its frame has passed, centred on the bar.
+		if (const ObjectEmoticon *emoticon = emoticons != nullptr ? emoticons->Get(object.entity) : nullptr; emoticon != nullptr && emoticon->until >= tick)
+			if (const auto found = animations.find(emoticon->animation); found != animations.end() && !found->second.images.empty())
+			{
+				const auto frames = static_cast<std::uint64_t>(std::max(clock - emoticon->since, 0.0) * 30.0);
+				const std::size_t first = found->second.StartImage(emoticon->roll);
+				OverlayImage image{found->second.images[found->second.ImageFrom(frames, first)], sx, sy, 1.0f, 1.0f};
+				image.placement = OverlayImage::Placement::Emoticon;
+				image.region = HealthRegion(screenX, screenY, look->healthBoxWidth, zoom);
+				overlay.images.push_back(std::move(image));
+			}
 		if (const ObjectIcons *icons = iconTable.Get(object.entity); icons != nullptr && icons->drawn != 0)
 		{
 			const float scale = EnthusiasticScale(kind != nullptr && (kind->structure || kind->hugeVehicle), kind != nullptr && kind->vehicle);

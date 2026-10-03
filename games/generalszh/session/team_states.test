@@ -414,7 +414,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_force_skirmish_ai_gives_a_maps_computer_playe
 }
 
 // legacy_parity: Object::setTeam / setOrRestoreTeam / onCapture (EA's CnC_Generals_Zero_Hour Object.cpp, which wins over the
-// fork's ally exception and dozer cancelAllTasks) on the shell map (PlyrAmerica and PlyrChina, enemies). Taken over by another
+// fork's ally exception and dozer cancelAllTasks) on the shell map (PlyrAmerica and PlyrGLA, enemies; China fights on America's side). Taken over by another
 // player, a dozer on its way stops (aiIdle(CMD_FROM_AI)), its task kept; moved to another team of its own player it keeps
 // going (oldOwner == newOwner: no idle). Given to a dead player's team, it goes
 // to the neutral player's default team instead (isPlayerActive). A skirmish computer player that takes a faction
@@ -428,7 +428,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_captured_unit_changes_hands_as_set_team_doe
 	auto &world = game.World();
 	namespace gp = engine::gameplay;
 	const std::uint32_t america = *game.Teams().FindPlayer("PlyrAmerica");
-	const std::uint32_t china = *game.Teams().FindPlayer("PlyrChina");
+	const std::uint32_t china = *game.Teams().FindPlayer("PlyrGLA");
 	const std::uint32_t americaTeam = *game.Teams().DefaultTeam(america);
 	const std::uint32_t chinaTeam = *game.Teams().DefaultTeam(china);
 	BOOST_TEST_REQUIRE((world.Resource<gp::Relationships>().Between(gp::Relationships::NoTeam, america, chinaTeam, china) != gp::Relationship::Allies));
@@ -659,25 +659,30 @@ BOOST_AUTO_TEST_CASE(legacy_parity_build_team_queues_its_work_orders_first)
 	// The team the shell map's scripts build.
 	std::string teamName;
 	std::size_t seat = 0;
-	for (std::size_t participant = 0; participant < level.scenario.participants.size() && teamName.empty(); ++participant)
-		for (const auto &script : level.scenario.participants[participant].scripts.scripts)
-		{
+	// (Its scripts at the top level or in a group.)
+	const auto findIn = [&](const std::vector<level::Script> &scripts, std::size_t participant) {
+		for (const auto &script : scripts)
 			for (const auto &call : script.actions)
-				if (call.name == "BUILD_TEAM" && !call.parameters.empty())
+				if (teamName.empty() && call.name == "BUILD_TEAM" && !call.parameters.empty())
 				{
 					teamName = call.parameters.front().text;
 					seat = participant;
-					break;
 				}
-			if (!teamName.empty())
-				break;
-		}
+	};
+	for (std::size_t participant = 0; participant < level.scenario.participants.size() && teamName.empty(); ++participant)
+	{
+		findIn(level.scenario.participants[participant].scripts.scripts, participant);
+		for (const auto &group : level.scenario.participants[participant].scripts.groups)
+			findIn(group.scripts, participant);
+	}
 	BOOST_TEST_REQUIRE(!teamName.empty());
 	level::Script build;
 	build.name = "buildNow";
 	build.oneShot = true;
 	build.conditions = {{Call("CONDITION_TRUE")}};
-	build.actions = {Call("BUILD_TEAM", {teamName})};
+	// A map computer player starts with unit building off (AIPlayer::AIPlayer: setCanBuildUnits(false)) and
+	// buildSpecificAITeam refuses until a script turns it on, as the shell map's own do first.
+	build.actions = {Call("PLAYER_ENABLE_UNIT_CONSTRUCTION", {"<This Player>"}), Call("BUILD_TEAM", {teamName})};
 	auto &own = level.scenario.participants[seat].scripts.scripts;
 	own.insert(own.begin(), build);
 	const engine::level::Properties *info = nullptr;

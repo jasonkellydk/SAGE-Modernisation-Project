@@ -82,7 +82,8 @@ public:
 	std::span<const MoneyTransaction> Transactions() const noexcept { return m_transactions; }
 	void ClearTransactions() noexcept { m_transactions.clear(); }
 	// The players of each deposit of more than nothing since its reader last took them, in order (Money::deposit's
-	// income, sounding or not: the game's per-player records read them once a tick); neither saved nor hashed.
+	// income, sounding or not: the game's per-player records read them once a tick). Saved: those after the tick's
+	// reading wait for the next one.
 	std::span<const std::uint32_t> Incomes() const noexcept { return m_incomes; }
 	void ClearIncomes() noexcept { m_incomes.clear(); }
 
@@ -94,6 +95,9 @@ public:
 		writer.U32(static_cast<std::uint32_t>(m_earned.size()));
 		for (const std::int64_t amount : m_earned)
 			writer.I64(amount);
+		writer.U32(static_cast<std::uint32_t>(m_incomes.size()));
+		for (const std::uint32_t player : m_incomes)
+			writer.U32(player);
 	}
 
 	bool Load(engine::core::serialization::ByteReader &reader)
@@ -120,8 +124,20 @@ public:
 				return false;
 			earned.push_back(*amount);
 		}
+		const auto incomeCount = reader.U32();
+		if (!incomeCount)
+			return false;
+		std::vector<std::uint32_t> incomes;
+		for (std::uint32_t index = 0; index < *incomeCount; ++index)
+		{
+			const auto player = reader.U32();
+			if (!player)
+				return false;
+			incomes.push_back(*player);
+		}
 		m_amounts = std::move(amounts);
 		m_earned = std::move(earned);
+		m_incomes = std::move(incomes);
 		return true;
 	}
 

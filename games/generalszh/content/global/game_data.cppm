@@ -61,6 +61,21 @@ struct GameData
 	Engine::Math::Fixed baseRegenPerSecond;
 	// A promotion's world animation (LevelGainAnimationName, LevelGainAnimationTime s, LevelGainAnimationZRise a second).
 	std::string levelGainAnimation;
+	// AutoHealBehavior's single burst over each one it heals (GetHealedAnimationName, GetHealedAnimationTime s,
+	// GetHealedAnimationZRise a second).
+	std::string getHealedAnimation;
+	Engine::Math::Fixed getHealedSeconds;
+	Engine::Math::Fixed getHealedRise;
+	// ActiveBody::updateBodyParticleSystems' particle systems put on a damaged body's bones (GlobalData
+	// AutoFireParticle*/AutoSmokeParticle*/AutoAflameParticle*): for each its bone name prefix (bones prefix01, prefix02,
+	// ...), its particle system and how many at most (defaults: none).
+	struct BodyParticleSet
+	{
+		std::string prefix;
+		std::string system;
+		std::int32_t max{0};
+	};
+	BodyParticleSet fireSmall, fireMedium, fireLarge, smokeSmall, smokeMedium, smokeLarge, aflame;
 	// ShellMapName: the map the shell plays behind its menus (GlobalData's default: ShellMap1).
 	std::string shellMapName{"Maps\\ShellMap1\\ShellMap1.map"};
 	bool playIntro{true}; // PlayIntro: the EA logo movie before the shell
@@ -89,6 +104,15 @@ struct GameData
 	Engine::Math::Fixed maxLowEnergyProductionSpeed{Engine::Math::Fixed::FromRatio(4, 5)};
 	// Models take the NIGHT condition (headlights on, night models) when the time of day is night.
 	bool forceModelsToFollowTimeOfDay{true};
+	// Weather (WeatherNames: NORMAL 0, SNOWY 1) and ForceModelsToFollowWeather (GlobalData default Yes): with snowy weather
+	// every model takes its SNOW condition (Object::onDrawableBoundToObject... setDrawable's MODELCONDITION_SNOW).
+	bool snowyWeather{false};
+	// ShowObjectHealth (GlobalData default No): health bars (and pips) over the selected and the moused-over.
+	bool showObjectHealth{false};
+	// StealthFriendlyOpacity (GlobalData default 50%): how see-through a stealthed thing is to its friends when it has no
+	// StealthUpdate of its own to say (Drawable::setStealthLook's STEALTHLOOK_VISIBLE_FRIENDLY).
+	Engine::Math::Fixed stealthFriendlyOpacity{Engine::Math::Fixed::FromRatio(1, 2)};
+	bool forceModelsToFollowWeather{true};
 	// MaxFieldParticleCount (GlobalData default 30): on-screen ground-aligned AREA_EFFECT particles beyond which such
 	// particle systems make no more.
 	std::int32_t maxFieldParticleCount{30};
@@ -98,6 +122,11 @@ struct GameData
 	std::string moveHintName{"SCMoveHint"};
 	// KeyboardCameraRotateSpeed: radians the view turns each client frame a keypad rotate key is held (default 0.1).
 	Engine::Math::Fixed keyboardCameraRotateSpeed{Engine::Math::Fixed::FromRatio(1, 10)};
+	// InGameUI's scrolling: HorizontalScrollSpeedFactor / VerticalScrollSpeedFactor (GlobalData defaults 1) scale the
+	// sideways and the up-down scroll; KeyboardDefaultScrollSpeedFactor (0.5) is the scroll speed when the player chose none.
+	Engine::Math::Fixed horizontalScrollFactor{Engine::Math::Fixed::One()};
+	Engine::Math::Fixed verticalScrollFactor{Engine::Math::Fixed::One()};
+	Engine::Math::Fixed keyboardDefaultScrollFactor{Engine::Math::Fixed::FromRatio(1, 2)};
 	// DownwindAngle (radians, default -0.785: north-east): which way the wind blows (the rally point flag faces it).
 	Engine::Math::Fixed downwindAngle{Engine::Math::Fixed::FromRatio(-785, 1000)};
 	// The control bar's power bar (PowerBarBase, PowerBarIntervals, PowerBarYellowRange): its length is the log to this
@@ -126,6 +155,28 @@ struct GameData
 	std::uint8_t fogAlpha{127};
 	std::uint8_t shroudAlpha{0};
 };
+
+
+// The body particle field a GameData key names (Auto{Fire,Smoke}Particle{Small,Medium,Large}{Prefix,System,Max},
+// AutoAflameParticle{Prefix,System,Max}): its set and which part (0 prefix, 1 system, 2 max); none: {nullptr, 0}.
+inline std::pair<GameData::BodyParticleSet *, int> BodyParticleField(GameData &data, std::string_view key)
+{
+	const std::pair<std::string_view, GameData::BodyParticleSet *> sets[] = {{"AutoFireParticleSmall", &data.fireSmall},
+		{"AutoFireParticleMedium", &data.fireMedium}, {"AutoFireParticleLarge", &data.fireLarge}, {"AutoSmokeParticleSmall", &data.smokeSmall},
+		{"AutoSmokeParticleMedium", &data.smokeMedium}, {"AutoSmokeParticleLarge", &data.smokeLarge}, {"AutoAflameParticle", &data.aflame}};
+	for (const auto &[stem, set] : sets)
+		if (key.starts_with(stem))
+		{
+			const std::string_view part = key.substr(stem.size());
+			if (part == "Prefix")
+				return {set, 0};
+			if (part == "System")
+				return {set, 1};
+			if (part == "Max")
+				return {set, 2};
+		}
+	return {nullptr, 0};
+}
 
 GameData BindGameData(const engine::config::Document &document, engine::config::BindContext &context)
 {
@@ -237,6 +288,19 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 			}
 			else if (key == "LevelGainAnimationName")
 				data.levelGainAnimation = std::string(field.Value());
+			else if (const auto set = BodyParticleField(data, key); set.first != nullptr)
+			{
+				if (set.second == 2)
+					set.first->max = static_cast<std::int32_t>(engine::config::ReadInt(field, context).value_or(set.first->max));
+				else if (!field.values.empty())
+					(set.second == 0 ? set.first->prefix : set.first->system) = std::string(field.Value());
+			}
+			else if (key == "GetHealedAnimationName" && !field.values.empty())
+				data.getHealedAnimation = std::string(field.Value());
+			else if (key == "GetHealedAnimationTime")
+				fixed(data.getHealedSeconds);
+			else if (key == "GetHealedAnimationZRise")
+				fixed(data.getHealedRise);
 			else if (key == "LevelGainAnimationTime")
 				fixed(data.levelGainSeconds);
 			else if (key == "LevelGainAnimationZRise")
@@ -330,6 +394,20 @@ GameData BindGameData(const engine::config::Document &document, engine::config::
 				fixed(data.keyboardCameraRotateSpeed);
 			else if (key == "MoveHintName")
 				data.moveHintName = std::string(field.Value());
+			else if (key == "ShowObjectHealth")
+				data.showObjectHealth = engine::config::ReadBool(field, context).value_or(data.showObjectHealth);
+			else if (key == "StealthFriendlyOpacity")
+				data.stealthFriendlyOpacity = engine::config::ReadPercent(field, context).value_or(data.stealthFriendlyOpacity);
+			else if (key == "Weather" && !field.values.empty())
+				data.snowyWeather = field.Value() == "SNOWY";
+			else if (key == "ForceModelsToFollowWeather")
+				data.forceModelsToFollowWeather = engine::config::ReadBool(field, context).value_or(data.forceModelsToFollowWeather);
+			else if (key == "HorizontalScrollSpeedFactor")
+				fixed(data.horizontalScrollFactor);
+			else if (key == "VerticalScrollSpeedFactor")
+				fixed(data.verticalScrollFactor);
+			else if (key == "KeyboardDefaultScrollSpeedFactor")
+				fixed(data.keyboardDefaultScrollFactor);
 			else if (key == "ForceModelsToFollowTimeOfDay")
 				data.forceModelsToFollowTimeOfDay = engine::config::ReadBool(field, context).value_or(data.forceModelsToFollowTimeOfDay);
 			else if (key == "MaxFieldParticleCount")

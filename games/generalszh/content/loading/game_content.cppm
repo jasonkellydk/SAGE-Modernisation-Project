@@ -141,6 +141,7 @@ inline std::optional<engine::gameplay::MissileFlightDefinition> ReadMissileFligh
 		flight.maxThrustAngle = locomotor->maxThrustAngle;
 		flight.preferredHeight = locomotor->preferredHeight;
 		flight.preferredHeightDamping = locomotor->preferredHeightDamping;
+		flight.closeEnough = locomotor->closeEnough;
 	}
 	if (object.geometry.majorRadius > Engine::Math::Fixed{})
 		flight.radius = object.geometry.majorRadius;
