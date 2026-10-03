@@ -1,0 +1,84 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.session;
+namespace {
+using namespace renegade;using namespace engine::gameplay;using namespace Engine::Math;
+FixedVector3 Point(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+std::shared_ptr<const engine::level::CollisionScene3> Floor(bool wall) {
+	auto scene=std::make_shared<engine::level::CollisionScene3>();
+	scene->AddTriangle(Point(-30,-30,0),Point(30,-30,0),Point(30,30,0),9000,1);
+	scene->AddTriangle(Point(-30,-30,0),Point(30,30,0),Point(-30,30,0),9000,1);
+	if(wall) {scene->AddTriangle(Point(2,-4,0),Point(2,4,0),Point(2,4,6),9001,1);scene->AddTriangle(Point(2,-4,0),Point(2,4,6),Point(2,-4,6),9001,1);}
+	scene->Prepare();return scene;
+}
+struct GotoFixture {
+	Session session;ecs::Entity actor;
+	GotoFixture(unsigned workers,bool wall=false):session(workers,7) {
+		auto& world=session.World();world.Resource<CollisionGeometry>().scene=Floor(wall);
+		engine::level::Level level;
+		for(const auto [id,position]:std::array<std::pair<unsigned,FixedVector3>,3>{{{1,Point(0,0,5)},{2,Point(4,0,5)},{3,Point(4,4,5)}}}) {
+			engine::level::Marker marker;marker.id=id;marker.position=position;level.markers.push_back(marker);
+		}
+		engine::level::NavigationPath path;path.id=77;path.markers={1,2,3};level.navigationPaths.push_back(path);
+		BOOST_REQUIRE(PrepareMissionRoutes(level,world.Resource<RouteCurves>(),world.Resource<MissionRoutes>()));
+		ecs::CommandBuffer commands;const auto entity=commands.Create();Transform pose;pose.position.z=Fixed::FromRatio(1,50);
+		commands.Add<Transform>(entity,pose);commands.Add<AffinePose>(entity);
+		HumanMovement preset;preset.definition.speed=Fixed::FromInt(6);commands.Add<HumanMovement>(entity,preset);
+		commands.Add<HumanState>(entity);commands.Add<HumanControl>(entity);commands.Add<HumanGoto>(entity);commands.Add<RouteTraversal>(entity);commands.Add<RouteSteering>(entity);
+		SweptHull hull;hull.offset.z=Fixed::One();hull.extent={Fixed::FromRatio(1,4),Fixed::FromRatio(1,4),Fixed::One()};hull.categories=1;
+		commands.Add<SweptHull>(entity,hull);commands.Add<SweepContacts>(entity);world.Commit(commands);actor=commands.Resolve(entity);
+		world.Resource<SceneState>().authored_entities.emplace(700,actor);
+		content::PreparedBehaviors prepared;prepared.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+		prepared.library.programs.push_back({"goto_fixture","return {Created=function(self,obj) emit('Action_Goto_Waypath',obj,77,'1','0.5',100,7) end,Custom=function(self,obj,priority,action) emit('Action_Goto_Waypath',obj,77,'1','0.5',priority,action) end,Action_Complete=function(self,obj,action,reason) self[1]=self[1]+1;emit('route_done',obj,action,reason) end}","Created",{std::int64_t{700}}});
+		prepared.bindings.push_back({700,0,0});BOOST_REQUIRE(session.InstallBehaviors(prepared));
+	}
+};
+}
+BOOST_AUTO_TEST_CASE(human_goto_runs_source_linear_spline_controls_collision_and_single_completion) {
+	const auto run=[](unsigned workers) {
+		GotoFixture fixture(workers);auto& world=fixture.session.World();unsigned completed{};bool moved_x{},moved_y{};
+		for(unsigned tick=1;tick<=300;++tick) {
+			fixture.session.Step();const auto* pose=world.Get<Transform>(fixture.actor);
+			moved_x|=pose->position.x>Fixed::FromInt(2);moved_y|=pose->position.y>Fixed::FromInt(2);
+			BOOST_TEST(pose->position.z.Raw()<Fixed::FromRatio(1,10).Raw()); // authored 5m Z cannot teleport a walking human
+			world.Resource<MissionRequests>().ForEach([&](const auto& request) {if(request.command.name=="route_done") {++completed;BOOST_TEST(std::get<std::int64_t>(request.command.arguments[1])==7);BOOST_TEST(std::get<std::int64_t>(request.command.arguments[2])==0);}});
+		}
+		BOOST_TEST(moved_x);BOOST_TEST(moved_y);BOOST_TEST(completed==1u);BOOST_TEST(world.Get<HumanGoto>(fixture.actor)->enabled==0u);
+		BOOST_TEST(Length(world.Get<Transform>(fixture.actor)->position.XY()-FixedVector2{Fixed::FromInt(4),Fixed::FromInt(4)}).Raw()<=Fixed::Half().Raw());
+		return world.StateHash();
+	};BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(human_goto_waits_at_collision_and_resumes_without_skipping_the_source_path) {
+	GotoFixture fixture(4,true);auto& world=fixture.session.World();unsigned completed{};
+	for(unsigned tick=1;tick<=180;++tick) {fixture.session.Step();world.Resource<MissionRequests>().ForEach([&](const auto& request) {if(request.command.name=="route_done") ++completed;});}
+	const auto blocked=world.Get<Transform>(fixture.actor)->position;const auto parameter=world.Get<RouteTraversal>(fixture.actor)->parameter;
+	BOOST_TEST(blocked.x.Raw()<Fixed::FromInt(2).Raw());BOOST_TEST(completed==0u);BOOST_TEST(world.Get<HumanGoto>(fixture.actor)->enabled==1u);
+	for(unsigned tick=181;tick<=200;++tick) fixture.session.Step();
+	BOOST_TEST(world.Get<RouteTraversal>(fixture.actor)->parameter.Raw()==parameter.Raw());
+	world.Resource<CollisionGeometry>().scene=Floor(false);
+	for(unsigned tick=201;tick<=500;++tick) {fixture.session.Step();world.Resource<MissionRequests>().ForEach([&](const auto& request) {if(request.command.name=="route_done") ++completed;});}
+	BOOST_TEST(completed==1u);BOOST_TEST(world.Get<Transform>(fixture.actor)->position.y.Raw()>Fixed::FromInt(3).Raw());
+}
+BOOST_AUTO_TEST_CASE(human_goto_preserves_source_priority_rejection_and_equal_priority_replacement_callbacks) {
+	const auto run=[](unsigned workers) {
+		GotoFixture fixture(workers);auto& world=fixture.session.World();std::vector<std::pair<std::int64_t,std::int64_t>> completions;
+		for(unsigned tick=1;tick<=300;++tick) {
+			if(tick==4 || tick==7) {
+				BehaviorMessage message;message.recipient=fixture.actor;message.event=std::uint32_t(content::MissionEvent::Custom);message.due_tick=tick;
+				message.arguments={700,tick==4 ? 99 : 100,tick==4 ? 8 : 9,0};message.argument_count=3;world.Resource<BehaviorInbox>().messages.push_back(message);
+			}
+			fixture.session.Step();world.Resource<MissionRequests>().ForEach([&](const auto& request) {
+				if(request.command.name=="route_done") completions.emplace_back(std::get<std::int64_t>(request.command.arguments[1]),std::get<std::int64_t>(request.command.arguments[2]));
+			});
+			if(tick==6) BOOST_TEST(world.Get<HumanGoto>(fixture.actor)->action==7u);
+			if(tick==9) BOOST_TEST(world.Get<HumanGoto>(fixture.actor)->action==9u);
+		}
+		// Combat/action.cpp Request_Action: reject lower priority, replace equal
+		// priority, and notify the old observer with LOW_PRIORITY (1).
+		BOOST_REQUIRE_EQUAL(completions.size(),3);
+		BOOST_TEST(completions[0].first==8);BOOST_TEST(completions[0].second==1);
+		BOOST_TEST(completions[1].first==7);BOOST_TEST(completions[1].second==1);
+		BOOST_TEST(completions[2].first==9);BOOST_TEST(completions[2].second==0);
+		return world.StateHash();
+	};BOOST_TEST(run(1)==run(4));
+}

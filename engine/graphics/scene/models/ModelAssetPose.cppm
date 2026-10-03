@@ -2,6 +2,7 @@ export module Graphics.Scene.Models.AssetPose;
 import std;
 export import Graphics.Scene.Models.AnimationBlend;
 import Assets.ModelRig;
+import Assets.Identity;
 import Graphics.Scene.Models.AnimationChannels;
 
 namespace Graphics {
@@ -16,6 +17,25 @@ RenderTransform Compose(const std::array<float,4>& q,const std::array<float,3>& 
 }
 export class ModelAssetPose final {
 public:
+    // Bind an externally loaded W3D clip by pivot index, shared by both game
+    // compositions. Preserve the target hierarchy's additional attachment bones.
+    bool Initialize(const Assets::ModelRigDesc& model,const Assets::ModelAnimationDesc& clip,std::string& error) {
+        return Initialize(model,std::span<const Assets::ModelAnimationDesc>(&clip,1),error);
+    }
+    bool Initialize(const Assets::ModelRigDesc& model,std::span<const Assets::ModelAnimationDesc> clips,std::string& error) {
+        if(model.bones.empty()) {error="model has no skeleton to animate";return false;}
+        Assets::ModelRigDesc rig;rig.skeleton_name=model.skeleton_name;rig.bones=model.bones;
+        for(const auto& clip:clips) {
+        if(Assets::Canonicalize_Asset_Name(clip.skeleton_name)!=Assets::Canonicalize_Asset_Name(model.skeleton_name) &&
+            std::ranges::any_of(clip.channels,[&](const auto& channel) {return channel.bone>=model.bones.size();})) {
+            error="clip is for skeleton "+clip.skeleton_name+", model uses "+model.skeleton_name;return false;
+        }
+        auto bound=clip;bound.skeleton_name=model.skeleton_name;
+        std::erase_if(bound.channels,[&](const auto& channel) {return channel.bone>=rig.bones.size() || channel.component>=Assets::ModelChannelComponent::RotationX;});
+        rig.animations.push_back(std::move(bound));
+        }
+        return Initialize(rig,error);
+    }
     bool Initialize(const Assets::ModelRigDesc& rig,std::string& error) {
         if(!Assets::Validate_Model_Rig(rig,error)) return false;
         if(rig.bones.empty()) { error="pose requires a resolved skeleton"; return false; }
@@ -24,8 +44,10 @@ public:
             bones.push_back({bone.parent,AssetPoseDetail::Compose(bone.rotation,{bone.translation.x,bone.translation.y,bone.translation.z})});
         Skeleton skeleton(bones,{});
         if(!skeleton.Is_Valid()) { error="invalid prepared skeleton"; return false; }
-        m_rig=rig; m_skeleton=std::move(skeleton); m_pose.Initialize(bones.size());
+        m_rig=std::make_shared<const Assets::ModelRigDesc>(rig); m_skeleton=std::move(skeleton); m_pose.Initialize(bones.size());
         m_translation.resize(bones.size()); m_rotation.resize(bones.size()); m_visible.resize(bones.size());
+        m_blend_previous.resize(bones.size());
+        m_layer_previous.resize(bones.size());m_layer_visibility.resize(bones.size());
         return Rest();
     }
     bool Rest() {
@@ -38,9 +60,9 @@ public:
     // Frame numbers let the caller retain manual door states and original
     // playback timing. No source lookup or allocation occurs while sampling.
     bool Evaluate(std::size_t clip_index,float frame,bool loop=false) {
-        if(clip_index>=m_rig.animations.size() || !std::isfinite(frame)) return false;
-        const auto& clip=m_rig.animations[clip_index];
-        if(!clip.channels_available || clip.skeleton_name!=m_rig.skeleton_name) return false;
+        if(!m_rig || clip_index>=m_rig->animations.size() || !std::isfinite(frame)) return false;
+        const auto& clip=m_rig->animations[clip_index];
+        if(!clip.channels_available || clip.skeleton_name!=m_rig->skeleton_name) return false;
         if(loop) { frame=std::fmod(frame,float(clip.frame_count)); if(frame<0) frame+=float(clip.frame_count); }
         else frame=std::clamp(frame,0.f,float(clip.frame_count-1));
         const auto first=static_cast<std::uint32_t>(std::floor(frame));
@@ -78,14 +100,38 @@ public:
         return m_pose.Evaluate(m_skeleton,m_pose.Local_Transforms());
     }
     // A bone by name (case-insensitive), or the bone count when there is none.
+    bool Evaluate_Blended(std::size_t previous,float previous_frame,std::size_t current,float current_frame,float amount,bool previous_loop=false,bool current_loop=false) {
+        if(!std::isfinite(amount) || amount<0 || amount>1 || !Evaluate(previous,previous_frame,previous_loop)) return false;
+        const auto previous_transforms=m_pose.Local_Transforms();std::copy(previous_transforms.begin(),previous_transforms.end(),m_blend_previous.begin());
+        if(!Evaluate(current,current_frame,current_loop)) return false;
+        auto transforms=m_pose.Local_Transforms();
+        for(std::size_t bone=0;bone<transforms.size();++bone) {
+            RenderTransform blended;if(!Blend_Transforms(m_blend_previous[bone],transforms[bone],amount,blended)) return false;transforms[bone]=blended;
+        }
+        return m_pose.Evaluate(m_skeleton,transforms);
+    }
+    // Replace only the independent attachment's local pose. Parent/body
+    // animation and visibility remain intact, including nested attachments.
+    bool Evaluate_Layer(std::size_t clip,float frame,std::size_t first_bone,std::size_t bone_count) {
+        if(!bone_count || first_bone>=Bone_Count() || bone_count>Bone_Count()-first_bone) return false;
+        const auto before=m_pose.Local_Transforms();std::copy(before.begin(),before.end(),m_layer_previous.begin());
+        std::copy(m_visible.begin(),m_visible.end(),m_layer_visibility.begin());
+        if(!Evaluate(clip,frame)) return false;
+        auto locals=m_pose.Local_Transforms();
+        for(std::size_t bone=0;bone<locals.size();++bone) if(bone<first_bone || bone>=first_bone+bone_count) {
+            locals[bone]=m_layer_previous[bone];m_visible[bone]=m_layer_visibility[bone];
+        }
+        return m_pose.Evaluate(m_skeleton,locals);
+    }
     std::size_t Bone_Index(std::string_view name) const {
+        if(!m_rig) return 0;
         const auto lower=[](char c){ return c>='A'&&c<='Z' ? static_cast<char>(c-'A'+'a') : c; };
-        for(std::size_t bone=0;bone<m_rig.bones.size();++bone) {
-            const std::string& candidate=m_rig.bones[bone].name;
+        for(std::size_t bone=0;bone<m_rig->bones.size();++bone) {
+            const std::string& candidate=m_rig->bones[bone].name;
             if(candidate.size()==name.size() && std::equal(candidate.begin(),candidate.end(),name.begin(),[&](char x,char y){ return lower(x)==lower(y); }))
                 return bone;
         }
-        return m_rig.bones.size();
+        return m_rig->bones.size();
     }
     // This pose as `base` (same skeleton; null: at rest) with some bones
     // turned further in their own frames (a wheel rolling, a cab steering):
@@ -117,14 +163,18 @@ public:
         output=m_pose.World_Transforms()[bone];return true;
     }
     bool Visible(std::size_t bone) const { return bone<m_visible.size() && m_visible[bone]!=0; }
-    std::string_view Skeleton_Name() const { return m_rig.skeleton_name; }
+    std::string_view Skeleton_Name() const { return m_rig ? std::string_view(m_rig->skeleton_name) : std::string_view{}; }
     std::size_t Bone_Count() const { return m_skeleton.Bone_Count(); }
+    std::span<const Assets::ModelAnimationDesc> Animations() const {return m_rig ? std::span<const Assets::ModelAnimationDesc>(m_rig->animations) : std::span<const Assets::ModelAnimationDesc>{};}
 private:
-    Assets::ModelRigDesc m_rig;
+    std::shared_ptr<const Assets::ModelRigDesc> m_rig;
     Skeleton m_skeleton;
     Pose m_pose;
     std::vector<std::array<float,3>> m_translation;
     std::vector<RenderTransform> m_rotation;
+    std::vector<RenderTransform> m_blend_previous;
+    std::vector<RenderTransform> m_layer_previous;
+    std::vector<unsigned char> m_layer_visibility;
     std::vector<unsigned char> m_visible;
 };
 }

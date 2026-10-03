@@ -4,9 +4,13 @@ import Assets.Adapters.W3D.Chunks;
 
 export namespace renegade::content
 {
-struct Translation { std::string descriptor; std::vector<std::u16string> languages; std::uint32_t sound{0xffffffff}; };
+struct Translation { std::string descriptor; std::vector<std::u16string> languages; std::uint32_t sound{0xffffffff};std::string animation,english; };
 struct StringCatalog {
     std::map<std::uint32_t,Translation> entries;
+    std::u16string Lookup(std::uint32_t id,std::size_t language=0) const {
+        const auto found=entries.find(id);if(found==entries.end() || found->second.languages.empty()) return {};
+        const auto& languages=found->second.languages;return languages[language<languages.size() ? language : 0];
+    }
     std::u16string Lookup(std::string_view descriptor,std::size_t language=0) const {
         for(const auto& [id,entry]:entries) if(entry.descriptor==descriptor && !entry.languages.empty())
             return entry.languages[language<entry.languages.size() ? language : 0];
@@ -38,7 +42,10 @@ std::expected<StringCatalog,std::string> ReadStrings(std::span<const std::byte> 
                             if(variable==1 && !W3DRead_U32(data,0,id)) return false;
                             if(variable==5 && !W3DRead_U32(data,0,entry.sound)) return false;
                             if(variable==2) entry.descriptor=W3DRead_String(data);
+                            if(variable==6) entry.animation=W3DRead_String(data);
                         }
+                    } else if(field.id==0x0614110a) {
+                        entry.english=W3DRead_String(field.payload);
                     } else if(field.id==0x0614110b) {
                         if(field.payload.size()%2) return false;
                         std::u16string text;

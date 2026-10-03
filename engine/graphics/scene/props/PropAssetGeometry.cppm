@@ -44,7 +44,7 @@ export bool Build_Prop_Asset_Geometry(const Assets::ModelAsset& model,
                 vertex.tangent={source.tangent.x,source.tangent.y,source.tangent.z,source.tangent_sign};
                 vertex.uv={source.texcoord.x,source.texcoord.y};
                 vertex.color={source.color.r,source.color.g,source.color.b,source.color.a};
-                vertex.material_ambient={material.ambient_color.r,material.ambient_color.g,material.ambient_color.b,1};
+                vertex.material_ambient={material.ambient_color.r,material.ambient_color.g,material.ambient_color.b,submesh.lighting_enabled ? 1.f : 0.f};
                 vertex.material_diffuse={material.base_color.r,material.base_color.g,material.base_color.b,material.opacity};
                 vertex.material_specular={material.specular_color.r,material.specular_color.g,material.specular_color.b,material.shininess};
                 vertex.material_emissive={material.emissive_color.r,material.emissive_color.g,material.emissive_color.b,0};

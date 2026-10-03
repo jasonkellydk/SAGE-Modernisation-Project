@@ -38,6 +38,18 @@ export struct CameraOrientedBox final
 		0.0f, 0.0f, 1.0f};
 };
 
+// Conservative world AABB for an affine-transformed local bound. Negative
+// and nonuniform scale are supported; no asset or game schema is involved.
+export CameraAxisAlignedBox Transform_Camera_Box(const CameraAxisAlignedBox& local,const RenderTransform& world) noexcept {
+    CameraAxisAlignedBox result;const auto& m=world.matrix;
+    result.center={m[0]*local.center.x+m[1]*local.center.y+m[2]*local.center.z+m[3],
+        m[4]*local.center.x+m[5]*local.center.y+m[6]*local.center.z+m[7],m[8]*local.center.x+m[9]*local.center.y+m[10]*local.center.z+m[11]};
+    result.extent={std::abs(m[0])*local.extent.x+std::abs(m[1])*local.extent.y+std::abs(m[2])*local.extent.z,
+        std::abs(m[4])*local.extent.x+std::abs(m[5])*local.extent.y+std::abs(m[6])*local.extent.z,
+        std::abs(m[8])*local.extent.x+std::abs(m[9])*local.extent.y+std::abs(m[10])*local.extent.z};
+    return result;
+}
+
 export struct CameraFrustum final
 {
 	// Plane 0: near, 1: bottom, 2: right, 3: top, 4: left, 5: far.

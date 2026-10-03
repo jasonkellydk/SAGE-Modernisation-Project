@@ -45,7 +45,19 @@ inline std::vector<std::byte> Box_Filter_Level(std::span<const std::byte> pixels
 	return next;
 }
 
-inline RHITextureHandle Create_Mipped_Texture(Device &device, std::uint32_t width, std::uint32_t height, std::span<const std::byte> pixels,
+struct PreparedMipLevel
+{
+	std::uint32_t width{}, height{};
+	std::vector<std::byte> pixels;
+};
+struct PreparedMipChain
+{
+	std::vector<PreparedMipLevel> levels;
+};
+
+// CPU preparation is independent of the device and may run on a loader worker.
+// Publication and GPU calls remain on the render thread.
+inline PreparedMipChain Prepare_Mip_Chain(std::uint32_t width, std::uint32_t height, std::span<const std::byte> pixels,
 	std::uint32_t rowPitch, std::uint32_t levels = 0, std::uint32_t reduction = 0, std::uint32_t minimum_dimension = 1)
 {
 	if (width == 0 || height == 0 || width > (std::numeric_limits<std::uint32_t>::max)()/4 ||
@@ -66,24 +78,47 @@ inline RHITextureHandle Create_Mipped_Texture(Device &device, std::uint32_t widt
 		std::uint32_t nw{},nh{};
 		level=Box_Filter_Level(level,w,h,nw,nh);w=nw;h=nh;--levels;
 	}
-	RHITexture description{w, h, levels, RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
-	const RHITextureHandle texture = device.Create_Texture(description);
-	if (!texture.Is_Valid()) return {};
+	PreparedMipChain chain;
 	for (std::uint32_t mip = 0; mip < levels; ++mip)
 	{
-		if (!device.Update_Texture(texture, {std::span<const std::byte>(level), w * 4, w * h * 4, mip, 0}))
-		{
-			device.Destroy_Texture(texture);
-			return {};
-		}
+		chain.levels.push_back({w, h, std::move(level)});
 		if (mip + 1 < levels)
 		{
 			std::uint32_t nw = 0, nh = 0;
-			level = Box_Filter_Level(level, w, h, nw, nh);
+			level = Box_Filter_Level(chain.levels.back().pixels, w, h, nw, nh);
 			w = nw;
 			h = nh;
 		}
 	}
+	return chain;
+}
+
+inline RHITextureHandle Upload_Mip_Chain(Device &device, const PreparedMipChain &chain)
+{
+	if (chain.levels.empty() || chain.levels.size() > 15) return {};
+	const auto &base = chain.levels.front();
+	if (!base.width || !base.height || base.width > (std::numeric_limits<std::uint32_t>::max)() / 4) return {};
+	std::uint32_t w = base.width, h = base.height;
+	for (const auto &level : chain.levels) {
+		if (level.width != w || level.height != h || level.pixels.size() != static_cast<std::uint64_t>(w) * h * 4) return {};
+		w = std::max(w / 2, 1u); h = std::max(h / 2, 1u);
+	}
+	const RHITexture texture_description{base.width, base.height, static_cast<std::uint32_t>(chain.levels.size()),
+		RHITextureFormat::RGBA8_UNorm, static_cast<std::uint32_t>(RHITextureUsage::ShaderResource)};
+	const auto texture = device.Create_Texture(texture_description);
+	if (!texture.Is_Valid()) return {};
+	for (std::uint32_t mip = 0; mip < chain.levels.size(); ++mip) {
+		const auto &level = chain.levels[mip];
+		if (!device.Update_Texture(texture, {level.pixels, level.width * 4, level.width * level.height * 4, mip, 0})) {
+			device.Destroy_Texture(texture); return {};
+		}
+	}
 	return texture;
+}
+
+inline RHITextureHandle Create_Mipped_Texture(Device &device, std::uint32_t width, std::uint32_t height, std::span<const std::byte> pixels,
+	std::uint32_t rowPitch, std::uint32_t levels = 0, std::uint32_t reduction = 0, std::uint32_t minimum_dimension = 1)
+{
+	return Upload_Mip_Chain(device, Prepare_Mip_Chain(width, height, pixels, rowPitch, levels, reduction, minimum_dimension));
 }
 }

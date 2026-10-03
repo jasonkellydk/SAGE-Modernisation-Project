@@ -246,26 +246,7 @@ inline bool PrepareAnimation(const Assets::ModelAsset &asset, const Assets::Mode
 		error = "no such clip";
 		return false;
 	}
-	// W3D plays a clip onto a hierarchy by pivot index (HRawAnimClass channels), so a clip made for another
-	// skeleton plays too when that skeleton has every pivot it moves (a damaged model's own hierarchy under a
-	// pristine model's clip, as the combat bike's turns).
-	if (Assets::Canonicalize_Asset_Name(clip->skeleton_name) != Assets::Canonicalize_Asset_Name(modelRig.skeleton_name) &&
-		std::any_of(clip->channels.begin(), clip->channels.end(), [&](const Assets::ModelAnimationChannel &channel) { return channel.bone >= modelRig.bones.size(); }))
-	{
-		error = "clip is for skeleton " + clip->skeleton_name + ", model uses " + modelRig.skeleton_name;
-		return false;
-	}
-	Assets::ModelRigDesc rig;
-	rig.skeleton_name = modelRig.skeleton_name;
-	rig.bones = modelRig.bones;
-	Assets::ModelAnimationDesc bound = *clip;
-	bound.skeleton_name = modelRig.skeleton_name;
-	// Keep the channels this skeleton has; the pose samples translation, quaternion rotation and visibility channels.
-	std::erase_if(bound.channels, [&](const Assets::ModelAnimationChannel &channel) {
-		return channel.bone >= rig.bones.size() || channel.component >= Assets::ModelChannelComponent::RotationX;
-	});
-	rig.animations.push_back(std::move(bound));
-	if (!result.pose.Initialize(rig, error))
+	if (!result.pose.Initialize(modelRig, *clip, error))
 		return false;
 	result.mode = request.mode;
 	result.repeat = request.repeat;

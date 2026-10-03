@@ -1,0 +1,60 @@
+#define BOOST_TEST_MODULE KinematicCollision
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.physics.systems.kinematic_collision_system;
+namespace {
+using namespace Engine::Math;using namespace engine::gameplay;
+FixedVector3 P(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{7}};ecs::SystemRegistry registry;ClipPlaybackSystem playback;ClipRequestSystem requests;KinematicCollisionSystem collision;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> subjects;
+    Fixture(unsigned workers,unsigned count) {
+        world.RegisterComponent<AffinePose>();world.RegisterComponent<KinematicCollider>();world.RegisterComponent<ClipPlayback>();world.FinalizeComponents();
+        world.EmplaceResource<ClipRequests>();world.EmplaceResource<KinematicCollisionLibrary>();world.EmplaceResource<KinematicCollisionOutputs>();world.EmplaceResource<CollisionGeometry>();
+        auto& library=world.Resource<KinematicCollisionLibrary>();
+        auto base=std::make_shared<engine::level::CollisionScene3>();base->AddTriangle(P(-4,-4,-10),P(4,-4,-10),P(0,4,-10),9999,1);base->Prepare();library.static_scene=base;
+        engine::level::ModelCollision3 closed;closed.first={P(0,-2,-2)};closed.second={P(0,2,-2)};closed.third={P(0,0,2)};closed.categories={3};closed.surfaces={7};
+        auto open=closed;for(auto* column:{&open.first,&open.second,&open.third}) for(auto& point:*column) point.y+=Fixed::FromInt(8);
+        library.models.push_back({closed,{{{closed,open}}}});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {
+            const auto entity=commands.Create();pending.push_back(entity);AffinePose pose;pose.transform.elements[7]=Fixed::FromInt(i*20);
+            commands.Add<AffinePose>(entity,pose);commands.Add<KinematicCollider>(entity,KinematicCollider{i+1,0});
+            ClipPlayback clip;clip.clip=1;clip.frame_count=2;clip.frames_per_second=Fixed::FromInt(30);commands.Add<ClipPlayback>(entity,clip);
+        }world.Commit(commands);for(auto entity:pending) subjects.push_back(commands.Resolve(entity));
+        registry.Register(playback);registry.Register(requests);registry.Register(collision);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(animation_requests_and_completed_collision_follow_hold_partial_open_close_disable_and_destroy) {
+    Fixture fixture(4,1);fixture.Step(1);auto& world=fixture.world;
+    const auto blocks=[&] {return world.Resource<CollisionGeometry>().scene->Cast({P(-2,0,0),{}},P(4,0,0),1);};
+    const auto closed=blocks();BOOST_REQUIRE(closed);BOOST_TEST(closed->subject==1u);BOOST_TEST(closed->fraction.Raw()==Fixed::Half().Raw());
+    auto open=*world.Get<ClipPlayback>(fixture.subjects[0]);open.mode=ClipMode::Target;open.target=Fixed::One();
+    auto hold=open;hold.mode=ClipMode::Hold;
+    auto& queue=world.Resource<ClipRequests>();queue.Reset(2);queue.SlotAt(0).push_back({fixture.subjects[0],hold,20});queue.SlotAt(1).push_back({fixture.subjects[0],open,30});
+    fixture.Step(2);queue.Reset(0);BOOST_CHECK(blocks());fixture.Step(3);BOOST_TEST(!blocks());
+    BOOST_TEST(world.Get<ClipPlayback>(fixture.subjects[0])->frame.Raw()==Fixed::Half().Raw());fixture.Step(4);BOOST_TEST(world.Get<ClipPlayback>(fixture.subjects[0])->frame.Raw()==Fixed::One().Raw());
+    world.Get<ClipPlayback>(fixture.subjects[0])->target={};fixture.Step(5);BOOST_TEST(!blocks());fixture.Step(6);BOOST_REQUIRE(blocks());
+    world.Get<KinematicCollider>(fixture.subjects[0])->enabled=0;fixture.Step(7);BOOST_TEST(!blocks());
+    world.Get<KinematicCollider>(fixture.subjects[0])->enabled=1;ecs::CommandBuffer remove;remove.Destroy(fixture.subjects[0]);world.Commit(remove);fixture.Step(8);BOOST_TEST(!blocks());
+    BOOST_TEST(world.Resource<CollisionGeometry>().scene->TriangleCount()==1u);BOOST_TEST(world.Resource<KinematicCollisionLibrary>().static_scene->TriangleCount()==1u);
+}
+BOOST_AUTO_TEST_CASE(kinematic_collision_parallel_chunks_publish_identical_hits_and_state) {
+    Fixture serial(1,513),parallel(4,513);
+    for(unsigned i=0;i<513;++i) {
+        serial.world.Get<ClipPlayback>(serial.subjects[i])->mode=ClipMode::Target;parallel.world.Get<ClipPlayback>(parallel.subjects[i])->mode=ClipMode::Target;
+        serial.world.Get<ClipPlayback>(serial.subjects[i])->target=Fixed::One();parallel.world.Get<ClipPlayback>(parallel.subjects[i])->target=Fixed::One();
+    }
+    for(unsigned tick=1;tick<=4;++tick) {
+        serial.Step(tick);parallel.Step(tick);BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+        const auto& a=serial.world.Resource<CollisionGeometry>().scene;const auto& b=parallel.world.Resource<CollisionGeometry>().scene;BOOST_TEST(a->TriangleCount()==b->TriangleCount());
+        for(unsigned i=0;i<513;++i) {
+            const auto first=a->Cast({P(-2,i*20+8,0),{}},P(4,0,0),3),second=b->Cast({P(-2,i*20+8,0),{}},P(4,0,0),3);
+            BOOST_TEST(first.has_value()==second.has_value());if(first) {BOOST_TEST(first->subject==i+1);BOOST_TEST(first->subject==second->subject);BOOST_TEST(first->fraction.Raw()==second->fraction.Raw());BOOST_TEST(first->triangle==second->triangle);}
+        }
+    }
+}

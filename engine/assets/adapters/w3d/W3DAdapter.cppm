@@ -5,6 +5,8 @@ import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;
 import Assets.Adapters.W3D.Rig;
+import Assets.Adapters.W3D.ResolvedModel;
+import Assets.Adapters.W3D.Box;
 import Assets.Identity;
 import Assets.Importers.Models;
 import Assets.Models;
@@ -16,6 +18,7 @@ namespace W3DAdapterDetail
 
 std::string Extension(std::string_view name)
 {
+	if (const auto selector = name.find("::"); selector != std::string_view::npos) name = name.substr(0, selector);
 	const std::size_t separator = name.find_last_of('/');
 	const std::size_t dot = name.find_last_of('.');
 	if (dot == std::string_view::npos || (separator != std::string_view::npos && dot < separator))
@@ -94,18 +97,41 @@ public:
 		auto description = std::make_unique<ModelAssetDesc>();
 		description->source_name = identity.canonical_name;
 		description->source_format = "W3D";
+		// An explicit render-object selector addresses one exported mesh inside
+		// a container without importing unrelated scene meshes. Ordinary file
+		// requests retain their full model/hierarchy behavior.
+		const auto marker = identity.canonical_name.find("::");
+		const std::string selector = marker == std::string::npos ? std::string{} : identity.canonical_name.substr(marker + 2);
+		if (marker != std::string::npos && selector.empty()) return {nullptr, "empty W3D render-object selector"};
 		bool found_mesh = false;
 		std::string error;
-		if (!W3D::W3DRead_Model_Rig(source, description->rig, error))
+		if (selector.empty() && !W3D::W3DRead_Model_Rig(source, description->rig, error))
 			return {nullptr, std::move(error)};
-		if (!W3D::W3DVisit_Chunks(source, [&description, &found_mesh, &error](const W3D::W3DChunkView &chunk) {
+		if (!W3D::W3DVisit_Chunks(source, [&description, &found_mesh, &error, &selector](const W3D::W3DChunkView &chunk) {
 			if (chunk.id == W3D::W3DChunkMesh) {
+				if (!selector.empty()) {
+					W3D::W3DMeshHeader header; bool decoded = false;
+					if (!W3D::W3DVisit_Chunks(chunk.payload, [&](const W3D::W3DChunkView &child) {
+						if (child.id == W3D::W3DChunkMeshHeader3) decoded = W3D::W3DRead_Mesh_Header(child.payload, header);
+						return true;
+					}) || !decoded) { error = "invalid W3D selected mesh header"; return false; }
+					const auto full_name = header.container_name.empty() ? header.name : header.container_name + "." + header.name;
+					if (Canonicalize_Asset_Name(full_name) != selector) return true;
+					if (found_mesh) { error = "ambiguous W3D render-object selector"; return false; }
+				}
 				W3D::W3DParsedMesh mesh;
 				if (!chunk.contains_children || !W3D::W3DParse_Mesh(chunk.payload, mesh, error))
 					return false;
+				if (!selector.empty() && (!mesh.bone_indices.empty() || !mesh.skin_indices.empty())) {
+					error = "selected skinned mesh requires an explicit hierarchy binding"; return false;
+				}
 				W3D::W3DAppend_Mesh(*description, mesh);
 				found_mesh = true;
-			} else if (chunk.id == W3D::W3DChunkHierarchy || chunk.id == W3D::W3DChunkAnimation) {
+			} else if(selector.empty() && chunk.id==W3D::W3DChunkBox) {
+				W3D::W3DBoxDescription box;if(!W3D::W3DRead_Box(chunk.payload,box,error)) return false;
+				description->collision.boxes.push_back({box.name,box.center,box.extent,
+					(box.attributes>>W3D::W3DBoxAttributeCollisionTypeShift)&0xffu,box.Is_Aligned()});
+			} else if (selector.empty() && (chunk.id == W3D::W3DChunkHierarchy || chunk.id == W3D::W3DChunkAnimation)) {
 				W3DAdapterDetail::Read_Top_Level_Dependency(chunk, *description);
 			}
 			return true;
@@ -113,7 +139,7 @@ public:
 			return {nullptr, error.empty() ? "W3D top-level chunk traversal failed" : std::move(error)};
 
 		if (!found_mesh || description->vertices.empty() || description->indices.empty())
-			return {nullptr, "W3D source contains no static mesh"};
+			return {nullptr, selector.empty() ? "W3D source contains no static mesh" : "W3D render-object selector not found"};
 		if (description->name.empty())
 			description->name = identity.canonical_name;
 		if (!description->bounds.Is_Valid())
@@ -125,6 +151,17 @@ public:
 	// file's clips, as the original catalog published them on demand.
 	bool Import_Rig(const AssetIdentity &identity, std::span<const std::byte> source, ModelRigDesc &result,
 		std::string &error) const override;
+	ModelImportResult Import_With_Source(const AssetIdentity &identity, std::span<const std::byte> bytes, const AssetSource &source) const override
+	{
+		// Explicit mesh requests retain their bounded single-export contract.
+		if (identity.canonical_name.find("::") != std::string::npos) return Import(identity, bytes);
+		bool aggregate{}, mesh{};
+		if (!W3D::W3DVisit_Chunks(bytes, [&](const auto &chunk) {
+			aggregate |= chunk.id == 0x600; mesh |= chunk.id == W3D::W3DChunkMesh; return true;
+		})) return {nullptr, "malformed W3D composition source"};
+		if (aggregate || !mesh) return W3D::W3DResolve_Model(identity, bytes, source);
+		return Import(identity, bytes);
+	}
 };
 
 bool W3DAdapter::Import_Rig(const AssetIdentity &, std::span<const std::byte> source, ModelRigDesc &result,

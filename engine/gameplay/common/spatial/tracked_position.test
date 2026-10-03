@@ -1,0 +1,21 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.spatial.systems.tracked_position_system;
+using namespace engine::gameplay;using namespace Engine::Math;
+BOOST_AUTO_TEST_CASE(tracked_position_follows_motion_and_stale_generation_uses_configured_fallback) {
+    const auto run=[](unsigned workers) {
+        ecs::World world(ecs::WorldConfig{7});world.RegisterComponent<Transform>();world.RegisterComponent<TrackedPosition>();world.FinalizeComponents();
+        TrackedPositionSystem system;ecs::SystemRegistry registry;registry.Register(system);registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;const auto target=commands.Create();commands.Add<Transform>(target,Transform{{Fixed::FromInt(10),Fixed{},Fixed{}}});world.Commit(commands);const auto actor=commands.Resolve(target);
+        ecs::CommandBuffer markers;for(unsigned i=0;i<513;++i) {const auto e=markers.Create();markers.Add<TrackedPosition>(e,TrackedPosition{actor,{Fixed::FromInt(i),Fixed{},Fixed{}},{}});}world.Commit(markers);
+        scheduler.Execute(engine::time::SimulationTime{1,engine::time::FixedStep{60}});ecs::Query<ecs::Read<TrackedPosition>> query(world);
+        query.ForEachChunk([&](auto chunk) {for(const auto& marker:chunk.template Get<TrackedPosition>()) BOOST_TEST(marker.resolved.x.Raw()==Fixed::FromInt(10).Raw());});
+        world.Get<Transform>(actor)->position.z=Fixed::FromInt(5);scheduler.Execute(engine::time::SimulationTime{2,engine::time::FixedStep{60}});
+        query.ForEachChunk([&](auto chunk) {for(const auto& marker:chunk.template Get<TrackedPosition>()) BOOST_TEST(marker.resolved.z.Raw()==Fixed::FromInt(5).Raw());});
+        ecs::CommandBuffer removal;removal.Destroy(actor);world.Commit(removal);ecs::CommandBuffer spawn;const auto replacement=spawn.Create();spawn.Add<Transform>(replacement,Transform{{Fixed::FromInt(999),Fixed{},Fixed{}}});world.Commit(spawn);
+        scheduler.Execute(engine::time::SimulationTime{3,engine::time::FixedStep{60}});
+        query.ForEachChunk([&](auto chunk) {for(const auto& marker:chunk.template Get<TrackedPosition>()) BOOST_CHECK(marker.resolved==marker.point);});return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}

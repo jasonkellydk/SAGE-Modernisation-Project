@@ -264,6 +264,12 @@ public:
 			if (!instance.streamed && !instance.positional && instance.voice != 0)
 				m_mixer.Pause(instance.voice, paused);
 	}
+	// Scope suspension to this owner's voices. Scene and menu owners can
+	// share a mixer without pausing each other's sounds or losing cursors.
+	void PauseAll(bool paused) {
+		m_paused=paused;
+		for(const auto& [handle,instance]:m_instances) if(instance.voice) m_mixer.Pause(instance.voice,paused);
+	}
 
 	bool Playing(SoundHandle handle) const { return m_instances.contains(handle); }
 	std::size_t PlayingCount() const noexcept { return m_instances.size(); }
@@ -445,6 +451,7 @@ private:
 				sound.delayMaxMs == 0 && (sound.control & sound_control::All) == 0;
 		}
 		instance.voice = m_mixer.Play(std::move(start));
+		if(m_paused) m_mixer.Pause(instance.voice,true);
 		m_voiceOwner[instance.voice] = handle;
 		return true;
 	}
@@ -487,6 +494,7 @@ private:
 	CullSettings m_cull;
 	Vec3 m_listener;
 	bool m_listenerPlaced{false};
+	bool m_paused{};
 	std::mt19937_64 m_random;
 	SoundHandle m_nextHandle{0};
 	std::unordered_map<SoundHandle, Instance> m_instances;

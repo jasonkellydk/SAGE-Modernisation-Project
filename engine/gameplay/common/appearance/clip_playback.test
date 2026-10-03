@@ -1,0 +1,42 @@
+#define BOOST_TEST_MODULE ClipPlayback
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.appearance.systems.clip_playback_system;
+namespace {
+struct Clips {
+    ecs::World world{ecs::WorldConfig{64}};engine::gameplay::ClipPlaybackSystem system;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    explicit Clips(unsigned workers,unsigned count) {
+        world.RegisterComponent<engine::gameplay::ClipPlayback>();world.FinalizeComponents();registry.Register(system);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {
+            auto entity=commands.Create();pending.push_back(entity);engine::gameplay::ClipPlayback clip;
+            clip.clip=i+1;clip.frame_count=3;clip.frames_per_second=Engine::Math::Fixed::FromInt(30);clip.mode=static_cast<engine::gameplay::ClipMode>(i%4);clip.loop_period=Engine::Math::Fixed::FromInt(2);clip.target=Engine::Math::Fixed::One();
+            commands.Add<engine::gameplay::ClipPlayback>(entity,clip);
+        }
+        world.Commit(commands);for(auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(clip_playheads_hold_complete_wrap_authored_period_and_reach_target) {
+    Clips fixture(4,4);for(unsigned tick=1;tick<=5;++tick) fixture.Step(tick);
+    const auto frame=[&](unsigned index) {return fixture.world.Get<engine::gameplay::ClipPlayback>(fixture.entities[index])->frame.Raw();};
+    BOOST_TEST(frame(0)==0);BOOST_TEST(frame(1)==Engine::Math::Fixed::FromInt(2).Raw());BOOST_TEST(frame(2)==Engine::Math::Fixed::Half().Raw());BOOST_TEST(frame(3)==Engine::Math::Fixed::One().Raw());
+    auto* target=fixture.world.Get<engine::gameplay::ClipPlayback>(fixture.entities[3]);target->target={};fixture.Step(6);BOOST_TEST(target->frame.Raw()==Engine::Math::Fixed::Half().Raw());fixture.Step(7);BOOST_TEST(target->frame.Raw()==0);
+}
+
+BOOST_AUTO_TEST_CASE(once_completion_requires_a_nonempty_once_clip_and_its_inclusive_last_frame) {
+    using namespace engine::gameplay;using Engine::Math::Fixed;
+    ClipPlayback clip;BOOST_TEST(!OnceClipComplete(clip));clip.mode=ClipMode::Once;BOOST_TEST(!OnceClipComplete(clip));
+    clip.frame_count=11;clip.frame=Fixed::FromInt(10)-Fixed::FromRaw(1);BOOST_TEST(!OnceClipComplete(clip));
+    clip.frame=Fixed::FromInt(10);BOOST_TEST(OnceClipComplete(clip));
+    for(const auto mode:{ClipMode::Loop,ClipMode::Target,ClipMode::Hold}) {clip.mode=mode;BOOST_TEST(!OnceClipComplete(clip));}
+    clip.mode=ClipMode::Once;clip.frame_count=1;clip.frame={};BOOST_TEST(OnceClipComplete(clip));
+}
+BOOST_AUTO_TEST_CASE(clip_playback_parallel_chunks_have_identical_checkpoint_state) {
+    Clips serial(1,513),parallel(4,513);for(unsigned tick=1;tick<=120;++tick) {serial.Step(tick);parallel.Step(tick);}
+    BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+}

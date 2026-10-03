@@ -32,16 +32,20 @@ std::vector<std::byte> Fixture() {
     std::vector<std::byte> fields{std::byte{1},std::byte{4}};Put(fields,1000);
     const std::string descriptor="IDS_MENU_TEXT073";Put(fields,2,1);Put(fields,std::uint32_t(descriptor.size()+1),1);
     for(auto c:descriptor) Put(fields,c,1);Put(fields,0,1);
+    const std::string animation="FACE.TALK";Put(fields,6,1);Put(fields,std::uint32_t(animation.size()+1),1);for(auto c:animation) Put(fields,c,1);Put(fields,0,1);
     auto object=Chunk(0x06141108,fields);Append(object,Chunk(0x0614110b,Text(u"Single Player")));
+    std::vector<std::byte> english;for(const auto c:std::string("Original English phrase")) Put(english,c,1);Put(english,0,1);Append(object,Chunk(0x0614110a,english));
     Append(object,Chunk(0x0614110b,Text(u"Joueur unique")));
     return Chunk(0x90000,Chunk(0x07141201,Chunk(0x90001,Chunk(0x00100101,object,true),true),true),true);
 }
 }
 BOOST_AUTO_TEST_CASE(source_translation_format_preserves_descriptors_and_falls_back_to_english) {
     const auto bytes=Fixture();const auto result=renegade::content::ReadStrings(bytes);BOOST_REQUIRE(result);
+    BOOST_TEST(result->entries.at(1000).animation=="FACE.TALK");BOOST_TEST(result->entries.at(1000).english=="Original English phrase");
     BOOST_CHECK(result->Lookup("IDS_MENU_TEXT073")==u"Single Player");
     BOOST_CHECK(result->Lookup("IDS_MENU_TEXT073",1)==u"Joueur unique");
     BOOST_CHECK(result->Lookup("IDS_MENU_TEXT073",7)==u"Single Player");BOOST_CHECK(result->Lookup("missing").empty());
+    BOOST_CHECK(result->Lookup(1000u)==u"Single Player");BOOST_CHECK(result->Lookup(1000u,1)==u"Joueur unique");BOOST_CHECK(result->Lookup(1000u,7)==u"Single Player");BOOST_CHECK(result->Lookup(999u).empty());
     for(std::size_t count=0;count<bytes.size();++count) BOOST_CHECK(!renegade::content::ReadStrings(std::span(bytes).first(count)));
 }
 BOOST_AUTO_TEST_CASE(retail_menu_models_rigs_materials_dialog_and_labels) {

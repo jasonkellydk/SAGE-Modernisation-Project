@@ -3,7 +3,7 @@ import std;
 import engine.gui.mvvm.observable;
 export import engine.gui.w3d.value_controls;
 import engine.gui.w3d.navigation;
-import engine.config.adapters.ini.section_reader;
+export import games.renegade.content.audio.audio_settings;
 
 export namespace renegade::presentation {
 enum class AudioCategory : unsigned { Effects,Music,Dialog,Cinematic,Count };
@@ -25,23 +25,7 @@ public:
     }
     unsigned Resource() const { constexpr std::array resources{231u,233u,232u};return resources.at(selected_tab.Get()); }
 };
-// WWAudio.cpp Load_Default_Volume, with game-specific keys and defaults.
-std::expected<AudioVolumes,std::string> ReadAudioDefaults(std::string text) {
-    AudioVolumes volumes{43,31,50,100};
-    if(text.empty()) return volumes;
-    const auto document=engine::config::ini::ReadSections("WWAudio.ini",std::move(text));
-    if(!document) return std::unexpected(document.error());
-    const auto* section=engine::config::ini::FindSection(*document,"Default Volume");
-    if(!section) return volumes;
-    constexpr std::array keys{"sound_volume","music_volume","dialog_volume","cinematic_volume"};
-    for(unsigned i=0;i<keys.size();++i) if(const auto* node=section->Find(keys[i])) {
-        int value{};const auto parsed=std::from_chars(node->text.data(),node->text.data()+node->text.size(),value);
-        if(parsed.ec!=std::errc{} || parsed.ptr!=node->text.data()+node->text.size())
-            return std::unexpected("invalid default audio volume: "+std::string(keys[i]));
-        volumes[i]=std::clamp(value,0,100);
-    }
-    return volumes;
-}
+using content::ReadAudioDefaults;
 class AudioSettings final {
 public:
     using Changed=std::function<void(AudioCategory,int,bool)>;

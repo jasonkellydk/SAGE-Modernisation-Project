@@ -64,6 +64,10 @@ BOOST_AUTO_TEST_CASE(sdl3_platform_event_queue_roundtrips_keys_pointer_and_modif
     BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));BOOST_TEST(output.clicks==2u);
     input.type=engine::platform::EventType::mouse_button_up;BOOST_REQUIRE(platform.events().post(input));
     BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));BOOST_TEST(output.clicks==2u);
+    for(const auto type:{engine::platform::EventType::focus_lost,engine::platform::EventType::focus_gained}) {
+        input.type=type;BOOST_REQUIRE(platform.events().post(input));
+        BOOST_REQUIRE(Receive(platform.events(),output,type,input.window));BOOST_CHECK(output.type==type);BOOST_TEST(output.window==input.window);
+    }
     input.type=engine::platform::EventType::window_resized;BOOST_TEST(!platform.events().post(input));
     input.type=engine::platform::EventType::mouse_wheel;input.x=0.25f;input.y=-1.5f;input.flipped=true;
     BOOST_REQUIRE(platform.events().post(input));BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
@@ -89,6 +93,28 @@ BOOST_AUTO_TEST_CASE(portable_keyboard_state_keeps_native_queries_and_bounds_wit
     BOOST_TEST(!state.down(-1));BOOST_TEST(!state.down(8));BOOST_TEST(state.caps_lock);
     state.key_indices={};BOOST_TEST(!state.down(KeyCode::a));BOOST_TEST(state.down(4));
     state.keys=nullptr;BOOST_TEST(!state.down(4));
+}
+BOOST_AUTO_TEST_CASE(sdl3_relative_pointer_motion_preserves_absolute_menu_coordinates) {
+    engine::platform::sdl3::SDL3PlatformAdapter platform;engine::platform::WindowConfig config;config.hidden=true;config.size={64,64};
+    auto window=platform.windows().create(config);BOOST_REQUIRE(window);engine::platform::PlatformEvent input,output;
+    while(platform.events().poll(output)) {}
+    input.window=window->id();input.type=engine::platform::EventType::mouse_moved;input.position={12.5f,30.25f};input.x=8.5f;input.y=-3.25f;
+    BOOST_REQUIRE(platform.events().post(input));BOOST_REQUIRE(Receive(platform.events(),output,input.type,input.window));
+    BOOST_TEST(output.position.x==12.5f);BOOST_TEST(output.position.y==30.25f);BOOST_TEST(output.x==8.5f);BOOST_TEST(output.y==-3.25f);
+    input.x=std::numeric_limits<float>::quiet_NaN();BOOST_TEST(!platform.events().post(input));
+    input.x=0;input.position.y=std::numeric_limits<float>::infinity();BOOST_TEST(!platform.events().post(input));
+}
+
+BOOST_AUTO_TEST_CASE(sdl3_relative_pointer_ownership_does_not_require_mouse_focus) {
+    engine::platform::sdl3::SDL3PlatformAdapter platform;engine::platform::WindowConfig config;config.hidden=true;config.size={64,64};
+    auto first=platform.windows().create(config),second=platform.windows().create(config);BOOST_REQUIRE(first);BOOST_REQUIRE(second);
+    BOOST_TEST(!platform.input().relative_mouse_mode(first->id()));
+    BOOST_REQUIRE(platform.input().set_relative_mouse_mode(first->id(),true));
+    BOOST_TEST(platform.input().relative_mouse_mode(first->id()));BOOST_TEST(!platform.input().relative_mouse_mode(second->id()));
+    BOOST_REQUIRE(platform.input().set_relative_mouse_mode(first->id(),false));BOOST_TEST(!platform.input().relative_mouse_mode(first->id()));
+    BOOST_REQUIRE(platform.input().set_relative_mouse_mode(first->id(),true));BOOST_TEST(platform.input().relative_mouse_mode(first->id()));
+    BOOST_TEST(!platform.input().set_relative_mouse_mode(0xffffffff,true));BOOST_TEST(!platform.input().relative_mouse_mode(0xffffffff));
+    BOOST_REQUIRE(platform.input().set_relative_mouse_mode(first->id(),false));
 }
 
 BOOST_AUTO_TEST_CASE(sdl3_preferences_reject_empty_names_and_path_syntax_before_creating_directories) {

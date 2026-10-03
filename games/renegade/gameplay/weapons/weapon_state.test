@@ -1,0 +1,73 @@
+#define BOOST_TEST_MODULE RenegadeWeaponState
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import games.renegade.gameplay.weapons.systems.weapon_state_system;
+using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+namespace {
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{7}};WeaponStateSystem system;ecs::SystemRegistry registry;std::unique_ptr<ecs::Scheduler> scheduler;std::uint64_t tick{};
+    explicit Fixture(unsigned workers=1) {
+        world.RegisterComponent<InventoryItem>();world.RegisterComponent<Magazine>();world.RegisterComponent<WeaponControl>();world.RegisterComponent<WeaponState>();world.FinalizeComponents();
+        auto& definitions=world.EmplaceResource<WeaponDefinitions>();world.EmplaceResource<WeaponShots>();
+        content::WeaponPreset weapon;weapon.id=1;weapon.style=5;weapon.primary=2;weapon.secondary=3;weapon.reload_time=Fixed::FromRatio(1,2);weapon.empty_sound=4;
+        definitions.catalog.weapons.emplace(1,weapon);
+        content::AmmoPreset primary;primary.id=2;primary.rate=Fixed::FromInt(4);primary.bullet_cost=1;
+        definitions.catalog.ammunition.emplace(2,primary);primary.id=3;primary.rate=Fixed::FromInt(8);primary.bullet_cost=2;definitions.catalog.ammunition.emplace(3,primary);
+        registry.Register(system);registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+    }
+    ecs::Entity Add(Magazine stock,WeaponControl control={},WeaponState state={}) {
+        ecs::CommandBuffer commands;const auto weapon=commands.Create();commands.Add<InventoryItem>(weapon,InventoryItem{{},1,1,1,1});commands.Add<Magazine>(weapon,stock);commands.Add<WeaponControl>(weapon,control);commands.Add<WeaponState>(weapon,state);world.Commit(commands);return commands.Resolve(weapon);
+    }
+    void Step(unsigned count=1) {while(count--) scheduler->Execute(engine::time::SimulationTime{++tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(source_add_rounds_loads_empty_clip_then_caps_reserve_and_keeps_negative_unlimited) {
+    // Combat/weapons.cpp Add_Rounds and Do_Reload, independent input/output
+    // examples: two 30-round grants make 30 loaded +30 reserve, not 60 loaded.
+    Magazine magazine{0,0,30,90};AddWeaponRounds(magazine,30);BOOST_TEST(magazine.loaded==30);BOOST_TEST(magazine.reserve==0);
+    AddWeaponRounds(magazine,30);BOOST_TEST(magazine.loaded==30);BOOST_TEST(magazine.reserve==30);
+    AddWeaponRounds(magazine,200);BOOST_TEST(magazine.reserve==90);Consume(magazine,7);Reload(magazine);BOOST_TEST(magazine.loaded==30);BOOST_TEST(magazine.reserve==83);
+    AddWeaponRounds(magazine,-1);BOOST_TEST(magazine.reserve==-1);Consume(magazine,30);Reload(magazine);BOOST_TEST(magazine.loaded==30);BOOST_TEST(magazine.reserve==-1);
+    magazine={0,0,12,60};AddWeaponRounds(magazine,5);BOOST_TEST(magazine.loaded==5);BOOST_TEST(magazine.reserve==0);
+    magazine={0,0,-1,0};AddWeaponRounds(magazine,-1);BOOST_TEST(magazine.loaded==-1);BOOST_TEST(magazine.reserve==-1);
+}
+BOOST_AUTO_TEST_CASE(source_switch_is_two_half_seconds_and_firing_waits_for_selection) {
+    Fixture fixture;const auto entity=fixture.Add({12,60,12,60},WeaponControl{1,1});
+    fixture.Step(29);BOOST_TEST(std::uint32_t(fixture.world.Get<WeaponState>(entity)->phase)==std::uint32_t(WeaponPhase::StartSwitch));BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==12);
+    fixture.Step();BOOST_TEST(std::uint32_t(fixture.world.Get<WeaponState>(entity)->phase)==std::uint32_t(WeaponPhase::EndSwitch));
+    fixture.Step(30);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);fixture.Step();BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==1u);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==11);
+}
+BOOST_AUTO_TEST_CASE(source_empty_magazine_reloads_without_trigger_and_partial_reserve_is_conserved) {
+    Fixture fixture;WeaponState state;state.active=1;const auto entity=fixture.Add({0,2,6,12},WeaponControl{1},state);
+    fixture.Step(29);BOOST_TEST(std::uint32_t(fixture.world.Get<WeaponState>(entity)->phase)==std::uint32_t(WeaponPhase::Reload));BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==0);
+    fixture.Step();BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==2);BOOST_TEST(fixture.world.Get<Magazine>(entity)->reserve==0);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);
+    fixture.world.Get<Magazine>(entity)->loaded=0;fixture.Step(120);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==0);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);
+}
+BOOST_AUTO_TEST_CASE(source_charge_release_muzzle_obstruction_and_secondary_bullet_cost) {
+    Fixture fixture;fixture.world.Resource<WeaponDefinitions>().catalog.ammunition.at(2).charge=Fixed::FromRatio(1,4);
+    WeaponState state;state.active=1;const auto entity=fixture.Add({12,0,12,0},WeaponControl{1,1},state);
+    fixture.Step(10);fixture.world.Get<WeaponControl>(entity)->primary=0;fixture.Step(5);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==12);
+    fixture.Step(15);fixture.world.Get<WeaponControl>(entity)->secondary=1;fixture.Step(15);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==1u);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==10);
+    std::vector<WeaponShot> shots;fixture.world.Resource<WeaponShots>().AppendTo(shots);BOOST_REQUIRE_EQUAL(shots.size(),1u);BOOST_TEST(shots[0].ammunition==3u);
+    fixture.world.Get<WeaponControl>(entity)->muzzle_clear=0;fixture.Step(60);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==1u);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==10);
+}
+BOOST_AUTO_TEST_CASE(source_manual_reload_respects_ready_state_safety_and_gameplay_permission) {
+    Fixture fixture;WeaponState state;state.active=1;const auto entity=fixture.Add({4,2,6,12},WeaponControl{1,1,0,1},state);
+    fixture.Step(30);BOOST_TEST(fixture.world.Get<Magazine>(entity)->loaded==6);BOOST_TEST(fixture.world.Get<Magazine>(entity)->reserve==0);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);
+    auto& control=*fixture.world.Get<WeaponControl>(entity);control.reload=0;control.permitted=0;fixture.Step(60);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);
+    control.permitted=1;control.safety=1;fixture.Step(60);BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==0u);
+    control.safety=0;fixture.Step();BOOST_TEST(fixture.world.Get<WeaponState>(entity)->shots==1u);
+    control.reload=1;fixture.Step();BOOST_TEST(std::uint32_t(fixture.world.Get<WeaponState>(entity)->phase)==std::uint32_t(WeaponPhase::FirePrimary));
+}
+BOOST_AUTO_TEST_CASE(weapon_columns_and_all_subtick_shots_are_identical_across_parallel_chunk_counts) {
+    const auto run=[](unsigned workers) {
+        Fixture fixture(workers);fixture.world.Resource<WeaponDefinitions>().catalog.ammunition.at(2).rate=Fixed::FromInt(120);
+        WeaponState state;state.active=1;std::vector<ecs::Entity> items;
+        for(unsigned i=0;i<513;++i) items.push_back(fixture.Add({-1,-1,-1,0},WeaponControl{1,1},state));
+        fixture.Step(600);std::vector<WeaponShot> shots;fixture.world.Resource<WeaponShots>().AppendTo(shots);BOOST_REQUIRE_EQUAL(shots.size(),1026u);
+        for(const auto item:items) {BOOST_TEST(fixture.world.Get<WeaponState>(item)->shots==1201u);BOOST_TEST(fixture.world.Get<Magazine>(item)->loaded==-1);}
+        return fixture.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

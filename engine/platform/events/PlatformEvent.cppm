@@ -47,6 +47,8 @@ struct PlatformEvent
 	bool flipped{};
 	Point2D position{};
 	Extent2D size{};
+	// Wheel axes for mouse_wheel; relative motion for mouse_moved. Position
+	// remains absolute so menu hit testing and FPS look can share the service.
 	float x{};
 	float y{};
 	std::int32_t text_start{};

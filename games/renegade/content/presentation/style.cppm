@@ -1,6 +1,7 @@
 export module games.renegade.content.presentation.style;
 import std;
 import engine.config.adapters.ini.section_reader;
+import engine.filesystem.core.virtual_file_system;
 
 export namespace renegade::content {
 enum class FontRole : unsigned { Title,LargeControls,Controls,Lists,Tooltips,Menu,SmallMenu,Header,BigHeader,
@@ -171,5 +172,10 @@ std::expected<MenuStyle,std::string> ReadMenuStyle(std::string text) {
         style.sounds[i]={std::string(filename),std::min(*volume,100u)};
     }
     return style;
+}
+std::expected<MenuStyle,std::string> LoadMenuStyle(const engine::filesystem::VirtualFileSystem& files) {
+    const auto text=files.ReadText("stylemgr.ini");
+    if(!text) return std::unexpected("stylemgr.ini missing");
+    return ReadMenuStyle(*text);
 }
 }

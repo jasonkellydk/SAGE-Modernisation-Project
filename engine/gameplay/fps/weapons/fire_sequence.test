@@ -1,0 +1,22 @@
+#define BOOST_TEST_MODULE FireSequence
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.fps.weapons.systems.fire_sequence_system;
+BOOST_AUTO_TEST_CASE(charge_cooldown_reload_and_released_trigger_keep_fractional_time_debt) {
+    using namespace Engine::Math;using namespace engine::gameplay;
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<FireTrigger>();world.RegisterComponent<FireSequence>();world.FinalizeComponents();
+        FireSequenceSystem system;ecs::SystemRegistry registry;registry.Register(system);registry.Finalize(world.Components());ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) {const auto entity=commands.Create();pending.push_back(entity);FireTrigger trigger;trigger.pressed=1;commands.Add<FireTrigger>(entity,trigger);FireSequence fire;fire.period=Fixed::FromRatio(1,10);fire.charge=Fixed::FromRatio(1,20);fire.reload=Fixed::FromRatio(1,4);fire.capacity=2;fire.rounds=2;commands.Add<FireSequence>(entity,fire);}
+        world.Commit(commands);const auto first=commands.Resolve(pending.front());
+        for(unsigned tick=1;tick<=2;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});BOOST_TEST(world.Get<FireSequence>(first)->shots==0u);
+        for(unsigned tick=3;tick<=15;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});BOOST_TEST(world.Get<FireSequence>(first)->shots==2u);BOOST_TEST(world.Get<FireSequence>(first)->rounds==0u);
+        for(unsigned tick=16;tick<=27;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});BOOST_TEST(world.Get<FireSequence>(first)->shots==2u);
+        for(unsigned tick=28;tick<=38;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});BOOST_TEST(world.Get<FireSequence>(first)->shots==3u);
+        for(const auto entity:pending) world.Get<FireTrigger>(commands.Resolve(entity))->pressed=0;
+        for(unsigned tick=39;tick<=120;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});BOOST_TEST(world.Get<FireSequence>(first)->shots==3u);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

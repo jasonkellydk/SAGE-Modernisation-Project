@@ -1,0 +1,109 @@
+#define BOOST_TEST_MODULE BehaviorEvents
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.scripts.systems.lua_behavior_system;
+import engine.gameplay.common.scripts.systems.behavior_attachment_system;
+import engine.core.serialization.byte_stream;
+using namespace engine::gameplay;
+
+namespace {
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{7}};
+    MessageTimerSystem timers;LuaBehaviorSystem scripts;BehaviorAttachmentSystem attachments;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;
+    explicit Fixture(unsigned workers) {
+        world.RegisterComponent<LuaBehavior>();world.RegisterComponent<LuaBehaviorState>();world.RegisterComponent<ScheduledBehaviorMessage>();world.FinalizeComponents();
+        world.EmplaceResource<BehaviorPrograms>();world.EmplaceResource<BehaviorInbox>();world.EmplaceResource<DueBehaviorMessages>();world.EmplaceResource<BehaviorEmissions>();
+        world.EmplaceResource<BehaviorInvocations>();world.EmplaceResource<BehaviorAttachments>();
+        auto& library=world.Resource<BehaviorPrograms>();library.event_names={"Later","Broadcast"};
+        library.programs.push_back({"counter","return { Created=function(self) self[1]=10; emit('created',self[1]) end, Later=function(self, delta) self[1]=self[1]+delta;emit('later',self[1]) end, Broadcast=function(self, delta) self[2]=self[2]+delta end }","Created",{}});
+        registry.Register(timers);registry.Register(scripts);registry.Register(attachments);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+    }
+    void Step(std::uint64_t tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});world.Resource<BehaviorInbox>().messages.clear();}
+};
+}
+
+BOOST_AUTO_TEST_CASE(exact_deadlines_once_only_cancel_on_removal_and_restored_script_columns_match_parallel_execution) {
+    const auto run=[](unsigned workers) {
+        Fixture f(workers);ecs::CommandBuffer commands;std::vector<ecs::Entity> subjects,observers;
+        std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) pending.push_back(commands.Create());f.world.Commit(commands);
+        for(const auto p:pending) subjects.push_back(commands.Resolve(p));
+        ecs::CommandBuffer bindings;pending.clear();
+        for(unsigned i=0;i<subjects.size();++i) {const auto p=bindings.Create();pending.push_back(p);bindings.Add<LuaBehavior>(p,LuaBehavior{subjects[i],i,i});bindings.Add<LuaBehaviorState>(p);}
+        f.world.Commit(bindings);for(const auto p:pending) observers.push_back(bindings.Resolve(p));
+        f.Step(1);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==513u);
+        ecs::CommandBuffer alarms;
+        for(unsigned i=0;i<observers.size();++i) {BehaviorMessage message;message.recipient=subjects[i];message.observer=observers[i];message.arguments[0]=7;message.argument_count=1;message.due_tick=120;message.order=i;const auto p=alarms.Create();alarms.Add<ScheduledBehaviorMessage>(p,ScheduledBehaviorMessage{message});}
+        f.world.Commit(alarms);ecs::CommandBuffer removed;removed.Destroy(subjects.back());f.world.Commit(removed);
+        for(unsigned tick=2;tick<120;++tick) {f.Step(tick);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==0u);}
+        BOOST_TEST(!f.world.IsAlive(observers.back()));
+        engine::core::serialization::ByteWriter checkpoint;f.world.SaveCheckpoint(checkpoint);
+        Fixture restored(workers);engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+        restored.Step(120);f.Step(120);
+        BOOST_TEST(restored.world.StateHash()==f.world.StateHash());BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==512u);
+        for(unsigned i=0;i<512;++i) BOOST_TEST(f.world.Get<LuaBehaviorState>(observers[i])->slots[0]==17);
+        BOOST_TEST(f.world.Resource<DueBehaviorMessages>().Size()==512u);
+        f.Step(121);BOOST_TEST(f.world.Resource<DueBehaviorMessages>().Size()==0u);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==0u);
+        return f.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+
+BOOST_AUTO_TEST_CASE(broadcast_reaches_each_attached_observer_but_addressed_timer_reaches_only_its_owner) {
+    Fixture f(4);ecs::CommandBuffer subjects;const auto target=subjects.Create();f.world.Commit(subjects);const auto recipient=subjects.Resolve(target);
+    ecs::CommandBuffer bindings;const auto a=bindings.Create(),b=bindings.Create();
+    for(const auto p:{a,b}) {bindings.Add<LuaBehavior>(p,LuaBehavior{recipient});bindings.Add<LuaBehaviorState>(p);}f.world.Commit(bindings);f.Step(1);
+    BehaviorMessage broadcast;broadcast.recipient=recipient;broadcast.event=1;broadcast.argument_count=1;broadcast.arguments[0]=3;
+    f.world.Resource<BehaviorInbox>().messages.push_back(broadcast);
+    BehaviorMessage addressed;addressed.recipient=recipient;addressed.observer=bindings.Resolve(a);addressed.argument_count=1;addressed.arguments[0]=5;addressed.due_tick=2;
+    ecs::CommandBuffer timers;const auto timer=timers.Create();timers.Add<ScheduledBehaviorMessage>(timer,ScheduledBehaviorMessage{addressed});f.world.Commit(timers);f.Step(2);
+    const auto* first=f.world.Get<LuaBehaviorState>(bindings.Resolve(a));const auto* second=f.world.Get<LuaBehaviorState>(bindings.Resolve(b));
+    BOOST_TEST(first->slots[0]==15);BOOST_TEST(second->slots[0]==10);BOOST_TEST(first->slots[1]==3);BOOST_TEST(second->slots[1]==3);
+}
+
+BOOST_AUTO_TEST_CASE(runtime_attachments_share_sources_preserve_distinct_arguments_and_defer_created_until_next_tick) {
+    const auto run=[](unsigned workers) {
+        Fixture f(workers);auto& library=f.world.Resource<BehaviorPrograms>();
+        library.programs.push_back({"attached","return { Created=function(self,object,parameter) self[1]=object;self[2]=0;emit('parameter',parameter) end, Broadcast=function(self,delta) self[2]=self[2]+delta end }","Created",{}});
+        ecs::CommandBuffer subjects;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<514;++i) pending.push_back(subjects.Create());f.world.Commit(subjects);
+        const auto removed=subjects.Resolve(pending.back());ecs::CommandBuffer deletion;deletion.Destroy(removed);f.world.Commit(deletion);
+        auto& requests=f.world.Resource<BehaviorAttachments>();requests.Reset(3);
+        // Authored order differs from slot and arrival order. A stale subject
+        // consumes neither an invocation index nor an observer order.
+        for(unsigned i=514;i-->0;) requests.SlotAt(i%3).push_back({subjects.Resolve(pending[i]),i,1000-i,1,{std::int64_t(i),std::string("payload-")+std::to_string(i)}});
+        f.Step(1);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==0u);BOOST_TEST(requests.Size()==0u);
+        const auto& invocations=f.world.Resource<BehaviorInvocations>();BOOST_REQUIRE(invocations.arguments.size()==513u);BOOST_TEST(invocations.next_order==513u);
+        BOOST_TEST(std::get<std::int64_t>(invocations.arguments.front()[0])==512);BOOST_TEST(std::get<std::string>(invocations.arguments.back()[1])=="payload-0");
+        f.Step(2);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==513u);BOOST_TEST(library.programs.size()==2u);
+        ecs::Query<ecs::Read<LuaBehavior>,ecs::Read<LuaBehaviorState>> query(f.world);
+        std::vector<ecs::Entity> observers;
+        query.ForEachChunk([&](auto chunk) {for(std::size_t row=0;row<chunk.Count();++row) {
+            const auto& binding=chunk.template Get<LuaBehavior>()[row];const auto& state=chunk.template Get<LuaBehaviorState>()[row];
+            BOOST_TEST(state.slots[0]==std::int64_t(binding.authored_subject));BOOST_TEST(binding.initialized==1u);
+            BOOST_TEST(binding.invocation==binding.order);observers.push_back(chunk.Entities()[row]);
+        }});
+        BOOST_REQUIRE(observers.size()==513u);
+        // ECS checkpoints contain POD invocation indices and persistent slots;
+        // the matching immutable invocation pool is explicitly reinjected.
+        engine::core::serialization::ByteWriter checkpoint;f.world.SaveCheckpoint(checkpoint);
+        Fixture restored(workers);restored.world.Resource<BehaviorPrograms>()=library;restored.world.Resource<BehaviorInvocations>()=invocations;
+        engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+        BehaviorMessage message;message.recipient=subjects.Resolve(pending[10]);message.event=1;message.argument_count=1;message.arguments[0]=7;
+        f.world.Resource<BehaviorInbox>().messages.push_back(message);restored.world.Resource<BehaviorInbox>().messages.push_back(message);
+        f.Step(3);restored.Step(3);BOOST_TEST(f.world.Resource<BehaviorEmissions>().Size()==0u);BOOST_TEST(f.world.StateHash()==restored.world.StateHash());
+        ecs::CommandBuffer remove;remove.Destroy(subjects.Resolve(pending[10]));f.world.Commit(remove);f.Step(4);
+        BOOST_TEST(f.world.EntityCount()==1024u);return f.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+
+BOOST_AUTO_TEST_CASE(invalid_runtime_attachment_rejects_the_batch_before_metadata_and_entities_are_published) {
+    Fixture f(4);ecs::CommandBuffer commands;const auto pending=commands.Create();f.world.Commit(commands);
+    auto& requests=f.world.Resource<BehaviorAttachments>();requests.Reset(1);
+    requests.SlotAt(0).push_back({commands.Resolve(pending),1,0,0,{}});requests.SlotAt(0).push_back({commands.Resolve(pending),1,1,5,{}});
+    BOOST_CHECK_THROW(f.Step(1),std::out_of_range);BOOST_TEST(f.world.EntityCount()==1u);BOOST_TEST(f.world.Resource<BehaviorInvocations>().arguments.empty());
+}

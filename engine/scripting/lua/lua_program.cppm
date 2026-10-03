@@ -10,6 +10,9 @@ export namespace engine::scripting::lua
 {
 using Value = std::variant<std::int64_t, std::string>;
 struct Command { std::string name; std::vector<Value> arguments; };
+// Explicit persistent slots let ECS hosts own script state in component
+// columns. Callback functions and immutable constants stay in the program.
+using IntegerState = std::array<std::int64_t, 64>;
 
 // A private Lua VM for a script instance; persistent state is its returned
 // table. The host dispatches events and consumes commands only after success.
@@ -68,6 +71,54 @@ public:
 		}
 		lua_settop(m_state, 0);
 		return std::move(m_commands);
+	}
+	std::expected<void, std::string> RestoreState(const IntegerState &state)
+	{
+		if (m_script == LUA_NOREF) return std::unexpected("script is not loaded");
+		lua_settop(m_state, 0);
+		lua_rawgeti(m_state, LUA_REGISTRYINDEX, m_script);
+		for (std::size_t slot = 0; slot < state.size(); ++slot)
+		{
+			lua_pushinteger(m_state, state[slot]);
+			lua_rawseti(m_state, -2, static_cast<lua_Integer>(slot + 1));
+		}
+		lua_settop(m_state, 0);
+		return {};
+	}
+	std::expected<std::vector<std::string>, std::string> StringList(std::string_view field)
+	{
+		if (m_script == LUA_NOREF) return std::unexpected("script is not loaded");
+		lua_settop(m_state, 0);lua_rawgeti(m_state, LUA_REGISTRYINDEX, m_script);
+		const std::string key(field);lua_getfield(m_state, -1, key.c_str());
+		if (lua_isnil(m_state, -1)) {lua_settop(m_state, 0);return std::vector<std::string>{};}
+		if (!lua_istable(m_state, -1) || lua_rawlen(m_state, -1)>1024) {lua_settop(m_state, 0);return std::unexpected("invalid script dependency list");}
+		std::vector<std::string> result;const auto count=lua_rawlen(m_state, -1);
+		for (std::size_t i=1;i<=count;++i) {
+			lua_rawgeti(m_state, -1, static_cast<lua_Integer>(i));
+			if (lua_type(m_state, -1)!=LUA_TSTRING) {lua_settop(m_state, 0);return std::unexpected("script dependencies must be strings");}
+			std::size_t size{};const auto* text=lua_tolstring(m_state, -1, &size);result.emplace_back(text,size);lua_pop(m_state, 1);
+		}
+		lua_settop(m_state, 0);return result;
+	}
+	std::expected<IntegerState, std::string> CaptureState()
+	{
+		if (m_script == LUA_NOREF) return std::unexpected("script is not loaded");
+		IntegerState result{};
+		lua_settop(m_state, 0);
+		lua_rawgeti(m_state, LUA_REGISTRYINDEX, m_script);
+		for (std::size_t slot = 0; slot < result.size(); ++slot)
+		{
+			lua_rawgeti(m_state, -1, static_cast<lua_Integer>(slot + 1));
+			if (!lua_isnil(m_state, -1) && !lua_isinteger(m_state, -1))
+			{
+				lua_settop(m_state, 0);
+				return std::unexpected("persistent script slots must contain integers");
+			}
+			result[slot] = lua_isnil(m_state, -1) ? 0 : static_cast<std::int64_t>(lua_tointeger(m_state, -1));
+			lua_pop(m_state, 1);
+		}
+		lua_settop(m_state, 0);
+		return result;
 	}
 private:
 	std::expected<void, std::string> Error()

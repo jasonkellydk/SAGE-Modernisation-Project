@@ -6,6 +6,7 @@ import Assets.Identity;
 import Assets.Materials;
 import Assets.Math;
 export import Assets.ModelRig;
+export import Assets.Particles;
 
 namespace Assets
 {
@@ -39,10 +40,37 @@ export struct ModelSubmeshDesc final
 	// Authored static order for this source mesh; zero bypasses static ordering.
 	// Ordinary transparency sorting remains a separate submission decision.
 	std::int32_t sort_level = 0;
+	// Selected precomputed vertex lighting is already the final illumination.
+	bool lighting_enabled = true;
 };
 
 export using ModelMaterialDesc = MaterialAssetDesc;
 
+// Immutable collision topology is independent of material passes and render
+// visibility. Surface ids and index triples retain authored triangle order.
+export struct ModelCollisionPart final {
+	std::string name;
+	std::uint32_t first_triangle{},triangle_count{},categories{};
+	bool skinned{};
+	std::uint32_t bone{},lod{};
+	bool attached{};
+};
+export struct ModelBoxVolume final {
+	std::string name;
+	Vector3f center{},extent{};
+	std::uint32_t categories{};
+	bool aligned{};
+	std::uint32_t bone{},lod{};
+	bool attached{};
+};
+export struct ModelCollisionGeometry final {
+	std::vector<std::array<std::uint32_t,3>> triangles;
+	std::vector<std::uint32_t> surfaces;
+	std::vector<ModelCollisionPart> parts;
+	std::vector<ModelBoxVolume> boxes;
+};
+
+export struct ModelEmitterAttachment final {EmitterAssetDesc description;std::uint32_t bone{},lod{};};
 export struct ModelAssetDesc final
 {
 	std::string name;
@@ -61,6 +89,9 @@ export struct ModelAssetDesc final
 	std::vector<ModelMaterialDesc> materials;
 	std::vector<AssetDependencyDesc> dependencies;
 	ModelRigDesc rig;
+	ModelCollisionGeometry collision;
+    std::optional<EmitterAssetDesc> emitter;
+    std::vector<ModelEmitterAttachment> emitters;
 };
 
 export struct ModelVertex final
@@ -90,6 +121,7 @@ export struct ModelSubmesh final
 	std::uint8_t pass = 0;
 	bool blends = false;
 	std::int32_t sort_level = 0;
+	bool lighting_enabled = true;
 };
 
 export struct ModelMaterial final
@@ -138,6 +170,9 @@ public:
 	std::span<const ModelMaterial> Materials() const noexcept;
 	std::span<const AssetDependency> Dependencies() const noexcept;
 	const ModelRigDesc &Rig() const noexcept { return m_rig; }
+	const ModelCollisionGeometry &Collision() const noexcept {return m_collision;}
+    const std::optional<EmitterAssetDesc>& Emitter() const noexcept {return m_emitter;}
+    std::span<const ModelEmitterAttachment> Emitters() const noexcept {return m_emitters;}
 
 private:
 	AssetIdentity m_identity;
@@ -156,6 +191,9 @@ private:
 	std::vector<ModelMaterial> m_materials;
 	std::vector<AssetDependency> m_dependencies;
 	ModelRigDesc m_rig;
+	ModelCollisionGeometry m_collision;
+    std::optional<EmitterAssetDesc> m_emitter;
+    std::vector<ModelEmitterAttachment> m_emitters;
 };
 
 }
@@ -177,7 +215,8 @@ ModelAsset::ModelAsset(
 	  m_lod_max(description.lod_max),
 	  m_bounds(description.bounds),
 	  m_skin_bone_count(description.skin_bone_count),
-	  m_rig(std::move(description.rig))
+	  m_rig(std::move(description.rig)),
+	  m_collision(std::move(description.collision)),m_emitter(std::move(description.emitter)),m_emitters(std::move(description.emitters))
 {
 	m_vertices.reserve(description.vertices.size());
 	for (const ModelVertexDesc &vertex : description.vertices) {
@@ -200,7 +239,8 @@ ModelAsset::ModelAsset(
 			submesh.first_index,
 			submesh.index_count,
 			submesh.material_index,
-			std::move(submesh.name), submesh.skinned, submesh.source_attributes, submesh.pass, submesh.blends, submesh.sort_level});
+			std::move(submesh.name), submesh.skinned, submesh.source_attributes, submesh.pass, submesh.blends, submesh.sort_level,
+			submesh.lighting_enabled});
 	}
 
 	m_materials.reserve(description.materials.size());

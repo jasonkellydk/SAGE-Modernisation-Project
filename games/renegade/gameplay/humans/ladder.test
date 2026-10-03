@@ -1,0 +1,127 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import games.renegade.gameplay.humans.systems.ladder_transition_system;
+import games.renegade.gameplay.humans.systems.animation_system;
+import engine.gameplay.common.timing.systems.pose_track_system;
+import engine.gameplay.common.physics.systems.suspension_system;
+namespace {
+using namespace renegade;using namespace engine::gameplay;using namespace Engine::Math;
+struct LadderFixture {
+    ecs::World world{ecs::WorldConfig{7}};LadderTransitionSystem transitions;HumanMotionSystem motion;
+    PoseTrackSystem tracks;SuspensionSystem suspension;HumanAnimationSystem animation;ClipPlaybackSystem playback;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    LadderFixture(unsigned workers,unsigned count=1) {
+        world.RegisterComponent<Transform>();world.RegisterComponent<AffinePose>();world.RegisterComponent<HumanState>();world.RegisterComponent<HumanControl>();world.RegisterComponent<Owner>();
+        world.RegisterComponent<InputPermission>();world.RegisterComponent<HumanMovement>();world.RegisterComponent<SweptHull>();world.RegisterComponent<SweepContacts>();
+        world.RegisterComponent<HumanAnimation>();world.RegisterComponent<ClipPlayback>();world.RegisterComponent<ClipTransition>();
+        world.RegisterComponent<TimelinePlayback>();world.RegisterComponent<SampledPose>();world.RegisterComponent<Suspension>();world.RegisterComponent<SuspensionState>();world.FinalizeComponents();
+        world.EmplaceResource<LadderPortals>();world.EmplaceResource<CollisionGeometry>();world.EmplaceResource<PoseTrackLibrary>();
+        auto& bank=world.EmplaceResource<HumanAnimationCatalog>().banks.emplace_back();
+        for(unsigned i=0;i<bank.size();++i) {bank[i].clip=i+1;bank[i].frame_count=4;bank[i].frames_per_second=Fixed::FromInt(30);bank[i].mode=i>=24 ? ClipMode::Once : ClipMode::Loop;}
+        registry.Register(transitions);registry.Register(motion);registry.Register(animation);registry.Register(playback);registry.Register(tracks);registry.Register(suspension);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> deferred;
+        for(unsigned i=0;i<count;++i) {
+            const auto subject=commands.Create();deferred.push_back(subject);const FixedVector3 position{Fixed::FromInt(i*10),Fixed{},Fixed{}};
+            commands.Add<Transform>(subject,Transform{position});commands.Add<AffinePose>(subject,AffinePose{FixedAffineTransform3::From_Translation(position)});
+            HumanState state;state.grounded=1;state.velocity={Fixed::One(),Fixed::One(),Fixed::One()};commands.Add<HumanState>(subject,state);commands.Add<HumanControl>(subject);
+            commands.Add<Owner>(subject,Owner{1});commands.Add<InputPermission>(subject);
+            commands.Add<HumanAnimation>(subject,HumanAnimation{1,1});commands.Add<ClipPlayback>(subject,bank[0]);commands.Add<ClipTransition>(subject);
+            LadderPortal portal;portal.style=content::TransitionStyle::LadderEnterBottom;portal.geometry.bounds.center=position;portal.geometry.bounds.extent={Fixed::One(),Fixed::One(),Fixed::One()};
+            portal.geometry.destination.elements={-Fixed::One(),Fixed{},Fixed{},position.x+Fixed::FromInt(3),Fixed{},-Fixed::One(),Fixed{},Fixed::FromInt(4),Fixed{},Fixed{},Fixed::One(),Fixed::FromInt(5)};
+            world.Resource<LadderPortals>().portals.push_back(portal);
+        }
+        world.Commit(commands);for(const auto entity:deferred) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(source_manual_entry_transfers_full_pose_resets_velocity_and_applies_player_direction_mask) {
+    LadderFixture fixture(4);const auto actor=fixture.entities.front();
+    fixture.Step(1);BOOST_TEST(fixture.world.Get<HumanState>(actor)->ladder==0u); // entry never automatic
+    fixture.world.Get<HumanControl>(actor)->action=1;fixture.Step(2);
+    const auto* state=fixture.world.Get<HumanState>(actor);const auto* pose=fixture.world.Get<Transform>(actor);
+    BOOST_TEST(state->ladder==0u);BOOST_TEST(state->transition==4u);BOOST_TEST(state->state_locked==1u);BOOST_TEST(state->transition_sequence==1u);
+    BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==28u);BOOST_TEST(fixture.world.Get<ClipTransition>(actor)->duration.Raw()==0);
+    BOOST_TEST(state->ladder_down_mask==1u);BOOST_TEST(state->ladder_up_mask==0u);
+    BOOST_TEST(Length(state->velocity).Raw()==0);BOOST_TEST(state->grounded==0u);BOOST_TEST(pose->position.x.Raw()==Fixed::FromInt(3).Raw());
+    BOOST_TEST(pose->position.y.Raw()==Fixed::FromInt(4).Raw());BOOST_TEST(pose->position.z.Raw()==Fixed::FromInt(5).Raw());BOOST_TEST(pose->facing.units==TurnFromDegrees(180).units);
+    BOOST_TEST(fixture.world.Get<AffinePose>(actor)->transform.elements[0].Raw()==-Fixed::OneRaw);BOOST_TEST(fixture.world.Get<HumanControl>(actor)->action==0u);
+    BOOST_TEST(fixture.world.Get<HumanControl>(actor)->facing.units==pose->facing.units);
+    for(unsigned tick=3;tick<=7;++tick) {fixture.Step(tick);BOOST_TEST(state->ladder==0u);BOOST_TEST(state->state_locked==1u);}
+    fixture.Step(8);BOOST_TEST(state->ladder==1u);BOOST_TEST(state->state_locked==0u);BOOST_TEST(state->transition==0u);
+    LadderFixture npc(1);ecs::CommandBuffer commands;commands.Remove<Owner>(npc.entities.front());npc.world.Commit(commands);
+    npc.world.Get<HumanControl>(npc.entities.front())->action=1;npc.Step(1);BOOST_TEST(npc.world.Get<HumanState>(npc.entities.front())->ladder_down_mask==0u);
+}
+BOOST_AUTO_TEST_CASE(source_portal_order_state_lock_input_permission_and_upright_eligibility) {
+    for(unsigned condition=0;condition<4;++condition) {
+        LadderFixture fixture(1);const auto actor=fixture.entities.front();auto* state=fixture.world.Get<HumanState>(actor);
+        if(condition==0) state->state_locked=1;if(condition==1) state->grounded=0;if(condition==2) state->just_jumped=1;if(condition==3) fixture.world.Get<InputPermission>(actor)->enabled=0;
+        fixture.world.Get<HumanControl>(actor)->action=1;fixture.Step(1);BOOST_TEST(state->ladder==0u);BOOST_TEST(fixture.world.Get<HumanControl>(actor)->action==0u);
+    }
+    LadderFixture fixture(4);const auto actor=fixture.entities.front();auto& portals=fixture.world.Resource<LadderPortals>().portals;
+    auto second=portals[0];second.geometry.destination.elements[11]=Fixed::FromInt(99);portals.push_back(second);
+    fixture.world.Get<HumanControl>(actor)->action=1;fixture.Step(1);BOOST_TEST(fixture.world.Get<Transform>(actor)->position.z.Raw()==Fixed::FromInt(5).Raw());
+}
+BOOST_AUTO_TEST_CASE(source_automatic_exit_requires_ladder_velocity_and_strict_speed_and_alignment_thresholds) {
+    for(const auto top:{false,true}) for(unsigned condition=0;condition<6;++condition) {
+        LadderFixture fixture(1);const auto actor=fixture.entities.front();auto& portal=fixture.world.Resource<LadderPortals>().portals.front();
+        portal.style=top ? content::TransitionStyle::LadderExitTop : content::TransitionStyle::LadderExitBottom;
+        auto* state=fixture.world.Get<HumanState>(actor);state->ladder=condition!=0;state->grounded=0;state->ladder_up_mask=1;
+        state->velocity={Fixed{},Fixed{},top ? Fixed::One() : -Fixed::One()};
+        if(condition==1) state->velocity.z=Fixed{};
+        if(condition==2) state->velocity.z=(top ? Fixed::One() : -Fixed::One())*Fixed::FromRatio(1,10);
+        if(condition==3) state->velocity.z=-state->velocity.z;
+        if(condition==4) state->velocity.x=Fixed::FromInt(4);
+        fixture.Step(1);
+        if(condition==5) {
+            BOOST_TEST(state->ladder==1u);BOOST_TEST(state->transition==(top ? 1u : 2u));BOOST_TEST(state->state_locked==1u);
+            BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==(top ? 25u : 26u));
+            for(unsigned tick=2;tick<=6;++tick) {fixture.Step(tick);BOOST_TEST(state->ladder==1u);}
+            fixture.Step(7);BOOST_TEST(state->ladder==0u);BOOST_TEST(state->ladder_up_mask==0u);BOOST_TEST(Length(state->velocity).Raw()==0);
+        }
+        else BOOST_TEST(fixture.world.Get<Transform>(actor)->position.z.Raw()==0);
+    }
+    LadderFixture manual(1);const auto actor=manual.entities.front();manual.world.Resource<LadderPortals>().portals.front().style=content::TransitionStyle::LadderExitBottom;
+    manual.world.Get<HumanState>(actor)->ladder=1;manual.world.Get<HumanState>(actor)->velocity={};manual.world.Get<HumanControl>(actor)->action=1;manual.Step(1);
+    BOOST_TEST(manual.world.Get<HumanState>(actor)->transition==2u);BOOST_TEST(manual.world.Get<HumanState>(actor)->ladder==1u);
+}
+BOOST_AUTO_TEST_CASE(ladder_transfers_are_parallel_soa_deterministic_and_checkpointed) {
+    LadderFixture serial(1,513),parallel(4,513);
+    for(auto* fixture:{&serial,&parallel}) for(const auto actor:fixture->entities) fixture->world.Get<HumanControl>(actor)->action=1;
+    serial.Step(1);parallel.Step(1);BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+    engine::core::serialization::ByteWriter checkpoint;serial.world.SaveCheckpoint(checkpoint);LadderFixture restored(4,0);
+    engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+    restored.world.Resource<LadderPortals>()=serial.world.Resource<LadderPortals>();BOOST_TEST(restored.world.StateHash()==serial.world.StateHash());
+    for(unsigned tick=2;tick<=15;++tick) {serial.Step(tick);restored.Step(tick);parallel.Step(tick);BOOST_TEST(restored.world.StateHash()==serial.world.StateHash());BOOST_TEST(parallel.world.StateHash()==serial.world.StateHash());}
+}
+
+BOOST_AUTO_TEST_CASE(locked_transition_cannot_be_restarted_or_bypassed_by_manual_action) {
+    LadderFixture fixture(4);const auto actor=fixture.entities.front();fixture.world.Get<HumanControl>(actor)->action=1;fixture.Step(1);
+    const auto pose=fixture.world.Get<Transform>(actor)->position;
+    for(unsigned tick=2;tick<=6;++tick) {
+        auto* control=fixture.world.Get<HumanControl>(actor);control->action=1;control->forward=Fixed::One();control->jump=1;fixture.Step(tick);
+        BOOST_TEST(fixture.world.Get<HumanState>(actor)->transition_sequence==1u);BOOST_CHECK(fixture.world.Get<Transform>(actor)->position==pose);
+        BOOST_TEST(fixture.world.Get<HumanControl>(actor)->action==0u);
+    }
+    fixture.Step(7);BOOST_TEST(fixture.world.Get<HumanState>(actor)->ladder==1u);
+}
+
+BOOST_AUTO_TEST_CASE(retail_transition_frame_counts_at_15fps_lock_exact_fixed_tick_completion) {
+    for(unsigned style=0;style<4;++style) {
+        LadderFixture fixture(4);const auto actor=fixture.entities.front();auto& portal=fixture.world.Resource<LadderPortals>().portals.front();
+        portal.style=static_cast<content::TransitionStyle>(style);
+        auto& source=fixture.world.Resource<HumanAnimationCatalog>().banks[0][24+style];source.frame_count=style==0 || style==2 ? 11 : 8;source.frames_per_second=Fixed::FromInt(15);
+        auto* state=fixture.world.Get<HumanState>(actor);state->ladder=style<2;fixture.world.Get<HumanControl>(actor)->action=1;
+        const unsigned last_tick=(source.frame_count-1)*4;
+        for(unsigned tick=1;tick<=last_tick;++tick) {
+            fixture.Step(tick);BOOST_TEST(state->transition==style+1);BOOST_TEST(state->state_locked==1u);
+            const auto& clip=*fixture.world.Get<ClipPlayback>(actor);
+            BOOST_TEST(clip.clip==25+style);BOOST_TEST(clip.frame.Raw()==Fixed::FromRatio(tick,4).Raw());
+            BOOST_TEST(OnceClipComplete(clip)==(tick==last_tick));
+        }
+        fixture.Step(last_tick+1);BOOST_TEST(state->transition==0u);BOOST_TEST(state->state_locked==0u);BOOST_TEST(state->ladder==(style>=2));
+        BOOST_TEST(state->transition_sequence==1u);
+    }
+}

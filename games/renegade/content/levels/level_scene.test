@@ -1,0 +1,440 @@
+#define BOOST_TEST_MODULE RenegadeLevelContent
+#include <boost/test/included/unit_test.hpp>
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+import games.renegade.content.levels.level_scene;
+import games.renegade.content.presentation.background_colors;
+import games.renegade.content.install.install_mount;
+import games.renegade.content.levels.render_assets;
+import games.renegade.content.levels.background;
+import games.renegade.content.levels.sounds;
+import Assets.Adapters.W3D;
+import Assets.Identity;
+import Assets.Models;
+import Assets.Importers.Models;
+import Assets.Models.Composition;
+
+using namespace renegade::content;
+namespace
+{
+using Buffer = std::vector<std::byte>;
+Buffer Hex(std::string_view text) {
+	Buffer bytes;
+	for (std::size_t i = 0; i < text.size(); i += 2) bytes.push_back(static_cast<std::byte>(std::stoul(std::string(text.substr(i, 2)), nullptr, 16)));
+	return bytes;
+}
+Buffer Chunk(std::uint32_t id, Buffer payload) {
+	Buffer result;
+	for (const auto value : {id, std::uint32_t(payload.size()) | 0x80000000u})
+		for (unsigned shift = 0; shift < 32; shift += 8) result.push_back(std::byte(value >> shift));
+	result.insert(result.end(), payload.begin(), payload.end()); return result;
+}
+Buffer NavigationFixture(Buffer path, const std::vector<Buffer> &points) {
+	auto records = Chunk(0x20110, Chunk(0x100101, Chunk(0x04290219, std::move(path))));
+	for (const auto &point : points) {
+		auto record = Chunk(0x20111, Chunk(0x100101, Chunk(0x04290112, point)));
+		records.insert(records.end(), record.begin(), record.end());
+	}
+	return Chunk(0x20000, Chunk(0x04433221, Chunk(0x01060635, std::move(records))));
+}
+}
+
+BOOST_AUTO_TEST_CASE(navigation_restores_original_pointer_order_and_rejects_broken_references)
+{
+	// Independently captured Mission00.h route 400049. Waypoint factory records
+	// are saved in reverse membership order. wwphys/waypath.cpp Post_Load must
+	// remap the six pointers, not sort IDs or follow file record order.
+	const auto path = Hex("0104b88ea30902040c0000000304b11a060004047890a309040408208b0a040440208b0a040478208b0a0404b0208b0a0404e8208b0a");
+	const std::vector<Buffer> points{
+		Hex("0104e8208b0a020400000000030c599670c210e7cfc114d00c400404b71a06000504ffffffff"),
+		Hex("0104b0208b0a020400000000030cccb170c2d0f2d9c114d00c400404b61a06000504ffffffff"),
+		Hex("010478208b0a020400000000030c45c170c21d27e1c114d00c400404b51a06000504ffffffff"),
+		Hex("010440208b0a020400000000030c6eb16fc21a13e7c114d00c400404b41a06000504ffffffff"),
+		Hex("010408208b0a020400000000030ce6606bc25a0de7c114d00c400404b31a06000504ffffffff"),
+		Hex("01047890a309020400000000030c33f665c274dee6c114d00c400404b21a06000504ffffffff")};
+	const auto decoded = ReadNavigationPaths(NavigationFixture(path, points));
+	BOOST_REQUIRE_MESSAGE(decoded.has_value(), (decoded ? "" : decoded.error()));
+	BOOST_REQUIRE_EQUAL(decoded->paths.size(), 1); BOOST_REQUIRE_EQUAL(decoded->markers.size(), 6);
+	const auto &route = decoded->paths[0]; BOOST_TEST(route.id == 400049u); BOOST_TEST(!route.looping);
+	BOOST_TEST(route.properties.Get<std::int64_t>("renegade.flags").value() == 12);
+	BOOST_REQUIRE_EQUAL(route.markers.size(), 6);
+	for (std::size_t i = 0; i < 6; ++i) BOOST_TEST(route.markers[i] == 400050u + i);
+	BOOST_TEST(decoded->markers[0].id == 400055u);
+	BOOST_TEST(decoded->markers[0].properties.Get<std::int64_t>("renegade.action_portal").value() == -1);
+	BOOST_TEST(decoded->markers[0].position.z.Raw() == Engine::Math::Fixed::FromBinary32Bits(0x400cd014).Raw());
+	auto broken = points; broken.pop_back(); BOOST_TEST(!ReadNavigationPaths(NavigationFixture(path, broken)));
+	broken = points; broken.push_back(points[0]); BOOST_TEST(!ReadNavigationPaths(NavigationFixture(path, broken)));
+	broken = points; broken[0].pop_back(); BOOST_TEST(!ReadNavigationPaths(NavigationFixture(path, broken)));
+	broken = points; broken[0][17] = std::byte{0x7f}; broken[0][16] = std::byte{0x80}; broken[0][15] = std::byte{}; broken[0][14] = std::byte{};
+	BOOST_TEST(!ReadNavigationPaths(NavigationFixture(path, broken)));
+	auto duplicate = path; duplicate.insert(duplicate.end(), path.begin(), path.begin() + 6);
+	BOOST_TEST(!ReadNavigationPaths(NavigationFixture(duplicate, points)));
+	auto looping = path; looping[8] = std::byte{14};
+	const auto loop = ReadNavigationPaths(NavigationFixture(looping, points)); BOOST_REQUIRE(loop); BOOST_TEST(loop->paths[0].looping);
+}
+
+BOOST_AUTO_TEST_CASE(transition_definition_preserves_original_fields_and_legacy_style_conversion)
+{
+	// transition.cpp Save: enum32, original OBBox basis/center/extent,
+	// Matrix3D and terminated animation string. Unknown microfields survive
+	// in the enclosing retained data; duplicate known fields cannot arbitrate.
+	const auto fields=Hex("010403000000023c0000803f0000000000000000000000000000803f0000000000000000000000000000803f0000004000004040000080400000803f00000040000040400305706f73650004300000803f00000000000000000000a040000000000000803f000000000000c04000000000000000000000803f0000e040");
+	const auto decode=[](Buffer fields) {return ReadTransitionDefinitions(Chunk(1111991202,Chunk(0x11051106,std::move(fields))));};
+	const auto decoded=decode(fields);BOOST_REQUIRE_MESSAGE(decoded.has_value(),(decoded ? "" : decoded.error()));BOOST_REQUIRE_EQUAL(decoded->size(),1);
+	const auto& record=decoded->front();BOOST_TEST(std::uint32_t(record.style)==3u);BOOST_TEST(record.animation=="pose");
+	BOOST_TEST(record.bounds.center.y.Raw()==Engine::Math::Fixed::FromInt(3).Raw());BOOST_TEST(record.bounds.extent.z.Raw()==Engine::Math::Fixed::FromInt(3).Raw());
+	BOOST_TEST(record.destination.elements[7].Raw()==Engine::Math::Fixed::FromInt(6).Raw());
+	for(unsigned legacy=4;legacy<=7;++legacy) {auto bytes=fields;bytes[2]=std::byte(legacy);const auto mapped=decode(bytes);BOOST_REQUIRE(mapped.has_value());BOOST_TEST(std::uint32_t(mapped->front().style)==(legacy<6 ? 8u : 9u));}
+	auto broken=fields;broken.insert(broken.end(),fields.begin(),fields.begin()+6);BOOST_TEST(!decode(broken));
+	broken=fields;broken[2]=std::byte{10};BOOST_TEST(!decode(broken));
+	broken=fields;broken.pop_back();BOOST_TEST(!decode(broken));
+	broken=fields;broken.erase(broken.begin(),broken.begin()+6);BOOST_TEST(!decode(broken));
+}
+
+BOOST_AUTO_TEST_CASE(retail_ladder_portals_compose_shared_world_regions_in_saved_actor_order)
+{
+	const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+	const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+	const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes.has_value());
+	const auto definitions=ReadDefinitions(*bytes);BOOST_REQUIRE_MESSAGE(definitions.has_value(),(definitions ? "" : definitions.error()));
+	const std::array maps{"M00_Tutorial.mix","M13.mix","M01.mix","M02.mix","M03.mix","M04.mix","M05.mix","M06.mix","M07.mix","M08.mix","M09.mix","M10.mix","M11.mix"};
+	const std::array placements{4u,0u,24u,16u,10u,0u,0u,2u,0u,0u,0u,6u,0u};
+	for(std::size_t map=0;map<maps.size();++map) {
+		const auto scene=LoadLevelScene(*mounted->files,maps[map],*definitions);BOOST_REQUIRE_MESSAGE(scene.has_value(),(scene ? "" : scene.error()));
+		BOOST_TEST(std::ranges::count_if(scene->dynamic.actors,[](const auto& actor){return actor.factory==0x40124;})==placements[map]);
+		BOOST_TEST(engine::level::ValidateSpatialLevel(scene->level).has_value());
+		std::size_t index{};
+		for(const auto& actor:scene->dynamic.actors) if(actor.factory==0x40124 && !actor.pending_delete) {
+			const auto* definition=definitions->Find(actor.definition);BOOST_REQUIRE(definition);BOOST_REQUIRE_EQUAL(definition->transitions.size(),2);
+			for(const auto& source:definition->transitions) {
+				BOOST_REQUIRE(index<scene->level.traversalPortals.size());const auto& portal=scene->level.traversalPortals[index++];
+				BOOST_TEST(portal.subject==actor.LevelId());BOOST_TEST(portal.properties.Get<std::int64_t>("renegade.ladder_index").value()==actor.ladder_index);
+				BOOST_TEST(portal.properties.Get<std::int64_t>("renegade.style").value()==std::int64_t(source.style));
+				BOOST_TEST(portal.properties.Get<std::string>("renegade.animation").value()==source.animation);
+				// Independent double matrix equations cover every source map,
+				// including rotated origins and negative world coordinates.
+				for(unsigned row=0;row<3;++row) {
+					const auto f=[](auto value){return double(value.Raw())/65536;};
+					const auto& m=actor.transform->elements;const auto& d=source.destination.elements;
+					const double expected=f(m[row*4+3])+f(m[row*4])*f(d[3])+f(m[row*4+1])*f(d[7])+f(m[row*4+2])*f(d[11]);
+					BOOST_CHECK_SMALL(f(portal.destination.elements[row*4+3])-expected,0.00008);
+				}
+			}
+		}
+		BOOST_TEST(index==scene->level.traversalPortals.size());
+		if(map==0) {
+			BOOST_REQUIRE_EQUAL(index,8);const auto& first=scene->level.traversalPortals[0];
+			BOOST_TEST(first.properties.Get<std::int64_t>("renegade.style").value()==3);
+			BOOST_CHECK_SMALL(double(first.destination.elements[3].Raw())/65536+54.177,0.00005);
+			BOOST_CHECK_SMALL(double(first.destination.elements[7].Raw())/65536+19.666,0.00005);
+			BOOST_CHECK_SMALL(double(first.destination.elements[11].Raw())/65536-0.81,0.00005);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(retail_all_campaign_maps_preserve_navigation_inventories_and_tutorial_lesson_routes)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = MountInstall(install); BOOST_REQUIRE(mounted);
+	// Counts from an independent archive/chunk inventory, not this adapter.
+	const std::array<std::tuple<const char *, std::size_t, std::size_t>, 13> maps{{
+		{"M00_Tutorial.mix",8,62},{"M01.mix",56,401},{"M02.mix",18,146},{"M03.mix",43,468},
+		{"M04.mix",63,256},{"M05.mix",29,146},{"M06.mix",31,240},{"M07.mix",39,172},
+		{"M08.mix",31,219},{"M09.mix",11,26},{"M10.mix",5,22},{"M11.mix",56,296},{"M13.mix",16,66}}};
+	for (const auto &[map, paths, points] : maps) {
+		BOOST_TEST_CONTEXT(map) {
+			const auto scene = LoadLevelScene(*mounted->files, map); BOOST_REQUIRE_MESSAGE(scene.has_value(), (scene ? "" : scene.error()));
+			BOOST_TEST(scene->level.navigationPaths.size() == paths); BOOST_TEST(scene->level.markers.size() == points);
+			BOOST_TEST(engine::level::ValidateSpatialLevel(scene->level).has_value());
+		}
+	}
+	const auto tutorial = LoadLevelScene(*mounted->files, "M00_Tutorial.mix"); BOOST_REQUIRE(tutorial);
+	for (const auto &[id, first, count] : std::array<std::tuple<std::uint32_t,std::uint32_t,std::size_t>,3>{{{400049,400050,6},{400067,400068,5},{400074,400075,1}}}) {
+		const auto path = std::ranges::find(tutorial->level.navigationPaths, id, &engine::level::NavigationPath::id);
+		BOOST_REQUIRE(path != tutorial->level.navigationPaths.end()); BOOST_REQUIRE_EQUAL(path->markers.size(), count);
+		for (std::size_t i = 0; i < count; ++i) BOOST_TEST(path->markers[i] == first + i);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(persist_original_width_and_transform_layout)
+{
+	// Independent retail RenderObjPersistFactory variables, captured from the
+	// first tutorial building aggregate. Matrix3D uses row-major 3x4 storage.
+	const auto data = Hex("0004408a1d0a010b4d475057525f41475f3100023000008033ffff7f3f00000000b78f3ac2ffff7fbf00008033000000003d609c4100000000000000000000803f00000040");
+	const auto fields = persist::Micros(data); BOOST_REQUIRE(fields.has_value()); BOOST_REQUIRE_EQUAL(fields->size(), 3);
+	BOOST_TEST(*persist::U32((*fields)[0].payload) == 0x0a1d8a40u);
+	BOOST_TEST(*persist::Text((*fields)[1].payload) == "MGPWR_AG_1");
+	const auto matrix = persist::Matrix((*fields)[2].payload); BOOST_REQUIRE(matrix.has_value());
+	BOOST_TEST(matrix->elements[3].Raw() == -3056622);
+	BOOST_TEST(matrix->elements[7].Raw() == 1281032);
+	BOOST_TEST(matrix->elements[11].Raw() == 131072);
+	BOOST_TEST(!persist::U32(Buffer(8)));
+	BOOST_TEST(!persist::Matrix(Buffer(47)));
+	BOOST_TEST(!persist::Text(Hex("6162")));
+	BOOST_TEST(!persist::Text(Hex("61006200")));
+	BOOST_TEST(!persist::Micros(Hex("010401")));
+	BOOST_TEST(!persist::Micros(Hex("01")));
+	BOOST_TEST(!persist::Flag(Hex("02")));
+	BOOST_TEST(!persist::Scalar(Hex("0000807f")));
+}
+
+BOOST_AUTO_TEST_CASE(script_zone_binary_basis_uses_columns_and_preserves_vertical_extent)
+{
+	using Engine::Math::Fixed; using Engine::Math::FixedVector3;
+	// Independent 60-byte OBBox fixture: row-major +90-degree basis,
+	// center (10,-20,3), half extents (2,4,1). Width and height must not swap.
+	const auto bytes = Hex("00000000000080bf000000000000803f000000000000000000000000000000000000803f000020410000a0c10000404000000040000080400000803f");
+	const auto box = persist::OrientedBox(bytes); BOOST_REQUIRE_MESSAGE(box.has_value(), (box ? "" : box.error()));
+	BOOST_TEST(box->Contains({Fixed::FromInt(14), Fixed::FromInt(-18), Fixed::FromInt(4)}));
+	BOOST_TEST(!box->Contains({Fixed::FromInt(15), Fixed::FromInt(-20), Fixed::FromInt(3)}));
+	BOOST_TEST(!box->Contains({Fixed::FromInt(10), Fixed::FromInt(-17), Fixed::FromInt(3)}));
+	BOOST_TEST(!box->Contains({Fixed::FromInt(10), Fixed::FromInt(-20), Fixed::FromInt(5)}));
+	const FixedVector3 local{Fixed::FromInt(1), Fixed::FromInt(2), Fixed::FromInt(-1)};
+	const auto roundtrip = box->LocalPoint(box->WorldPoint(local));
+	BOOST_TEST(roundtrip.x.Raw() == local.x.Raw()); BOOST_TEST(roundtrip.y.Raw() == local.y.Raw()); BOOST_TEST(roundtrip.z.Raw() == local.z.Raw());
+	auto malformed = bytes; malformed.resize(59); BOOST_TEST(!persist::OrientedBox(malformed).has_value());
+	malformed = bytes; malformed[55] = std::byte{0xc0}; BOOST_TEST(!persist::OrientedBox(malformed).has_value());
+	malformed = bytes; malformed[15] = std::byte{0x40}; BOOST_TEST(!persist::OrientedBox(malformed).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(background_source_palette_and_retail_save_values) {
+    // Source enum IDs and original-width fields; tutorial is 18:30,
+    // 85% cloud cover, 30% gloom, no tint.
+    auto wire=Hex("260104003a000080320708111800000014041200000015041e000000160400000000170400000000160202111200000018049a99593f1e049a99993e240400000000");
+    const auto background=ReadBackground(wire);BOOST_REQUIRE_MESSAGE(background.has_value(),(background ? "" : background.error()));
+    BOOST_TEST(background->hours==18u);BOOST_TEST(background->minutes==30u);BOOST_TEST(background->cloud_cover.Raw()==55706);
+    BackgroundDefinition noon;noon.hours=12;const auto colors=BackgroundColors(noon);
+    BOOST_CHECK_SMALL(colors.sky[0]-112.f/255,0.00001f);BOOST_CHECK_SMALL(colors.sky[2]-176.f/255,0.00001f);
+    BOOST_CHECK_SMALL(colors.horizon[0]-215.f/255,0.00001f);
+    noon.gloominess=Engine::Math::Fixed::FromInt(1);const auto overcast=BackgroundColors(noon);
+    for(unsigned c=0;c<3;++c) BOOST_CHECK_SMALL(overcast.sky[c]-192.f/255,0.00001f);
+    noon.tint=Engine::Math::Fixed::FromInt(1);const auto red=BackgroundColors(noon);BOOST_TEST(red.sky[0]==1.f);BOOST_TEST(red.sky[1]==0.f);
+    BackgroundDefinition midnight;midnight.hours=23;midnight.minutes=30;BOOST_CHECK_SMALL(BackgroundColors(midnight).sky[0]-4.f/255,0.00001f);
+    wire.pop_back();BOOST_TEST(!ReadBackground(wire));
+}
+
+BOOST_AUTO_TEST_CASE(simple_preset_visibility_uses_its_own_inheritance_schema) {
+    // Frozen original-width SimpleGameObjDef and VehicleGameObjDef records.
+    // The latter reuses the same parent/variables IDs for nonboolean fields.
+    auto bytes=Hex("010100009e00008001010000960000800b01040041000080000110000400000001000000010110002d000080000100000f000000010401000000030768656c7065720028ce7d370000008029ce7d3706000000010101020100290104004500008000011000040000000200000001011000310000800001000010000000010402000000030876656869636c650028ce7d370000008029ce7d3709000000010403000000020101");
+    auto definitions=ReadDefinitions(bytes);BOOST_REQUIRE_MESSAGE(definitions.has_value(),(definitions ? "" : definitions.error()));
+    BOOST_TEST(definitions->Find(1)->editor_only);BOOST_TEST(!definitions->Find(1)->hidden);
+    BOOST_TEST(!definitions->Find(2)->editor_only);BOOST_TEST(!definitions->Find(2)->hidden);
+    bytes[85]=std::byte{2};BOOST_TEST(!ReadDefinitions(bytes));
+}
+
+BOOST_AUTO_TEST_CASE(retail_saved_background_and_ambient_sounds_preserve_authored_playback_states) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted.has_value());const auto& files=*mounted->files;
+    for(const auto& name:{"M00_Tutorial.mix","M13.mix"}) {
+        const auto level=LoadLevelScene(files,name);BOOST_REQUIRE(level.has_value());const auto background=ReadBackground(level->static_data);BOOST_REQUIRE(background.has_value());
+        const auto sounds=ReadLevelSounds(level->static_data);BOOST_REQUIRE_MESSAGE(sounds.has_value(),(sounds ? "" : sounds.error()));
+        const bool tutorial=std::string_view(name).starts_with("M00");BOOST_TEST(sounds->size()==(tutorial ? 11u : 12u));
+        BOOST_TEST(std::ranges::count_if(*sounds,[](const auto& sound) {return sound.state==1;})==(tutorial ? 11 : 6));
+        BOOST_TEST(sounds->front().filename==(tutorial ? "ambcrick2.wav" : "wnddes3.wav"));
+        BOOST_TEST(sounds->front().loops==0u);BOOST_TEST(sounds->front().positional);BOOST_TEST(sounds->front().minimum_range.Raw()>0);
+        BOOST_TEST(sounds->front().pitch.Raw()==Engine::Math::Fixed::OneRaw);
+        if(tutorial) {BOOST_TEST(background->hours==18u);BOOST_TEST(background->minutes==30u);BOOST_TEST(sounds->front().volume.Raw()==6554);}
+        auto damaged=level->static_data;damaged.pop_back();BOOST_TEST(!ReadLevelSounds(damaged));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(observer_attachment_order_comes_from_actor_not_script_allocation)
+{
+	DynamicLevel dynamic;
+	ActorPlacement actor; actor.token = 10; actor.instance = 400005; actor.definition = 1; actor.observers = {20, 21};
+	dynamic.actors.push_back(actor);
+	dynamic.observers.push_back({21, 10, 2, "second", "2"});
+	dynamic.observers.push_back({20, 10, 1, "first", "1"});
+	ActorPlacement deleted = actor; deleted.token = 11; deleted.pending_delete = true; deleted.observers.clear(); dynamic.actors.push_back(deleted);
+	engine::level::Level level;
+	BOOST_REQUIRE(AppendDynamicLevel(level, dynamic).has_value());
+	BOOST_REQUIRE_EQUAL(level.placements.size(), 1u); BOOST_TEST(level.placements.front().id == 400005u);
+	BOOST_REQUIRE_EQUAL(level.behaviors.size(), 2u); BOOST_TEST(level.behaviors[0].program == "first"); BOOST_TEST(level.behaviors[1].program == "second");
+	BOOST_TEST(level.behaviors[0].subject == 400005u);
+	dynamic.observers.erase(dynamic.observers.begin()); engine::level::Level failed;
+	BOOST_TEST(!AppendDynamicLevel(failed, dynamic).has_value()); BOOST_TEST(failed.placements.empty()); BOOST_TEST(failed.behaviors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(primary_spawner_follows_source_list_order_even_when_disabled)
+{
+	DefinitionCatalog definitions;
+	definitions.by_id.emplace(10, LegacyDefinition{10, 0x40121, 0, "first", "", SpawnerDefinition{{20}, true, true}});
+	definitions.by_id.emplace(11, LegacyDefinition{11, 0x40121, 0, "second", "", SpawnerDefinition{{21}, true, true}});
+	definitions.by_id.emplace(20, LegacyDefinition{20, 0x4010f, 30, "authored soldier"});
+	definitions.by_id.emplace(21, LegacyDefinition{21, 0x4010f, 30, "another soldier"});
+	definitions.by_id.emplace(30, LegacyDefinition{30, 0x20501, 0, "physics", "character.w3d"});
+	LevelScene level;
+	level.spawners.push_back({1, 10, Engine::Math::FixedAffineTransform3::From_Translation({Engine::Math::Fixed::FromInt(3), Engine::Math::Fixed::FromInt(4), Engine::Math::Fixed::FromInt(5)}), false});
+	level.spawners.push_back({2, 11, Engine::Math::FixedAffineTransform3::From_Translation({Engine::Math::Fixed::FromInt(6), Engine::Math::Fixed::FromInt(7), Engine::Math::Fixed::FromInt(8)}), true});
+	const auto first = ResolvePlayerStart(level, definitions); BOOST_REQUIRE(first.has_value());
+	BOOST_TEST(first->definition == 20u); BOOST_TEST(first->spawner == 1u); BOOST_TEST(first->transform.elements[3].Raw() == 196608);
+	definitions.by_id.at(10).spawner->soldier_startup = false;
+	const auto second = ResolvePlayerStart(level, definitions); BOOST_REQUIRE(second.has_value()); BOOST_TEST(second->definition == 21u);
+	definitions.by_id.at(11).spawner->presets.clear(); BOOST_TEST(!ResolvePlayerStart(level, definitions));
+	definitions.by_id.erase(11); BOOST_TEST(!ResolvePlayerStart(level, definitions));
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_definitions_placements_and_start_script)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = MountInstall(install); BOOST_REQUIRE_MESSAGE(mounted.has_value(), (mounted ? std::string{} : mounted.error()));
+	const auto bytes = mounted->files->Read("objects.ddb"); BOOST_REQUIRE(bytes.has_value());
+	const auto definitions = ReadDefinitions(*bytes); BOOST_REQUIRE_MESSAGE(definitions.has_value(), (definitions ? std::string{} : definitions.error()));
+	BOOST_TEST(definitions->by_id.size() > 1000u);
+	const auto tutorial = LoadLevelScene(*mounted->files, "M00_Tutorial.mix"); BOOST_REQUIRE_MESSAGE(tutorial.has_value(), (tutorial ? std::string{} : tutorial.error()));
+	BOOST_TEST(tutorial->static_file == "M00_Tutorial.lsd"); BOOST_TEST(tutorial->first_load);
+	BOOST_TEST(tutorial->start_script == "MTU_Commando_Startup"); BOOST_TEST(tutorial->statics.size() == 495u);
+	BOOST_TEST(tutorial->statics.front().model == "MGPWR_AG_1");
+	// Independent retail chunk inventory includes scripts on pending-delete
+	// editor remnants; active attachment composition retains 50 bindings.
+	BOOST_TEST(tutorial->dynamic.actors.size() == 74u); BOOST_TEST(tutorial->dynamic.physics.size() == 35u); BOOST_TEST(tutorial->dynamic.observers.size() == 60u);
+	BOOST_TEST(tutorial->dynamic.builtin_observers.size() == 21u);
+	BOOST_TEST(tutorial->level.behaviors.size() == 50u);
+	BOOST_TEST(std::ranges::count(tutorial->dynamic.actors, false, &ActorPlacement::pending_delete) == 59);
+	BOOST_TEST(tutorial->level.volumes.size() == 31u);
+	const auto logan = std::ranges::find(tutorial->level.placements, 400005ull, &engine::level::Placement::id);
+	BOOST_REQUIRE(logan != tutorial->level.placements.end()); BOOST_TEST(logan->definition == 81930280u); BOOST_TEST(!logan->model.empty()); BOOST_REQUIRE(logan->transform.has_value());
+	const auto saved_logan = std::ranges::find(tutorial->dynamic.actors, 400005u, &ActorPlacement::instance);
+	BOOST_REQUIRE(saved_logan != tutorial->dynamic.actors.end()); BOOST_TEST(saved_logan->innate_observer != saved_logan->innate_observer_alias);
+	BOOST_CHECK(std::ranges::find(saved_logan->observers, saved_logan->innate_observer_alias) != saved_logan->observers.end());
+	const auto controller = std::ranges::find(tutorial->level.behaviors, std::string{"MTU_Tutorial_Controller"}, &engine::level::BehaviorBinding::program);
+	BOOST_REQUIRE(controller != tutorial->level.behaviors.end()); BOOST_TEST(controller->subject == 400099u);
+	for (const auto &binding : tutorial->level.behaviors) BOOST_CHECK(std::ranges::find(tutorial->level.placements, binding.subject, &engine::level::Placement::id) != tutorial->level.placements.end());
+	const auto player = ResolvePlayerStart(*tutorial, *definitions); BOOST_REQUIRE_MESSAGE(player.has_value(), (player ? std::string{} : player.error()));
+	BOOST_TEST(!player->model.empty()); BOOST_TEST(player->spawner != 0u);
+	for (const auto &placement : tutorial->statics) {
+		BOOST_TEST_CONTEXT("physical instance " << placement.instance) {
+			if (placement.definition) BOOST_TEST(definitions->Find(placement.definition) != nullptr);
+			for (const auto element : placement.transform.elements) BOOST_TEST(element.Raw() != Engine::Math::Fixed::Max().Raw());
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(retail_every_campaign_level_decodes_authored_static_scene)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = MountInstall(install); BOOST_REQUIRE_MESSAGE(mounted.has_value(), (mounted ? std::string{} : mounted.error()));
+	// Independent chunk-envelope inventory counts, including dazzle objects.
+	const std::array<std::pair<const char *, std::size_t>, 12> maps{{
+		{"M13.mix", 423}, {"M01.mix", 2405}, {"M02.mix", 3441}, {"M03.mix", 2231}, {"M04.mix", 2339}, {"M05.mix", 1923},
+		{"M06.mix", 1020}, {"M07.mix", 1920}, {"M08.mix", 1864}, {"M09.mix", 1250}, {"M10.mix", 2573}, {"M11.mix", 1936}}};
+	for (const auto &[map, count] : maps) {
+		BOOST_TEST_CONTEXT(map) {
+			const auto level = LoadLevelScene(*mounted->files, map); BOOST_REQUIRE_MESSAGE(level.has_value(), (level ? std::string{} : level.error()));
+			BOOST_TEST(level->first_load); BOOST_TEST(level->statics.size() == count); BOOST_TEST(!level->spawners.empty());
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_render_objects_resolve_without_importing_neighbor_meshes)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto bytes = mounted->files->Read("objects.ddb"); BOOST_REQUIRE(bytes.has_value());
+	const auto definitions = ReadDefinitions(*bytes); BOOST_REQUIRE(definitions.has_value());
+	const auto level = LoadLevelScene(*mounted->files, "M00_Tutorial.mix"); BOOST_REQUIRE(level.has_value());
+	std::set<std::string> imported; std::map<std::string, Buffer> containers;
+	Assets::W3DAdapter adapter;
+	for (const auto &placement : level->statics) if (imported.insert(placement.model).second) {
+		BOOST_TEST_CONTEXT(placement.model) {
+			const auto source = ResolveRenderAsset(*mounted->files, placement, *definitions);
+			BOOST_REQUIRE_MESSAGE(source.has_value(), (source ? std::string{} : source.error()));
+			if (source->empty()) continue;
+			const auto marker = source->find("::"); const auto file = source->substr(0, marker);
+			if (!containers.contains(file)) { const auto payload = mounted->files->Read(file); BOOST_REQUIRE(payload.has_value()); containers.emplace(file, *payload); }
+			const auto model = adapter.Import({Assets::AssetType::Model, Assets::Canonicalize_Asset_Name(*source)}, containers.at(file));
+			BOOST_REQUIRE_MESSAGE(model.description, model.error);
+			if (marker != std::string::npos) BOOST_TEST(Assets::Canonicalize_Asset_Name(model.description->container_name + "." + model.description->name) == Assets::Canonicalize_Asset_Name(placement.model));
+		}
+	}
+	BOOST_TEST(imported.size() == 444u);
+}
+
+BOOST_AUTO_TEST_CASE(retail_opening_mission_rock_vertex_solve_preserves_frozen_source_colors) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    const auto bytes=mounted->files->Read("l00.w3d");BOOST_REQUIRE(bytes.has_value());
+    Assets::W3DAdapter adapter;const auto converted=adapter.Import({Assets::AssetType::Model,"l00.w3d::l00.rock04"},*bytes);
+    BOOST_REQUIRE_MESSAGE(converted.description,converted.error);
+    BOOST_REQUIRE_EQUAL(converted.description->submeshes.size(),1u);
+    const auto& mesh=converted.description->submeshes[0];BOOST_TEST(!mesh.lighting_enabled);
+    const auto& material=converted.description->materials.at(mesh.material_index);
+    const auto& vertex=converted.description->vertices.at(converted.description->indices.at(mesh.first_index));
+    // Independent retail wire inventory: selected 0x24 DCG starts 66,59,57;
+    // the first triangle indexes vertex 16, whose DCG is 178,149,123.
+    // ambient/diffuse are zero, emissive is 255,255,255. Original post-load
+    // folds emissive into COLOR1 and disables lighting. Neither white nor black.
+    BOOST_TEST(material.base_color.r==1.f);BOOST_TEST(material.base_color.g==1.f);BOOST_TEST(material.base_color.b==1.f);
+    BOOST_TEST(vertex.color.r==178/255.f);BOOST_TEST(vertex.color.g==149/255.f);BOOST_TEST(vertex.color.b==123/255.f);
+}
+
+BOOST_AUTO_TEST_CASE(retail_opening_mission_collision_proxies_are_not_missing_meshes)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) {BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return;}
+	const auto mounted = MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto bytes = mounted->files->Read("l00_emis.w3d"); BOOST_REQUIRE(bytes.has_value());
+	const auto box = IsCollisionBox(*bytes, "L00_EMIS.PHYS000"); BOOST_REQUIRE(box.has_value()); BOOST_TEST(*box);
+	const auto mesh = IsCollisionBox(*bytes, "L00_EMIS.VIS_000"); BOOST_REQUIRE(mesh.has_value()); BOOST_TEST(!*mesh);
+	const auto missing = IsCollisionBox(*bytes, "L00_EMIS.PHYS000_SUFFIX"); BOOST_REQUIRE(missing.has_value()); BOOST_TEST(!*missing);
+	auto truncated = *bytes; truncated.pop_back(); BOOST_TEST(!IsCollisionBox(truncated, "L00_EMIS.PHYS000"));
+}
+
+BOOST_AUTO_TEST_CASE(composed_model_attachment_remaps_skin_columns_and_retains_parent_lod)
+{
+	Assets::ModelAssetDesc base; base.rig.skeleton_name = "body";
+	base.rig.bones = {{"root"}, {"head", 0}}; base.rig.attachments = {{"body", 0, 0}, {"body1", 0, 1}};
+	Assets::ModelAssetDesc child; child.rig.skeleton_name = "face";
+	child.rig.bones = {{"root"}, {"jaw", 0}}; child.rig.attachments = {{"face", 0, 0}, {"face1", 0, 1}};
+	Assets::ModelVertexDesc vertex; vertex.bone_indices[0] = 1; child.vertices.push_back(vertex);
+	child.indices = {0, 0, 0}; child.materials.emplace_back();
+	child.submeshes = {{0, 3, 0, "face", true}, {0, 3, 0, "face1", true}}; child.skin_bone_count = 2;
+	std::string error;
+	BOOST_REQUIRE_MESSAGE(Assets::Append_Model_Attachment(base, child, 1, false, "face branch", error), error);
+	BOOST_REQUIRE_EQUAL(base.rig.bones.size(), 4u); BOOST_TEST(base.rig.bones[2].parent == 1u); BOOST_TEST(base.rig.bones[3].parent == 2u);
+	BOOST_TEST(base.vertices.front().bone_indices[0] == 3u); BOOST_TEST(base.skin_bone_count == 4u);
+	BOOST_REQUIRE_EQUAL(base.submeshes.size(), 2u); BOOST_TEST(base.submeshes[0].name == "face branch/face1/0"); BOOST_TEST(base.submeshes[1].name == "face branch/face1/1");
+	const auto bones = base.rig.bones.size();
+	BOOST_TEST(!Assets::Append_Model_Attachment(base, child, 100, false, "bad", error)); BOOST_TEST(base.rig.bones.size() == bones);
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_character_aggregates_resolve_bodies_heads_and_bones)
+{
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) {BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return;}
+	const auto mounted = MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	Assets::W3DAdapter adapter;
+	const Assets::AssetSource source = [&](const Assets::AssetIdentity &identity) {
+		const auto bytes = mounted->files->Read(identity.canonical_name); return bytes ? *bytes : Buffer{};
+	};
+	for (const char *name : {"c_ag_gdi_mobi", "c_ag_nod_petr", "c_ag_gdi_mg", "c_ag_gdi_syd", "c_ag_logan", "c_ag_gdi_hotw", "c_ag_gdi_gun"}) {
+		BOOST_TEST_CONTEXT(name) {
+			const Assets::AssetIdentity identity{Assets::AssetType::Model, std::string(name) + ".w3d"};
+			const auto model = adapter.Import_With_Source(identity, source(identity), source);
+			BOOST_REQUIRE_MESSAGE(model.description, model.error);
+			BOOST_TEST(!model.description->vertices.empty()); BOOST_TEST(!model.description->indices.empty());
+			BOOST_TEST(model.description->rig.bones.size() > 25u);
+			BOOST_TEST(model.description->skin_bone_count <= model.description->rig.bones.size());
+			BOOST_REQUIRE(std::ranges::any_of(model.description->collision.boxes,[](const auto& box) {
+				return Assets::Canonicalize_Asset_Name(box.name).find("worldbox")!=std::string::npos;
+			}));
+			BOOST_TEST(std::ranges::any_of(model.description->submeshes, [](const auto &part) {return part.name.find("/0/") != std::string::npos;}));
+			std::string error; BOOST_REQUIRE_MESSAGE(Assets::Validate_Model_Rig(model.description->rig, error), error);
+		}
+	}
+	const Assets::AssetSource missing = [](const Assets::AssetIdentity &) {return Buffer{};};
+	const auto bytes = mounted->files->Read("c_ag_logan.w3d"); BOOST_REQUIRE(bytes.has_value());
+	BOOST_TEST(!adapter.Import_With_Source({Assets::AssetType::Model, "c_ag_logan.w3d"}, *bytes, missing).description);
+}

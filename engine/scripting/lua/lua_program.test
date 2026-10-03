@@ -6,6 +6,21 @@
 #include <variant>
 import engine.scripting.lua.lua_program;
 using namespace engine::scripting::lua;
+BOOST_AUTO_TEST_CASE(explicit_integer_slots_restore_in_an_independent_vm_and_reject_noninteger_state)
+{
+    constexpr auto source="return { Tick=function(self, delta) self[1]=self[1]+delta; emit('sum',self[1]) end }";
+    Program first; BOOST_REQUIRE(first.Load(source,"slots"));
+    IntegerState state{};state[0]=11;state[63]=-4;
+    BOOST_REQUIRE(first.RestoreState(state));
+    const std::array<Value,1> delta{std::int64_t{7}};
+    BOOST_REQUIRE(first.Invoke("Tick",delta));const auto checkpoint=first.CaptureState();BOOST_REQUIRE(checkpoint);
+    BOOST_TEST((*checkpoint)[0]==18);BOOST_TEST((*checkpoint)[63]==-4);
+    Program second;BOOST_REQUIRE(second.Load(source,"slots"));BOOST_REQUIRE(second.RestoreState(*checkpoint));
+    const auto commands=second.Invoke("Tick",delta);BOOST_REQUIRE(commands);
+    BOOST_TEST(std::get<std::int64_t>(commands->front().arguments[0])==25);
+    BOOST_REQUIRE(second.Load("return { Tick=function(self) self[1]='bad' end }","bad slots"));
+    BOOST_REQUIRE(second.Invoke("Tick"));BOOST_TEST(!second.CaptureState());
+}
 BOOST_AUTO_TEST_CASE(private_script_state_and_missing_callbacks)
 {
 	Program a, b;
@@ -31,4 +46,11 @@ BOOST_AUTO_TEST_CASE(errors_budgets_and_no_native_loaders)
 	BOOST_TEST(!script.Invoke("Tick"));
 	BOOST_REQUIRE(script.Load("return { Tick = function(self) emit('fraction', 0.5) end }", "integer API"));
 	BOOST_TEST(!script.Invoke("Tick"));
+}
+BOOST_AUTO_TEST_CASE(dependency_lists_remain_immutable_content_and_validate_element_types)
+{
+    Program program;BOOST_REQUIRE(program.Load("return { clips={'one','two'} }","dependencies"));
+    const auto clips=program.StringList("clips");BOOST_REQUIRE(clips);BOOST_REQUIRE_EQUAL(clips->size(),2u);BOOST_TEST((*clips)[0]=="one");BOOST_TEST((*clips)[1]=="two");
+    BOOST_TEST(program.StringList("missing")->empty());
+    BOOST_REQUIRE(program.Load("return { clips={1} }","invalid dependencies"));BOOST_TEST(!program.StringList("clips"));
 }

@@ -1,0 +1,50 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.campaign.conversations;
+import games.renegade.content.audio.sound_preset;
+import games.renegade.content.levels.level_scene;
+import games.renegade.content.install.install_mount;
+using namespace renegade::content;
+namespace {
+using ConversationBytes=std::vector<std::byte>;
+void Append32(ConversationBytes& out,std::uint32_t value) {for(unsigned i=0;i<4;++i) out.push_back(std::byte((value>>(8*i))&255));}
+ConversationBytes ScalarBytes(std::uint32_t value) {ConversationBytes out;Append32(out,value);return out;}
+ConversationBytes StringBytes(std::string_view text) {ConversationBytes out;for(char c:text) out.push_back(std::byte(c));out.push_back(std::byte{});return out;}
+void Micro(ConversationBytes& out,unsigned id,const ConversationBytes& bytes) {out.push_back(std::byte(id));out.push_back(std::byte(bytes.size()));out.insert(out.end(),bytes.begin(),bytes.end());}
+ConversationBytes Chunk(unsigned id,const ConversationBytes& payload,bool children=true) {ConversationBytes out;Append32(out,id);Append32(out,std::uint32_t(payload.size())|(children ? 0x80000000u : 0u));out.insert(out.end(),payload.begin(),payload.end());return out;}
+void Append(ConversationBytes& out,const ConversationBytes& bytes) {out.insert(out.end(),bytes.begin(),bytes.end());}
+ConversationBytes ConversationFixture(unsigned orator=0,unsigned category=1) {
+    ConversationBytes variables;Micro(variables,0,StringBytes("fixture"));Micro(variables,1,ScalarBytes(99));Micro(variables,8,ScalarBytes(category));
+    auto record=Chunk(0x08090316,variables,false);Append(record,Chunk(0x08090317,{}));
+    ConversationBytes remark;Micro(remark,0,ScalarBytes(orator));Micro(remark,1,ScalarBytes(202));Micro(remark,2,StringBytes("actor.speak"));
+    Append(record,Chunk(0x08090318,Chunk(0x01250307,remark,false)));
+    auto prefix=ScalarBytes(1);Append(prefix,Chunk(0x08090319,record));return Chunk(0x08090318,prefix);
+}
+}
+BOOST_AUTO_TEST_CASE(conversation_category_raw_prefix_and_remark_scopes_follow_original_save_schema) {
+    const auto parsed=ReadConversationManager(ConversationFixture());BOOST_REQUIRE_MESSAGE(parsed,(parsed ? "" : parsed.error()));
+    BOOST_REQUIRE_EQUAL(parsed->entries.size(),1u);const auto& conversation=parsed->entries.front();
+    BOOST_TEST(conversation.id==99u);BOOST_TEST(conversation.category==1u);BOOST_TEST(conversation.orators==1u);BOOST_REQUIRE_EQUAL(conversation.remarks.size(),1u);
+    BOOST_TEST(conversation.remarks.front().text==202u);BOOST_TEST(conversation.remarks.front().animation=="actor.speak");BOOST_TEST(parsed->Find("FIXTURE")!=nullptr);
+    BOOST_TEST(!ReadConversationManager(ConversationFixture(1)));BOOST_TEST(!ReadConversationManager(ConversationFixture(0,0)));
+    BOOST_TEST(!ReadConversationManager(Chunk(0x08090318,{std::byte{1}})));
+}
+BOOST_AUTO_TEST_CASE(sound_definition_variables_use_the_direct_scope_and_strip_only_legacy_relative_directories) {
+    LegacyDefinition definition;definition.factory=0x30000;definition.id=42;
+    ConversationBytes fields;Micro(fields,11,StringBytes("dialog\\hello.wav"));Micro(fields,4,ScalarBytes(0x3f000000));Micro(fields,19,ScalarBytes(0x3f800000));Micro(fields,10,{std::byte{1}});
+    Micro(fields,7,ScalarBytes(0x42c80000));Micro(fields,8,ScalarBytes(0x41200000));definition.data=Chunk(0x100,fields,false);
+    const auto parsed=ReadSoundPreset(definition);BOOST_REQUIRE(parsed);BOOST_TEST(parsed->filename=="hello.wav");BOOST_TEST(parsed->positional);
+    BOOST_TEST(parsed->volume.Raw()==Engine::Math::Fixed::FromRatio(1,2).Raw());BOOST_TEST(parsed->minimum_range.Raw()==10*Engine::Math::Fixed::OneRaw);BOOST_TEST(parsed->maximum_range.Raw()==100*Engine::Math::Fixed::OneRaw);
+    Micro(fields,11,StringBytes("duplicate.wav"));definition.data=Chunk(0x100,fields,false);BOOST_TEST(!ReadSoundPreset(definition));
+}
+BOOST_AUTO_TEST_CASE(retail_tutorial_preserves_original_Logan_intro_remarks_and_all_thirteen_level_conversation_catalogs) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted);
+    constexpr std::array maps{"M00_Tutorial.mix","M01.mix","M02.mix","M03.mix","M04.mix","M05.mix","M06.mix","M07.mix","M08.mix","M09.mix","M10.mix","M11.mix","M13.mix"};
+    for(const auto map:maps) {
+        const auto level=LoadLevelScene(*mounted->files,map);BOOST_REQUIRE(level);
+        const auto catalog=ReadLevelConversations(level->dynamic_data);BOOST_REQUIRE_MESSAGE(catalog,(catalog ? map : std::string(map)+": "+catalog.error()));
+        BOOST_TEST_MESSAGE(map<<" conversations="<<catalog->entries.size());
+        if(std::string_view(map)=="M00_Tutorial.mix") {const auto* intro=catalog->Find("MTU_LOGAN_START");BOOST_REQUIRE(intro);BOOST_TEST(!intro->remarks.empty());for(const auto& remark:intro->remarks) BOOST_TEST(remark.text!=0u);}
+    }
+}

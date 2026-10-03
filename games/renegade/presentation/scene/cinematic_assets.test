@@ -1,0 +1,169 @@
+#define BOOST_TEST_MODULE RenegadeCinematicAssets
+#include <boost/test/included/unit_test.hpp>
+import std;
+import games.renegade.presentation.scene.cinematic_assets;
+import games.renegade.content.install.install_mount;
+import engine.assets.adapters.filesystem.virtual_asset_source;
+import Assets.Adapters.W3D;
+import Assets.Adapters.W3D.RequestPolicy;
+import Assets.Cache;
+import Assets.Identity;
+import Assets.ModelRig;
+import games.renegade.content.levels.definition_catalog;
+import Engine.Core.Math.FixedPresentation;
+import games.renegade.content.presentation.asset_paths;
+import engine.filesystem.adapters.directory.directory_source;
+import engine.level.adapters.model.model_collision;
+import games.renegade.session;
+import Graphics.Scene.Models.AssetPose;
+import games.renegade.presentation.scene.speech_assets;
+
+BOOST_AUTO_TEST_CASE(retail_ladder_transition_clips_retain_authored_root_motion) {
+    using namespace renegade;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    engine::assets::VirtualAssetSource source(*mounted->files,content::AssetPaths);
+    Assets::AssetCache assets(source);BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
+    std::string error;
+    const auto skeleton=assets.Load_Rig(Assets::AssetType::Skeleton,"S_A_HUMAN",error);BOOST_REQUIRE_MESSAGE(skeleton,error);
+    unsigned ordinal{};
+    for(const auto suffix:{"4242","4243","4262","4263"}) {
+        const auto name=std::string("S_A_HUMAN.H_A_")+suffix;
+        const auto rig=assets.Load_Rig(Assets::AssetType::Animation,name,error);BOOST_REQUIRE_MESSAGE(rig,error);
+        BOOST_REQUIRE_EQUAL(rig->animations.size(),1);const auto& clip=rig->animations.front();
+        Graphics::ModelAssetPose pose;BOOST_REQUIRE_MESSAGE(pose.Initialize(*skeleton,clip,error),error);
+        BOOST_REQUIRE(pose.Evaluate(0,0,false));std::vector<Graphics::RenderTransform> first(pose.Bone_Count());
+        for(unsigned bone=0;bone<pose.Bone_Count();++bone) BOOST_REQUIRE(pose.Bone_Transform(bone,first[bone]));
+        BOOST_REQUIRE(pose.Evaluate(0,float(clip.frame_count-1),false));
+        float maximum{};
+        for(unsigned bone=0;bone<pose.Bone_Count();++bone) {
+            Graphics::RenderTransform end;BOOST_REQUIRE(pose.Bone_Transform(bone,end));
+            const auto dx=end.matrix[3]-first[bone].matrix[3],dy=end.matrix[7]-first[bone].matrix[7],dz=end.matrix[11]-first[bone].matrix[11];
+            maximum=(std::max)(maximum,std::sqrt(dx*dx+dy*dy+dz*dz));
+            if(bone<3) BOOST_TEST_MESSAGE(name<<" bone="<<bone<<" first="<<first[bone].matrix[3]<<","<<first[bone].matrix[7]<<","<<first[bone].matrix[11]<<" end="<<end.matrix[3]<<","<<end.matrix[7]<<","<<end.matrix[11]);
+        }
+        BOOST_TEST_MESSAGE(name<<" frames="<<clip.frame_count<<" fps="<<clip.frame_rate<<" motion="<<maximum);
+        const std::array frames{8u,8u,11u,11u};BOOST_TEST(clip.frame_count==frames[ordinal]);BOOST_TEST(clip.frame_rate==15.f);BOOST_TEST(maximum>0.1f);
+        if(ordinal>=2) {
+            Graphics::RenderTransform end;BOOST_REQUIRE(pose.Bone_Transform(1,end));
+            const auto delta=end.matrix[11]-first[1].matrix[11];
+            BOOST_CHECK_SMALL(delta-(ordinal==2 ? 1.6063457f : -1.6063457f),.0001f);
+        }
+        ++ordinal;
+    }
+}
+
+BOOST_AUTO_TEST_CASE(retail_intro_vehicle_tracks_and_late_created_human_have_valid_poses) {
+    using namespace renegade;using namespace Engine::Math;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) {BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR");return;}
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    auto& files=*mounted->files;files.Mount(std::make_unique<engine::filesystem::DirectorySource>(std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path().parent_path()/"content/scripts"));const auto bytes=files.Read("objects.ddb");BOOST_REQUIRE(bytes.has_value());
+    const auto definitions=content::ReadDefinitions(*bytes);BOOST_REQUIRE(definitions.has_value());
+    engine::assets::VirtualAssetSource source(files,content::AssetPaths);
+    Assets::AssetCache assets(source);BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
+    content::CinematicStartup startup;startup.control_file="X00_Intro.txt";
+    const auto cinematic=presentation::PrepareCinematic(assets,files,*definitions,startup,48000,[]{return false;});
+    BOOST_REQUIRE_MESSAGE(cinematic.has_value(),(cinematic ? "" : cinematic.error()));
+    BOOST_REQUIRE_EQUAL(cinematic->actors.size(),37u);
+    for(const auto slot:{2,4,6}) {
+        const auto actor=std::ranges::find(cinematic->actors,slot,&presentation::PreparedCinematicActor::slot);BOOST_REQUIRE(actor!=cinematic->actors.end());
+        const auto& samples=actor->motion.samples;BOOST_REQUIRE(samples.size()>=4501u);Fixed maximum{};
+        const auto initial=samples.front().Point({});
+        for(const auto& sample:samples) maximum=(std::max)(maximum,Length(sample.Point({})-initial));
+        BOOST_TEST_MESSAGE("vehicle slot="<<slot<<" motion="<<ToFloat(maximum));
+        BOOST_TEST(maximum.Raw()>Fixed::FromInt(1).Raw());
+    }
+    const auto human=std::ranges::find(cinematic->actors,11,&presentation::PreparedCinematicActor::slot);BOOST_REQUIRE(human!=cinematic->actors.end());
+    BOOST_REQUIRE(human->initial_clip.clip);auto pose=human->pose;
+    BOOST_TEST(pose.Evaluate(human->initial_clip.clip-1,0,true));
+    const auto* human_model=assets.Try_Get_Model(human->gpu.model);BOOST_REQUIRE(human_model);BOOST_REQUIRE(!human_model->Rig().attached_rigs.empty());
+    const auto existing=human->pose.Animations();std::vector<Assets::ModelAnimationDesc> speech_clips(existing.begin(),existing.end());
+    const std::array<presentation::SpeechAssetLine,1> line{{{1,123,{},"cat",Fixed::One()}}};
+    const auto speech=presentation::PrepareSpeech(assets,human_model->Rig(),line,speech_clips);BOOST_REQUIRE_MESSAGE(speech,(speech ? "" : speech.error()));BOOST_REQUIRE(speech->has_value());
+    BOOST_REQUIRE((**speech).bank.size()==1u);const auto& face=(**speech).state;const auto index=(**speech).bank.front().playback.clip-1;
+    BOOST_TEST_MESSAGE("retail face range="<<face.first_bone<<"+"<<face.bone_count<<" generated keys="<<speech_clips[index].channels.front().key_frames.size());
+    std::string face_error;BOOST_REQUIRE(pose.Initialize(human_model->Rig(),std::span<const Assets::ModelAnimationDesc>(speech_clips),face_error));BOOST_REQUIRE(pose.Evaluate(human->initial_clip.clip-1,0));
+    std::vector<Graphics::RenderTransform> rest(face.bone_count);for(unsigned i=0;i<face.bone_count;++i) BOOST_REQUIRE(pose.Bone_Transform(face.first_bone+i,rest[i]));
+    BOOST_REQUIRE(pose.Evaluate_Layer(index,8,face.first_bone,face.bone_count));float maximum{};
+    for(unsigned i=0;i<face.bone_count;++i) {Graphics::RenderTransform current;BOOST_REQUIRE(pose.Bone_Transform(face.first_bone+i,current));for(unsigned element=0;element<12;++element) maximum=(std::max)(maximum,std::abs(current.matrix[element]-rest[i].matrix[element]));}
+    BOOST_TEST_MESSAGE("retail mouth pose difference="<<maximum);BOOST_TEST(maximum>.001f);
+    for(const auto slot:{8,9,10,11}) {
+        const auto actor=std::ranges::find(cinematic->actors,slot,&presentation::PreparedCinematicActor::slot);BOOST_REQUIRE(actor!=cinematic->actors.end());
+        BOOST_REQUIRE(actor->weapon.has_value());BOOST_TEST(actor->held_weapon.model.Is_Valid());BOOST_TEST(actor->pose.Bone_Index("GUNBONE")<actor->pose.Bone_Count());
+        BOOST_TEST(actor->weapon->collision_categories==2u);
+        BOOST_TEST_MESSAGE("actor="<<slot<<" weapon="<<actor->weapon->model<<" rate="<<ToFloat(actor->weapon->rate)<<" projectile="<<actor->weapon->projectile<<" trail="<<actor->weapon->trail);
+        BOOST_TEST(actor->projectile.model.Is_Valid());BOOST_TEST(!actor->muzzle.samples.empty());
+    }
+    const auto rocket=std::ranges::find(cinematic->actors,10,&presentation::PreparedCinematicActor::slot);BOOST_REQUIRE(rocket!=cinematic->actors.end());
+    // X00_Intro attaches the original force-fire callback at frame 1200.
+    // WeaponClass::Fire_Bullet (weapons.cpp:800) launches along muzzle X,
+    // including the pitch authored by the character's cinematic animation.
+    // The callback's ground-level target must not flatten this direction.
+    const auto& muzzle=rocket->muzzle.samples.at(2403);
+    auto direction=FixedVector3{muzzle.elements[0],muzzle.elements[4],muzzle.elements[8]};direction=direction/Length(direction);
+    BOOST_TEST_MESSAGE("authored rocket muzzle direction="<<ToFloat(direction.x)<<","<<ToFloat(direction.y)<<","<<ToFloat(direction.z));
+    BOOST_TEST(direction.x.Raw()>Fixed::FromRatio(9,10).Raw());BOOST_TEST(direction.z.Raw()>Fixed::FromRatio(1,10).Raw());
+    const auto* projectile=assets.Try_Get_Model(rocket->projectile.model);BOOST_REQUIRE(projectile);
+    BOOST_TEST(!projectile->Emitter().has_value());BOOST_REQUIRE(!projectile->Emitters().empty());
+    for(const auto& emitter:projectile->Emitters()) {BOOST_TEST_MESSAGE("rocket emitter="<<emitter.description.name<<" texture="<<emitter.description.texture_name<<" rate="<<emitter.description.emission_rate);BOOST_TEST(emitter.description.emission_rate>0);BOOST_TEST(!emitter.description.texture_name.empty());}
+    for(const auto slot:{2,4,6}) {const auto actor=std::ranges::find(cinematic->actors,slot,&presentation::PreparedCinematicActor::slot);BOOST_REQUIRE(actor!=cinematic->actors.end());BOOST_TEST(!actor->wheels.empty());}
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_gate_frames_and_lua_commands_change_shared_collision) {
+    using namespace renegade;using namespace Engine::Math;using namespace engine::gameplay;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted);
+    auto& files=*mounted->files;files.Mount(std::make_unique<engine::filesystem::DirectorySource>(std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path().parent_path()/"content/scripts"));
+    engine::assets::VirtualAssetSource source(files,content::AssetPaths);Assets::AssetCache assets(source);BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));
+    const auto handle=assets.Request_Model("CHT_JAIL.w3d");assets.Wait(handle);const auto* model=assets.Try_Get_Model(handle);BOOST_REQUIRE_MESSAGE(model,assets.Get_Error(handle));
+    BOOST_TEST_MESSAGE("retail gate collision parts="<<model->Collision().parts.size()<<" boxes="<<model->Collision().boxes.size());
+    std::string error;const auto rig=assets.Load_Rig(Assets::AssetType::Animation,"CHT_JAIL.CHT_JAIL",error);BOOST_REQUIRE_MESSAGE(rig,error);BOOST_REQUIRE(rig->animations.size()==1u);
+    const auto& clip=rig->animations.front();BOOST_TEST(clip.frame_count==3u);BOOST_TEST(clip.frame_rate==5.f);
+    Graphics::ModelAssetPose pose;BOOST_REQUIRE_MESSAGE(pose.Initialize(model->Rig(),clip,error),error);
+    engine::level::ModelCollisionTrack3 track;std::vector<FixedAffineTransform3> bones(pose.Bone_Count());
+    for(unsigned frame=0;frame<3;++frame) {
+        BOOST_REQUIRE(pose.Evaluate(0,float(frame)));
+        for(std::size_t bone=0;bone<bones.size();++bone) {
+            Graphics::RenderTransform transform;BOOST_REQUIRE(pose.Bone_Transform(bone,transform));
+            for(unsigned element=0;element<12;++element) bones[bone].elements[element]=Fixed::FromBinary32Bits(std::bit_cast<std::uint32_t>(transform.matrix[element]));
+        }
+        const auto geometry=engine::level::PrepareModelCollision(*model,{},bones);BOOST_REQUIRE(geometry);track.frames.push_back(*geometry);
+        BOOST_TEST_MESSAGE("retail gate frame="<<frame<<" collision triangles="<<geometry->first.size());
+        const auto boxes=engine::level::PrepareModelBoxBounds(*model,{},bones);BOOST_REQUIRE(boxes);
+        for(const auto& box:*boxes) BOOST_TEST_MESSAGE("box="<<box.name<<" center="<<ToFloat(box.bounds.center.x)<<","<<ToFloat(box.bounds.center.y)<<","<<ToFloat(box.bounds.center.z)<<" extent="<<ToFloat(box.bounds.extent.x)<<","<<ToFloat(box.bounds.extent.y)<<","<<ToFloat(box.bounds.extent.z)<<" categories="<<box.categories);
+    }
+    const auto point=[](int x,int y,int z) {return FixedVector3{Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};};
+    const auto run=[&](unsigned workers) {
+        Session session(workers,7);auto& world=session.World();ecs::CommandBuffer entities;
+        const auto owner=entities.Create();entities.Add<AffinePose>(owner);std::vector<ecs::DeferredEntity> pending;
+        constexpr std::array<std::uint64_t,4> ids{400142,400143,400144,400146};
+        for(unsigned i=0;i<ids.size();++i) {
+            auto gate=entities.Create();pending.push_back(gate);AffinePose transform;transform.transform.elements[7]=Fixed::FromInt(i*20);
+            entities.Add<AffinePose>(gate,transform);entities.Add<ClipPlayback>(gate);entities.Add<KinematicCollider>(gate,KinematicCollider{ids[i],0});
+        }world.Commit(entities);auto& scene=world.Resource<SceneState>();scene.authored_entities.emplace(400099,entities.Resolve(owner));
+        ClipPlayback prototype;prototype.clip=1;prototype.frame_count=3;prototype.frames_per_second=Fixed::FromInt(5);prototype.loop_period=Fixed::FromInt(2);
+        for(unsigned i=0;i<4;++i) {const auto gate=entities.Resolve(pending[i]);scene.authored_entities.emplace(ids[i],gate);world.Resource<MissionAnimationLibrary>().bindings.push_back({gate,"CHT_JAIL.CHT_JAIL",prototype});}
+        auto base=std::make_shared<engine::level::CollisionScene3>();base->Prepare();auto& library=world.Resource<KinematicCollisionLibrary>();library.static_scene=base;library.models.push_back({track.frames[2],{track}});
+        content::PreparedBehaviors programs;programs.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+        const auto controller=files.ReadText("MTU_Tutorial_Controller.lua");BOOST_REQUIRE(controller);
+        programs.library.programs.push_back({"controller",*controller,"Created",{std::int64_t{400099},std::string{},std::int64_t{17}}});programs.bindings.push_back({400099,0,0});BOOST_REQUIRE(session.InstallBehaviors(programs));
+        session.Step();
+        const engine::level::CollisionBox3 body{point(0,-2,1),{Fixed::FromRatio(1,5),Fixed::FromRatio(1,5),Fixed::FromRatio(9,10)}};
+        const auto closed=world.Resource<CollisionGeometry>().scene->Cast(body,point(0,4,0),1);BOOST_REQUIRE_MESSAGE(closed,"retail frame zero must block the central entrance");BOOST_TEST(closed->subject==400142u);
+        // Original instructor Action_Complete emits opening commands for the
+        // two entrance gates. Exercise those callbacks through the ECS bridge.
+        const auto instructor=files.ReadText("MTU_Tutorial_Instructor.lua");BOOST_REQUIRE(instructor);
+        auto& behavior=world.Resource<BehaviorPrograms>().programs.front();behavior.source=*instructor;behavior.startup_event="";
+        BehaviorMessage message;message.recipient=entities.Resolve(owner);message.event=std::uint32_t(content::MissionEvent::ActionComplete);message.arguments={400099,5,6,0};message.argument_count=3;message.due_tick=2;
+        world.Resource<BehaviorInbox>().messages.push_back(message);session.Step();
+        BOOST_TEST(world.Resource<ClipRequests>().Size()==2u);
+        for(unsigned tick=3;tick<=27;++tick) session.Step();
+        BOOST_TEST(world.Get<ClipPlayback>(scene.authored_entities.at(400142))->frame.Raw()==Fixed::FromInt(2).Raw());
+        BOOST_TEST(world.Get<ClipPlayback>(scene.authored_entities.at(400143))->frame.Raw()==Fixed::FromInt(2).Raw());
+        BOOST_TEST(world.Get<ClipPlayback>(scene.authored_entities.at(400144))->frame.Raw()==0);BOOST_TEST(world.Get<ClipPlayback>(scene.authored_entities.at(400146))->frame.Raw()==0);
+        const auto still_blocked=world.Resource<CollisionGeometry>().scene->Cast(body,point(0,4,0),1);
+        if(still_blocked) BOOST_TEST_MESSAGE("open hit subject="<<still_blocked->subject<<" triangle="<<still_blocked->triangle<<" fraction="<<ToFloat(still_blocked->fraction));
+        BOOST_TEST(!still_blocked);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

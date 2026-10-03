@@ -36,6 +36,22 @@ BOOST_AUTO_TEST_CASE(chunk_reader_rejects_truncated_headers_and_payloads)
 	BOOST_CHECK(!Assets::W3D::W3DValidate_Chunk_Tree(truncated_payload));
 }
 
+BOOST_AUTO_TEST_CASE(microchunk_envelope_preserves_repeated_fields_and_rejects_truncation)
+{
+	using namespace Assets::W3D;
+	std::vector<Byte> bytes{Byte{1}, Byte{0}, Byte{1}, Byte{255}};
+	bytes.insert(bytes.end(), 255, Byte{42});
+	std::vector<std::pair<unsigned, std::size_t>> visits;
+	BOOST_REQUIRE(W3DVisit_MicroChunks(bytes, [&](const W3DMicroChunkView &chunk) {
+		visits.emplace_back(chunk.id, chunk.payload.size()); return true;
+	}));
+	BOOST_REQUIRE_EQUAL(visits.size(), 2u); BOOST_TEST(visits[0].second == 0u);
+	BOOST_TEST(visits[1].first == 1u); BOOST_TEST(visits[1].second == 255u);
+	bytes.pop_back(); BOOST_TEST(!W3DVisit_MicroChunks(bytes, [](const auto &) { return true; }));
+	BOOST_TEST(!W3DVisit_MicroChunks(std::array{Byte{1}}, [](const auto &) { return true; }));
+	BOOST_TEST(!W3DVisit_MicroChunks(std::array{Byte{1}, Byte{0}}, [](const auto &) { return false; }));
+}
+
 BOOST_AUTO_TEST_CASE(chunk_reader_visits_bounded_nested_chunks)
 {
 	std::vector<Byte> nested;

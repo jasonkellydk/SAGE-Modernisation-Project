@@ -1,0 +1,117 @@
+#define BOOST_TEST_MODULE LevelModelCollision
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.level.adapters.model.model_collision;
+import Assets.Models;
+import Assets.Identity;
+
+namespace {
+using namespace Engine::Math;
+FixedVector3 P(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+Assets::ModelAssetDesc Floor() {
+    Assets::ModelAssetDesc model;
+    model.vertices.resize(3);model.vertices[0].position={-16,-16,0};model.vertices[1].position={16,-16,0};model.vertices[2].position={0,16,0};
+    model.collision.triangles={{0,1,2}};model.collision.surfaces={17};model.collision.parts={{"floor",0,1,3,false}};
+    return model;
+}
+}
+BOOST_AUTO_TEST_CASE(model_collision_preserves_surfaces_categories_and_full_instance_transform) {
+    using namespace engine::level;
+    Assets::ModelAsset asset({Assets::AssetType::Model,"floor"},Floor());
+    const auto model=PrepareModelCollision(asset);BOOST_REQUIRE(model.has_value());BOOST_REQUIRE(model->first.size()==1u);
+    FixedAffineTransform3 pose;pose.elements={Fixed{},-Fixed::One(),Fixed{},Fixed::FromInt(30),Fixed::FromInt(2),Fixed{},Fixed{},Fixed::FromInt(50),Fixed{},Fixed{},Fixed::One(),Fixed::FromInt(7)};
+    CollisionScene3 scene;AppendModelCollision(scene,*model,pose,42,1);scene.Prepare();
+    const auto hit=scene.Cast({P(30,50,12),P(1,1,1)},P(0,0,-10),1);BOOST_REQUIRE(hit.has_value());
+    BOOST_TEST(hit->fraction.Raw()==Fixed::FromRatio(2,5).Raw());BOOST_TEST(hit->surface==17u);BOOST_TEST(hit->subject==42u);
+    BOOST_TEST(!scene.Cast({P(30,50,12),P(1,1,1)},P(0,0,-10),2).has_value());
+    BOOST_TEST(!scene.Cast({P(0,0,12),P(1,1,1)},P(0,0,-10),1).has_value());
+}
+BOOST_AUTO_TEST_CASE(collision_bind_pose_uses_parent_rotation_and_highest_detail) {
+    auto description=Floor();
+    description.rig.skeleton_name="rig";
+    // Quaternion (0,0,1,0) rotates the translated child by 180 degrees.
+    description.rig.bones={{"root",Assets::ModelRootParent,{10,20,3},{0,0,1,0}},{"child",0,{2,0,4}}};
+    description.rig.attachments={{"rig.floor",1,1},{"rig.coarse",0,0}};
+    description.collision.parts.push_back({"coarse",0,1,4,false});
+    Assets::ModelAsset asset({Assets::AssetType::Model,"rig"},std::move(description));
+    const auto model=engine::level::PrepareModelCollision(asset);BOOST_REQUIRE(model.has_value());BOOST_REQUIRE(model->first.size()==1u);
+    BOOST_TEST(model->first[0].x.Raw()==Fixed::FromInt(24).Raw());BOOST_TEST(model->first[0].y.Raw()==Fixed::FromInt(36).Raw());BOOST_TEST(model->first[0].z.Raw()==Fixed::FromInt(7).Raw());
+    BOOST_TEST(model->categories[0]==3u);
+    const auto coarse=engine::level::PrepareModelCollision(asset,0);BOOST_REQUIRE(coarse.has_value());BOOST_REQUIRE(coarse->first.size()==1u);BOOST_TEST(coarse->categories[0]==4u);
+}
+BOOST_AUTO_TEST_CASE(collision_skinning_uses_indexed_influences_without_material_or_visibility_dependency) {
+    auto description=Floor();description.rig.skeleton_name="rig";
+    description.rig.bones={{"root",Assets::ModelRootParent,{0,0,2}},{"child",0,{0,0,8}}};
+    description.collision.parts[0].skinned=true;
+    for(auto& vertex:description.vertices) {vertex.bone_indices={0,1,0,0};vertex.bone_weights={.25f,.75f,0,0};}
+    Assets::ModelAsset asset({Assets::AssetType::Model,"skin"},std::move(description));
+    const auto model=engine::level::PrepareModelCollision(asset);BOOST_REQUIRE(model.has_value());
+    BOOST_TEST(model->first[0].z.Raw()==Fixed::FromInt(8).Raw());BOOST_TEST(model->second[0].z.Raw()==Fixed::FromInt(8).Raw());
+    BOOST_TEST(asset.Submeshes().empty()); // Collision-only model still works.
+}
+BOOST_AUTO_TEST_CASE(posed_collision_uses_supplied_bones_and_rejects_incomplete_poses) {
+    auto description=Floor();description.rig.skeleton_name="rig";
+    description.rig.bones={{"root",Assets::ModelRootParent,{0,0,2}},{"child",0,{0,0,8}}};
+    description.rig.attachments={{"rig.floor",1,0}};
+    Assets::ModelAsset asset({Assets::AssetType::Model,"posed"},std::move(description));
+    std::array<FixedAffineTransform3,2> bones;bones[1].elements[11]=Fixed::FromInt(25);
+    const auto model=engine::level::PrepareModelCollision(asset,{},bones);BOOST_REQUIRE(model);BOOST_TEST(model->first[0].z.Raw()==Fixed::FromInt(25).Raw());
+    BOOST_TEST(!engine::level::PrepareModelCollision(asset,{},std::span(bones).first(1)));
+    const auto rest=engine::level::PrepareModelCollision(asset);BOOST_REQUIRE(rest);BOOST_TEST(rest->first[0].z.Raw()==Fixed::FromInt(10).Raw());
+}
+BOOST_AUTO_TEST_CASE(authored_box_proxies_retain_dimensions_and_hierarchy_transforms_at_highest_detail) {
+    auto description=Floor();description.rig.skeleton_name="rig";
+    description.rig.bones={{"root",Assets::ModelRootParent,{10,20,3}},{"child",0,{2,0,4}}};
+    description.rig.attachments={{"rig.proxy",1,1},{"rig.coarse_proxy",0,0}};
+    description.collision.boxes={{"proxy",{0,0,1},{.5f,.75f,1},1,true},{"coarse_proxy",{0,0,1},{2,2,2},0,false}};
+    Assets::ModelAsset asset({Assets::AssetType::Model,"proxy"},std::move(description));
+    const auto boxes=engine::level::PrepareModelBoxBounds(asset);BOOST_REQUIRE(boxes.has_value());BOOST_REQUIRE(boxes->size()==1u);
+    BOOST_TEST(boxes->front().bounds.center.x.Raw()==Fixed::FromInt(12).Raw());BOOST_TEST(boxes->front().bounds.center.z.Raw()==Fixed::FromInt(8).Raw());
+    BOOST_TEST(boxes->front().bounds.extent.x.Raw()==Fixed::Half().Raw());BOOST_TEST(boxes->front().bounds.extent.y.Raw()==Fixed::FromRatio(3,4).Raw());
+    BOOST_TEST(boxes->front().categories==1u);BOOST_TEST(boxes->front().aligned);
+}
+BOOST_AUTO_TEST_CASE(malformed_collision_geometry_fails_before_level_mutation) {
+    auto description=Floor();description.collision.triangles[0][2]=99;
+    Assets::ModelAsset missing({Assets::AssetType::Model,"missing"},description);BOOST_TEST(!engine::level::PrepareModelCollision(missing).has_value());
+    description=Floor();description.collision.surfaces.clear();
+    Assets::ModelAsset columns({Assets::AssetType::Model,"columns"},description);BOOST_TEST(!engine::level::PrepareModelCollision(columns).has_value());
+    description=Floor();description.vertices[0].position.x=std::numeric_limits<float>::infinity();
+    Assets::ModelAsset invalid({Assets::AssetType::Model,"invalid"},description);BOOST_TEST(!engine::level::PrepareModelCollision(invalid).has_value());
+    engine::level::CollisionScene3 scene;engine::level::ModelCollision3 malformed;malformed.first.push_back({});
+    BOOST_CHECK_THROW(engine::level::AppendModelCollision(scene,malformed,{},1),std::invalid_argument);BOOST_TEST(scene.TriangleCount()==0u);
+}
+BOOST_AUTO_TEST_CASE(explicit_attachment_metadata_disambiguates_identical_names_across_detail_levels) {
+    auto description=Floor();description.rig.skeleton_name="rig";
+    description.rig.bones={{"root",Assets::ModelRootParent,{0,0,3}},{"child",0,{0,0,4}}};
+    description.rig.attachments={{"rig.floor",0,0},{"rig.floor",1,1},{"rig.worldbox",0,0},{"rig.worldbox",1,1}};
+    description.collision.parts={{"floor",0,1,1,false,0,0,true},{"floor",0,1,2,false,1,1,true}};
+    description.collision.boxes={{"worldbox",{0,0,1},{1,1,1},1,true,0,0,true},{"worldbox",{0,0,1},{.5f,.75f,1},2,true,1,1,true}};
+    Assets::ModelAsset asset({Assets::AssetType::Model,"rig"},std::move(description));
+    const auto fine=engine::level::PrepareModelCollision(asset);BOOST_REQUIRE(fine.has_value());BOOST_REQUIRE(fine->first.size()==13u);
+    BOOST_TEST(fine->categories[0]==2u);BOOST_TEST(fine->first[0].z.Raw()==Fixed::FromInt(7).Raw());
+    const auto coarse=engine::level::PrepareModelCollision(asset,0);BOOST_REQUIRE(coarse.has_value());BOOST_REQUIRE(coarse->first.size()==13u);
+    BOOST_TEST(coarse->categories[0]==1u);BOOST_TEST(coarse->first[0].z.Raw()==Fixed::FromInt(3).Raw());
+    const auto boxes=engine::level::PrepareModelBoxBounds(asset);BOOST_REQUIRE(boxes.has_value());BOOST_REQUIRE(boxes->size()==1u);
+    BOOST_TEST(boxes->front().bounds.center.z.Raw()==Fixed::FromInt(8).Raw());BOOST_TEST(boxes->front().bounds.extent.x.Raw()==Fixed::Half().Raw());
+    const auto low_boxes=engine::level::PrepareModelBoxBounds(asset,0);BOOST_REQUIRE(low_boxes.has_value());BOOST_REQUIRE(low_boxes->size()==1u);
+    BOOST_TEST(low_boxes->front().bounds.center.z.Raw()==Fixed::FromInt(4).Raw());
+}
+BOOST_AUTO_TEST_CASE(collision_only_boxes_publish_exact_oriented_faces_with_posed_hierarchy_and_category_filtering) {
+    Assets::ModelAssetDesc description;description.rig.skeleton_name="door";
+    description.rig.bones={{"root",Assets::ModelRootParent},{"leaf",0}};
+    description.rig.attachments={{"door.collision",1,0}};
+    description.collision.boxes={{"collision",{0,0,1},{.125f,1,1},3,false}};
+    Assets::ModelAsset asset({Assets::AssetType::Model,"door"},std::move(description));
+    const auto closed=engine::level::PrepareModelCollision(asset);BOOST_REQUIRE(closed);BOOST_REQUIRE(closed->first.size()==12u);
+    engine::level::CollisionScene3 blocked;engine::level::AppendModelCollision(blocked,*closed,{},42);blocked.Prepare();
+    BOOST_REQUIRE(blocked.Cast({P(-2,0,1),{}},P(4,0,0),1));BOOST_REQUIRE(blocked.Cast({P(-2,0,1),{}},P(4,0,0),2));BOOST_TEST(!blocked.Cast({P(-2,0,1),{}},P(4,0,0),4));
+    std::array<FixedAffineTransform3,2> bones;bones[1].elements[7]=Fixed::FromInt(3);
+    const auto open=engine::level::PrepareModelCollision(asset,{},bones);BOOST_REQUIRE(open);
+    engine::level::CollisionScene3 free;engine::level::AppendModelCollision(free,*open,{},42);free.Prepare();BOOST_TEST(!free.Cast({P(-2,0,1),{}},P(4,0,0),3));
+    // Rotate the thin box by 90 degrees: its broad expanded AABB must not
+    // replace the oriented faces used for authoritative collision.
+    bones[1].elements={Fixed{},-Fixed::One(),Fixed{},Fixed::FromInt(5),Fixed::One(),Fixed{},Fixed{},Fixed{},Fixed{},Fixed{},Fixed::One(),Fixed{}};
+    const auto rotated=engine::level::PrepareModelCollision(asset,{},bones);BOOST_REQUIRE(rotated);
+    engine::level::CollisionScene3 turn;engine::level::AppendModelCollision(turn,*rotated,{},42);turn.Prepare();
+    BOOST_REQUIRE(turn.Cast({P(5,-2,1),{}},P(0,4,0),3));BOOST_TEST(!turn.Cast({P(7,-2,1),{}},P(0,4,0),3));
+}

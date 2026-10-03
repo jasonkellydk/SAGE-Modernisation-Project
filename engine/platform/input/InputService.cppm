@@ -38,6 +38,10 @@ public:
 	[[nodiscard]] virtual KeyboardState keyboard_state() const noexcept = 0;
 	[[nodiscard]] virtual MouseState mouse_state() const noexcept = 0;
 	virtual bool set_relative_mouse_mode(bool enabled) = 0;
+	// Explicit ownership avoids a transient missing mouse-focus window during
+	// scene publication, focus changes, or release after Alt-Tab.
+	virtual bool set_relative_mouse_mode(WindowId window, bool enabled) { return set_relative_mouse_mode(enabled); }
+	[[nodiscard]] virtual bool relative_mouse_mode(WindowId window) const noexcept { return false; }
 	virtual bool show_cursor(bool visible) = 0;
 	virtual bool set_cursor_shape(CursorShape shape) = 0;
 	virtual bool warp_mouse(WindowId window, Point2D position) = 0;

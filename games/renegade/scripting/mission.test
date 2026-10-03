@@ -6,8 +6,195 @@
 #include <iterator>
 #include <string>
 #include <variant>
+#include <vector>
 import engine.scripting.lua.lua_program;
 using namespace engine::scripting::lua;
+namespace {
+void LoadMissionScript(Program& program,const char* name) {
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/"+name+".lua");BOOST_REQUIRE(file);
+    const std::string source{std::istreambuf_iterator<char>(file),{}};BOOST_REQUIRE(program.Load(source,name));
+}
+void CheckTrace(const std::vector<Command>& actual,const std::vector<Command>& expected) {
+    BOOST_REQUIRE_EQUAL(actual.size(),expected.size());
+    for(std::size_t i=0;i<expected.size();++i) {
+        BOOST_TEST_CONTEXT("source command "<<i) {
+            BOOST_TEST(actual[i].name==expected[i].name);BOOST_REQUIRE_EQUAL(actual[i].arguments.size(),expected[i].arguments.size());
+            for(std::size_t j=0;j<expected[i].arguments.size();++j) BOOST_CHECK(actual[i].arguments[j]==expected[i].arguments[j]);
+        }
+    }
+}
+Value I(std::int64_t value) {return value;}
+Value S(const char* value) {return std::string(value);}
+Command Help(const char* descriptor) {return {"Set_HUD_Help_Text",{S(descriptor),S("0.196"),S("0.882"),S("0.196")}};}
+std::vector<Command> Speech(const char* name,std::int64_t action,bool camera=true) {
+    std::vector<Command> result{{"Stop_All_Conversations",{}},{"Face_Actor",{I(400005),I(1)}}};
+    if(camera) result.push_back({"Camera_Look_Actor",{I(400005),S("1.5")}});
+    result.push_back({"Start_Conversation",{I(400005),S(name),I(100),I(300),I(action)}});return result;
+}
+}
+BOOST_AUTO_TEST_CASE(cinematic_generic_conversation_uses_original_parameter_priority_distance_and_action) {
+    // Toolkit.cpp:1813. Create/Join/Start/Monitor are composed by the typed
+    // conversation adapter; the script owns the source content and values.
+    Program script;LoadMissionScript(script,"M00_Generic_Conv_DME");
+    const std::array<Value,2> args{I(4294967304ll),S("MX0INTRO004")};const auto commands=script.Invoke("Created",args);BOOST_REQUIRE(commands);
+    CheckTrace(*commands,{{"Start_Conversation",{I(4294967304ll),S("MX0INTRO004"),I(99),I(2000),I(100000)}}});
+}
+BOOST_AUTO_TEST_CASE(tutorial_course_zone_entry_matches_original_ids_saved_state_and_one_shot_destruction) {
+    // Pinned Mission00.cpp:2757-2840 and :3190. These are independent
+    // source command traces; they do not establish the later zone branches.
+    Program zone;LoadMissionScript(zone,"MTU_Trigger_Zone");
+    const std::array<Value,1> created{I(300001)};BOOST_REQUIRE(zone.Invoke("Created",created));
+    const auto state=zone.CaptureState();BOOST_REQUIRE(state);BOOST_TEST((*state)[0]==1);BOOST_TEST((*state)[1]==0);
+    const std::array<Value,2> help{I(300001),I(1)};const auto commands=zone.Invoke("Entered",help);BOOST_REQUIRE(commands);
+    CheckTrace(*commands,{Help("IDS_MTUDSGN_DSGN0384I1DSGN_TXT"),{"Destroy_Object",{I(300001)}}});
+    for(const auto id:{400015,400016,400017,400018}) {
+        const std::array<Value,2> args{I(id),I(1)};const auto entered=zone.Invoke("Entered",args);BOOST_REQUIRE(entered);
+        CheckTrace(*entered,{{"Send_Custom_Event",{I(id),I(400005),I(2),I(id-400010),I(0)}},{"Destroy_Object",{I(id)}}});
+    }
+    // The original crouch case is commented out, and must not destroy itself.
+    const std::array<Value,2> inactive{I(400014),I(1)};const auto nothing=zone.Invoke("Entered",inactive);BOOST_REQUIRE(nothing);BOOST_TEST(nothing->empty());
+    const std::array<Value,2> later{I(400020),I(1)};const auto pending=zone.Invoke("Entered",later);BOOST_REQUIRE(pending);
+    CheckTrace(*pending,{{"Unported_Callback",{S("Entered"),I(400020),I(1)}}});
+}
+BOOST_AUTO_TEST_CASE(tutorial_course_instructor_custom_order_matches_Mission00_cpp) {
+    // Mission00.cpp:1308-1360. Jump starts the action before locking input;
+    // the EVA and exterior branches lock input before their action/speech.
+    Program instructor;LoadMissionScript(instructor,"MTU_Tutorial_Instructor");
+    const std::array<Value,4> jump{I(400005),I(2),I(5),I(400015)};
+    const auto j=instructor.Invoke("Custom",jump);BOOST_REQUIRE(j);
+    CheckTrace(*j,{{"Action_Goto_Waypath",{I(400005),I(400049),S("1"),S("1"),I(100),I(1)}},{"Send_Custom_Event",{I(400005),I(1),I(1),I(2),I(0)}}});
+    const std::array<Value,4> eva{I(400005),I(2),I(6),I(400016)};const auto e=instructor.Invoke("Custom",eva);BOOST_REQUIRE(e);
+    auto eva_trace=Speech("MTU_LOGAN_EVA",12);eva_trace.insert(eva_trace.begin(),{"Send_Custom_Event",{I(400005),I(1),I(1),I(2),I(0)}});CheckTrace(*e,eva_trace);
+    const std::array<Value,4> course{I(400005),I(2),I(7),I(400017)};const auto c=instructor.Invoke("Custom",course);BOOST_REQUIRE(c);
+    CheckTrace(*c,{{"Send_Custom_Event",{I(400005),I(1),I(1),I(2),I(0)}},{"Action_Goto_Waypath",{I(400005),I(400074),S("1"),S("1"),I(100),I(3)}}});
+    const std::array<Value,4> keycard{I(400005),I(2),I(8),I(400018)};const auto k=instructor.Invoke("Custom",keycard);BOOST_REQUIRE(k);
+    CheckTrace(*k,{{"Send_Custom_Event",{I(400005),I(1),I(1),I(2),I(0)}},{"Stop_All_Conversations",{}},{"Face_Actor",{I(400005),I(1)}},{"Force_Camera_Look",{S("-12.776"),S("23.761"),S("1")}},{"Start_Conversation",{I(400005),S("MTU_LOGAN_KEYCARDS"),I(100),I(300),I(16)}}});
+}
+BOOST_AUTO_TEST_CASE(tutorial_route_results_relocate_Logan_before_speech_but_conversation_results_do_not) {
+    // Mission00.cpp:2687. The source applies these positions for every
+    // non-conversation reason, including interrupted or failed movement.
+    Program instructor;LoadMissionScript(instructor,"MTU_Tutorial_Instructor");
+    for(const auto reason:{0,1,2,3,4,5,9,10}) for(const auto action:{1,3}) {
+        const std::array<Value,3> args{I(400005),I(action),I(reason)};const auto commands=instructor.Invoke("Action_Complete",args);BOOST_REQUIRE(commands);
+        auto trace=Speech(action==1 ? "MTU_LOGAN_JUMP_TEST" : "MTU_LOGAN_COURSE_DONE",action==1 ? 11 : 15);
+        trace.insert(trace.begin(),action==1 ? Command{"Set_Position",{I(400005),S("-53.697"),S("-5.334"),S("2")}} : Command{"Set_Position",{I(400005),S("-35.01"),S("-15.658"),S("0.705")}});
+        CheckTrace(*commands,trace);
+    }
+    for(const auto reason:{6,7,8}) {
+        const std::array<Value,3> args{I(400005),I(1),I(reason)};const auto commands=instructor.Invoke("Action_Complete",args);BOOST_REQUIRE(commands);
+        CheckTrace(*commands,{{"Unported_Callback",{S("Action_Complete"),I(1),I(reason)}}});
+    }
+}
+BOOST_AUTO_TEST_CASE(tutorial_course_speech_results_preserve_HUD_routes_gate_and_pending_game_commands) {
+    // Mission00.cpp conversation-result switch. PENDING is enum value zero
+    // in Scripts/scriptcommands.h:89. Camera offsets are heights, not delays.
+    Program instructor;LoadMissionScript(instructor,"MTU_Tutorial_Instructor");
+    for(const auto reason:{6,7,8}) {
+        const auto complete=[&](std::int64_t action) {const std::array<Value,3> args{I(400005),I(action),I(reason)};auto result=instructor.Invoke("Action_Complete",args);BOOST_REQUIRE(result);return *result;};
+        CheckTrace(complete(11),{Help("IDS_MTUDSGN_DSGN0383I1DSGN_TXT"),{"Send_Custom_Event",{I(400005),I(1),I(1),I(1),I(0)}},{"Action_Goto_Waypath",{I(400005),I(400067),S("0.3"),S("1"),I(100),I(2)}},{"Set_Animation",{I(400144),S("CHT_JAIL.CHT_JAIL"),I(0),I(0),I(2)}}});
+        auto eva=Speech("MTU_LOGAN_POKE",13,false);
+        eva.insert(eva.begin(),{Help("IDS_M00DSGN_DSGN1004I1DSGN_TXT"),{"Set_Objective_Status",{I(1),I(0)}},{"Set_Objective_Radar_Blip",{I(1),S("-12.39"),S("20.78"),S("1.81")}},{"Set_Objective_HUD_Info_Position",{I(1),I(99),S("POG_M00_1_01.tga"),S("IDS_POG_LOCATE"),S("-12.39"),S("20.78"),S("1.81")}}});CheckTrace(complete(12),eva);
+        CheckTrace(complete(13),{Help("IDS_MTUDSGN_DSGN0385I1DSGN_TXT"),{"Select_Weapon",{I(1),S("Weapon_Pistol_Player")}},{"Send_Custom_Event",{I(400005),I(1),I(1),I(1),I(0)}}});
+        CheckTrace(complete(15),{Help("IDS_M00DSGN_DSGN1003I1DSGN_TXT"),{"Send_Custom_Event",{I(400005),I(1),I(1),I(1),I(0)}},{"Action_Goto_Position",{I(400005),S("-13.094"),S("32.111"),S("1.023"),S("1"),S("1"),I(100),I(4)}}});
+        auto keycard=Speech("MTU_LOGAN_GO_INSIDE",17,false);
+        keycard.insert(keycard.begin(),{Help("IDS_MTUDSGN_DSGN0386I1DSGN_TXT"),{"Create_Object",{S("Level_01_Keycard"),S("-12.637"),S("24.426"),S("0")}}});keycard.push_back({"Send_Custom_Event",{I(400005),I(1),I(1),I(1),I(0)}});CheckTrace(complete(16),keycard);
+    }
+}
+BOOST_AUTO_TEST_CASE(tutorial_controller_startup_preserves_saved_slots_gate_ids_and_two_second_Logan_event)
+{
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/MTU_Tutorial_Controller.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program program;BOOST_REQUIRE(program.Load(source,"MTU_Tutorial_Controller"));
+    const auto animations=program.StringList("Animations");BOOST_REQUIRE(animations);BOOST_REQUIRE(animations->size()==1u);BOOST_TEST(animations->front()=="CHT_JAIL.CHT_JAIL");
+    const std::array<Value,3> args{std::int64_t{400099},std::string{},std::int64_t{17}};
+    const auto commands=program.Invoke("Created",args);BOOST_REQUIRE(commands);BOOST_REQUIRE_EQUAL(commands->size(),18u);
+    const auto state=program.CaptureState();BOOST_REQUIRE(state);BOOST_TEST((*state)[7]==1);BOOST_TEST((*state)[9]==-1);BOOST_TEST((*state)[17]==1);BOOST_TEST((*state)[18]==1);BOOST_TEST((*state)[19]==0);
+    BOOST_TEST((*commands)[0].name=="Reveal_Map");
+    for(unsigned i=1;i<=5;++i) {BOOST_TEST((*commands)[i].name=="Add_Radar_Marker");BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[0])==11+i);BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[4])==3);BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[5])==1);}
+    constexpr std::array<std::int64_t,6> titles{7505,7507,7509,7511,7513,7515},descriptions{7506,7508,7510,7512,7514,7516};
+    for(unsigned i=6;i<12;++i) {
+        BOOST_TEST((*commands)[i].name=="Add_Objective");BOOST_REQUIRE((*commands)[i].arguments.size()==6u);
+        BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[0])==i-5);
+        BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[1])==1);BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[2])==3);
+        BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[3])==titles[i-6]);BOOST_TEST(std::get<std::int64_t>((*commands)[i].arguments[5])==descriptions[i-6]);
+        BOOST_TEST(std::get<std::string>((*commands)[i].arguments[4])=="IDS_M00EVAG_DSGN0056I1EVAG_SND");
+    }
+    BOOST_TEST((*commands)[12].name=="Start_Timer");BOOST_TEST(std::get<std::int64_t>((*commands)[12].arguments[1])==2000);BOOST_TEST(std::get<std::int64_t>((*commands)[12].arguments[2])==1);
+    BOOST_TEST(std::get<std::int64_t>((*commands)[13].arguments[1])==17000);BOOST_TEST(std::get<std::int64_t>((*commands)[13].arguments[2])==22);
+    constexpr std::array<std::int64_t,4> gates{400142,400143,400144,400146};
+    for(unsigned i=0;i<4;++i) {BOOST_TEST((*commands)[14+i].name=="Set_Animation_Frame");BOOST_TEST(std::get<std::int64_t>((*commands)[14+i].arguments[0])==gates[i]);}
+    const std::array<Value,2> timer{std::int64_t{400099},std::int64_t{1}};
+    const auto started=program.Invoke("Timer_Expired",timer);BOOST_REQUIRE(started);BOOST_REQUIRE_EQUAL(started->size(),2u);
+    BOOST_TEST(std::get<std::int64_t>((*started)[0].arguments[1])==400005);BOOST_TEST(std::get<std::int64_t>((*started)[0].arguments[2])==2);BOOST_TEST(std::get<std::int64_t>((*started)[0].arguments[3])==3);
+    BOOST_TEST(std::get<std::int64_t>((*started)[1].arguments[1])==450939);
+}
+BOOST_AUTO_TEST_CASE(tutorial_instructor_source_intro_requests_original_conversation_and_speech_action)
+{
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/MTU_Tutorial_Instructor.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program program;BOOST_REQUIRE(program.Load(source,"MTU_Tutorial_Instructor"));
+    const std::array<Value,1> object{std::int64_t{400005}};const auto created=program.Invoke("Created",object);BOOST_REQUIRE(created);BOOST_REQUIRE_EQUAL(created->size(),4u);
+    BOOST_TEST((*created)[0].name=="Set_Loiters_Allowed");BOOST_TEST((*created)[1].name=="Innate_Disable");BOOST_TEST(std::get<std::string>((*created)[2].arguments[1])=="Blamo");
+    const std::array<Value,4> message{std::int64_t{400005},std::int64_t{2},std::int64_t{3},std::int64_t{400099}};
+    const auto commands=program.Invoke("Custom",message);BOOST_REQUIRE(commands);BOOST_REQUIRE_EQUAL(commands->size(),4u);
+    BOOST_TEST((*commands)[0].name=="Stop_All_Conversations");BOOST_TEST((*commands)[3].name=="Start_Conversation");BOOST_TEST(std::get<std::string>((*commands)[3].arguments[1])=="MTU_LOGAN_START");BOOST_TEST(std::get<std::int64_t>((*commands)[3].arguments[4])==5);
+}
+BOOST_AUTO_TEST_CASE(tutorial_commando_startup_and_control_custom_callbacks_match_Mission00_cpp) {
+    std::ifstream startup_file(std::string(RENEGADE_SCRIPT_DIR)+"/MTU_Commando_Startup.lua");BOOST_REQUIRE(startup_file);const std::string startup_source{std::istreambuf_iterator<char>(startup_file),{}};
+    Program startup;BOOST_REQUIRE(startup.Load(startup_source,"MTU_Commando_Startup"));
+    const auto dependencies=startup.StringList("Scripts");BOOST_REQUIRE(dependencies);BOOST_REQUIRE(dependencies->size()==1u);BOOST_TEST(dependencies->front()=="MTU_Commando");
+    const std::array<Value,1> object{std::int64_t{1}};const auto attached=startup.Invoke("Created",object);BOOST_REQUIRE(attached);BOOST_REQUIRE(attached->size()==1u);
+    BOOST_TEST(attached->front().name=="Attach_Script");BOOST_TEST(std::get<std::string>(attached->front().arguments[1])=="MTU_Commando");BOOST_TEST(std::get<std::string>(attached->front().arguments[2]).empty());
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/MTU_Commando.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program commando;BOOST_REQUIRE(commando.Load(source,"MTU_Commando"));const auto created=commando.Invoke("Created",object);BOOST_REQUIRE(created);BOOST_REQUIRE(created->size()==2u);
+    BOOST_TEST(created->front().name=="Reveal_Encyclopedia_Weapon");BOOST_TEST(std::get<std::int64_t>(created->front().arguments[0])==14);
+    for(const auto parameter:{2,1}) {
+        const std::array<Value,4> custom{std::int64_t{1},std::int64_t{1},std::int64_t(parameter),std::int64_t{400005}};
+        const auto commands=commando.Invoke("Custom",custom);BOOST_REQUIRE(commands);BOOST_REQUIRE(commands->size()==(parameter==2 ? 1u : 2u));
+        BOOST_TEST(commands->front().name=="Control_Enable");BOOST_TEST(std::get<std::int64_t>(commands->front().arguments[1])==(parameter==2 ? 0 : 1));
+        if(parameter==1) {BOOST_TEST((*commands)[1].name=="Action_Follow_Input");BOOST_TEST(std::get<std::int64_t>((*commands)[1].arguments[1])==100);}
+    }
+    IntegerState saved{};saved[0]=1;BOOST_REQUIRE(commando.RestoreState(saved));
+    const std::array<Value,4> reset{std::int64_t{1},std::int64_t{1},std::int64_t{14},std::int64_t{400005}};BOOST_REQUIRE(commando.Invoke("Custom",reset));
+    const auto state=commando.CaptureState();BOOST_REQUIRE(state);BOOST_TEST((*state)[0]==0);
+}
+BOOST_AUTO_TEST_CASE(tutorial_intro_completion_opens_both_original_gates_for_all_source_conversation_results)
+{
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/MTU_Tutorial_Instructor.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program program;BOOST_REQUIRE(program.Load(source,"MTU_Tutorial_Instructor"));
+    // Mission00.cpp MTU_Tutorial_Instructor::Action_Complete: ended,
+    // interrupted and unable-to-initialize all release the movement lesson.
+    for(const auto reason : {6,7,8}) {
+        const std::array<Value,3> args{std::int64_t{400005},std::int64_t{5},std::int64_t{reason}};
+        const auto commands=program.Invoke("Action_Complete",args);BOOST_REQUIRE(commands);BOOST_REQUIRE_EQUAL(commands->size(),3u);
+        BOOST_TEST((*commands)[0].name=="Set_HUD_Help_Text");BOOST_TEST(std::get<std::string>((*commands)[0].arguments[0])=="IDS_M01DSGN_DSGN0515I1DSGN_TXT");
+        for(unsigned gate=0;gate<2;++gate) {
+            const auto& command=(*commands)[gate+1];BOOST_TEST(command.name=="Set_Animation");
+            BOOST_TEST(std::get<std::int64_t>(command.arguments[0])==400142+gate);
+            BOOST_TEST(std::get<std::string>(command.arguments[1])=="CHT_JAIL.CHT_JAIL");
+            BOOST_TEST(std::get<std::int64_t>(command.arguments[4])==2);
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(cinematic_attack_force_fire_and_delayed_reset_match_Test_Cinematic_cpp) {
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/M00_Cinematic_Attack_Command_DLS.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program program;BOOST_REQUIRE(program.Load(source,"M00_Cinematic_Attack_Command_DLS"));
+    // Facing +Y from (3,4,5), for 1.5 seconds. Source target=(3,14,7).
+    const std::array<Value,7> arguments{std::int64_t{42},std::int64_t{3*65536},std::int64_t{4*65536},std::int64_t{5*65536},std::int64_t{0},std::int64_t{65536},std::int64_t{98304}};
+    const auto commands=program.Invoke("Created",arguments);BOOST_REQUIRE(commands);BOOST_REQUIRE_EQUAL(commands->size(),2u);
+    BOOST_TEST((*commands)[0].name=="Action_Attack");const auto& attack=(*commands)[0].arguments;BOOST_REQUIRE_EQUAL(attack.size(),10u);
+    BOOST_TEST(std::get<std::int64_t>(attack[1])==99);BOOST_TEST(std::get<std::int64_t>(attack[2])==1);
+    BOOST_TEST(std::get<std::int64_t>(attack[3])==3*65536);BOOST_TEST(std::get<std::int64_t>(attack[4])==14*65536);BOOST_TEST(std::get<std::int64_t>(attack[5])==7*65536);BOOST_TEST(std::get<std::int64_t>(attack[9])==1);
+    BOOST_TEST((*commands)[1].name=="Send_Custom_Event");BOOST_REQUIRE_EQUAL((*commands)[1].arguments.size(),5u);BOOST_TEST(std::get<std::int64_t>((*commands)[1].arguments[4])==98304);
+    const std::array<Value,4> event{std::int64_t{42},std::int64_t{1},std::int64_t{1},std::int64_t{42}};const auto reset=program.Invoke("Custom",event);BOOST_REQUIRE(reset);BOOST_REQUIRE_EQUAL(reset->size(),1u);BOOST_TEST(reset->front().name=="Action_Reset");BOOST_TEST(std::get<std::int64_t>(reset->front().arguments[1])==100);
+}
+BOOST_AUTO_TEST_CASE(MX0_mission_start_created_commands_match_original_opening_order) {
+    std::ifstream file(std::string(RENEGADE_SCRIPT_DIR)+"/MX0_MissionStart_DME.lua");BOOST_REQUIRE(file);const std::string source{std::istreambuf_iterator<char>(file),{}};
+    Program program;BOOST_REQUIRE(program.Load(source,"MX0_MissionStart_DME"));const std::array<Value,2> arguments{std::int64_t{1200001},std::int64_t{1}};
+    const auto commands=program.Invoke("Created",arguments);BOOST_REQUIRE(commands);BOOST_REQUIRE_EQUAL(commands->size(),4u);
+    BOOST_TEST((*commands)[0].name=="Select_Weapon");BOOST_TEST(std::get<std::int64_t>((*commands)[0].arguments[0])==1);BOOST_TEST(std::get<std::string>((*commands)[0].arguments[1]).empty());
+    BOOST_TEST((*commands)[1].name=="Initialize_State");BOOST_REQUIRE_EQUAL((*commands)[1].arguments.size(),9u);for(unsigned i=1;i<9;++i) BOOST_TEST(std::get<std::int64_t>((*commands)[1].arguments[i])==0);
+    BOOST_TEST((*commands)[2].name=="Fade_Background_Music");BOOST_TEST(std::get<std::string>((*commands)[2].arguments[0])=="renegade_intro_no_vox.mp3");BOOST_TEST(std::get<std::int64_t>((*commands)[2].arguments[2])==1000);
+    BOOST_TEST((*commands)[3].name=="Start_Cinematic");BOOST_TEST(std::get<std::string>((*commands)[3].arguments[2])=="X00_Intro.txt");
+}
 BOOST_AUTO_TEST_CASE(M03_destroyed_turret_callback_trace_matches_original)
 {
 	std::ifstream file(std::string(RENEGADE_SCRIPT_DIR) + "/M03_Destroyed_Turret.lua");

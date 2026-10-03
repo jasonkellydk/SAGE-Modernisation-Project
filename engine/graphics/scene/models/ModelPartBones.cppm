@@ -17,7 +17,7 @@ inline std::optional<std::pair<std::uint32_t, std::uint32_t>> Model_Part_Bone(co
 	{
 		const auto dot = attachment.object_name.find('.');
 		const std::string_view name = std::string_view(attachment.object_name).substr(dot == std::string::npos ? 0 : dot + 1);
-		if (name != part || (found && attachment.lod >= found->second))
+		if ((name != part && attachment.object_name != part) || (found && attachment.lod >= found->second))
 			continue;
 		found = std::pair<std::uint32_t, std::uint32_t>{attachment.bone, attachment.lod};
 	}

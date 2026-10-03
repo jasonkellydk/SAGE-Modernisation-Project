@@ -1,0 +1,123 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <vector>
+import engine.gameplay.common.areas.systems.volume_presence_system;
+import engine.ecs;
+import engine.core.serialization.byte_stream;
+
+namespace
+{
+using namespace engine::gameplay;
+using Engine::Math::Fixed;
+struct VolumeField
+{
+	VolumeField(std::size_t workers, std::size_t capacity) : world(ecs::WorldConfig{capacity}) {
+		world.RegisterComponent<Transform>(); world.RegisterComponent<VolumeProbe>(); world.RegisterComponent<VolumeContact>(); world.FinalizeComponents();
+		world.EmplaceResource<TriggerVolumes>(); world.EmplaceResource<VolumeTransitions>(); world.EmplaceResource<VolumeProbePositions>(); world.EmplaceResource<VolumeProbePositionOutputs>();
+		registry.Register(snapshot); registry.Register(presence); registry.Finalize(world.Components());
+		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers}); scheduler->Finalize(engine::time::FixedStep{60});
+	}
+	void Step() {scheduler->Execute(engine::time::SimulationTime{++tick, engine::time::FixedStep{60}});}
+	std::vector<VolumeTransition> Events() const {
+		std::vector<VolumeTransition> events; world.Resource<VolumeTransitions>().AppendTo(events);
+		std::ranges::sort(events, {}, &VolumeTransition::order); return events;
+	}
+	ecs::World world; VolumeProbeSnapshotSystem snapshot; VolumePresenceSystem presence; ecs::SystemRegistry registry;
+	std::unique_ptr<ecs::Scheduler> scheduler; std::uint64_t tick{};
+};
+}
+
+BOOST_AUTO_TEST_CASE(volume_contacts_parallel_rows_overlap_reentry_and_checkpoint)
+{
+	using namespace engine::gameplay;
+	std::array<std::uint64_t, 2> reference{};
+	for (const auto workers : {1u, 4u}) for (const auto capacity : {7u, 128u}) {
+		VolumeField field(workers, capacity);
+		ecs::CommandBuffer objects; std::vector<ecs::DeferredEntity> probes;
+		for (unsigned i = 0; i < 80; ++i) {
+			const auto probe = objects.Create(); probes.push_back(probe);
+			objects.Add<Transform>(probe, Transform{{Fixed::FromInt(1), Fixed::FromInt(1), Fixed::FromInt(2)}, {}});
+			objects.Add<VolumeProbe>(probe, VolumeProbe{i % 2 ? 2ull : 1ull, i});
+		}
+		field.world.Commit(objects);
+		auto &volumes = field.world.Resource<TriggerVolumes>();
+		for (unsigned v = 0; v < 70; ++v) {
+			TriggerVolume volume; volume.subject = {10000 + v, 1}; volume.bounds.center.z = Fixed::FromInt(2);
+			volume.bounds.extent = {Fixed::FromInt(2), Fixed::FromInt(2), Fixed::FromInt(1)}; volume.accepted_categories = 1;
+			volumes.volumes.push_back(volume);
+		}
+		ecs::CommandBuffer pairs;
+		for (unsigned v = 0; v < 70; ++v) for (unsigned i = 0; i < 80; ++i) {
+			const auto pair = pairs.Create(); pairs.Add<VolumeContact>(pair, VolumeContact{v, objects.Resolve(probes[i]), 0, 0, v * 80ull + i});
+		}
+		field.world.Commit(pairs); field.Step();
+		const auto entered = field.Events(); BOOST_REQUIRE_EQUAL(entered.size(), 2800u);
+		for (const auto &event : entered) { BOOST_TEST(event.entered); BOOST_TEST(event.probe_order % 2 == 0u); }
+		field.Step(); BOOST_TEST(field.Events().empty());
+		const auto player = objects.Resolve(probes.front()); field.world.Get<Transform>(player)->position.z = Fixed::FromInt(4);
+		field.Step(); const auto exited = field.Events(); BOOST_REQUIRE_EQUAL(exited.size(), 70u);
+		for (const auto &event : exited) {BOOST_TEST(!event.entered); BOOST_TEST(event.previous_entry_tick == 1u);}
+		field.world.Get<Transform>(player)->position.z = Fixed::FromInt(2); field.Step(); BOOST_TEST(field.Events().size() == 70u);
+		engine::core::serialization::ByteWriter writer; field.world.SaveCheckpoint(writer);
+		VolumeField restored(workers, capacity); restored.world.Resource<TriggerVolumes>() = volumes;
+		engine::core::serialization::ByteReader reader(writer.Bytes()); BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));
+		BOOST_TEST(restored.world.StateHash() == field.world.StateHash()); restored.Step(); BOOST_TEST(restored.Events().empty());
+		// World hashes include the physical chunk layout. Compare hashes across
+		// worker counts at each capacity; compare semantic events for both.
+		auto &hash = reference[capacity == 7 ? 0 : 1];
+		if (!hash) hash = field.world.StateHash(); BOOST_TEST(field.world.StateHash() == hash);
+		volumes.exit_on_removal = false; ecs::CommandBuffer removed; removed.Destroy(player); field.world.Commit(removed); field.Step(); BOOST_TEST(field.Events().empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(volume_snapshot_rejects_stale_entity_generation_and_supports_disable)
+{
+	using namespace engine::gameplay;
+	VolumeField field(4, 7); auto &volumes = field.world.Resource<TriggerVolumes>();
+	TriggerVolume volume; volume.subject = {1000, 1}; volume.bounds.extent = {Fixed::One(), Fixed::One(), Fixed::One()}; volumes.volumes.push_back(volume);
+	ecs::CommandBuffer command; const auto probe = command.Create(); command.Add<Transform>(probe); command.Add<VolumeProbe>(probe); field.world.Commit(command);
+	ecs::CommandBuffer pairs; const auto pair = pairs.Create(); pairs.Add<VolumeContact>(pair, VolumeContact{0, command.Resolve(probe)}); field.world.Commit(pairs);
+	field.Step(); BOOST_REQUIRE_EQUAL(field.Events().size(), 1u);
+	volumes.volumes[0].enabled = false; field.Step(); BOOST_REQUIRE_EQUAL(field.Events().size(), 1u); BOOST_TEST(!field.Events().front().entered);
+	volumes.volumes[0].enabled = true; field.Step(); BOOST_REQUIRE_EQUAL(field.Events().size(), 1u);
+	ecs::CommandBuffer removed; removed.Destroy(command.Resolve(probe)); field.world.Commit(removed); field.Step(); BOOST_REQUIRE_EQUAL(field.Events().size(), 1u); BOOST_TEST(!field.Events().front().entered);
+	const auto *positions = &field.world.Resource<VolumeProbePositions>(); BOOST_TEST(positions->Find(command.Resolve(probe)) == nullptr);
+	ecs::CommandBuffer replacement; const auto fresh = replacement.Create(); replacement.Add<Transform>(fresh); replacement.Add<VolumeProbe>(fresh); field.world.Commit(replacement);
+	field.Step(); BOOST_TEST(field.Events().empty());
+	BOOST_TEST(positions->Find(command.Resolve(probe)) == nullptr); BOOST_REQUIRE(positions->Find(replacement.Resolve(fresh)));
+	BOOST_TEST(replacement.Resolve(fresh).index == command.Resolve(probe).index);
+	BOOST_TEST(replacement.Resolve(fresh).generation != command.Resolve(probe).generation);
+}
+
+BOOST_AUTO_TEST_CASE(living_volume_owners_retire_relationships_without_exit_callbacks_or_reactivation_by_reused_indices) {
+    const auto run=[](unsigned workers) {
+        VolumeField field(workers,7);auto& volumes=field.world.Resource<TriggerVolumes>();volumes.require_live_subject=true;volumes.retire_missing_probes=true;volumes.exit_on_removal=false;
+        ecs::CommandBuffer objects;const auto probe=objects.Create();objects.Add<Transform>(probe);objects.Add<VolumeProbe>(probe);
+        std::vector<ecs::DeferredEntity> pending;for(unsigned i=0;i<513;++i) pending.push_back(objects.Create());field.world.Commit(objects);
+        ecs::CommandBuffer contacts;
+        for(unsigned i=0;i<pending.size();++i) {
+            TriggerVolume volume;volume.subject=objects.Resolve(pending[i]);volume.bounds.extent={Fixed::One(),Fixed::One(),Fixed::One()};volumes.volumes.push_back(volume);
+            const auto contact=contacts.Create();contacts.Add<VolumeContact>(contact,VolumeContact{i,objects.Resolve(probe),0,0,i});
+        }
+        field.world.Commit(contacts);field.Step();BOOST_REQUIRE(field.Events().size()==513u);
+        const auto removed=objects.Resolve(pending.front());ecs::CommandBuffer deletion;
+        for(const auto owner:pending) deletion.Destroy(objects.Resolve(owner));field.world.Commit(deletion);
+        field.Step();BOOST_TEST(field.Events().empty());BOOST_TEST(field.world.EntityCount()==1u);
+        ecs::CommandBuffer replacements;for(unsigned i=0;i<514;++i) replacements.Create();field.world.Commit(replacements);field.Step();
+        BOOST_TEST(field.Events().empty());BOOST_TEST(!field.world.IsAlive(removed));return field.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(living_volume_contacts_retire_removed_probes_and_preserve_the_selected_exit_policy) {
+    for(const bool exits:{false,true}) {
+        VolumeField field(4,7);auto& volumes=field.world.Resource<TriggerVolumes>();volumes.require_live_subject=true;volumes.retire_missing_probes=true;volumes.exit_on_removal=exits;
+        ecs::CommandBuffer objects;const auto owner=objects.Create(),probe=objects.Create();objects.Add<Transform>(probe);objects.Add<VolumeProbe>(probe);field.world.Commit(objects);
+        TriggerVolume volume;volume.subject=objects.Resolve(owner);volume.bounds.extent={Fixed::One(),Fixed::One(),Fixed::One()};volumes.volumes.push_back(volume);
+        ecs::CommandBuffer contacts;const auto contact=contacts.Create();contacts.Add<VolumeContact>(contact,VolumeContact{0,objects.Resolve(probe)});field.world.Commit(contacts);field.Step();BOOST_REQUIRE(field.Events().size()==1u);
+        ecs::CommandBuffer deletion;deletion.Destroy(objects.Resolve(probe));field.world.Commit(deletion);field.Step();
+        BOOST_TEST(field.Events().size()==(exits ? 1u : 0u));BOOST_TEST(!field.world.IsAlive(contacts.Resolve(contact)));field.Step();BOOST_TEST(field.Events().empty());
+    }
+}

@@ -1,0 +1,59 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.session;
+using namespace renegade;using namespace engine::gameplay;using namespace Engine::Math;
+namespace {
+struct ObjectiveFixture {
+    Session session;ecs::Entity controller,actor;
+    ObjectiveFixture(unsigned workers=1):session(workers,7) {
+        auto& world=session.World();ecs::CommandBuffer commands;const auto a=commands.Create(),b=commands.Create();
+        commands.Add<Transform>(a);commands.Add<Transform>(b,Transform{{Fixed::FromInt(10),Fixed{},Fixed{}}});world.Commit(commands);
+        controller=commands.Resolve(a);actor=commands.Resolve(b);world.Resource<SceneState>().authored_entities.emplace(400099,controller);world.Resource<SceneState>().authored_entities.emplace(400005,actor);
+        content::PreparedBehaviors programs;programs.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+        programs.library.programs.push_back({"objectives","return { Created=function(self,obj) end }","Created",{std::int64_t{400099}}});programs.bindings.push_back({400099,0,0});BOOST_REQUIRE(session.InstallBehaviors(programs));session.Step();
+        world.Resource<ObjectiveVocabulary>().translations.emplace("IDS_POG_LOCATE",7384);
+    }
+    void Invoke(std::string source) {
+        // Replacing the immutable fixture program is setup; callbacks execute
+        // through the real Lua/missions systems and deferred objective reducer.
+        auto& world=session.World();world.Resource<BehaviorPrograms>().programs[0].source="return { Created=function(self,obj) "+source+" end }";
+        ecs::Query<ecs::Write<LuaBehavior>> query(world);query.ForEachChunk([&](auto chunk) {for(auto& binding:chunk.template Get<LuaBehavior>()) binding.initialized=0;});session.Step();
+    }
+    std::vector<ecs::Entity> Objectives() {
+        std::vector<ecs::Entity> out;ecs::Query<ecs::Read<MissionObjective>> query(session.World());query.ForEachChunk([&](auto chunk) {out.insert(out.end(),chunk.Entities().begin(),chunk.Entities().end());});return out;
+    }
+};
+}
+BOOST_AUTO_TEST_CASE(source_hidden_objective_unhide_age_duplicate_and_original_hud_fields) {
+    ObjectiveFixture fixture;auto& world=fixture.session.World();
+    fixture.Invoke("emit('Add_Objective',1,1,3,7505,'IDS_M00EVAG_DSGN0056I1EVAG_SND',7506)");
+    auto entities=fixture.Objectives();BOOST_REQUIRE(entities.size()==1u);const auto entity=entities[0];
+    BOOST_TEST(world.Get<SimulationAge>(entity)->enabled==0u);for(unsigned i=0;i<120;++i) fixture.session.Step();BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==0u);
+    fixture.Invoke("emit('Add_Objective',1,2,0,999,'duplicate',998);emit('Set_Objective_Status',1,0);emit('Set_Objective_Radar_Blip',1,'-12.39','20.78','1.81');emit('Set_Objective_HUD_Info_Position',1,99,'POG_M00_1_01.tga','IDS_POG_LOCATE','-12.39','20.78','1.81')");
+    const auto* value=world.Get<MissionObjective>(entity);BOOST_REQUIRE(value);BOOST_CHECK(value->type==ObjectiveType::Primary);BOOST_TEST(value->short_text==7505u);BOOST_TEST(value->long_text==7506u);BOOST_TEST(value->hud_message==7384u);BOOST_TEST(value->priority.Raw()==Fixed::FromInt(99).Raw());BOOST_TEST(value->draw_blip==1u);
+    const auto& vocabulary=world.Resource<ObjectiveVocabulary>();BOOST_TEST(vocabulary.tokens.at(value->pog)=="POG_M00_1_01.tga");BOOST_TEST(vocabulary.tokens.at(value->description_sound)=="IDS_M00EVAG_DSGN0056I1EVAG_SND");
+    BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==0u);fixture.session.Step();BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==1u);
+    fixture.Invoke("emit('Set_Objective_Status',1,0)");BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==2u); // repeated pending does not reset
+    fixture.Invoke("emit('Set_Objective_Status',1,3)");const auto frozen=world.Get<SimulationAge>(entity)->ticks;fixture.session.Step();BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==frozen);
+    fixture.Invoke("emit('Set_Objective_Status',1,1)");BOOST_TEST(world.Get<SimulationAge>(entity)->ticks==0u);
+    BOOST_REQUIRE(world.Resource<ObjectiveChanges>().Size()==1u);world.Resource<ObjectiveChanges>().ForEach([&](const auto& change) {BOOST_CHECK(change.notice==ObjectiveNotice::StatusChanged);});
+}
+BOOST_AUTO_TEST_CASE(source_radar_actor_position_override_remove_and_readd_are_ordered) {
+    ObjectiveFixture fixture;auto& world=fixture.session.World();fixture.Invoke("emit('Add_Objective',1,1,0,7505,'sound',7506);emit('Set_Objective_Radar_Blip',1,2,3,4);emit('Set_Objective_Radar_Blip_Object',1,400005);emit('Set_Objective_HUD_Info_Position',1,99,'POG_M00_1_01.tga',7384,5,6,7)");
+    auto entities=fixture.Objectives();BOOST_REQUIRE(entities.size()==1u);const auto original=entities[0];const auto* marker=world.Get<TrackedPosition>(original);
+    BOOST_CHECK(marker->target==fixture.actor);BOOST_TEST(marker->point.x.Raw()==Fixed::FromInt(5).Raw());BOOST_TEST(marker->resolved.x.Raw()==Fixed::FromInt(10).Raw());
+    fixture.Invoke("emit('Set_Objective_Radar_Blip',1,8,9,10)");marker=world.Get<TrackedPosition>(original);BOOST_CHECK(!marker->target.IsValid());BOOST_TEST(marker->resolved.x.Raw()==Fixed::FromInt(8).Raw());
+    fixture.Invoke("emit('Remove_Objective',1);emit('Set_Objective_Status',1,2);emit('Add_Objective',1,2,0,7511,'replacement',7512);emit('Change_Objective_Type',1,3)");
+    BOOST_TEST(!world.IsAlive(original));entities=fixture.Objectives();BOOST_REQUIRE(entities.size()==1u);BOOST_CHECK(world.Get<MissionObjective>(entities[0])->type==ObjectiveType::Tertiary);BOOST_TEST(world.Get<MissionObjective>(entities[0])->short_text==7511u);
+    fixture.Invoke("emit('Remove_Objective',1);emit('Remove_Objective',999)");BOOST_TEST(fixture.Objectives().empty());
+}
+BOOST_AUTO_TEST_CASE(objective_513_rows_are_parallel_soa_deterministic_and_checkpointed) {
+    ObjectiveFixture serial(1),parallel(4);
+    for(const auto source:{"for id=1,513 do emit('Add_Objective',id,1,3,7505,'sound',7506) end","for id=1,513 do emit('Set_Objective_Status',id,0) end","for id=1,513 do emit('Set_Objective_Radar_Blip_Object',id,400005) end"}) {serial.Invoke(source);parallel.Invoke(source);BOOST_TEST(serial.session.World().StateHash()==parallel.session.World().StateHash());}
+    BOOST_TEST(serial.Objectives().size()==513u);
+    for(unsigned tick=0;tick<120;++tick) {serial.session.Step();parallel.session.Step();}BOOST_TEST(serial.session.World().StateHash()==parallel.session.World().StateHash());
+    Session restored(4,7);engine::core::serialization::ByteWriter bytes;serial.session.World().SaveCheckpoint(bytes);engine::core::serialization::ByteReader reader(bytes.Bytes());BOOST_REQUIRE(restored.World().LoadCheckpoint(reader));BOOST_TEST(restored.World().StateHash()==serial.session.World().StateHash());
+    restored.World().Resource<SceneState>()=serial.session.World().Resource<SceneState>();restored.World().Resource<BehaviorPrograms>()=serial.session.World().Resource<BehaviorPrograms>();restored.World().Resource<ObjectiveVocabulary>()=serial.session.World().Resource<ObjectiveVocabulary>();
+    restored.World().Resource<BehaviorInvocations>()=serial.session.World().Resource<BehaviorInvocations>();
+    for(unsigned tick=0;tick<5;++tick) {serial.session.Step();restored.Step();BOOST_TEST(restored.World().StateHash()==serial.session.World().StateHash());}
+}

@@ -89,7 +89,7 @@ public:
 		if (!Frame_Device_Ready())
 			return false;
 
-		Get_Resource_Load_Queue().Update(options.resource_progress);
+		Get_Resource_Load_Queue().Update_Until(std::chrono::steady_clock::now()+std::chrono::milliseconds(2), 32, options.resource_progress);
 		if (options.evict_unused_textures != nullptr)
 			options.evict_unused_textures();
 

@@ -13,6 +13,14 @@ import Graphics.Tests.Device;
 
 using namespace Graphics;
 
+BOOST_AUTO_TEST_CASE(transformed_culling_bound_encloses_rotated_mirrored_and_scaled_local_box) {
+    const CameraAxisAlignedBox local{{1,2,3},{2,4,1}};
+    RenderTransform world;world.matrix={0,-2,0,10,-3,0,0,20,0,0,.5f,30,0,0,0,1};
+    const auto box=Transform_Camera_Box(local,world);
+    BOOST_TEST(box.center.x==6.f);BOOST_TEST(box.center.y==17.f);BOOST_TEST(box.center.z==31.5f);
+    BOOST_TEST(box.extent.x==8.f);BOOST_TEST(box.extent.y==6.f);BOOST_TEST(box.extent.z==.5f);
+}
+
 namespace
 {
 

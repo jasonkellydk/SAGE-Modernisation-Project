@@ -1,0 +1,82 @@
+#include <boost/test/unit_test.hpp>
+#include <cstdlib>
+#include <string>
+import games.renegade.content.campaign.campaign_content;
+import games.renegade.content.install.install_mount;
+import games.renegade.content.audio.audio_settings;
+import games.renegade.content.campaign.campaign_flow;
+
+BOOST_AUTO_TEST_CASE(campaign_flow_preserves_authored_order_and_typed_steps)
+{
+    using namespace renegade::content;
+    const auto flow=ReadCampaignFlow("[Campaign]\n99=Level M13.mix\n;1=Movie removed.bik IDS_REMOVED\n2=Movie Data\\Movies\\R_L01.bik IDS_MISSION1\n8=Score\n1=Message End\n");
+    BOOST_REQUIRE(flow.has_value());BOOST_REQUIRE(flow->steps.size()==4u);
+    BOOST_TEST(flow->steps[0].asset=="M13.mix");BOOST_CHECK(flow->steps[0].kind==CampaignStepKind::Level);
+    BOOST_TEST(flow->steps[1].asset=="Data/Movies/R_L01.bik");BOOST_TEST(flow->steps[1].description=="IDS_MISSION1");
+    BOOST_CHECK(flow->steps[2].kind==CampaignStepKind::Score);BOOST_CHECK(flow->steps[3].kind==CampaignStepKind::Message);
+    BOOST_TEST(!ReadCampaignFlow("[Campaign]\n1=Level ../M13.mix\n"));
+    BOOST_TEST(!ReadCampaignFlow("[Campaign]\n1=Movie x.bik\n"));
+    BOOST_TEST(!ReadCampaignFlow("[Campaign]\n1=Broken\n"));
+    BOOST_TEST(!ReadCampaignFlow("[Campaign]\n"));
+}
+
+BOOST_AUTO_TEST_CASE(retail_campaign_flow_resolves_all_36_ordered_level_and_movie_entries)
+{
+    using namespace renegade::content;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");
+    if(!install) {BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR");return;}
+    const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    const auto flow=LoadCampaignFlow(*mounted->files);BOOST_REQUIRE_MESSAGE(flow.has_value(),(flow ? std::string{} : flow.error()));
+    BOOST_REQUIRE(flow->steps.size()==36u);BOOST_TEST(flow->steps.front().asset=="M13.mix");
+    BOOST_CHECK(flow->steps.front().kind==CampaignStepKind::Level);
+    BOOST_CHECK(flow->steps.back().kind==CampaignStepKind::Movie);
+    BOOST_TEST(flow->steps.back().asset=="Data/Movies/R_Finale.bik");
+    unsigned levels{},movies{};
+    for(const auto& step:flow->steps) if(step.kind==CampaignStepKind::Level || step.kind==CampaignStepKind::Movie) {
+        // Check VFS identities without decoding or starting a game session.
+        // Campaign filenames are relative to the install root; the mounted
+        // Data directory is the VFS root, as for the existing movie player.
+        const auto name=engine::filesystem::NormalizePath(step.asset);
+        BOOST_REQUIRE_MESSAGE(mounted->files->Exists(name.starts_with("data/") ? name.substr(5) : name),step.asset);
+        if(step.kind==CampaignStepKind::Level) ++levels;else ++movies;
+    }
+    BOOST_TEST(levels==12u);BOOST_TEST(movies==12u);
+}
+
+BOOST_AUTO_TEST_CASE(retail_campaign_content_has_typed_profiles_and_persistent_armor)
+{
+	using namespace renegade::content;
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto content = LoadCampaignContent(*mounted->files);
+	BOOST_REQUIRE_MESSAGE(content.has_value(), (content ? std::string{} : content.error()));
+	BOOST_TEST(content->cameras.by_name.size() == 26u);
+	const auto *profile = content->cameras.Find("Default"); BOOST_REQUIRE(profile);
+	BOOST_TEST(profile->fov_degrees.Raw() == 75 * Engine::Math::Fixed::OneRaw);
+	BOOST_TEST(profile->translation_tilt_degrees.Raw() == Engine::Math::Fixed::ParseDecimal("12.6")->Raw());
+	BOOST_TEST(profile->view_tilt_degrees.Raw() == Engine::Math::Fixed::ParseDecimal("5.5")->Raw());
+	BOOST_TEST(profile->distance.Raw() == Engine::Math::Fixed::ParseDecimal("1.8")->Raw());
+	const auto *first_person = content->cameras.Find("first_person"); BOOST_REQUIRE(first_person);
+	BOOST_TEST(first_person->distance.Raw() == 0); BOOST_TEST(first_person->fov_degrees.Raw() == 70 * Engine::Math::Fixed::OneRaw);
+	for (const unsigned id : {81930078u, 81930296u}) {
+		const auto *definition = content->definitions.Find(id); BOOST_REQUIRE(definition);
+		const auto preset = ReadDefensePreset(*definition, content->armor); BOOST_REQUIRE(preset.has_value());
+		BOOST_TEST(content->armor.armors[preset->defense.skin] == "SkinFlesh");
+		BOOST_TEST(content->armor.armors[preset->shield.armor] == "ShieldKevlar");
+	}
+	const auto audio = LoadDefaultAudioSettings(*mounted->files); BOOST_REQUIRE(audio.has_value());
+	BOOST_TEST(audio->effects >= 0); BOOST_TEST(audio->effects <= 100);
+}
+
+BOOST_AUTO_TEST_CASE(audio_configuration_uses_schema_diagnostics_and_int32_boundary)
+{
+	using renegade::content::ReadDefaultAudioSettings;
+	const auto defaults = ReadDefaultAudioSettings(""); BOOST_REQUIRE(defaults.has_value());
+	BOOST_TEST(defaults->effects == 43); BOOST_TEST(defaults->music == 31);
+	BOOST_TEST(defaults->dialog == 50); BOOST_TEST(defaults->cinematic == 100);
+	BOOST_TEST(!ReadDefaultAudioSettings("[Default Volume]\nmusic_volume=4294967296\n"));
+	BOOST_TEST(!ReadDefaultAudioSettings("[Default Volume]\nmusic_volume=-2147483649\n"));
+	const auto mod = ReadDefaultAudioSettings("[Default Volume]\nmusic_volume=2147483647\nsound_volume=-2147483648\n");
+	BOOST_REQUIRE(mod.has_value()); BOOST_TEST(mod->music == 100); BOOST_TEST(mod->effects == 0);
+}

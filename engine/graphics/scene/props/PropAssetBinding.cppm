@@ -3,7 +3,7 @@ import Graphics.Resources.MipChain;
 import std;
 export import Graphics.Scene.Props.Submission;
 export import Graphics.Scene.Models.AssetPose;
-import Graphics.Scene.Props.AssetGeometry;
+export import Graphics.Scene.Props.AssetPreparation;
 import Graphics.Scene.Models.PartBones;
 import Assets.Cache;
 import Assets.Models;
@@ -19,6 +19,7 @@ export struct PropTextureMappingContext final {
 };
 // Own GPU versions for a resolved asset. Draws use immutable prepared state;
 // source IO and asset-name lookup never occur during submission.
+export enum class PropAssetLoadState { Pending, Ready, Failed };
 export class PropAssetBinding final {
 public:
     PropAssetBinding()=default;
@@ -26,6 +27,7 @@ public:
     PropAssetBinding& operator=(const PropAssetBinding&)=delete;
     ~PropAssetBinding() { Clear(); }
     void Clear() noexcept {
+        Cancel_Load();
         if(m_renderer) for(const auto& part:m_parts) m_renderer->Destroy_Mesh(part.mesh);
         if(m_device) for(const auto& texture:m_textures) m_device->Destroy_Texture(texture.second);
         m_parts.clear(); m_textures.clear(); m_device=nullptr; m_renderer=nullptr; m_rest_pose={};
@@ -42,76 +44,51 @@ public:
         if(!model) { error="model asset is not ready"; return false; }
         std::vector<PropAssetPart> geometry;
         if(!Build_Prop_Asset_Geometry(*model,geometry,error)) return false;
-        PropAssetBinding next;
-        next.m_device=&device; next.m_renderer=&renderer;
-        next.m_mip_reduction=mip_reduction;next.m_minimum_texture_dimension=minimum_texture_dimension;
-        if(!model->Rig().skeleton_name.empty() && !next.m_rest_pose.Initialize(model->Rig(),error)) return false;
-        for(const auto& source:geometry) {
-            const auto* material=assets.Try_Get_Material(model->Materials()[source.material_index].asset_handle);
-            if(!material) { error="model material is not ready"; return false; }
-            Part part; part.name=source.name;part.sort_level=source.sort_level;
-            part.skinning=source.skinning;
-            if(!part.skinning.empty()) {
-                if(!next.m_rest_pose.Bone_Count()) { error="skin requires a resolved skeleton"; return false; }
-                part.bind_vertices=source.vertices; part.indices=source.indices;
-            }
-            if(next.m_rest_pose.Bone_Count()) {
-                const auto attached=Model_Part_Bone(model->Rig(),source.name);
-                if(!attached) { error="model part has no hierarchy attachment"; return false; }
-                part.bone=attached->first; part.lod=attached->second;
-            }
-            part.style.depth_write=material->Depth_Write();
-            for(unsigned stage=0;stage<part.mappings.size();++stage) {
-                if(const auto& description=material->Texture_Mappings()[stage]) {
-                    try { part.mappings[stage]=TextureMapping::Create(*description,0); }
-                    catch(const std::exception& exception) { error=exception.what();return false; }
-                }
-            }
-            auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
-            for(const auto& [original,replacement]:base_replacements)
-                if(!base_override.Is_Valid() && original==base && replacement.Is_Valid()) { base=replacement; break; }
-            part.textured=material->Texturing() && base.Is_Valid();
-            if(!next.Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
-            if(material->Secondary_Texture().Is_Valid()) { error="secondary stage requires an explicit stage binding"; return false; }
-            std::uint32_t maps=0;
-            for(std::size_t role=0;role<PropSurfaceTextureCount;++role) {
-                const auto texture=material->Surface_Texture(static_cast<Assets::MaterialTextureRole>(role));
-                if(texture.Is_Valid()) maps|=1u<<role;
-                if(!next.Upload(assets,texture,part.textures[PropSurfaceTextureFirst+role])) { error="could not upload surface map"; return false; }
-            }
-            if(!Configure_Prop_Surface(material->Surface(),maps,part.surface)) { error="invalid surface description"; return false; }
-            switch(material->Render_Mode()) {
-            case Assets::MaterialRenderMode::AlphaTest: part.alpha_cutoff=material->Surface().alpha_cutoff; break;
-            case Assets::MaterialRenderMode::AlphaBlend:
-                part.style.source_blend=RHIBlendFactor::SourceAlpha; part.style.destination_blend=RHIBlendFactor::InverseSourceAlpha; break;
-            case Assets::MaterialRenderMode::Additive:
-                part.style.source_blend=RHIBlendFactor::One; part.style.destination_blend=RHIBlendFactor::One; break;
-            case Assets::MaterialRenderMode::Multiply:
-                part.style.source_blend=RHIBlendFactor::Zero; part.style.destination_blend=RHIBlendFactor::SourceColor; break;
-            default: break;
-            }
-            if(const auto& authored=material->Draw_State()) {
-                if(!Assets::Validate_Material_Draw_State(*authored)) { error="invalid authored material draw state"; return false; }
-                constexpr std::array factors{RHIBlendFactor::Zero,RHIBlendFactor::One,
-                    RHIBlendFactor::SourceColor,RHIBlendFactor::InverseSourceColor,
-                    RHIBlendFactor::SourceAlpha,RHIBlendFactor::InverseSourceAlpha};
-                constexpr std::array comparisons{RHIComparison::Never,RHIComparison::Less,
-                    RHIComparison::Equal,RHIComparison::LessEqual,RHIComparison::Greater,
-                    RHIComparison::NotEqual,RHIComparison::GreaterEqual,RHIComparison::Always};
-                part.style.source_blend=factors[static_cast<std::size_t>(authored->source)];
-                part.style.destination_blend=factors[static_cast<std::size_t>(authored->destination)];
-                part.style.depth_comparison=comparisons[static_cast<std::size_t>(authored->depth_comparison)];
-            }
-            part.mesh=renderer.Create_Mesh(source.vertices,source.indices);
-            if(!part.mesh.Is_Valid()) { error="could not create model geometry"; return false; }
-            next.m_parts.push_back(std::move(part));
-        }
-        std::swap(m_device,next.m_device); std::swap(m_renderer,next.m_renderer);
-        m_parts.swap(next.m_parts); m_textures.swap(next.m_textures);
-        std::swap(m_rest_pose,next.m_rest_pose);
-        std::swap(m_mip_reduction,next.m_mip_reduction);std::swap(m_minimum_texture_dimension,next.m_minimum_texture_dimension);
-        error.clear(); return true;
+        PreparedPropAsset prepared{model_handle,std::move(geometry),{}};
+        if(!Begin_Load(device,renderer,assets,std::move(prepared),error,base_override,base_replacements,mip_reduction,minimum_texture_dimension)) return false;
+        return Advance_Load(assets,(std::numeric_limits<std::size_t>::max)(),std::chrono::steady_clock::time_point::max(),error)==PropAssetLoadState::Ready;
     }
+    // CPU geometry/mip preparation happens before Begin_Load. GPU work is
+    // transactional and advances between frames; the old binding remains valid.
+    bool Begin_Load(Device& device,PropRenderer& renderer,Assets::AssetCache& assets,PreparedPropAsset prepared,
+        std::string& error,Assets::TextureAssetHandle base_override={},
+        std::span<const std::pair<Assets::TextureAssetHandle,Assets::TextureAssetHandle>> base_replacements={},
+        unsigned mip_reduction=0,unsigned minimum_texture_dimension=1) {
+        Cancel_Load();
+        const auto* model=assets.Try_Get_Model(prepared.model);
+        if(!model || prepared.geometry.empty()) {error="prepared model is not ready";return false;}
+        auto next=std::make_unique<PropAssetBinding>();
+        next->m_device=&device;next->m_renderer=&renderer;
+        next->m_mip_reduction=mip_reduction;next->m_minimum_texture_dimension=minimum_texture_dimension;
+        next->m_prepared_textures=prepared.textures;
+        if(!model->Rig().skeleton_name.empty() && !next->m_rest_pose.Initialize(model->Rig(),error)) return false;
+        m_loading=std::move(prepared);m_pending=std::move(next);
+        m_base_override=base_override;m_base_replacements.assign(base_replacements.begin(),base_replacements.end());
+        m_loading_cursor=0;error.clear();return true;
+    }
+    PropAssetLoadState Advance_Load(Assets::AssetCache& assets,std::size_t maximum_parts,
+        std::chrono::steady_clock::time_point deadline,std::string& error) {
+        if(!m_pending) {error="no model upload in progress";return PropAssetLoadState::Failed;}
+        const auto* model=assets.Try_Get_Model(m_loading.model);
+        if(!model) {error="prepared model disappeared";Cancel_Load();return PropAssetLoadState::Failed;}
+        std::size_t processed=0;
+        while(m_loading_cursor<m_loading.geometry.size() && processed<maximum_parts && std::chrono::steady_clock::now()<deadline) {
+            if(!m_pending->Append_Part(m_loading.geometry[m_loading_cursor],*model,assets,error,m_base_override,m_base_replacements)) {
+                Cancel_Load();return PropAssetLoadState::Failed;
+            }
+            // Release CPU batches as their GPU copies are published.
+            m_loading.geometry[m_loading_cursor]={};++m_loading_cursor;++processed;
+        }
+        if(m_loading_cursor<m_loading.geometry.size()) return PropAssetLoadState::Pending;
+        auto next=std::move(m_pending);
+        std::swap(m_device,next->m_device); std::swap(m_renderer,next->m_renderer);
+        m_parts.swap(next->m_parts); m_textures.swap(next->m_textures);
+        std::swap(m_rest_pose,next->m_rest_pose);
+        std::swap(m_mip_reduction,next->m_mip_reduction);std::swap(m_minimum_texture_dimension,next->m_minimum_texture_dimension);
+        m_loading={};m_base_replacements.clear();error.clear();return PropAssetLoadState::Ready;
+    }
+    void Cancel_Load() noexcept {m_pending.reset();m_loading={};m_base_replacements.clear();m_loading_cursor=0;}
+    std::size_t Uploaded_Parts() const noexcept {return m_pending ? m_loading_cursor : m_parts.size();}
     std::size_t Part_Count() const noexcept { return m_parts.size(); }
     // Every part's textures sampled clamped at their edges (a sky box's faces meet without seams).
     void Clamp_Texture_Addressing() noexcept {
@@ -219,6 +196,70 @@ public:
         return false;
     }
 private:
+    bool Append_Part(const PropAssetPart& source,const Assets::ModelAsset& model,Assets::AssetCache& assets,
+        std::string& error,Assets::TextureAssetHandle base_override,
+        std::span<const std::pair<Assets::TextureAssetHandle,Assets::TextureAssetHandle>> base_replacements) {
+            if(source.material_index>=model.Materials().size()) {error="invalid prepared material index";return false;}
+            const auto* material=assets.Try_Get_Material(model.Materials()[source.material_index].asset_handle);
+            if(!material) { error="model material is not ready"; return false; }
+            Part part; part.name=source.name;part.sort_level=source.sort_level;
+            part.skinning=source.skinning;
+            if(!part.skinning.empty()) {
+                if(!m_rest_pose.Bone_Count()) { error="skin requires a resolved skeleton"; return false; }
+                part.bind_vertices=source.vertices; part.indices=source.indices;
+            }
+            if(m_rest_pose.Bone_Count()) {
+                const auto attached=Model_Part_Bone(model.Rig(),source.name);
+                if(!attached) { error="model part has no hierarchy attachment"; return false; }
+                part.bone=attached->first; part.lod=attached->second;
+            }
+            part.style.depth_write=material->Depth_Write();
+            for(unsigned stage=0;stage<part.mappings.size();++stage) {
+                if(const auto& description=material->Texture_Mappings()[stage]) {
+                    try { part.mappings[stage]=TextureMapping::Create(*description,0); }
+                    catch(const std::exception& exception) { error=exception.what();return false; }
+                }
+            }
+            auto base=base_override.Is_Valid() ? base_override : material->Primary_Texture();
+            for(const auto& [original,replacement]:base_replacements)
+                if(!base_override.Is_Valid() && original==base && replacement.Is_Valid()) { base=replacement; break; }
+            part.textured=material->Texturing() && base.Is_Valid();
+            if(!Upload(assets,base,part.textures[0])) { error="could not upload base map"; return false; }
+            if(material->Secondary_Texture().Is_Valid()) { error="secondary stage requires an explicit stage binding"; return false; }
+            std::uint32_t maps=0;
+            for(std::size_t role=0;role<PropSurfaceTextureCount;++role) {
+                const auto texture=material->Surface_Texture(static_cast<Assets::MaterialTextureRole>(role));
+                if(texture.Is_Valid()) maps|=1u<<role;
+                if(!Upload(assets,texture,part.textures[PropSurfaceTextureFirst+role])) { error="could not upload surface map"; return false; }
+            }
+            if(!Configure_Prop_Surface(material->Surface(),maps,part.surface)) { error="invalid surface description"; return false; }
+            switch(material->Render_Mode()) {
+            case Assets::MaterialRenderMode::AlphaTest: part.alpha_cutoff=material->Surface().alpha_cutoff; break;
+            case Assets::MaterialRenderMode::AlphaBlend:
+                part.style.source_blend=RHIBlendFactor::SourceAlpha; part.style.destination_blend=RHIBlendFactor::InverseSourceAlpha; break;
+            case Assets::MaterialRenderMode::Additive:
+                part.style.source_blend=RHIBlendFactor::One; part.style.destination_blend=RHIBlendFactor::One; break;
+            case Assets::MaterialRenderMode::Multiply:
+                part.style.source_blend=RHIBlendFactor::Zero; part.style.destination_blend=RHIBlendFactor::SourceColor; break;
+            default: break;
+            }
+            if(const auto& authored=material->Draw_State()) {
+                if(!Assets::Validate_Material_Draw_State(*authored)) { error="invalid authored material draw state"; return false; }
+                constexpr std::array factors{RHIBlendFactor::Zero,RHIBlendFactor::One,
+                    RHIBlendFactor::SourceColor,RHIBlendFactor::InverseSourceColor,
+                    RHIBlendFactor::SourceAlpha,RHIBlendFactor::InverseSourceAlpha};
+                constexpr std::array comparisons{RHIComparison::Never,RHIComparison::Less,
+                    RHIComparison::Equal,RHIComparison::LessEqual,RHIComparison::Greater,
+                    RHIComparison::NotEqual,RHIComparison::GreaterEqual,RHIComparison::Always};
+                part.style.source_blend=factors[static_cast<std::size_t>(authored->source)];
+                part.style.destination_blend=factors[static_cast<std::size_t>(authored->destination)];
+                part.style.depth_comparison=comparisons[static_cast<std::size_t>(authored->depth_comparison)];
+            }
+            part.mesh=m_renderer->Create_Mesh(source.vertices,source.indices);
+            if(!part.mesh.Is_Valid()) { error="could not create model geometry"; return false; }
+            m_parts.push_back(std::move(part));
+        return true;
+    }
     static constexpr std::size_t Shroud_Texture_Slot=3;
     struct Part;
     static std::array<RHITextureHandle,PropTextureCount> Textures(const Part& part,RHITextureHandle shroud) noexcept;
@@ -291,11 +332,21 @@ private:
         const auto* source=assets.Try_Get_Texture(handle);
         if(!source || !source->Has_Pixels()) return false;
         // W3D's mesh textures load with every mip level (MIP_LEVELS_ALL, box filtered): far off they do not shimmer.
-        result=Create_Mipped_Texture(*m_device,source->Width(),source->Height(),source->Pixels(),source->Row_Pitch(),
+        if(m_prepared_textures) {
+            const auto prepared=std::ranges::find_if(*m_prepared_textures,[&](const auto& entry) {return entry.first==handle;});
+            if(prepared==m_prepared_textures->end() || !prepared->second) return false;
+            result=Upload_Mip_Chain(*m_device,*prepared->second);
+        } else result=Create_Mipped_Texture(*m_device,source->Width(),source->Height(),source->Pixels(),source->Row_Pitch(),
             0,m_mip_reduction,m_minimum_texture_dimension);
         if(!result.Is_Valid()) return false;
         m_textures.emplace_back(handle,result); return true;
     }
+    std::unique_ptr<PropAssetBinding> m_pending;
+    PreparedPropAsset m_loading;
+    std::size_t m_loading_cursor{};
+    Assets::TextureAssetHandle m_base_override;
+    std::vector<std::pair<Assets::TextureAssetHandle,Assets::TextureAssetHandle>> m_base_replacements;
+    std::shared_ptr<const PreparedPropTextures> m_prepared_textures;
     Device* m_device=nullptr;
     unsigned m_mip_reduction{},m_minimum_texture_dimension{1};
     PropRenderer* m_renderer=nullptr;

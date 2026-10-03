@@ -9,6 +9,9 @@ import Graphics.Resources.MipChain;
 import Graphics.Tests.Device;
 import Graphics.Scene.Shadows.DirectionalRenderer;
 import Assets.Adapters.W3D;
+import Assets.Adapters.W3D.Mesh;
+import Assets.Adapters.W3D.Model;
+import Assets.Adapters.W3D.Materials;
 import Assets.Cache;
 import Assets.Identity;
 import Assets.Models;
@@ -37,6 +40,16 @@ public:
             Assets::ModelVertexDesc vertex;vertex.position=point;vertex.normal={0,0,1};vertex.texcoord={0.125f,0.125f};model->vertices.push_back(vertex);
         }
         model->indices={0,1,2,0,2,3};model->submeshes={{0,6,0,"quad"}};
+        if(identity.canonical_name=="prelit.w3d") {
+            Assets::W3D::W3DParsedMesh mesh;mesh.header.name="solved";mesh.header.bounds=model->bounds;mesh.prelit_chunk=0x24;
+            for(const auto& vertex:model->vertices) {mesh.positions.push_back(vertex.position);mesh.normals.push_back(vertex.normal);mesh.stage_texcoords.push_back(vertex.texcoord);mesh.colors.push_back({1,1,1,1});}
+            mesh.triangles={{0,1,2},{0,2,3}};
+            Assets::W3D::W3DVertexMaterialData material;material.material.name="paint";material.material.base_color={0,0,0,1};material.material.ambient_color={0,0,0,1};material.material.emissive_color={1,1,1,1};
+            mesh.materials.vertex_materials.push_back(material);Assets::W3D::W3DTextureData texture;texture.name="paint.tga";mesh.materials.textures.push_back(texture);
+            Assets::W3D::W3DMaterialPass pass;pass.vertex_material_index=0;pass.texture_index=0;pass.colors.assign(4,{.2f,.3f,.4f,1});mesh.materials.passes.push_back(pass);
+            model->vertices.clear();model->indices.clear();model->submeshes.clear();Assets::W3D::W3DAppend_Mesh(*model,mesh);
+            return {std::move(model),{}};
+        }
         Assets::ModelMaterialDesc material;material.name="paint";material.scope=Assets::MaterialScope::Model;material.primary_texture="paint.tga";material.ambient_color={1,1,1,1};
         if(identity.canonical_name=="mapped.w3d") material.texture_mappings[0]=Assets::TextureEnvironmentMapping{Assets::TextureEnvironmentSource::Normal};
         if(identity.canonical_name=="screen.w3d" || identity.canonical_name=="screen-always.w3d") {
@@ -102,6 +115,9 @@ BOOST_AUTO_TEST_CASE(authored_screen_blending_preserves_rgb_equation_depth_and_l
         check(binding==&screen ? screenExpected : binding==&alpha ? alphaExpected : source);
     }
     // LEQUAL fails behind stored depth; explicit ALWAYS bypasses comparison.
+    PropAssetBinding prelit;load(prelit,"prelit.w3d");
+    BOOST_REQUIRE(commands.Clear({0,0,0,1},1));BOOST_REQUIRE(prelit.Draw_Part(commands,0,parameters));
+    check({source[0]*.2f,source[1]*.3f,source[2]*.4f});
     BOOST_REQUIRE(commands.Clear({background[0],background[1],background[2],1},0.25f));
     BOOST_REQUIRE(screen.Draw_Part(commands,0,parameters));check(background);
     BOOST_REQUIRE(always.Draw_Part(commands,0,parameters));check(screenExpected);
@@ -581,4 +597,39 @@ BOOST_AUTO_TEST_CASE(texture_replacements_quality_mapping_and_stencil_coexist)
     check(overridden,nullptr,255,0); // Whole-model override takes precedence.
     check(changed,nullptr,0,255); // The other binding cannot mutate this one.
     changed.Clear();overridden.Clear();renderer.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(staged_uploads_keep_the_previous_binding_through_partial_work_cancel_and_failure)
+{
+    std::vector<std::byte> texture(18+4);texture[2]=std::byte{2};texture[12]=texture[14]=std::byte{1};texture[16]=std::byte{32};texture[17]=std::byte{0x28};
+    texture[20]=texture[21]=std::byte{255};
+    Assets::AssetCache assets([&](const auto& identity) {return identity.type==Assets::AssetType::Texture ? texture : std::vector<std::byte>{std::byte{1}};});
+    BOOST_REQUIRE(assets.Register_Model_Adapter(std::make_shared<MappingAdapter>()));
+    const auto handle=assets.Request_Model("opaque.w3d");assets.Wait(handle);const auto* model=assets.Try_Get_Model(handle);BOOST_REQUIRE(model);
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());PropRenderer renderer;
+    BOOST_REQUIRE(renderer.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    std::string error;PropAssetBinding binding;BOOST_REQUIRE_MESSAGE(binding.Load(device,renderer,assets,handle,error),error);
+    auto textures=std::make_shared<PreparedPropTextures>();BOOST_REQUIRE_MESSAGE(Prepare_Prop_Textures(assets,handle,*textures,error),error);
+    std::vector<PropAssetPart> geometry;BOOST_REQUIRE_MESSAGE(Build_Prop_Asset_Geometry(*model,geometry,error),error);
+    geometry.push_back(geometry.front());
+    const auto prepare=[&] {return PreparedPropAsset{handle,geometry,textures};};
+    const auto forever=(std::chrono::steady_clock::time_point::max)();
+    BOOST_REQUIRE(binding.Begin_Load(device,renderer,assets,prepare(),error));
+    BOOST_CHECK(binding.Advance_Load(assets,0,forever,error)==PropAssetLoadState::Pending);
+    BOOST_TEST(binding.Uploaded_Parts()==0u);BOOST_TEST(binding.Part_Count()==1u);
+    BOOST_CHECK(binding.Advance_Load(assets,8,std::chrono::steady_clock::now(),error)==PropAssetLoadState::Pending);
+    BOOST_TEST(binding.Uploaded_Parts()==0u);
+    BOOST_CHECK(binding.Advance_Load(assets,1,forever,error)==PropAssetLoadState::Pending);
+    BOOST_TEST(binding.Uploaded_Parts()==1u);BOOST_TEST(binding.Part_Count()==1u);
+    binding.Cancel_Load();BOOST_TEST(binding.Part_Count()==1u);
+    auto invalid=prepare();invalid.geometry.back().material_index=999;
+    BOOST_REQUIRE(binding.Begin_Load(device,renderer,assets,std::move(invalid),error));
+    BOOST_CHECK(binding.Advance_Load(assets,1,forever,error)==PropAssetLoadState::Pending);
+    BOOST_CHECK(binding.Advance_Load(assets,1,forever,error)==PropAssetLoadState::Failed);
+    BOOST_TEST(binding.Part_Count()==1u);BOOST_CHECK(error=="invalid prepared material index");
+    BOOST_REQUIRE(binding.Begin_Load(device,renderer,assets,prepare(),error));
+    BOOST_CHECK(binding.Advance_Load(assets,1,forever,error)==PropAssetLoadState::Pending);
+    BOOST_CHECK(binding.Advance_Load(assets,1,forever,error)==PropAssetLoadState::Ready);
+    BOOST_TEST(binding.Part_Count()==2u);BOOST_TEST(binding.Texture_Count()==1u);
+    binding.Clear();renderer.Shutdown();
 }

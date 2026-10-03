@@ -1,0 +1,32 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.gameplay.common.physics.algorithms.ground_motion;
+namespace {
+using namespace Engine::Math;
+FixedVector3 V(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+void Plane(engine::level::CollisionScene3& scene,int z) {
+    scene.AddTriangle(V(-20,-20,z),V(20,-20,z),V(20,20,z),1,1);scene.AddTriangle(V(-20,-20,z),V(20,20,z),V(-20,20,z),1,1);
+}
+engine::level::CollisionScene3 Stair(bool ceiling=false,int height=1) {
+    engine::level::CollisionScene3 scene;Plane(scene,0);
+    scene.AddTriangle(V(2,-20,0),V(2,20,0),V(2,20,height),2,1);scene.AddTriangle(V(2,-20,0),V(2,20,height),V(2,-20,height),2,1);
+    scene.AddTriangle(V(2,-20,height),V(20,-20,height),V(20,20,height),3,1);scene.AddTriangle(V(2,-20,height),V(20,20,height),V(2,20,height),3,1);
+    if(ceiling) Plane(scene,3);scene.Prepare();return scene;
+}
+}
+BOOST_AUTO_TEST_CASE(ground_motion_steps_low_obstacle_snaps_to_support_and_rejects_tall_obstacles) {
+    using namespace engine::gameplay;SweptHull hull;hull.offset=V(0,0,1);hull.extent={Fixed::Half(),Fixed::Half(),Fixed::One()};hull.categories=1;
+    const auto position=FixedVector3{Fixed{},Fixed{},Fixed::FromRatio(1,50)};
+    const GroundMotionOptions options{Fixed::FromRatio(6,5),Fixed::FromRatio(1,10),Fixed::FromRatio(7,10),Fixed::FromRatio(1,50)};
+    auto low=Stair();const auto result=GroundMotion(low,position,V(4,0,0),hull,options);
+    BOOST_TEST(result.applied.x.Raw()==Fixed::FromInt(4).Raw());BOOST_TEST(Abs(result.applied.z-Fixed::One()).Raw()<8);BOOST_REQUIRE(result.support);BOOST_TEST(result.support->subject==3u);
+    const auto tall=GroundMotion(Stair(false,2),position,V(4,0,0),hull,options);BOOST_TEST(tall.applied.x.Raw()<=Fixed::FromRatio(3,2).Raw());BOOST_TEST(Abs(tall.applied.z).Raw()<8);
+}
+BOOST_AUTO_TEST_CASE(ground_motion_cannot_step_through_ceiling_or_snap_across_missing_support) {
+    using namespace engine::gameplay;SweptHull hull;hull.offset=V(0,0,1);hull.extent={Fixed::Half(),Fixed::Half(),Fixed::One()};hull.categories=1;
+    GroundMotionOptions options{Fixed::FromRatio(6,5),Fixed::FromRatio(1,10),Fixed::FromRatio(7,10),Fixed::FromRatio(1,50)};
+    const auto position=FixedVector3{Fixed{},Fixed{},Fixed::FromRatio(1,50)};
+    const auto roof=GroundMotion(Stair(true),position,V(4,0,0),hull,options);BOOST_TEST(roof.applied.x.Raw()<=Fixed::FromRatio(3,2).Raw());BOOST_TEST(Abs(roof.applied.z).Raw()<8);
+    engine::level::CollisionScene3 empty;empty.Prepare();const auto free=GroundMotion(empty,position,V(4,0,0),hull,options);BOOST_CHECK(free.applied==V(4,0,0));BOOST_TEST(!free.support);
+    options.step_height=-Fixed::One();BOOST_CHECK_THROW(GroundMotion(empty,position,{},hull,options),std::invalid_argument);
+}

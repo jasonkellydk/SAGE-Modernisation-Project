@@ -11,9 +11,7 @@ int main(int argc, char **argv)
 		auto install = renegade::content::MountInstall(std::filesystem::path(argv[2]));
 		if (!install) { std::cerr << install.error() << '\n'; return 1; }
 		std::cout << "Mounted " << install->archives.size() << " retail archives, " << install->files->FileCount() << " virtual files\n";
-		const auto armorText = install->files->ReadText("armor.ini");
-		if (!armorText) { std::cerr << "Retail armor.ini is missing\n"; return 1; }
-		auto armor = renegade::content::ReadArmor(*armorText);
+		auto armor = renegade::content::LoadArmorCatalog(*install->files);
 		if (!armor) { std::cerr << armor.error() << '\n'; return 1; }
 		session.World().Resource<renegade::DamageRules>() = std::move(armor->rules);
 		std::cout << "Loaded " << armor->armors.size() << " armor types and " << armor->warheads.size() << " warheads\n";

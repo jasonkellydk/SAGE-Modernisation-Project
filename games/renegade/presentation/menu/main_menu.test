@@ -1,11 +1,58 @@
 #define BOOST_TEST_MODULE RenegadeMenu
 #include <boost/test/included/unit_test.hpp>
 #include <limits>
+#include <expected>
+#include <vector>
 import games.renegade.presentation.menu.main_menu;
 import games.renegade.presentation.menu.intro;
 import games.renegade.presentation.menu.navigation;
+import games.renegade.presentation.menu.single_player;
+import games.renegade.presentation.menu.pause;
+import games.renegade.content.campaign.campaign_flow;
 import engine.config.adapters.preferences.preferences_file;
 using namespace renegade::presentation;
+BOOST_AUTO_TEST_CASE(single_player_pause_preserves_session_through_children_resume_and_exit_cancellation) {
+    MenuNavigation navigation;unsigned pauses{},resumes{},exits{};
+    PauseMenu pause(navigation,[&](bool active) {if(active) ++pauses;else ++resumes;},[&] {++exits;navigation.Reset(128);});
+    pause.Open();BOOST_TEST(pause.active.Get());BOOST_TEST(navigation.dialog.Get()==153u);BOOST_TEST(pauses==1u);
+    pause.Open();BOOST_TEST(pauses==1u);navigation.For(11003).Execute();navigation.For(11014).Execute();
+    BOOST_TEST(navigation.dialog.Get()==169u);BOOST_TEST(pause.active.Get());navigation.For(11034).Execute();navigation.For(11034).Execute();
+    BOOST_TEST(navigation.dialog.Get()==153u);BOOST_TEST(pause.active.Get());BOOST_TEST(resumes==0u);
+    pause.SelectTab(6);pause.SelectTab(8);BOOST_TEST(pause.selected_tab.Get()==6u);
+    navigation.For(11020).Execute();BOOST_TEST(navigation.dialog.Get()==209u);BOOST_TEST(pause.ExitPending());
+    pause.ConfirmExit(false);BOOST_TEST(navigation.dialog.Get()==153u);BOOST_TEST(pause.active.Get());BOOST_TEST(exits==0u);
+    navigation.For(11034).Execute();BOOST_TEST(!pause.active.Get());BOOST_TEST(resumes==1u);
+    pause.Open();navigation.For(11020).Execute();pause.ConfirmExit(true);pause.ConfirmExit(true);
+    BOOST_TEST(!pause.active.Get());BOOST_TEST(exits==1u);BOOST_TEST(navigation.dialog.Get()==128u);
+}
+BOOST_AUTO_TEST_CASE(single_player_menu_uses_injected_start_and_original_tutorial_difficulty_routes) {
+    const auto flow=renegade::content::ReadCampaignFlow("[Campaign]\n1=Level M13.mix\n2=Score\n");BOOST_REQUIRE(flow.has_value());
+    MenuNavigation navigation;std::vector<SinglePlayerStart> requests;
+    SinglePlayerMenu menu(navigation,*flow,[&](const auto& request)->std::expected<void,std::string>{requests.push_back(request);return {};});
+    navigation.For(11005).Execute();BOOST_TEST(requests.empty());
+    navigation.For(11000).Execute();BOOST_TEST(navigation.dialog.Get()==130u);
+    BOOST_TEST(navigation.For(11005).Execute());BOOST_REQUIRE(requests.size()==1u);
+    BOOST_TEST(requests.back().tutorial);BOOST_TEST(requests.back().map=="M00_Tutorial.mix");BOOST_TEST(menu.active.Get());
+    navigation.For(11005).Execute();BOOST_TEST(requests.size()==1u); // no double start
+    menu.ReturnToMenu();BOOST_TEST(navigation.dialog.Get()==128u);BOOST_TEST(!menu.active.Get());BOOST_CHECK(!navigation.Focus());
+    for(unsigned difficulty=0;difficulty<4;++difficulty) {
+        navigation.For(11000).Execute();navigation.For(11004).Execute();BOOST_TEST(navigation.dialog.Get()==131u);
+        BOOST_TEST(navigation.For(11007+difficulty).Execute());BOOST_TEST(requests.back().map=="M13.mix");
+        BOOST_TEST(!requests.back().tutorial);BOOST_TEST(requests.back().difficulty==int(difficulty));BOOST_TEST(menu.difficulty.Get()==int(difficulty));
+        menu.ReturnToMenu();navigation.back.Execute();BOOST_TEST(navigation.dialog.Get()==129u);navigation.back.Execute();
+    }
+    BOOST_TEST(requests.size()==5u);
+}
+BOOST_AUTO_TEST_CASE(single_player_start_failure_keeps_menu_available_for_retry) {
+    const auto flow=renegade::content::ReadCampaignFlow("[Campaign]\n1=Level M13.mix\n");BOOST_REQUIRE(flow.has_value());
+    MenuNavigation navigation;unsigned attempts{};
+    SinglePlayerMenu menu(navigation,*flow,[&](const auto&)->std::expected<void,std::string>{
+        if(++attempts==1) return std::unexpected("load queue unavailable");return {};
+    });
+    navigation.Open(130);navigation.For(11005).Execute();BOOST_TEST(!menu.active.Get());
+    BOOST_TEST(menu.error.Get()=="load queue unavailable");BOOST_TEST(navigation.dialog.Get()==130u);
+    navigation.For(11005).Execute();BOOST_TEST(menu.active.Get());BOOST_TEST(menu.error.Get().empty());BOOST_TEST(attempts==2u);
+}
 BOOST_AUTO_TEST_CASE(dialog_focus_lifetime_restores_parents_and_discards_closed_children) {
     MenuNavigation vm;vm.RememberFocus(11003);vm.For(11003).Execute();BOOST_CHECK(!vm.Focus());
     vm.RememberFocus(11014);vm.For(11014).Execute();BOOST_CHECK(!vm.Focus());

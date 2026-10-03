@@ -37,6 +37,7 @@ export struct W3DMaterialPass final
 	std::vector<std::uint32_t> vertex_material_ids;
 	std::vector<std::uint32_t> shader_ids;
 	std::vector<std::uint32_t> texture_ids;
+	std::vector<Color4f> colors;
 };
 
 export struct W3DVertexMaterialData final
@@ -337,7 +338,7 @@ bool Parse_Vertex_Materials(W3DByteSpan bytes, std::vector<W3DVertexMaterialData
 		if (chunk.id != W3DChunkVertexMaterial)
 			return false;
 		W3DVertexMaterialData material;
-		if (!chunk.contains_children || !W3DRead_Vertex_Material(chunk.payload, material) || !material.has_name)
+		if (!W3DRead_Vertex_Material(chunk.payload, material) || !material.has_name)
 			return false;
 		materials.push_back(std::move(material));
 		return true;
@@ -347,7 +348,7 @@ bool Parse_Vertex_Materials(W3DByteSpan bytes, std::vector<W3DVertexMaterialData
 bool Parse_Textures(W3DByteSpan bytes, std::vector<W3DTextureData> &textures)
 {
 	return W3DVisit_Chunks(bytes, [&textures](const W3DChunkView &chunk) {
-		if (chunk.id != W3DChunkTexture || !chunk.contains_children)
+		if (chunk.id != W3DChunkTexture)
 			return false;
 		W3DTextureData texture;
 		if (!W3DRead_Texture(chunk.payload, texture))
@@ -419,17 +420,22 @@ bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 		return true;
 	})) return false;
 	std::size_t stage_count = 0;
-	return W3DVisit_Chunks(bytes, [&pass, vertex_count, &stage_count](const W3DChunkView &chunk) {
+	bool diffuse = false, illumination = false;
+	return W3DVisit_Chunks(bytes, [&pass, vertex_count, &stage_count, &diffuse, &illumination](const W3DChunkView &chunk) {
 		switch (chunk.id) {
 			case W3DChunkVertexMaterialIds:
 				if (chunk.payload.size() < 4 || chunk.payload.size() % 4 != 0)
 					return false;
+				// Subsequent arrays describe the alternate material set. The
+				// runtime uses the first (default) set; retention keeps them all.
+				if (!pass.vertex_material_ids.empty()) { std::vector<std::uint32_t> alternate; return Read_Id_Array(chunk.payload, alternate); }
 				if (!Read_Id_Array(chunk.payload, pass.vertex_material_ids))
 					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.vertex_material_index);
 			case W3DChunkShaderIds:
 				if (chunk.payload.size() < 4 || chunk.payload.size() % 4 != 0)
 					return false;
+				if (!pass.shader_ids.empty()) { std::vector<std::uint32_t> alternate; return Read_Id_Array(chunk.payload, alternate); }
 				if (!Read_Id_Array(chunk.payload, pass.shader_ids))
 					return false;
 				return W3DRead_U32(chunk.payload, 0, pass.shader_index);
@@ -437,9 +443,29 @@ bool Parse_Material_Pass(W3DByteSpan bytes, std::uint32_t vertex_count, W3DMater
 			{
 				// Full indexed UVs for shader passes are decoded by PassBindings
 				// once the mesh's face count is known.
-				if (pass.uses_shader_material) return chunk.contains_children;
+				if (pass.uses_shader_material) return W3DValidate_Chunk_Tree(chunk.payload);
 				const bool first_stage = stage_count++ == 0;
-				return chunk.contains_children && Parse_Texture_Stage(chunk.payload, vertex_count, pass, first_stage);
+				return Parse_Texture_Stage(chunk.payload, vertex_count, pass, first_stage);
+			}
+			case 0x3B:
+			case 0x3C: {
+				if (chunk.payload.size() != std::uint64_t(vertex_count) * 4) return false;
+				const bool dig = chunk.id == 0x3C;
+				// First arrays feed the default material. DIG multiplies its
+				// illumination into DCG, as meshmdlio.cpp:read_dig does.
+				if (dig ? illumination : diffuse) return true;
+				if (!dig && !pass.colors.empty()) { diffuse = true; return true; }
+				if (pass.colors.empty()) pass.colors.resize(vertex_count, {1, 1, 1, 1});
+				for (std::size_t i = 0; i < vertex_count; ++i) {
+					auto &color = pass.colors[i]; const auto at = i * 4;
+					const auto r = std::to_integer<unsigned>(chunk.payload[at]) / 255.f;
+					const auto g = std::to_integer<unsigned>(chunk.payload[at + 1]) / 255.f;
+					const auto b = std::to_integer<unsigned>(chunk.payload[at + 2]) / 255.f;
+					if (dig) {color.r *= r; color.g *= g; color.b *= b;}
+					else color = {r, g, b, std::to_integer<unsigned>(chunk.payload[at + 3]) / 255.f};
+				}
+				(dig ? illumination : diffuse) = true;
+				return true;
 			}
 			default:
 				return true;
@@ -574,7 +600,7 @@ export bool W3DParse_Materials(W3DByteSpan bytes, std::uint32_t vertex_count, W3
 				materials.has_info = true;
 				return true;
 			case W3DChunkVertexMaterials:
-				return chunk.contains_children && MaterialDetail::Parse_Vertex_Materials(
+				return MaterialDetail::Parse_Vertex_Materials(
 					chunk.payload,
 					materials.vertex_materials);
 			case W3DChunkShaders:
@@ -585,10 +611,8 @@ export bool W3DParse_Materials(W3DByteSpan bytes, std::uint32_t vertex_count, W3
 				has_shader_materials = true;
 				return W3DRead_Shader_Materials(chunk.payload, materials.shader_materials);
 			case W3DChunkTextures:
-				return chunk.contains_children && MaterialDetail::Parse_Textures(chunk.payload, materials.textures);
+				return MaterialDetail::Parse_Textures(chunk.payload, materials.textures);
 			case W3DChunkMaterialPass: {
-				if (!chunk.contains_children)
-					return false;
 				W3DMaterialPass pass;
 				if (!MaterialDetail::Parse_Material_Pass(chunk.payload, vertex_count, pass))
 					return false;

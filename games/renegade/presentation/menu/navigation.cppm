@@ -20,6 +20,8 @@ public:
     void RememberFocus(std::optional<std::uint32_t> control) { m_focus=control; }
     std::optional<std::uint32_t> Focus() const { return m_focus; }
     void Open(std::uint32_t resource) { if(resource!=dialog.Get()) { m_stack.push_back({dialog.Get(),m_focus});m_focus.reset();dialog.Set(resource); } }
+    void Reset(std::uint32_t resource) {m_stack.clear();m_focus.reset();dialog.Set(resource);}
+    void Bind(std::uint32_t id,std::function<void()> action) {auto& command=For(id);command.SetAction(std::move(action));command.enabled.Set(true);}
     void Back() {
         if(m_stack.empty()) { Open(129);return; }
         if(!IsPopupResource(dialog.Get())) closed_menus.Set(closed_menus.Get()+1);
@@ -39,7 +41,7 @@ public:
         case 11000:return 130;case 11003:return 135;case 11004:return 131;case 11006:return 145;
         case 11011:return 136;case 11012:return 167;case 11013:return 168;case 11014:return 169;
         case 11015:return 170;case 11016:return 171;case 11017:return 172;case 11018:return 129;
-        case 11020:return 128;case 11027:return 166;
+        case 11019:return 153;case 11020:return 128;case 11021:return 211;case 11027:return 166;
         case 1338:return 216;
         // LAN's browser and hosting screens will be bound to the session host.
         case 11030:return 174;

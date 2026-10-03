@@ -1,0 +1,53 @@
+#define BOOST_TEST_MODULE SceneEmitterPlayer
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.audio.scene.emitter_player;
+import engine.gameplay.common.audio.systems.emitter_snapshot_system;
+namespace {
+struct Emitters {
+    ecs::World world{ecs::WorldConfig{64}};engine::gameplay::EmitterSnapshotSystem system;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    Emitters(unsigned workers,unsigned count=3) {
+        using namespace engine::gameplay;world.RegisterComponent<SoundEmitter>();world.RegisterComponent<Transform>();world.FinalizeComponents();world.EmplaceResource<SoundEmitterSnapshots>();
+        registry.Register(system);registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {auto entity=commands.Create();pending.push_back(entity);commands.Add<SoundEmitter>(entity,SoundEmitter{1,i==2 ? 0u : 1u});
+            Transform transform;if(i==1) transform.position.x=Engine::Math::Fixed::FromInt(10);commands.Add<Transform>(entity,transform);}
+        world.Commit(commands);for(const auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step() {scheduler->Execute(engine::time::SimulationTime{1,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(prepared_scene_sounds_spatialize_loop_stop_when_disabled_and_release_on_teardown) {
+    using namespace engine::audio;using namespace engine::gameplay;Emitters emitters(4);emitters.Step();Mixer mixer(1000);PreparedSoundLibrary library;
+    auto pcm=std::make_shared<PcmBuffer>();pcm->sampleRate=1000;pcm->samples.assign(8,.25f);library.buffers.emplace("wind",pcm);
+    SoundEventDefinition sound;sound.name="wind";sound.sounds={"wind"};sound.bus=Bus::Ambient;sound.control=sound_control::Loop;sound.minRange=1;sound.maxRange=5;
+    const std::array catalog{sound};std::vector<float> mixed(400);
+    {
+        EmitterPlayer player(mixer,library);player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{});mixer.Mix(mixed);player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{});
+        BOOST_TEST(player.Playing()==1u);BOOST_CHECK_SMALL(mixed.back()-.25f,.000001f); // short buffer loops through hundreds of frames
+        emitters.world.Get<SoundEmitter>(emitters.entities[0])->enabled=0;emitters.Step();player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{});mixer.Mix(mixed);BOOST_TEST(mixed.back()==0.f);
+        emitters.world.Get<SoundEmitter>(emitters.entities[0])->enabled=1;emitters.Step();player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{});mixer.Mix(mixed);BOOST_CHECK_SMALL(mixed.back()-.25f,.000001f);
+        ecs::CommandBuffer remove;remove.Remove<SoundEmitter>(emitters.entities[0]);emitters.world.Commit(remove);emitters.Step();player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{});mixer.Mix(mixed);BOOST_TEST(mixed.back()==0.f);
+        // Out-of-range emitter becomes audible as the listener moves to it.
+        player.Update(emitters.world.Resource<SoundEmitterSnapshots>(),catalog,{{10,0,0},{1,0,0}});mixer.Mix(mixed);BOOST_CHECK_SMALL(mixed.back()-.25f,.000001f);
+    }
+    mixer.Mix(mixed);BOOST_TEST(mixed.back()==0.f);BOOST_TEST(mixer.OutputStats().nonSilentFrames>0u);
+}
+BOOST_AUTO_TEST_CASE(emitter_snapshots_have_stable_order_across_parallel_chunks) {
+    Emitters serial(1,513),parallel(4,513);serial.Step();parallel.Step();std::vector<engine::gameplay::SoundEmitterSnapshot> a,b;
+    serial.world.Resource<engine::gameplay::SoundEmitterSnapshots>().ForEach([&](auto item) {a.push_back(item);});parallel.world.Resource<engine::gameplay::SoundEmitterSnapshots>().ForEach([&](auto item) {b.push_back(item);});
+    BOOST_REQUIRE(a.size()==b.size());for(std::size_t i=0;i<a.size();++i) {BOOST_CHECK(a[i].entity==b[i].entity);BOOST_CHECK(a[i].position==b[i].position);BOOST_TEST(a[i].emitter.enabled==b[i].emitter.enabled);}
+}
+BOOST_AUTO_TEST_CASE(pausing_a_scene_retains_sample_cursor_and_leaves_other_audio_owners_running) {
+    using namespace engine::audio;Emitters emitters(1,1);emitters.Step();Mixer mixer(1000);PreparedSoundLibrary library;
+    auto pcm=std::make_shared<PcmBuffer>();pcm->sampleRate=1000;pcm->samples={.1f,.1f,.2f,.2f,.3f,.3f};library.buffers.emplace("wind",pcm);
+    SoundEventDefinition sound;sound.name="wind";sound.sounds={"wind"};sound.control=sound_control::Loop;
+    const std::array catalog{sound};EmitterPlayer player(mixer,library);player.Update(emitters.world.Resource<engine::gameplay::SoundEmitterSnapshots>(),catalog,{});
+    std::array<float,2> output{};mixer.Mix(output);BOOST_CHECK_SMALL(output[0]-.1f,.000001f);
+    player.SetPaused(true);mixer.Mix(output);BOOST_TEST(output[0]==0.f);
+    auto menu=std::make_shared<PcmBuffer>();menu->sampleRate=1000;menu->samples={.5f,.5f};VoiceStart voice;voice.buffer=menu;voice.loop=true;mixer.Play(std::move(voice));
+    mixer.Mix(output);BOOST_CHECK_SMALL(output[0]-.5f,.000001f);
+    player.SetPaused(false);mixer.Mix(output);BOOST_CHECK_SMALL(output[0]-.7f,.000001f);
+}

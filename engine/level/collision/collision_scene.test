@@ -1,0 +1,86 @@
+#include <boost/test/unit_test.hpp>
+import engine.level.collision.collision_scene;
+import std;
+import engine.level.model.collision_mesh;
+
+namespace
+{
+using Engine::Math::Fixed;
+using Engine::Math::FixedVector3;
+FixedVector3 Point(int x, int y, int z) {return {Fixed::FromInt(x), Fixed::FromInt(y), Fixed::FromInt(z)};}
+}
+
+BOOST_AUTO_TEST_CASE(fixed_level_sweeps_floor_ceiling_and_boundary_contacts)
+{
+	engine::level::CollisionScene3 scene;
+	scene.AddTriangle(Point(-16, -16, 0), Point(16, -16, 0), Point(0, 16, 0), 42, 1, 7);
+	scene.Prepare();
+	const engine::level::CollisionBox3 box{Point(0, 0, 5), Point(1, 1, 1)};
+	const auto hit = scene.Cast(box, Point(0, 0, -10), 1); BOOST_REQUIRE(hit.has_value());
+	BOOST_TEST(hit->fraction.Raw() == Fixed::FromRatio(2, 5).Raw()); BOOST_TEST(hit->normal.z.Raw() == Fixed::One().Raw());
+	BOOST_TEST(hit->subject == 42u); BOOST_TEST(hit->surface == 7u); BOOST_TEST(!hit->starts_overlapping);
+	BOOST_TEST(!scene.Cast(box, Point(0, 0, -10), 2).has_value()); BOOST_TEST(!scene.Cast(box, Point(0, 0, -10), 1, 42).has_value());
+	const engine::level::CollisionBox3 touching{Point(0, 0, 1), Point(1, 1, 1)};
+	BOOST_TEST(!scene.Cast(touching, Point(2, 0, 0), 1).has_value()); BOOST_TEST(!scene.Cast(touching, Point(0, 0, 2), 1).has_value());
+	const auto approaching = scene.Cast(touching, Point(0, 0, -2), 1); BOOST_REQUIRE(approaching.has_value());
+	BOOST_TEST(approaching->fraction.Raw() == 0); BOOST_TEST(!approaching->starts_overlapping);
+	const auto overlap = scene.Cast({Point(0, 0, 0), Point(1, 1, 1)}, {}, 1); BOOST_REQUIRE(overlap.has_value()); BOOST_TEST(overlap->starts_overlapping);
+	const auto ceiling = scene.Cast({Point(0, 0, -5), Point(1, 1, 1)}, Point(0, 0, 10), 1); BOOST_REQUIRE(ceiling.has_value());
+	BOOST_TEST(ceiling->fraction.Raw() == Fixed::FromRatio(2, 5).Raw()); BOOST_TEST(ceiling->normal.z.Raw() == -Fixed::One().Raw());
+	const auto ray = scene.Cast({Point(0, 0, 5), {}}, Point(0, 0, -10), 1); BOOST_REQUIRE(ray.has_value()); BOOST_TEST(ray->fraction.Raw() == Fixed::Half().Raw());
+	BOOST_CHECK_THROW(scene.AddTriangle({}, Point(1, 0, 0), Point(0, 1, 0), 1, 1), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(fixed_level_bvh_preserves_authored_ties_and_filters_vertical_geometry)
+{
+	engine::level::CollisionScene3 scene;
+	scene.AddTriangle(Point(-16, -16, 0), Point(16, -16, 0), Point(0, 16, 0), 42, 1, 7);
+	for (int i = 1; i < 130; ++i) {
+		// Force multiple BVH levels, mixing distant and identically overlapping
+		// triangles. Equal hits retain original authored triangle order.
+		const int x = i % 2 ? 1000 + i * 10 : 0;
+		scene.AddTriangle(Point(x - 16, -16, 0), Point(x + 16, -16, 0), Point(x, 16, 0), 42 + i, 1, i);
+	}
+	scene.AddTriangle(Point(4, -16, -16), Point(4, 16, -16), Point(4, 0, 16), 900, 2, 33);
+	scene.AddTriangle({}, {}, {}, 901, 1); // Degenerate authored triangles cannot produce contacts.
+	BOOST_TEST(scene.TriangleCount() == 131u); scene.Prepare(); scene.Prepare();
+	const auto floor = scene.Cast({Point(0, 0, 5), Point(1, 1, 1)}, Point(0, 0, -10), 1); BOOST_REQUIRE(floor.has_value());
+	BOOST_TEST(floor->triangle == 0u); BOOST_TEST(floor->surface == 7u);
+	const auto wall = scene.Cast({Point(0, 0, 5), Point(1, 1, 1)}, Point(10, 0, 0), 3); BOOST_REQUIRE(wall.has_value());
+	BOOST_TEST(wall->fraction.Raw() == Fixed::FromRatio(3, 10).Raw()); BOOST_TEST(wall->normal.x.Raw() == -Fixed::One().Raw()); BOOST_TEST(wall->surface == 33u);
+	BOOST_TEST(!scene.Cast({Point(0, 100, 5), Point(1, 1, 1)}, Point(10, 0, 0), 3).has_value());
+	BOOST_CHECK_THROW(scene.Cast({{}, Point(-1, 1, 1)}, {}, 1), std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(immutable_collision_layers_preserve_nearest_hit_ties_masks_and_ignored_subjects)
+{
+    using namespace engine::level;
+    const auto floor=[](int height,unsigned subject,unsigned categories) {
+        auto scene=std::make_shared<CollisionScene3>();scene->AddTriangle(Point(-16,-16,height),Point(16,-16,height),Point(0,16,height),subject,categories,subject);
+        scene->Prepare();return scene;
+    };
+    CollisionScene3 composed;auto base=floor(0,42,1);composed.AddLayer(base);composed.AddLayer(floor(3,50,3));composed.AddLayer(floor(3,51,3));composed.Prepare();
+    BOOST_TEST(composed.TriangleCount()==3u);BOOST_TEST(base->TriangleCount()==1u);
+    const CollisionBox3 box{Point(0,0,5),{}};
+    const auto hit=composed.Cast(box,Point(0,0,-10),3);BOOST_REQUIRE(hit);BOOST_TEST(hit->subject==50u);BOOST_TEST(hit->triangle==1u);BOOST_TEST(hit->fraction.Raw()==Fixed::FromRatio(1,5).Raw());
+    const auto ignored=composed.Cast(box,Point(0,0,-10),3,50);BOOST_REQUIRE(ignored);BOOST_TEST(ignored->subject==51u);BOOST_TEST(ignored->triangle==2u);
+    BOOST_TEST(!composed.Cast(box,Point(0,0,-10),4));
+    BOOST_CHECK_THROW(composed.AddLayer(base),std::logic_error);
+    CollisionScene3 unprepared;BOOST_CHECK_THROW(unprepared.AddLayer(std::make_shared<CollisionScene3>()),std::invalid_argument);
+    BOOST_CHECK_THROW(unprepared.AddLayer({}),std::invalid_argument);
+    CollisionScene3 nested;nested.AddLayer(std::make_shared<CollisionScene3>(composed));nested.Prepare();
+    const auto nested_hit=nested.Cast(box,Point(0,0,-10),3);BOOST_REQUIRE(nested_hit);BOOST_TEST(nested_hit->triangle==1u);
+}
+
+BOOST_AUTO_TEST_CASE(sampled_collision_tracks_interpolate_translation_and_reject_topology_changes)
+{
+    using namespace engine::level;ModelCollision3 closed;
+    closed.first={Point(0,-2,-2)};closed.second={Point(0,2,-2)};closed.third={Point(0,0,2)};closed.categories={3};closed.surfaces={7};
+    auto open=closed;for(auto* column:{&open.first,&open.second,&open.third}) for(auto& point:*column) point.y+=Fixed::FromInt(4);
+    ModelCollisionTrack3 track{{closed,open}};
+    const auto middle=SampleCollisionTrack(track,Fixed::Half());BOOST_TEST(middle.first[0].y.Raw()==0);BOOST_TEST(middle.categories[0]==3u);BOOST_TEST(middle.surfaces[0]==7u);
+    const auto before=SampleCollisionTrack(track,Fixed::FromInt(-2));BOOST_TEST(before.first[0].y.Raw()==Fixed::FromInt(-2).Raw());
+    const auto after=SampleCollisionTrack(track,Fixed::FromInt(3));BOOST_TEST(after.first[0].y.Raw()==Fixed::FromInt(2).Raw());
+    track.frames[1].categories[0]=1;BOOST_CHECK_THROW(SampleCollisionTrack(track,Fixed::Half()),std::invalid_argument);
+    BOOST_CHECK_THROW(SampleCollisionTrack({},Fixed{}),std::invalid_argument);
+}

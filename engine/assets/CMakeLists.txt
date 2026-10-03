@@ -24,6 +24,7 @@ target_sources(generals_assets
             material/TextureMapping.cppm
             adapters/w3d/materials/W3DTextureMapping.cppm
             model/ModelAsset.cppm
+            model/ModelComposition.cppm
             model/ModelRig.cppm
             model/MeshBoundsTree.cppm
             particle/EmitterAsset.cppm
@@ -60,6 +61,7 @@ target_sources(generals_assets
             adapters/w3d/mesh/W3DGeometry.cppm
             adapters/w3d/mesh/W3DMeshData.cppm
             adapters/w3d/model/W3DModelBuilder.cppm
+            adapters/w3d/model/W3DResolvedModel.cppm
             adapters/w3d/model/W3DBox.cppm
             adapters/w3d/null/W3DNull.cppm
             adapters/w3d/model/W3DRig.cppm

@@ -64,12 +64,16 @@ engine_add_module_library(engine_core_math_fixed
 		fixed/angle/FixedAngleTables.cppm
 		fixed/angle/FixedAngle.cppm
 		fixed/vector/FixedVector.cppm
+		fixed/transform/FixedAffineTransform3.cppm
+		fixed/transform/FixedLookAngles.cppm
+		fixed/geometry/FixedOrientedBox3.cppm
 		fixed/random/FixedRandom.cppm
 		fixed/presentation/FixedPresentation.cppm
 	DEPENDS engine_core_math
 	TESTS
 		fixed/tests/Fixed.test
 		fixed/tests/FixedAngle.test
+		fixed/tests/FixedLookAngles.test
 		fixed/tests/FixedVector.test
 		fixed/tests/FixedRandom.test
 		fixed/tests/FixedPresentation.test

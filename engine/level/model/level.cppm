@@ -3,6 +3,8 @@ import std;
 
 export import engine.level.model.properties;
 export import Engine.Core.Math.FixedVector;
+export import Engine.Core.Math.FixedAffineTransform3;
+export import Engine.Core.Math.FixedOrientedBox3;
 
 // A level: the authored, static description of a playable space, independent
 // of the file format it came from and of any game's rules. Format adapters
@@ -79,6 +81,8 @@ struct TerrainSurface
 	std::vector<CliffMapping> cliffTable; // [0] unused
 };
 
+enum class PlacementKind : std::uint8_t { Object, Geometry, Trigger, SpawnPoint };
+
 // Something placed in the level: a unit, building, prop, tree, light, sound.
 struct Placement
 {
@@ -87,7 +91,55 @@ struct Placement
 	math::TurnAngle orientation;
 	std::uint32_t flags{0}; // format-defined bits (road/bridge endpoints, ...)
 	Properties properties;
+	// Optional full pose for authored 3D worlds; existing planar maps continue
+	// to use position/orientation. Identity is format-neutral and level-local.
+	std::optional<math::FixedAffineTransform3> transform;
+	std::uint64_t id{};
+	std::uint32_t definition{};
+	std::string model;
+	PlacementKind kind{PlacementKind::Object};
 };
+
+// Volumes and event-driven behavior bindings complement polygon regions and
+// scenario condition/action scripts. The game supplies filtering and program
+// vocabulary; the level describes geometry and ordered authored bindings.
+struct TriggerVolume
+{
+	std::uint64_t subject{};
+	math::FixedOrientedBox3 bounds;
+};
+struct BehaviorBinding
+{
+	std::uint64_t id{}, subject{};
+	std::string program, parameters;
+};
+
+// An authored region which transfers an actor to a full destination pose.
+// Games supply eligibility, interaction and state rules. The geometry and
+// placement operation are independent of ladders, vehicles or teleports.
+struct TraversalPortal
+{
+	std::uint64_t subject{};
+	std::uint32_t ordinal{};
+	math::FixedOrientedBox3 bounds;
+	math::FixedAffineTransform3 destination;
+	Properties properties;
+};
+
+inline std::expected<TraversalPortal, std::string> PlaceTraversalPortal(
+	TraversalPortal portal, const math::FixedAffineTransform3 &parent)
+{
+	portal.bounds.center = parent.Point(portal.bounds.center);
+	for (auto &axis : portal.bounds.axes) {
+		const auto &m = parent.elements;
+		axis = {m[0]*axis.x+m[1]*axis.y+m[2]*axis.z,
+			m[4]*axis.x+m[5]*axis.y+m[6]*axis.z,
+			m[8]*axis.x+m[9]*axis.y+m[10]*axis.z};
+	}
+	if (!portal.bounds.IsValid()) return std::unexpected("traversal portal requires a rigid parent pose");
+	portal.destination = parent * portal.destination;
+	return portal;
+}
 
 // A named point used for navigation paths and scripting.
 struct Marker
@@ -96,6 +148,18 @@ struct Marker
 	std::string name;
 	math::FixedVector3 position;
 	std::vector<std::uint32_t> links; // directed links to other marker ids
+	Properties properties;
+};
+
+// An authored traversal through markers in a specified order. Links describe
+// connectivity; paths describe an actual route, including repeated markers.
+// Format-specific access masks and actions remain properties of the adapter.
+struct NavigationPath
+{
+	std::uint32_t id{};
+	std::string name;
+	std::vector<std::uint32_t> markers;
+	bool looping{};
 	Properties properties;
 };
 
@@ -231,10 +295,14 @@ struct Level
 	std::vector<Marker> markers;
 	// Every marker link (from, to) in the order the level gives them (each marker's `links` keeps only its own).
 	std::vector<std::array<std::uint32_t, 2>> markerLinks;
+	std::vector<NavigationPath> navigationPaths;
 	std::vector<Region> regions;
 	Lighting lighting;
 	Scenario scenario;
 	std::vector<Section> sections;
+	std::vector<TriggerVolume> volumes;
+	std::vector<BehaviorBinding> behaviors;
+	std::vector<TraversalPortal> traversalPortals;
 
 	const Section *FindSection(const std::string &name) const noexcept
 	{
@@ -244,4 +312,37 @@ struct Level
 		return nullptr;
 	}
 };
+
+inline std::expected<void, std::string> ValidateSpatialLevel(const Level &level)
+{
+	std::set<std::uint32_t> marker_ids, path_ids;
+	for (const auto &marker : level.markers)
+		if (!marker_ids.insert(marker.id).second) return std::unexpected("duplicate level marker identity");
+	for (const auto &path : level.navigationPaths) {
+		if (!path_ids.insert(path.id).second) return std::unexpected("duplicate level navigation path identity");
+		for (const auto marker : path.markers)
+			if (!marker_ids.contains(marker)) return std::unexpected("navigation path references a missing level marker");
+	}
+	std::set<std::uint64_t> identities;
+	for (const auto &placement : level.placements) {
+		if (placement.id && !identities.insert(placement.id).second) return std::unexpected("duplicate level placement identity");
+		if (placement.kind == PlacementKind::Geometry && !placement.transform) return std::unexpected("geometry placement requires a full pose");
+	}
+	for (const auto &volume : level.volumes) {
+		if (!volume.subject || !identities.contains(volume.subject)) return std::unexpected("trigger volume references a missing level placement");
+		if (!volume.bounds.IsValid()) return std::unexpected("invalid oriented trigger volume");
+	}
+	std::set<std::pair<std::uint64_t, std::uint32_t>> portals;
+	for (const auto &portal : level.traversalPortals) {
+		if (!portal.subject || !identities.contains(portal.subject)) return std::unexpected("traversal portal references a missing level placement");
+		if (!portals.emplace(portal.subject, portal.ordinal).second) return std::unexpected("duplicate level traversal portal identity");
+		if (!portal.bounds.IsValid()) return std::unexpected("invalid oriented traversal portal");
+	}
+	std::set<std::uint64_t> bindings;
+	for (const auto &binding : level.behaviors) {
+		if (!binding.id || !bindings.insert(binding.id).second) return std::unexpected("duplicate or null level behavior identity");
+		if (!binding.subject || !identities.contains(binding.subject) || binding.program.empty()) return std::unexpected("invalid level behavior subject or program");
+	}
+	return {};
+}
 }

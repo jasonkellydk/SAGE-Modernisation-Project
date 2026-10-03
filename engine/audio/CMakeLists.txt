@@ -21,6 +21,12 @@ if(TARGET engine_audio_tests)
 	set_tests_properties(engine_audio_tests PROPERTIES PASS_REGULAR_EXPRESSION "No errors detected")
 endif()
 
+engine_add_module_library(engine_audio_scene
+	MODULES scene/emitter_player.cppm
+	DEPENDS engine_audio engine_gameplay_audio engine_core_math_fixed
+	TESTS scene/emitter_player.test
+	TESTS_OPTION ENGINE_AUDIO_BUILD_TESTS)
+
 # A module library whose platform code sits in one private implementation unit.
 function(engine_audio_adapter target module implementation)
 	engine_add_module_library(${target} MODULES ${module} DEPENDS engine_audio ${ARGN})

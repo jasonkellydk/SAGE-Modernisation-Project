@@ -8,6 +8,19 @@ export module Graphics.Scene.Environment.Tests;
 import std;
 
 import Graphics.Scene.Environment;
+import Graphics.Scene.Environment.Dome;
+
+BOOST_AUTO_TEST_CASE(dome_is_closed_around_camera_with_authored_bands_and_invalid_data_rejected) {
+    using namespace Graphics;
+    const std::array<DomeBand,3> bands{{{0,{1,0,0,1}},{std::numbers::pi_v<float>/2,{0,1,0,1}},{std::numbers::pi_v<float>,{0,0,1,1}}}};
+    const auto dome=Build_Dome(bands,4,2);BOOST_REQUIRE(dome.has_value());BOOST_TEST(dome->vertices.size()==12u);BOOST_TEST(dome->indices.size()==48u);
+    BOOST_CHECK_SMALL(dome->vertices[0].position[2]-2,0.000001f);BOOST_CHECK_SMALL(dome->vertices[1].position[0]-2,0.000001f);
+    BOOST_CHECK_SMALL(dome->vertices[4].position[1]-2,0.000001f);BOOST_CHECK_SMALL(dome->vertices[2].position[2]+2,0.000001f);
+    BOOST_TEST(dome->vertices[1].color[1]==1.f);BOOST_TEST(dome->indices[37]==0u);
+    BOOST_TEST(!Build_Dome(bands,2,2));BOOST_TEST(!Build_Dome(bands,4,0));
+    auto invalid=bands;invalid[1].polar_angle=0;BOOST_TEST(!Build_Dome(invalid,4,2));
+    invalid=bands;invalid[1].color[0]=std::numeric_limits<float>::quiet_NaN();BOOST_TEST(!Build_Dome(invalid,4,2));
+}
 
 using namespace Graphics;
 

@@ -1,0 +1,19 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.hud.help_text_view_model;
+using Engine::Math::Fixed;
+BOOST_AUTO_TEST_CASE(source_help_text_hold_fade_replacement_and_pause_flow_through_MVVM) {
+    renegade::hud::HelpTextViewModel model;
+    unsigned notices{};const auto subscription=model.text.Subscribe([&](const auto&) {++notices;});
+    const std::array tint{Fixed::FromRatio(196,1000),Fixed::FromRatio(882,1000),Fixed::FromRatio(196,1000)};
+    model.Show(u"Move forward",tint,Fixed::FromInt(10));BOOST_CHECK(model.text.Get()==u"Move forward");BOOST_TEST(model.opacity.Get().Raw()==Fixed::OneRaw/2);
+    model.Update(Fixed::FromInt(12));BOOST_TEST(model.opacity.Get().Raw()==Fixed::OneRaw/2);
+    model.Update(Fixed::FromInt(13));BOOST_TEST(model.opacity.Get().Raw()==Fixed::OneRaw/4);
+    for(unsigned frame=0;frame<100;++frame) model.Update(Fixed::FromInt(13));
+    BOOST_TEST(model.opacity.Get().Raw()==Fixed::OneRaw/4);BOOST_TEST(notices==2u);
+    model.Show(u"Jump",tint,Fixed::FromInt(13));BOOST_TEST(model.opacity.Get().Raw()==Fixed::OneRaw/2);
+    model.Update(Fixed::FromInt(17));BOOST_TEST(model.text.Get().empty());BOOST_TEST(model.opacity.Get().Raw()==0);
+    model.Show({},tint,Fixed::FromInt(18));BOOST_TEST(model.opacity.Get().Raw()==0);
+    BOOST_CHECK_THROW(model.Show(u"invalid",{Fixed::FromInt(2),{},{}},Fixed{}),std::invalid_argument);
+    model.text.Unsubscribe(subscription);
+}

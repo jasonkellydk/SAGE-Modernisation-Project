@@ -1,0 +1,26 @@
+#include <boost/test/unit_test.hpp>
+import engine.gui.w3d.loading;
+
+BOOST_AUTO_TEST_CASE(loading_progress_cancellation_and_new_request_do_not_publish_stale_completion)
+{
+	engine::gui::w3d::LoadingModel model;
+	unsigned cancelled{};
+	BOOST_TEST(!model.cancel.Execute());
+	model.Begin(u"First",[&]{++cancelled;});
+	model.Report(u"Assets",63);model.Report(u"Geometry",40);
+	BOOST_TEST(model.progress.Get()==63u);
+	BOOST_TEST(model.cancel.Execute());BOOST_TEST(cancelled==1u);
+	model.Report(u"Late",99);model.Complete();model.Fail(u"Late failure");
+	BOOST_TEST(model.progress.Get()==63u);BOOST_CHECK(model.stage.Get()==u"Geometry");
+	BOOST_CHECK(model.state.Get()==engine::gui::w3d::LoadingState::Cancelled);
+	BOOST_TEST(!model.cancel.Execute());
+	model.Begin(u"Second",[&]{++cancelled;});
+	BOOST_TEST(model.progress.Get()==0u);
+	model.Report(u"Uploads",1000);BOOST_TEST(model.progress.Get()==99u);
+	model.Complete();BOOST_TEST(model.progress.Get()==100u);
+	BOOST_CHECK(model.state.Get()==engine::gui::w3d::LoadingState::Ready);
+	BOOST_TEST(!model.cancel.Execute());BOOST_TEST(cancelled==1u);
+	model.Begin(u"Third",{});model.Fail(u"Missing asset");model.Complete();
+	BOOST_CHECK(model.state.Get()==engine::gui::w3d::LoadingState::Failed);
+	BOOST_CHECK(model.error.Get()==u"Missing asset");BOOST_TEST(!model.cancel.enabled.Get());
+}

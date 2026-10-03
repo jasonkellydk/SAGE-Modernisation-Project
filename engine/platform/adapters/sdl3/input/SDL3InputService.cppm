@@ -27,7 +27,16 @@ public:
 	}
 	bool set_relative_mouse_mode(bool enabled) override
 	{
-		auto* focus = SDL_GetMouseFocus(); return focus && SDL_SetWindowRelativeMouseMode(focus, enabled);
+		auto* focus = SDL_GetMouseFocus();if(!focus) focus=SDL_GetKeyboardFocus();
+		return focus && set_relative_mouse_mode(SDL_GetWindowID(focus),enabled);
+	}
+	bool set_relative_mouse_mode(WindowId window, bool enabled) override
+	{
+		auto* native=SDL_GetWindowFromID(window);return native && SDL_SetWindowRelativeMouseMode(native,enabled);
+	}
+	[[nodiscard]] bool relative_mouse_mode(WindowId window) const noexcept override
+	{
+		auto* native=SDL_GetWindowFromID(window);return native && SDL_GetWindowRelativeMouseMode(native);
 	}
 	bool show_cursor(bool visible) override { return visible ? SDL_ShowCursor() : SDL_HideCursor(); }
 	bool set_cursor_shape(CursorShape shape) override

@@ -26,6 +26,7 @@ engine_add_module_library(engine_gameplay_identity
 		common/identity/components/team_member.cppm
 		common/identity/components/captured.cppm
 		common/identity/components/object_id.cppm
+		common/identity/components/level_identity.cppm
 		common/identity/components/producer.cppm
 		common/identity/resources/object_ids.cppm
 		common/identity/resources/name_registry.cppm
@@ -34,25 +35,49 @@ engine_add_module_library(engine_gameplay_identity
 	DEPENDS engine_ecs)
 
 # common/appearance: condition bits the presentation draws by.
+engine_add_module_library(engine_gameplay_input_permission
+	MODULES common/input/components/input_permission.cppm common/input/systems/input_permission_system.cppm
+	DEPENDS engine_ecs
+	TESTS common/input/input_permission.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
 engine_add_module_library(engine_gameplay_appearance
 	MODULES
 		common/appearance/components/appearance.cppm
 		common/appearance/components/indicator_color.cppm
 		common/appearance/components/model_override.cppm
+		common/appearance/components/attached_model.cppm
+		common/appearance/components/pose_binding.cppm
 		common/appearance/components/draw_offset.cppm
 		common/appearance/components/draw_hidden.cppm
 		common/appearance/components/occlusion_safe.cppm
 		common/appearance/components/debris_look.cppm
 		common/appearance/components/part_overrides.cppm
 		common/appearance/components/special_model_state.cppm
+		common/appearance/components/clip_playback.cppm
+		common/appearance/components/clip_transition.cppm
 		common/appearance/algorithms/special_model_states.cppm
 		common/appearance/systems/special_model_state_system.cppm
-	DEPENDS engine_ecs)
+		common/appearance/systems/clip_playback_system.cppm
+		common/appearance/resources/clip_requests.cppm
+		common/appearance/systems/clip_request_system.cppm
+	DEPENDS engine_ecs
+	TESTS common/appearance/clip_playback.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
 # common/spatial: transforms, ground height, the presentation snapshot.
 engine_add_module_library(engine_gameplay_spatial
 	MODULES
 		common/spatial/components/transform.cppm
+		common/spatial/components/affine_pose.cppm
+		common/spatial/components/tracked_position.cppm
+		common/spatial/systems/tracked_position_system.cppm
+		common/spatial/systems/affine_snapshot_system.cppm
+		common/spatial/resources/position_requests.cppm
+		common/spatial/systems/position_request_system.cppm
+		common/spatial/resources/heading_requests.cppm
+		common/spatial/systems/heading_target_system.cppm
+		common/spatial/systems/rigid_heading_system.cppm
 		common/spatial/algorithms/find_position.cppm
 		common/spatial/algorithms/footprint.cppm
 		common/spatial/algorithms/geometry_collision.cppm
@@ -73,18 +98,89 @@ engine_add_module_library(engine_gameplay_spatial
 		common/spatial/systems/snapshot_system.cppm
 		common/spatial/systems/spatial_index_system.cppm
 	DEPENDS engine_ecs engine_core_math_fixed engine_level engine_gameplay_identity engine_gameplay_appearance
-	TESTS common/spatial/spatial.test
+	TESTS common/spatial/spatial.test common/spatial/position_requests.test common/spatial/heading_requests.test common/spatial/tracked_position.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
-# common/areas: the level's named polygon areas and which of them each object is in (trigger areas).
+# common/movement: authored three-dimensional curves and actor-driven targets.
+engine_add_module_library(engine_gameplay_route_traversal
+	MODULES common/movement/components/route_traversal.cppm common/movement/resources/route_curves.cppm common/movement/systems/route_traversal_system.cppm
+	DEPENDS engine_ecs engine_level engine_gameplay_spatial
+	TESTS common/movement/route_traversal.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_swept_motion
+	MODULES common/physics/resources/collision_geometry.cppm
+		common/physics/components/swept_hull.cppm common/physics/components/swept_motion.cppm common/physics/components/sweep_contacts.cppm
+		common/physics/algorithms/sweep_and_slide.cppm common/physics/algorithms/ground_motion.cppm common/physics/systems/swept_motion_system.cppm
+	DEPENDS engine_ecs engine_level engine_gameplay_spatial
+	TESTS common/physics/swept_motion.test common/physics/ground_motion.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_audio
+	MODULES common/audio/components/sound_emitter.cppm common/audio/systems/emitter_snapshot_system.cppm
+	DEPENDS engine_ecs engine_gameplay_spatial)
+
+engine_add_module_library(engine_gameplay_inventory
+	MODULES common/inventory/components/inventory.cppm common/inventory/components/magazine.cppm common/inventory/systems/inventory_selection_system.cppm
+	DEPENDS engine_ecs
+	TESTS common/inventory/inventory.test common/inventory/magazine.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_kinematic_collision
+	MODULES common/physics/components/kinematic_collider.cppm common/physics/resources/kinematic_collision.cppm common/physics/systems/kinematic_collision_system.cppm
+	DEPENDS engine_gameplay_swept_motion engine_gameplay_appearance
+	TESTS common/physics/kinematic_collision.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_timeline
+	MODULES common/timing/components/timeline_playback.cppm common/timing/components/sampled_pose.cppm
+        common/timing/components/simulation_age.cppm common/timing/systems/simulation_age_system.cppm
+        common/timing/resources/timelines.cppm common/timing/resources/pose_tracks.cppm
+        common/timing/systems/timeline_system.cppm common/timing/systems/pose_track_system.cppm
+	DEPENDS engine_ecs engine_level engine_gameplay_spatial
+	TESTS common/timing/timeline.test common/timing/simulation_age.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+# Event-driven Lua uses the same archetype columns and deferred commands as
+# gameplay. Programs and event vocabularies are supplied by game composition.
+if(NOT TARGET engine_scripting_lua)
+	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../scripting/lua" "${CMAKE_CURRENT_BINARY_DIR}/engine_scripting_lua")
+endif()
+engine_add_module_library(engine_gameplay_script_events
+	MODULES common/scripts/components/lua_behavior.cppm common/scripts/components/scheduled_message.cppm
+		common/scripts/resources/behavior_programs.cppm common/scripts/systems/message_timer_system.cppm
+		common/scripts/systems/lua_behavior_system.cppm
+		common/scripts/systems/behavior_attachment_system.cppm
+		common/scripts/components/timeline_behavior.cppm common/scripts/systems/timeline_behavior_system.cppm
+	DEPENDS engine_ecs engine_scripting_lua engine_gameplay_timeline
+	TESTS common/scripts/behavior_events.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_suspension
+	MODULES common/physics/components/suspension.cppm common/physics/resources/suspension_snapshots.cppm common/physics/systems/suspension_system.cppm
+	DEPENDS engine_gameplay_timeline engine_gameplay_swept_motion
+	TESTS common/physics/suspension.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
+engine_add_module_library(engine_gameplay_fire_sequence
+	MODULES fps/weapons/components/fire_sequence.cppm fps/weapons/components/projectile.cppm fps/weapons/systems/fire_sequence_system.cppm fps/weapons/systems/projectile_launch_system.cppm
+	DEPENDS engine_ecs engine_core_math_fixed engine_gameplay_spatial engine_gameplay_swept_motion
+	TESTS fps/weapons/fire_sequence.test fps/weapons/projectile_launch.test
+	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
+
 engine_add_module_library(engine_gameplay_areas
 	MODULES
 		common/areas/resources/trigger_areas.cppm
 		common/areas/resources/area_activity.cppm
 		common/areas/components/area_presence.cppm
 		common/areas/systems/area_presence_system.cppm
+		common/areas/components/volume_probe.cppm
+		common/areas/components/volume_contact.cppm
+		common/areas/resources/trigger_volumes.cppm
+		common/areas/systems/volume_probe_snapshot_system.cppm
+		common/areas/systems/volume_presence_system.cppm
 	DEPENDS engine_ecs engine_gameplay_spatial engine_core_math_fixed
-	TESTS common/areas/areas.test
+	TESTS common/areas/areas.test common/areas/volume_presence.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 
 # common/status: what disables an entity (the original's DisabledMaskType), and which behaviours still run.

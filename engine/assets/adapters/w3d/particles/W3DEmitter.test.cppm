@@ -9,6 +9,11 @@ import std;
 
 import Assets.Adapters.W3D.Particles;
 import Assets.Adapters.W3D.Chunks;
+import Assets.Adapters.W3D;
+import Assets.Cache;
+import Assets.Identity;
+import Assets.States;
+import Assets.Models;
 
 namespace
 {
@@ -415,6 +420,43 @@ BOOST_AUTO_TEST_CASE(emitter_decodes_semantic_version_two_description)
 		BOOST_CHECK_EQUAL(copy.name, "EmitterFixture");
 		BOOST_CHECK_EQUAL(copy.color.keys.size(), 1u);
 	}
+}
+BOOST_AUTO_TEST_CASE(shared_model_cache_preserves_standalone_emitter_assets_without_fabricating_meshes) {
+    const auto bytes=Make_Emitter();Bytes texture(22,Byte{0});texture[2]=Byte{2};texture[12]=texture[14]=Byte{1};texture[16]=Byte{32};for(unsigned i=18;i<22;++i) texture[i]=Byte{255};
+    Assets::AssetCache cache([&](const Assets::AssetIdentity& identity) {return identity.type==Assets::AssetType::Model ? bytes : identity.type==Assets::AssetType::Texture ? texture : Bytes{};});
+    BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));const auto handle=cache.Request_Model("generator.w3d");cache.Wait(handle);
+    BOOST_REQUIRE_MESSAGE(cache.Get_State(handle)==Assets::AssetState::Ready,cache.Get_Error(handle));const auto* model=cache.Try_Get_Model(handle);BOOST_REQUIRE(model);BOOST_REQUIRE(model->Emitter().has_value());
+    BOOST_TEST(model->Vertices().empty());BOOST_TEST(model->Submeshes().empty());BOOST_TEST(model->Emitter()->lifetime==2.5f);BOOST_TEST(model->Emitter()->emission_rate==33.f);
+    BOOST_TEST(model->Emitter()->texture_name=="fixture.tga");
+    BOOST_REQUIRE_EQUAL(cache.Model_Texture_Dependencies(handle).size(),1u);
+}
+
+BOOST_AUTO_TEST_CASE(hierarchy_activates_only_attached_emitter_prototypes_at_their_authored_bones) {
+    // Asset-manager prototypes in an HLOD container are instantiated only by
+    // its subobject array (hlod.cpp); they are not additional root emitters.
+    Bytes bytes,header(36,Byte{}),pivots(120,Byte{}),hierarchy;
+    Put_U32(header,0,0x40001);Put_String(header,4,16,"RIG");Put_U32(header,20,2);
+    Put_String(pivots,0,16,"ROOT");Put_U32(pivots,16,0xffffffffu);Put_F32(pivots,56,1);
+    Put_String(pivots,60,16,"EXHAUST");Put_U32(pivots,76,0);Put_F32(pivots,80,3);Put_F32(pivots,116,1);
+    Append_Chunk(hierarchy,0x101,header);Append_Chunk(hierarchy,0x102,pivots);Append_Chunk(bytes,0x100,hierarchy,true);
+    Bytes lod_header(40,Byte{}),array_header(8,Byte{}),array,lod;
+    Put_U32(lod_header,0,0x10000);Put_U32(lod_header,4,1);Put_String(lod_header,8,16,"fixture");Put_String(lod_header,24,16,"RIG");
+    Put_U32(array_header,0,2);Put_F32(array_header,4,100);Append_Chunk(array,0x703,array_header);
+    for(const auto& [name,bone]:std::array{std::pair{"fixture.smoke",1u},std::pair{"fixture.spark",0u}}) {
+        Bytes child(36,Byte{});Put_U32(child,0,bone);Put_String(child,4,32,name);Append_Chunk(array,0x704,child);
+    }
+    Append_Chunk(lod,0x701,lod_header);Append_Chunk(lod,0x702,array,true);Append_Chunk(bytes,0x700,lod,true);
+    for(const auto name:{"fixture.smoke","fixture.spark","fixture.unused"}) {
+        auto emitter=Make_Emitter();Put_String(emitter,Find_Chunk_Payload(emitter,W3DChunkEmitterHeader)+4,16,name);bytes.insert(bytes.end(),emitter.begin(),emitter.end());
+    }
+    Bytes texture(22,Byte{});texture[2]=Byte{2};texture[12]=texture[14]=Byte{1};texture[16]=Byte{32};for(unsigned i=18;i<22;++i) texture[i]=Byte{255};
+    Assets::AssetCache cache([&](const Assets::AssetIdentity& identity) {return identity.type==Assets::AssetType::Model ? bytes : identity.type==Assets::AssetType::Texture ? texture : Bytes{};});
+    BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));const auto handle=cache.Request_Model("fixture.w3d");cache.Wait(handle);
+    BOOST_REQUIRE_MESSAGE(cache.Get_State(handle)==Assets::AssetState::Ready,cache.Get_Error(handle));const auto* model=cache.Try_Get_Model(handle);BOOST_REQUIRE(model);
+    BOOST_TEST(!model->Emitter().has_value());BOOST_REQUIRE_EQUAL(model->Emitters().size(),2u);BOOST_TEST(model->Submeshes().empty());
+    BOOST_TEST(model->Emitters()[0].description.name=="fixture.smoke");BOOST_TEST(model->Emitters()[0].bone==1u);BOOST_TEST(model->Emitters()[0].lod==0u);
+    BOOST_TEST(model->Emitters()[1].description.name=="fixture.spark");BOOST_TEST(model->Emitters()[1].bone==0u);BOOST_TEST(model->Rig().bones[1].translation.x==3.f);
+    BOOST_REQUIRE_EQUAL(cache.Model_Texture_Dependencies(handle).size(),1u);
 }
 
 BOOST_AUTO_TEST_CASE(emitter_converts_version_one_defaults_and_texture_policy)

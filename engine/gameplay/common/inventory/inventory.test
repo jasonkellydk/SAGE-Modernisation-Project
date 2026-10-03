@@ -1,0 +1,42 @@
+#define BOOST_TEST_MODULE InventorySelection
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.inventory.systems.inventory_selection_system;
+using namespace engine::gameplay;
+BOOST_AUTO_TEST_CASE(item_columns_select_cycle_skip_unavailable_and_survive_growth_independently_of_workers) {
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<InventoryItem>();world.RegisterComponent<InventorySelection>();world.RegisterComponent<InventoryControl>();world.FinalizeComponents();
+        world.EmplaceResource<InventoryEntries>();world.EmplaceResource<InventorySnapshot>();
+        InventorySnapshotSystem snapshot;InventorySelectionSystem selection;ecs::SystemRegistry registry;registry.Register(snapshot);registry.Register(selection);registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer bags;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) {const auto owner=bags.Create();pending.push_back(owner);bags.Add<InventorySelection>(owner);bags.Add<InventoryControl>(owner);}
+        world.Commit(bags);std::vector<ecs::Entity> owners;for(const auto owner:pending) owners.push_back(bags.Resolve(owner));
+        ecs::CommandBuffer items;
+        for(const auto owner:owners) for(unsigned slot=0;slot<5;++slot) {const auto item=items.Create();items.Add<InventoryItem>(item,InventoryItem{owner,10+slot,slot/2,slot,slot!=1});}
+        world.Commit(items);unsigned tick{};
+        const auto step=[&](InventoryOperation operation,unsigned value,unsigned expected) {
+            for(const auto owner:owners) *world.Get<InventoryControl>(owner)={operation,value};
+            scheduler.Execute(engine::time::SimulationTime{++tick,engine::time::FixedStep{60}});
+            for(const auto owner:owners) {
+                const auto selected=world.Get<InventorySelection>(owner)->selected;
+                if(expected) {BOOST_REQUIRE(world.IsAlive(selected));BOOST_TEST(world.Get<InventoryItem>(selected)->definition==expected);}
+                else BOOST_TEST(!selected.IsValid());
+                BOOST_TEST(std::uint32_t(world.Get<InventoryControl>(owner)->operation)==std::uint32_t(InventoryOperation::None));
+            }
+        };
+        step(InventoryOperation::Next,0,10);step(InventoryOperation::Next,0,12);step(InventoryOperation::Previous,0,10);
+        step(InventoryOperation::Group,1,12);step(InventoryOperation::Group,1,13);step(InventoryOperation::Group,99,13);
+        step(InventoryOperation::Definition,14,14);step(InventoryOperation::Next,0,10);step(InventoryOperation::Clear,0,0);step(InventoryOperation::Previous,0,14);
+        // Structural changes occur at a commit barrier. New items are visible
+        // to the next snapshot, without an embedded per-owner vector limit.
+        ecs::CommandBuffer growth;
+        for(const auto owner:owners) {const auto item=growth.Create();growth.Add<InventoryItem>(item,InventoryItem{owner,99,9,9,1});}
+        world.Commit(growth);step(InventoryOperation::Next,0,99);
+        ecs::CommandBuffer remove;for(const auto owner:owners) remove.Destroy(world.Get<InventorySelection>(owner)->selected);world.Commit(remove);
+        step(InventoryOperation::None,0,0);step(InventoryOperation::Next,0,10);
+        return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

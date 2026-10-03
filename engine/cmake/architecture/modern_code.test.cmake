@@ -69,6 +69,18 @@ probe(renegade_dll "games/renegade/hosts/game/main.cppm" "__declspec(dllimport) 
 probe(w3d_platform "engine/gui/w3d/view.cppm" "#include <SDL3/SDL.h>\n" native-platform)
 probe(w3d_presentation "engine/gui/w3d/view.cppm" "export module engine.gui.w3d.view; struct Rect { float x; };" pass)
 probe(renegade_shared_platform "games/renegade/hosts/game/main.cppm" "import engine.platform.adapters.sdl3; engine::platform::sdl3::SDL3PlatformAdapter platform;" pass)
+probe(renegade_scene_ini "games/renegade/presentation/scene/view.cppm"
+    "import engine.config.adapters.ini.section_reader;" configuration-boundary)
+probe(renegade_host_ini "games/renegade/hosts/game/main.cppm"
+    "auto text = files.ReadText(\"cameras.ini\");" configuration-boundary)
+probe(renegade_gameplay_ini "games/renegade/gameplay/defense/algorithms/x.cppm"
+    "auto schema = ini::ReadSections(\"armor.ini\", text);" configuration-boundary)
+probe(renegade_content_schema "games/renegade/content/cameras/profile.cppm"
+    "import engine.config.adapters.ini.section_reader; auto text = files.ReadText(\"cameras.ini\");" pass)
+probe(renegade_typed_configuration "games/renegade/presentation/scene/view.cppm"
+    "import games.renegade.content.campaign.campaign_content; void Load(const CampaignContent &configuration);" pass)
+probe(renegade_ini_comment "games/renegade/hosts/game/main.cppm"
+    "// files.ReadText(\"cameras.ini\");\nstruct Configuration {};" pass)
 
 # Every simulation root is kept separate from both games' presentation tiers.
 # Include exported imports, semicolon boundaries and tabs rather than relying

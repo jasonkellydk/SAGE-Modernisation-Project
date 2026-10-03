@@ -2,6 +2,7 @@ export module games.renegade.content.armor.armor_catalog;
 import std;
 export import engine.config.adapters.ini.section_reader;
 export import games.renegade.gameplay.defense.resources.damage_rules;
+import engine.filesystem.core.virtual_file_system;
 
 export namespace renegade::content
 {
@@ -13,6 +14,13 @@ struct ArmorCatalog
 	std::vector<std::int32_t> armorSaveIds;
 	std::vector<std::int32_t> warheadSaveIds;
 	std::vector<bool> soft;
+	// Combat/damage.cpp Find_Armor_Save_ID: first declaration-order match,
+	// including duplicate/sentinel IDs, and armor zero when no ID matches.
+	std::uint32_t ArmorBySaveId(std::int32_t id) const noexcept
+	{
+		const auto found = std::ranges::find(armorSaveIds, id);
+		return found == armorSaveIds.end() ? 0u : static_cast<std::uint32_t>(found - armorSaveIds.begin());
+	}
 	std::optional<std::uint32_t> Armor(std::string_view name) const
 	{
 		const auto found = std::ranges::find_if(armors, [&](const auto &item) { return engine::config::ini::FoldAscii(item) == engine::config::ini::FoldAscii(name); });
@@ -95,5 +103,12 @@ std::expected<ArmorCatalog, std::string> ReadArmor(std::string text)
 			catalog.rules.responses[{armor, warhead}] = response;
 		}
 	return catalog;
+}
+
+std::expected<ArmorCatalog, std::string> LoadArmorCatalog(const engine::filesystem::VirtualFileSystem &files)
+{
+	const auto text = files.ReadText("armor.ini");
+	if (!text) return std::unexpected("armor.ini missing");
+	return ReadArmor(*text);
 }
 }
