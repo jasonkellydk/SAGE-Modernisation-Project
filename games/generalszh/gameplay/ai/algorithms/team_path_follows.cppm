@@ -1,5 +1,6 @@
 export module games.generalszh.gameplay.ai.algorithms.team_path_follows;
 import std;
+import engine.gameplay.rts.navigation.algorithms.waypoint_steps;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 export import games.generalszh.gameplay.ai.components.team_path_follow;
@@ -107,43 +108,16 @@ inline std::optional<Fixed> GroupSpeed(const GameWorld &game, std::span<const ec
 	return speed;
 }
 
-// AIFollowWaypointPathState::hasNextWaypoint: a waypoint with links has a next one unless its only link leads back to
-// where it came from.
+// AIFollowWaypointPathState::hasNextWaypoint / getNextWaypoint on the map's waypoints, its choices from the session's
+// stream.
 inline bool HasNextWaypoint(const GameWorld &game, std::uint32_t current, std::uint32_t prior)
 {
-	const auto links = game.waypoints.Links(current);
-	if (links.empty())
-		return false;
-	if (prior == TeamWaypoints::None || links.size() > 1)
-		return true;
-	return links.front() != prior;
+	return engine::gameplay::HasNextWaypoint(game.waypoints, current, prior);
 }
 
-// AIFollowWaypointPathState::getNextWaypoint: at random among its links, never straight back (GameLogicRandomValue);
-// none: no next one.
 inline std::uint32_t NextWaypoint(GameWorld &game, std::uint32_t current, std::uint32_t prior)
 {
-	if (!HasNextWaypoint(game, current, prior))
-		return TeamWaypoints::None;
-	const auto links = game.waypoints.Links(current);
-	const std::int64_t count = static_cast<std::int64_t>(links.size());
-	std::int64_t skip = -1;
-	for (std::int64_t index = 0; index < count; ++index)
-		if (links[static_cast<std::size_t>(index)] == prior)
-		{
-			skip = index;
-			break;
-		}
-	std::int64_t which = 0;
-	if (skip >= 0)
-	{
-		which = Engine::Math::UniformInt(game.random, 0, count - 2);
-		if (which == skip)
-			which = count - 1;
-	}
-	else
-		which = Engine::Math::UniformInt(game.random, 0, count - 1);
-	return links[static_cast<std::size_t>(which)];
+	return engine::gameplay::NextWaypoint(game.waypoints, current, prior, game.random);
 }
 
 // AIFollowWaypointPathState::computeGoal: the waypoint plus the member's offset (a waypoint on the wall whose offset goal

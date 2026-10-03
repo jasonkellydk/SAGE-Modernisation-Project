@@ -188,7 +188,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_waypoint_path_has_no_point_limit)
 	game.Tick();
 	std::vector<FixedVector2> spots;
 	for (int index = 0; index < 24; ++index)
-		spots.push_back(match->At((index % 4) * 40, -340 - (index / 4) * 30)); // a zigzag over the ground the test above walks
+		spots.push_back(match->At((index % 4) * 40, -340 - (index / 4) * 20)); // a zigzag over the ground the test above walks, inside the map's border
 	for (const FixedVector2 &spot : spots)
 		Order(game, commands::AddWaypoint{{ranger}, spot});
 	BOOST_TEST_REQUIRE(world.Has<gp::MovePath>(ranger));

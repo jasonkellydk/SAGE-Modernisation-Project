@@ -237,13 +237,15 @@ enum class CanMake : std::uint8_t
 // unit while it may build units); Buildable (a script's status first) not No; Ignore_Prerequisites is enough; Only_By_AI
 // only for a computer; its prerequisite objects (one of each group) and sciences owned; not past MaxSimultaneousOfType
 // (canBuildMoreOfType: counting, alive, what is it or shares its MaxSimultaneousLinkKey).
-// The kinds of thing a player has (alive, not dying), each definition once: OwnedObjects for one player.
+// The kinds of thing a player has, each definition once, as ProductionPrerequisite::calcNumPrereqUnitsOwned counts them
+// (Player::countObjectsByThingTemplate, ignoreDead FALSE, ignoreUnderConstruction TRUE): the dead and dying count, what
+// is still being built does not.
 inline std::vector<std::string_view> OwnedKinds(GameWorld &game, std::uint32_t player)
 {
 	namespace gp = engine::gameplay;
 	std::vector<std::uint8_t> seen(game.templates.DefinitionCount(), 0);
 	std::vector<std::string_view> kinds;
-	ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>, ecs::Exclude<gp::Dying>> things(game.world);
+	ecs::Query<ecs::Read<gp::Owner>, ecs::Read<gp::DefinitionRef>, ecs::Exclude<gp::UnderConstruction>> things(game.world);
 	things.ForEachChunk([&](auto chunk) {
 		const auto owners = chunk.template Get<gp::Owner>();
 		const auto definitions = chunk.template Get<gp::DefinitionRef>();

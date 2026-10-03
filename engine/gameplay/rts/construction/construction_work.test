@@ -34,6 +34,7 @@ struct Site
 		world.EmplaceResource<EnergySettings>();
 		world.EmplaceResource<ConstructionsDone>();
 		world.EmplaceResource<HealPulses>();
+		world.EmplaceResource<BurstHeals>();
 		registry.Register(system);
 		registry.Finalize(world.Components());
 		scheduler = std::make_unique<ecs::Scheduler>(world, registry, engine::jobs::JobSystemConfig{workers});

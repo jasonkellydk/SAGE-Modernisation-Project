@@ -11,6 +11,14 @@ export struct ScorchDescription final
     unsigned atlas_index = 0;
     // One texture laid over the whole square (a radius decal), not a cell of the 3x3 scorch atlas.
     bool whole_texture = false;
+    // A decal turned with its object (W3DProjectedShadowManager::queueDecal): each vertex's u, v the dot of its offset
+    // from the centre with u_axis, v_axis (already over the decal's size) plus uv_offset; it covers the cells from
+    // floor(centre + extent min) to ceil(centre + extent max) (extent: min x, max x, min y, max y off the centre).
+    bool oriented = false;
+    std::array<float, 2> u_axis{};
+    std::array<float, 2> v_axis{};
+    std::array<float, 2> uv_offset{};
+    std::array<float, 4> extent{};
 };
 
 export struct ScorchGrid final
@@ -49,8 +57,13 @@ public:
             return static_cast<int>(std::clamp(std::ceil((center + mark.radius) / grid.spacing) + 1,
                 -float(grid.border), float(extent - grid.border)));
         };
-        const int min_x = lower(mark.center[0], grid.width), max_x = upper(mark.center[0], grid.width);
-        const int min_y = lower(mark.center[1], grid.height), max_y = upper(mark.center[1], grid.height);
+        const auto clamp_cell = [&](float cell, int extent) {
+            return static_cast<int>(std::clamp(cell, -float(grid.border), float(extent - grid.border)));
+        };
+        const int min_x = mark.oriented ? clamp_cell(std::floor((mark.center[0] + mark.extent[0]) / grid.spacing), grid.width) : lower(mark.center[0], grid.width);
+        const int max_x = mark.oriented ? clamp_cell(std::ceil((mark.center[0] + mark.extent[1]) / grid.spacing) + 1, grid.width) : upper(mark.center[0], grid.width);
+        const int min_y = mark.oriented ? clamp_cell(std::floor((mark.center[1] + mark.extent[2]) / grid.spacing), grid.height) : lower(mark.center[1], grid.height);
+        const int max_y = mark.oriented ? clamp_cell(std::ceil((mark.center[1] + mark.extent[3]) / grid.spacing) + 1, grid.height) : upper(mark.center[1], grid.height);
         const int width = max_x - min_x, rows = max_y - min_y;
         if (width < 2 || rows < 2) return true;
         const std::size_t vertex_count = std::size_t(width) * rows;
@@ -65,7 +78,12 @@ public:
                 vertex.position = {x * grid.spacing, y * grid.spacing,
                     height(x + grid.border, y + grid.border) + grid.elevation};
                 vertex.color = color;
-                if (mark.whole_texture)
+                if (mark.oriented) {
+                    const float dx = vertex.position[0] - mark.center[0], dy = vertex.position[1] - mark.center[1];
+                    vertex.uv = {mark.u_axis[0] * dx + mark.u_axis[1] * dy + mark.uv_offset[0],
+                        mark.v_axis[0] * dx + mark.v_axis[1] * dy + mark.uv_offset[1]};
+                }
+                else if (mark.whole_texture)
                     vertex.uv = {0.5f + (vertex.position[0] - mark.center[0]) / (2 * mark.radius),
                         0.5f + (vertex.position[1] - mark.center[1]) / (2 * mark.radius)};
                 else

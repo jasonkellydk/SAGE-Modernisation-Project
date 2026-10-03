@@ -5,6 +5,7 @@ module;
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,53 +25,143 @@ namespace
 constexpr std::uint32_t CheckpointMagic = 0x315A4853u; // "SHZ1"
 }
 
-void Session::SaveResources(engine::core::serialization::ByteWriter &writer) const
+void Session::SaveResources(engine::core::serialization::ByteWriter &writer, std::vector<std::pair<std::string, std::size_t>> *marks) const
 {
 	writer.U64(m_tick);
+	if (marks != nullptr)
+		marks->emplace_back("m_tick", writer.Bytes().size());
 	writer.U64(std::bit_cast<std::uint64_t>(m_random));
+	if (marks != nullptr)
+		marks->emplace_back("m_random", writer.Bytes().size());
 	m_templates.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_templates", writer.Bytes().size());
 	m_roster.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_roster", writer.Bytes().size());
 	m_names.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_names", writer.Bytes().size());
 	m_manifest.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_manifest", writer.Bytes().size());
 	m_relationships.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_relationships", writer.Bytes().size());
 	m_shots.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_shots", writer.Bytes().size());
 	m_money.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_money", writer.Bytes().size());
 	m_upgrades.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_upgrades", writer.Bytes().size());
 	m_sciences.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_sciences", writer.Bytes().size());
 	m_outcome.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_outcome", writer.Bytes().size());
 	m_aiPlayers.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_aiPlayers", writer.Bytes().size());
 	m_objectIds.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_objectIds", writer.Bytes().size());
 	m_ranks.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_ranks", writer.Bytes().size());
 	m_sharedPowerTimers.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_sharedPowerTimers", writer.Bytes().size());
 	m_bounties.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_bounties", writer.Bytes().size());
 	m_world.Resource<gameplay::PlayerEnergy>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("PlayerEnergy", writer.Bytes().size());
 	m_world.Resource<gameplay::ShroudMap>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("ShroudMap", writer.Bytes().size());
 	m_scriptRecords.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_scriptRecords", writer.Bytes().size());
 	m_world.Resource<gameplay::AttackPriorities>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("AttackPriorities", writer.Bytes().size());
 	m_world.Resource<domain::AttackSquads>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("AttackSquads", writer.Bytes().size());
 	m_world.Resource<domain::SoloPlay>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("SoloPlay", writer.Bytes().size());
 	m_world.Resource<domain::ScoreKeepers>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("ScoreKeepers", writer.Bytes().size());
 	m_commandBarOverrides.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_commandBarOverrides", writer.Bytes().size());
 	m_buildableOverrides.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_buildableOverrides", writer.Bytes().size());
 	m_hulkLifetime.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_hulkLifetime", writer.Bytes().size());
 	m_world.Resource<gameplay::AreaActivity>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("AreaActivity", writer.Bytes().size());
 	m_world.Resource<gameplay::TemporaryWeaponFires>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("TemporaryWeaponFires", writer.Bytes().size());
 	m_world.Resource<gameplay::HistoricDamage>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("HistoricDamage", writer.Bytes().size());
 	m_world.Resource<domain::RetaliationModes>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("RetaliationModes", writer.Bytes().size());
 	m_world.Resource<domain::BattlePlanPlayers>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("BattlePlanPlayers", writer.Bytes().size());
 	m_world.Resource<domain::DeferredOrders>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("DeferredOrders", writer.Bytes().size());
 	m_world.Resource<domain::WaterChanges>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("WaterChanges", writer.Bytes().size());
 	m_world.Resource<domain::MusicProgress>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("MusicProgress", writer.Bytes().size());
 	m_world.Resource<domain::HotkeySquads>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("HotkeySquads", writer.Bytes().size());
 	m_world.Resource<domain::MapSceneryRules>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("MapSceneryRules", writer.Bytes().size());
 	m_world.Resource<domain::SceneryClearings>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("SceneryClearings", writer.Bytes().size());
 	m_world.Resource<gameplay::GoalCells>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("GoalCells", writer.Bytes().size());
 	m_world.Resource<domain::TeamWaypoints>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("TeamWaypoints", writer.Bytes().size());
 	m_world.Resource<gameplay::PathPoints>().Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("PathPoints", writer.Bytes().size());
 	m_academy.Save(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_academy", writer.Bytes().size());
 	m_ground.SaveWater(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_ground", writer.Bytes().size());
 	writer.U32(m_ground.ActiveBoundary());
+	if (marks != nullptr)
+		marks->emplace_back("m_ground.boundary", writer.Bytes().size());
 	m_scripts->SaveState(writer);
+	if (marks != nullptr)
+		marks->emplace_back("m_scripts", writer.Bytes().size());
 }
 
 bool Session::LoadResources(engine::core::serialization::ByteReader &reader)
@@ -133,6 +224,24 @@ ecs::StateHashValue Session::StateHash() const
 	hasher.AppendU64(m_world.StateHash());
 	hasher.AppendBytes(resources.Bytes());
 	return hasher.Value();
+}
+
+std::vector<std::pair<std::string, ecs::StateHashValue>> Session::ResourceHashes() const
+{
+	engine::core::serialization::ByteWriter writer;
+	std::vector<std::pair<std::string, std::size_t>> marks;
+	SaveResources(writer, &marks);
+	const std::span<const std::byte> bytes = writer.Bytes();
+	std::vector<std::pair<std::string, ecs::StateHashValue>> hashes;
+	std::size_t from = 0;
+	for (const auto &[name, to] : marks)
+	{
+		ecs::StateHasher hasher;
+		hasher.AppendBytes(bytes.subspan(from, to - from));
+		hashes.emplace_back(name, hasher.Value());
+		from = to;
+	}
+	return hashes;
 }
 
 std::unique_ptr<Session> Session::Restore(const engine::level::Level &level, const content::GameContent &content, SessionOptions options,

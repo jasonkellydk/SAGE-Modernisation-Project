@@ -28,6 +28,7 @@ import engine.gameplay.rts.combat.algorithms.countermeasure_decoys;
 import engine.gameplay.common.random.resources.random_seed;
 import engine.gameplay.common.spatial.components.attitude;
 import engine.gameplay.rts.combat.systems.missile_flight_system;
+import engine.gameplay.rts.combat.systems.missile_waypoint_path_system;
 import engine.gameplay.rts.combat.systems.point_defense_system;
 import engine.gameplay.rts.combat.systems.weapon_bonus_retime_system;
 import engine.gameplay.rts.combat.systems.damage_reaction_system;
@@ -104,6 +105,7 @@ struct Battle
 		world.EmplaceResource<PointDefenseShots>();
 		world.EmplaceResource<PhysicsSettings>();
 		world.EmplaceResource<RandomSeed>(RandomSeed{99});
+		world.EmplaceResource<ScriptShots>();
 		relationships.Set(0, 1, Relationship::Enemies);
 		relationships.Set(1, 0, Relationship::Enemies);
 		WeaponDefinition gun;
@@ -153,6 +155,7 @@ struct Battle
 		world.RegisterComponent<Slaved>();
 		world.RegisterComponent<BlockedState>();
 		world.RegisterComponent<SurfaceLayer>();
+		world.RegisterComponent<ContainedDefinitions>();
 		world.RegisterComponent<AttackApproach>();
 		world.RegisterComponent<MoveOrder>();
 		world.RegisterComponent<PathCompleted>();
@@ -172,6 +175,7 @@ struct Battle
 		world.RegisterComponent<Attitude>();
 		world.RegisterComponent<ProjectileFlight>();
 		world.RegisterComponent<MissileFlight>();
+		world.RegisterComponent<MissileWaypointPath>();
 		world.RegisterComponent<Lifetime>();
 		world.RegisterComponent<DrawHidden>();
 		world.RegisterComponent<Countermeasures>();
@@ -228,6 +232,7 @@ struct Battle
 		ProjectileLaunchSystem launches;
 		ProjectileFlightSystem flights;
 		MissileFlightSystem missiles;
+		MissileWaypointPathSystem missilePaths;
 		PointDefenseSystem lasers;
 		WeaponBonusRetimeSystem retime;
 		CountermeasuresSystem decoys;
@@ -235,6 +240,7 @@ struct Battle
 		registry.Register(retime);
 		registry.Register(decoys);
 		registry.Register(missiles);
+		registry.Register(missilePaths);
 		registry.Register(lasers);
 		registry.Register(turrets);
 		registry.Register(altTurrets);
@@ -2009,6 +2015,123 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_ignites_steers_locks_and_hits_on_th
 	BOOST_TEST(world.Get<Lifetime>(missile)->deletes == 1u);
 	// It went off by the victim: the radius damage reached it.
 	BOOST_TEST((world.Get<Health>(victim)->current < Fixed::FromInt(1000)));
+}
+
+// ScriptActions::doNamedFireWeaponFollowingWaypointPath -> AIUpdateInterface::aiFollowWaypointPath on the missile
+// (AIStates.cpp AIFollowWaypointPathState::onEnter / update / computeGoal / getNextWaypoint; AIInternalMoveToState::update
+// with getLocomotorDistanceToGoal's 3D distance for a projectile against CloseEnoughDist), run after MissileAIUpdate's own
+// state logic (MissileAIUpdate::update, doAttackState's lock on getGoalPosition): a missile with no lock steers for each
+// waypoint on the ground in turn, taking the next once within its close-enough distance (3D) and flying its last leg at
+// its precise height, the path over after the last; one that locks on (DistanceToTargetForLock 10: half that for a spot,
+// against the waypoint its AI's last update began with) makes its kill run back to its original target the tick it comes
+// within 5 of the first waypoint, its path over (here a tick after it reached it and took the next). One worker or four agree.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_missile_flies_its_waypoint_path_or_locks_back_onto_its_spot)
+{
+	const auto fly = [](Fixed lockDistance, std::size_t workers, std::vector<std::pair<int, std::uint32_t>> &legs, int &lockTick, int &endTick,
+						 FixedVector3 &goalAtLock, int &detonationTick) {
+		Battle battle;
+		ecs::World &world = battle.world;
+		std::vector<WaypointDescription> points(3);
+		const int at[3][2] = {{150, 0}, {150, 150}, {0, 150}};
+		for (std::uint32_t index = 0; index < 3; ++index)
+		{
+			points[index].id = index + 1;
+			points[index].name = "W" + std::to_string(index);
+			points[index].position = {Fixed::FromInt(at[index][0]), Fixed::FromInt(at[index][1]), Fixed::FromInt(7)};
+			if (index < 2)
+				points[index].links = {index + 2};
+			points[index].labels = {"Run"};
+		}
+		world.Resource<WaypointGraph>() = WaypointGraph(points);
+		WeaponDefinition rocket = battle.weapons.At(battle.cannon);
+		rocket.projectile = rocket.guided = true;
+		MissileFlightDefinition &d = rocket.missile;
+		const Fixed perSecond = Fixed::FromInt(30);
+		d.followsTarget = true;
+		d.fuelTicks = 300;
+		d.initialSpeed = Fixed::FromInt(50) / perSecond;
+		d.noTurnDistance = Fixed::FromInt(20);
+		d.maxSpeed = Fixed::FromInt(200) / perSecond;
+		d.minSpeed = Fixed::FromInt(100) / perSecond;
+		d.acceleration = Fixed::FromInt(675) / Fixed::FromInt(900);
+		d.turnRate = Engine::Math::TurnFromDegrees(Fixed::FromInt(540) / perSecond);
+		d.maxThrustAngle = Engine::Math::TurnFromDegrees(45);
+		d.lockDistance = lockDistance;
+		d.closeEnough = Fixed::FromInt(10);
+		const std::uint32_t weapon = battle.weapons.Add(rocket);
+		Shot shot;
+		shot.weapon = weapon;
+		shot.origin = {{}, {}, Fixed::FromInt(10)};
+		shot.aim = {{}, {}, {}}; // forceFireWeapon at the firer's own position
+		const ecs::Entity missile = world.Create();
+		world.Add<Transform>(missile);
+		world.Add<Attitude>(missile);
+		world.Add<MissileFlight>(missile);
+		world.Add<MissileWaypointPath>(missile);
+		*world.Get<Transform>(missile) = {shot.origin, {}};
+		MissileFlight flight = LaunchMissile(shot, battle.weapons.At(weapon));
+		const std::uint32_t first = world.Resource<WaypointGraph>().ClosestOnPath({}, "Run");
+		BOOST_TEST(first == 0u);
+		*world.Get<MissileWaypointPath>(missile) = FollowWaypointPath(flight, world.Resource<WaypointGraph>(), world.Resource<GroundHeight>(), first);
+		BOOST_TEST((flight.goal == FixedVector3{Fixed::FromInt(150), {}, {}}));
+		BOOST_TEST(!flight.preciseZ);
+		*world.Get<MissileFlight>(missile) = flight;
+		std::uint32_t last = first;
+		battle.Run(workers, 200, [&](int tick) {
+			world.Resource<MissileDetonations>().ForEach([&](const Shot &) {
+				if (detonationTick == 0)
+					detonationTick = tick;
+			});
+			if (!world.IsAlive(missile) || world.Get<MissileFlight>(missile) == nullptr)
+				return;
+			const MissileFlight &now = *world.Get<MissileFlight>(missile);
+			const MissileWaypointPath *path = world.Get<MissileWaypointPath>(missile);
+			if (path != nullptr && path->waypoint != last)
+			{
+				last = path->waypoint;
+				legs.push_back({tick, last});
+			}
+			if (lockTick == 0 && now.state == MissileState::Kill)
+			{
+				lockTick = tick;
+				goalAtLock = now.goal;
+			}
+			if (endTick == 0 && path == nullptr && now.state != MissileState::Kill)
+				endTick = tick;
+		});
+	};
+	// No lock: each leg in turn, the path over after the last.
+	{
+		std::vector<std::pair<int, std::uint32_t>> legs, legsFour;
+		int lockTick = 0, endTick = 0, detonationTick = 0, lockFour = 0, endFour = 0, detonationFour = 0;
+		FixedVector3 goal, goalFour;
+		fly(Fixed{}, 1, legs, lockTick, endTick, goal, detonationTick);
+		fly(Fixed{}, 4, legsFour, lockFour, endFour, goalFour, detonationFour);
+		BOOST_TEST_MESSAGE("legs " << legs.size() << " end " << endTick);
+		for (const auto &[tick, waypoint] : legs)
+			BOOST_TEST_MESSAGE("  tick " << tick << " -> W" << waypoint);
+		BOOST_TEST(lockTick == 0);
+		// W0 reached on tick 28 (W1 next), W1 on 64 (W2, the last), W2 on 90: the path over.
+		BOOST_TEST((legs == std::vector<std::pair<int, std::uint32_t>>{{28, 1u}, {64, 2u}}));
+		BOOST_TEST(endTick == 90);
+		BOOST_TEST((legs == legsFour));
+		BOOST_TEST(endFour == endTick);
+	}
+	// DistanceToTargetForLock 10: the kill run back to its original spot from the first waypoint.
+	{
+		std::vector<std::pair<int, std::uint32_t>> legs;
+		int lockTick = 0, endTick = 0, detonationTick = 0;
+		FixedVector3 goal;
+		fly(Fixed::FromInt(10), 1, legs, lockTick, endTick, goal, detonationTick);
+		BOOST_TEST_MESSAGE("lock " << lockTick << " detonation " << detonationTick);
+		// Within its close-enough distance of W0 on tick 28 it takes W1, but the lock the next tick still sees W0 (its AI's
+		// goal position is the one its last update began with): within 5 of it, the kill run back to its spot from tick
+		// 29, its path over, and it goes off there on tick 65.
+		BOOST_TEST((legs == std::vector<std::pair<int, std::uint32_t>>{{28, 1u}}));
+		BOOST_TEST(lockTick == 29);
+		BOOST_TEST((goal == FixedVector3{}));
+		BOOST_TEST(detonationTick == 65);
+	}
 }
 
 // MissileAIUpdate::doLaunchState / doIgnitionState / doAttackState (IgnitionDelay, DetonateOnNoFuel; the Dragon tank's

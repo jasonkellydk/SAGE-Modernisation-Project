@@ -24,6 +24,7 @@ import engine.gameplay.rts.navigation.components.navigation;
 import engine.gameplay.rts.navigation.components.ignored_obstacle;
 import engine.gameplay.rts.movement.components.locomotion;
 import engine.ecs.query.query;
+import engine.gameplay.rts.harvesting.components.harvester;
 import games.generalszh.session.setup.skirmish_level;
 import games.generalszh.content.install.install_mount;
 import games.generalszh.content.ini.zero_hour_grammar;
@@ -457,6 +458,21 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_black_lotus_steals_cash)
 		gp::ResumeCountdown(*world.Get<gp::SpecialPowerTimers>(lotus)->Find(power), game.CurrentTick());
 		auto &money = world.Resource<gp::PlayerMoney>();
 		const std::uint32_t america = world.Get<gp::Owner>(supply)->player, china = world.Get<gp::Owner>(lotus)->player;
+		// No income for America while the test counts its cash: the supply center's free truck goes (it would bring
+		// supplies in).
+		for (int tick = 0; tick < 2; ++tick)
+			game.Tick();
+		{
+			ecs::Query<ecs::Read<gp::Harvester>, ecs::Read<gp::Owner>> gatherers(world);
+			gatherers.ForEachChunk([&](auto chunk) {
+				const auto owners = chunk.template Get<gp::Owner>();
+				const auto entities = chunk.Entities();
+				for (std::size_t row = 0; row < owners.size(); ++row)
+					if (owners[row].player == america)
+						world.Resource<gp::KillRequests>().entities.push_back(entities[row]);
+			});
+			game.Tick();
+		}
 		money.Withdraw(america, money.Balance(america));
 		money.Deposit(america, 1400);
 		const std::int64_t chinaBefore = money.Balance(china);

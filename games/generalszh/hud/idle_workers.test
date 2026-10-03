@@ -153,7 +153,9 @@ BOOST_AUTO_TEST_CASE(legacy_parity_idle_workers_line_up_and_the_button_walks_the
 			back = marked(dozer);
 	}
 	BOOST_TEST_REQUIRE(back.has_value());
-	BOOST_TEST(*back == 172u); // its move over, it stands idle on tick 171
+	// Its move over (around the second dozer: 30 a second, 30 a second squared, Path::computePointOnPath along its
+	// route), it stands idle on tick 131.
+	BOOST_TEST(*back == 132u);
 	BOOST_TEST_MESSAGE("marks: first " << FIRST_MARK << ", second " << marked(second) << ", back " << *back);
 	BOOST_TEST((hud::IdleWorkers(game, player) == std::vector<ecs::Entity>{second, dozer}));
 	BOOST_TEST(game.StateHash() == game4.StateHash());

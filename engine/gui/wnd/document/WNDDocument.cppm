@@ -242,8 +242,12 @@ export bool Parse_Mapped_Image_INI(std::string_view source, ImageCatalog &catalo
 	std::istringstream lines{std::string(source)};
 	std::string line;
 	while (std::getline(lines, line)) {
+		// INI::getNextToken: a ';' starts a comment to the end of the line (ControlButtonsPro.ini's
+		// "MappedImage SSObserverUSA ; Hardcoded name; ...").
+		if (const std::size_t comment = line.find(';'); comment != std::string::npos)
+			line.erase(comment);
 		const std::string trimmed = WNDDocumentDetail::Trim(line);
-		if (trimmed.empty() || trimmed.front() == ';')
+		if (trimmed.empty())
 			continue;
 		if (WNDDocumentDetail::Starts_With(trimmed, "MappedImage ")) {
 			definition = {};

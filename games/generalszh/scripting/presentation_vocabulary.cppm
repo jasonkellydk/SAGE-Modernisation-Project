@@ -51,6 +51,8 @@ struct ClientScriptCommand
 		BlackWhite,          // CAMERA_BW_MODE_BEGIN / END: flag; percent: the frames it fades over
 		RadarEvent,          // RADAR_CREATE_EVENT, OBJECT_ / TEAM_CREATE_RADAR_EVENT: at `position`; percent: its type
 		Flash,               // NAMED_ / TEAM_FLASH(_WHITE): `subject` (flag: a team) for percent seconds; text "WHITE": in white
+		ForceSelect,         // OBJECT_FORCE_SELECT: `subject` the team, text the thing, detail the sound; flag: centre the view on it
+		Emoticon,            // NAMED_ / TEAM_SET_EMOTICON: `subject` (flag: a team) shows the Animation2D `text` for percent logic frames (below 0: for good)
 		NamedTimer,          // DISPLAY_COUNTER / DISPLAY_COUNTDOWN_TIMER: `subject` the counter, text its label; flag: counts down
 		NamedTimerHide,      // HIDE_COUNTER / HIDE_COUNTDOWN_TIMER: `subject`
 		NamedTimersShown,    // ENABLE_ / DISABLE_COUNTDOWN_TIMER_DISPLAY: flag
@@ -76,6 +78,7 @@ struct ClientScriptCommand
 	std::array<Engine::Math::Fixed, 5> numbers{};
 	Engine::Math::FixedVector3 position{};
 	std::string subject;
+	std::string detail; // a second text (OBJECT_FORCE_SELECT: the sound)
 };
 
 // Where a named unit is (`team` false) or a team is thought to be (Team::getEstimateTeamPosition, for one with units), as
@@ -245,6 +248,23 @@ inline void AddPresentationVocabulary(engine::scripting::Vocabulary &vocabulary,
 			command.subject = Text(c, 0);
 			out->push_back(std::move(command));
 		});
+	// doNamedEmoticon / doTeamEmoticon(name, emoticon, seconds): Drawable::setEmoticon for (Int)(seconds x
+	// LOGICFRAMES_PER_SECOND) frames (truncated toward zero; below zero: for good), each team member's (groupSetEmoticon).
+	for (const auto &[action, team] : {std::pair{"NAMED_SET_EMOTICON", false}, std::pair{"TEAM_SET_EMOTICON", true}})
+		vocabulary.AddAction(action, [out, team](ScriptCallContext &c) {
+			const Engine::Math::Fixed scaled = Number(c, 2) * Engine::Math::Fixed::FromInt(30);
+			const std::int64_t frames = scaled < Engine::Math::Fixed{} ? -(Engine::Math::Fixed{} - scaled).Floor() : scaled.Floor();
+			ClientScriptCommand command{Kind::Emoticon, Text(c, 1), frames, team};
+			command.subject = Text(c, 0);
+			out->push_back(std::move(command));
+		});
+	// OBJECT_FORCE_SELECT(team, thing, centre in view, sound): doForceObjectSelection, on the client.
+	vocabulary.AddAction("OBJECT_FORCE_SELECT", [out](ScriptCallContext &c) {
+		ClientScriptCommand command{Kind::ForceSelect, Text(c, 1), 0, Integer(c, 2) != 0};
+		command.subject = Text(c, 0);
+		command.detail = Text(c, 3);
+		out->push_back(std::move(command));
+	});
 	// CAMEO_FLASH(command button, seconds): doCameoFlash (the button's flash count, set on the client).
 	vocabulary.AddAction("CAMEO_FLASH", [out](ScriptCallContext &c) { out->push_back({Kind::CameoFlash, Text(c, 0), Integer(c, 1)}); });
 	// DISPLAY_TEXT(label): doDisplayText -> InGameUI::message.

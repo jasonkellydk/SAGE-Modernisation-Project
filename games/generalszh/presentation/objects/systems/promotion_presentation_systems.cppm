@@ -5,6 +5,7 @@ export import engine.ecs.system.system;
 export import engine.gameplay.common.spatial.components.transform;
 export import engine.gameplay.common.identity.components.definition_ref;
 export import engine.gameplay.rts.veterancy.resources.promotions;
+export import engine.gameplay.common.healing.resources.heal_pulses;
 export import engine.gameplay.common.identity.components.owner;
 export import games.generalszh.presentation.objects.resources.world_animations;
 export import games.generalszh.presentation.objects.resources.presentation_resources;
@@ -17,15 +18,18 @@ import Engine.Core.Math.FixedPresentation;
 // and fading out at its end, and MiscAudio's UnitPromoted on it; none for an
 // object IGNORED_IN_GUI, nor while icon UI is off (getDrawIconUI: the shell map turns it off). Its own promotion
 // sound (ActiveBody::onVeterancyLevelChanged: SoundPromotedVeteran / Elite / Hero by the level reached) plays on it
-// whatever the icon UI. World animations past their time go first.
+// whatever the icon UI. World animations past their time go first. A single-burst heal (AutoHealBehavior::update with
+// SingleBurst, while icon UI is on) shows GameData's GetHealedAnimation over each one it reached hurt, at its position
+// raised by its geometry's height (getMaxHeightAbovePosition), rising GetHealedAnimationZRise a second for
+// GetHealedAnimationTime and fading out (WORLD_ANIM_FADE_ON_EXPIRE).
 export namespace generalszh::presentation
 {
 struct PromotionPresentationSystem
 {
 	using Query = ecs::Query<ecs::Read<engine::gameplay::Transform>>;
 	using Lookup = ecs::Lookup<ecs::Read<engine::gameplay::Transform>, ecs::Read<engine::gameplay::DefinitionRef>, ecs::Read<engine::gameplay::Owner>>;
-	using Resources = ecs::Resources<ecs::Read<engine::gameplay::Promotions>, ecs::Read<LookCatalog>, ecs::Read<PresentationFrame>,
-		ecs::Write<WorldAnimations>, ecs::Write<SoundRequests>>;
+	using Resources = ecs::Resources<ecs::Read<engine::gameplay::Promotions>, ecs::Read<engine::gameplay::BurstHeals>, ecs::Read<LookCatalog>,
+		ecs::Read<PresentationFrame>, ecs::Write<WorldAnimations>, ecs::Write<SoundRequests>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -56,6 +60,18 @@ struct PromotionPresentationSystem
 			if (frame.drawIconUi && (looks == nullptr || !looks->ignoredInGui))
 				ShowLevelGain(catalog, at, clock, animations, sounds, owner != nullptr ? owner->player : SoundRequest::NoOwner);
 		}
+		if (!frame.drawIconUi || catalog.getHealedAnimation.empty())
+			return;
+		context.Read<engine::gameplay::BurstHeals>().ForEach([&](ecs::Entity healed) {
+			const auto *transform = lookup.IsAlive(healed) ? lookup.Get<engine::gameplay::Transform>(healed) : nullptr;
+			if (transform == nullptr)
+				return;
+			const auto *definition = lookup.Get<engine::gameplay::DefinitionRef>(healed);
+			const DefinitionLooks *looks = definition != nullptr ? catalog.Of(definition->index) : nullptr;
+			const std::array<float, 3> at{Engine::Math::ToFloat(transform->position.x), Engine::Math::ToFloat(transform->position.y),
+				Engine::Math::ToFloat(transform->position.z) + (looks != nullptr ? looks->constructionHeight : 0.0f)};
+			animations.push_back({catalog.getHealedAnimation, at, clock, clock + catalog.getHealedSeconds, catalog.getHealedRise, true});
+		});
 	}
 
 	// createVeterancyLevelFX's animation and sound at `at`.

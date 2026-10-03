@@ -52,6 +52,7 @@ struct ObjectSetup
 {
 	std::span<const std::array<float, 4>> playerColors;
 	bool night{false}; // the map is at night and models follow its time of day (ForceModelsToFollowTimeOfDay)
+	bool snow{false};  // the weather is snowy and models follow it (ForceModelsToFollowWeather)
 	engine::effects::ParticleWorld *particles{nullptr};
 	EffectsContent *effects{nullptr};
 	BonePoses bones;
@@ -68,6 +69,7 @@ inline void EmplaceObjectResources(ecs::World &world, session::SessionView &game
 	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
 	catalog.playerColors.assign(setup.playerColors.begin(), setup.playerColors.end());
 	catalog.night = setup.night;
+	catalog.snow = setup.snow;
 	KnowLooks(catalog, game);
 	world.EmplaceResource<LookClips>();
 	world.EmplaceResource<ObjectInstances>();

@@ -345,6 +345,84 @@ public:
 		return renderer.Draw(commands, m_decalMesh, style, parameters, textures);
 	}
 
+	// The objects' decal shadows (W3DProjectedShadowManager::renderShadows' SHADOW_DECAL list, queueDecal / flushDecals):
+	// each its texture laid over the terrain cells under its box, its uv turned with the object, 0.01 x MAP_XY_FACTOR
+	// over the ground, clamped at its edges, multiplied into what is drawn (_PresetMultiplicativeShader), in white; the
+	// ones sharing a texture drawn together.
+	struct ShadowDecalDraw
+	{
+		std::string texture;
+		std::array<float, 2> center{};
+		std::array<float, 2> uAxis{};
+		std::array<float, 2> vAxis{};
+		std::array<float, 2> uvOffset{};
+		std::array<float, 4> extent{};
+	};
+	bool DrawShadowDecals(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const ShadowDecalDraw> decals,
+		const ShroudBinding *shroud = nullptr)
+	{
+		if (m_grid.width < 2 || decals.empty())
+			return true;
+		std::vector<const ShadowDecalDraw *> order;
+		order.reserve(decals.size());
+		for (const ShadowDecalDraw &decal : decals)
+			order.push_back(&decal);
+		std::stable_sort(order.begin(), order.end(), [](const ShadowDecalDraw *a, const ShadowDecalDraw *b) { return a->texture < b->texture; });
+		Graphics::ScorchGrid grid = m_grid;
+		grid.elevation = 0.01f * grid.spacing; // MAP_XY_FACTOR
+		const int cellsAcross = m_grid.width - 1;
+		auto &renderer = Graphics::Get_Surface_Renderer();
+		bool drawn = true;
+		for (std::size_t first = 0; first < order.size();)
+		{
+			std::size_t last = first;
+			while (last < order.size() && order[last]->texture == order[first]->texture)
+				++last;
+			const Graphics::RHITextureHandle texture = TrackTexture(order[first]->texture);
+			Graphics::ScorchGeometry geometry;
+			if (texture.Is_Valid())
+				for (std::size_t index = first; index < last; ++index)
+				{
+					const ShadowDecalDraw &decal = *order[index];
+					Graphics::ScorchDescription mark{decal.center, 1.0f, 0};
+					mark.oriented = true;
+					mark.u_axis = decal.uAxis;
+					mark.v_axis = decal.vAxis;
+					mark.uv_offset = decal.uvOffset;
+					mark.extent = decal.extent;
+					geometry.Append(mark, grid, {1, 1, 1, 1},
+						[&](int x, int y) { return m_heights[static_cast<std::size_t>(std::clamp(y, 0, m_grid.height - 1)) * m_grid.width + std::clamp(x, 0, m_grid.width - 1)]; },
+						[&](int x, int y) {
+							const std::size_t cell = static_cast<std::size_t>(std::clamp(y, 0, m_grid.height - 2)) * cellsAcross + std::clamp(x, 0, cellsAcross - 1);
+							return cell < m_diagonals.size() && m_diagonals[cell] != 0;
+						}, std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint32_t>::max());
+				}
+			first = last;
+			if (geometry.indices.empty())
+				continue;
+			if (m_shadowDecalMesh.Is_Valid())
+			{
+				if (!renderer.Update_Mesh(m_shadowDecalMesh, geometry.vertices, geometry.indices))
+					return false;
+			}
+			else
+				m_shadowDecalMesh = renderer.Create_Mesh(geometry.vertices, geometry.indices);
+			Graphics::SurfaceStyle style;
+			style.cull = Graphics::RHICullMode::Back;
+			style.front_counter_clockwise = true; // ScorchGeometry's winding
+			style.clamp_texture = true;
+			style.blend = Graphics::RHIBlendMode::Multiply;
+			Graphics::SurfaceParameters parameters;
+			parameters.view_projection = viewProjection;
+			// Multiplied in, it darkens what the terrain pass already shrouded: not shrouded again.
+			const Graphics::RHITextureHandle shroudTexture = Shroud(parameters, nullptr);
+			(void)shroud;
+			const std::array<Graphics::RHITextureHandle, 4> textures{texture, {}, {}, shroudTexture};
+			drawn = renderer.Draw(commands, m_shadowDecalMesh, style, parameters, textures) && drawn;
+		}
+		return drawn;
+	}
+
 	// TerrainTracksRenderObjClassSystem::flush: each track with two or more edges as one strip (its older edges past the
 	// opaque ones fading with distance down the track), its texture from Art/Textures, back faces culled.
 	bool DrawTracks(Graphics::CommandList &commands, const std::array<float, 16> &viewProjection, std::span<const TrackView> tracks,
@@ -446,6 +524,7 @@ private:
 	engine::level::presentation::TerrainSurfaceTextures m_textures;
 	Graphics::RHITextureHandle m_atlas{};
 	std::size_t m_overlayCells{0};
+	Graphics::SurfaceMeshHandle m_shadowDecalMesh{};
 	Graphics::ScorchGrid m_grid{};
 	std::vector<float> m_heights;
 	std::vector<std::uint8_t> m_diagonals;

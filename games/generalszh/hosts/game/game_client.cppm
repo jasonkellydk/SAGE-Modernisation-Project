@@ -278,6 +278,8 @@ public:
 	void RestoreMusic();
 	// The player's volumes (Options.ini, percent): music, 2D and 3D sounds, speech.
 	void SetUserVolumes(int music, int sound2D, int sound3D, int speech);
+	// The player's scroll speed option (percent).
+	void SetScrollFactor(int percent);
 	// The options' detail level (StaticGameLOD: presentation::detail_level) and the player's own detail for Custom
 	// (GameLODManager::init / applyStaticLODLevel).
 	void SetDetail(std::int32_t level, const presentation::CustomDetail &custom);
@@ -310,6 +312,8 @@ public:
 	const presentation::RadiusCursor *CursorDecal() const;
 	// The objects' radius decals this frame (none: no match).
 	const presentation::RadiusDecalViews *RadiusDecals() const;
+	// The frame's decal shadows (SHADOW_DECAL things drawn this frame): each its texture and where it lies.
+	std::vector<std::pair<std::string, presentation::ShadowDecalPlacement>> ShadowDecals() const;
 	// The tracers flying this frame (none: no match).
 	const presentation::Tracers *TracerEffects() const;
 	// The map-drawn bridges as drawn this frame, and their models and textures (none: no match).

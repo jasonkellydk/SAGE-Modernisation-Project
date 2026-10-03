@@ -297,6 +297,8 @@ import games.generalszh.gameplay.teams.algorithms.team_actions;
 import games.generalszh.gameplay.orders.algorithms.command_application;
 import games.generalszh.session.script_bridge;
 import games.generalszh.scripting.core_vocabulary;
+import games.generalszh.scripting.legacy_calls;
+import games.generalszh.content.objects.kind_of;
 
 // The composition root of a running Zero Hour game. It owns the ECS world,
 // the resources and the systems (run in parallel by the scheduler on all but
@@ -661,6 +663,7 @@ private:
 				}
 		}
 		scripting::AddCoreVocabulary(m_vocabulary);
+		scripting::UseLegacyCallReading(m_vocabulary, content::KindOfNames);
 		scripting::AddCameraVocabulary(m_vocabulary, level, {&m_cameraCommands, std::move(options.cameraMovementFinished)});
 		scripting::AddUnitVocabulary(m_vocabulary, m_bridge);
 		scripting::AddPlayerVocabulary(m_vocabulary, &m_bridge);
@@ -741,7 +744,7 @@ private:
 
 	bool LoadCheckpoint(engine::core::serialization::ByteReader &reader);
 	// The state outside the ECS world (resources and scripts), in checkpoint order.
-	void SaveResources(engine::core::serialization::ByteWriter &writer) const;
+	void SaveResources(engine::core::serialization::ByteWriter &writer, std::vector<std::pair<std::string, std::size_t>> *marks = nullptr) const;
 	bool LoadResources(engine::core::serialization::ByteReader &reader);
 
 public:
@@ -1303,6 +1306,9 @@ public:
 	std::size_t WorkerCount() const noexcept override { return m_workers; }
 	// Everything a checkpoint holds, hashed: equal on every peer while in step.
 	ecs::StateHashValue StateHash() const;
+	// StateHash's session resources one by one (name, hash of its saved bytes), for finding what a desync or a checkpoint
+	// leaves out.
+	std::vector<std::pair<std::string, ecs::StateHashValue>> ResourceHashes() const;
 	const gameplay::TeamRoster &Teams() const noexcept { return m_roster; }
 	// The entity a script name refers to (invalid when none).
 	ecs::Entity Named(std::string_view name) const override { return m_names.Find(name); }

@@ -112,7 +112,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_audio_settings_read_as_the_original)
 	}
 	const presentation::AudioSettings &settings = install.audio->settings;
 	constexpr float rounding = 1.0f / 65536.0f;
-	BOOST_TEST(settings.audioRoot == "Data\Audio");
+	BOOST_TEST(settings.audioRoot == "Data\\Audio");
 	BOOST_TEST(settings.soundsFolder == "Sounds");
 	BOOST_TEST(settings.musicFolder == "Tracks");
 	BOOST_TEST(settings.streamingFolder == "Speech");

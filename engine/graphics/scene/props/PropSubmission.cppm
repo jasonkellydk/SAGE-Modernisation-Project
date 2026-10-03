@@ -72,7 +72,9 @@ public:
     // Retain each borrowed generation once for the submission interval, before
     // invoking another resolver. Failed draws may keep this lease until Clear.
     // Dense slots are only a lookup cache; the list owns every retained handle.
-    bool Retain_Borrowed_Texture(RHITextureHandle texture) {
+    // `added`: set when this call took the lease (not one already held this interval).
+    bool Retain_Borrowed_Texture(RHITextureHandle texture, bool* added = nullptr) {
+        if (added) *added = false;
         if (!m_device || !texture.Is_Valid()) return false;
         const auto index = texture.Get_Index();
         if (index < m_borrowed_slots.size() && m_borrowed_slots[index] == texture) return true;
@@ -85,7 +87,16 @@ public:
             throw;
         }
         m_borrowed_slots[index] = texture;
+        if (added) *added = true;
         return true;
+    }
+    // An immediate draw is done with its texture: the lease it took goes now, not at Clear.
+    void Release_Borrowed_Texture(RHITextureHandle texture) noexcept {
+        const auto found = std::find(m_borrowed_textures.begin(), m_borrowed_textures.end(), texture);
+        if (found == m_borrowed_textures.end()) return;
+        m_borrowed_textures.erase(found);
+        if (texture.Get_Index() < m_borrowed_slots.size()) m_borrowed_slots[texture.Get_Index()] = {};
+        if (m_device) m_device->Destroy_Texture(texture);
     }
 
     // On success, texture handles transfer to this submission. On failure the

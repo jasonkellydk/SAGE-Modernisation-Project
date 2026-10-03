@@ -39,6 +39,17 @@ struct ObjectIcons
 	bool Drawn(ObjectIcon icon) const noexcept { return (drawn >> static_cast<std::size_t>(icon) & 1u) != 0; }
 };
 
+// A script's emoticon (NAMED_SET_EMOTICON / TEAM_SET_EMOTICON: Drawable::setEmoticon, its ICON_EMOTICON Anim2D and
+// m_keepTillFrame): the Animation2D it shows, the presentation clock when it was made and its random draw, and the logic
+// frame it shows through (until: ~0, for good). A side table on the simulation's own entities.
+struct ObjectEmoticon
+{
+	std::string animation;
+	double since{0.0};
+	std::uint32_t roll{0};
+	std::uint64_t until{0};
+};
+
 // The client random draw an icon's animation takes when it is made (GameClientRandomValue's randomValue: the original's
 // client stream is never synchronised, so any uniform draw does): a SplitMix64 mix of the object, the icon and the
 // presentation clock then, so the chunked icon system draws it without a shared stream.
@@ -54,6 +65,15 @@ inline std::uint32_t IconRoll(ecs::Entity entity, ObjectIcon icon, double clock)
 
 export namespace ecs
 {
+template<>
+struct ComponentTraits<generalszh::presentation::ObjectEmoticon>
+{
+	static constexpr std::string_view StableName = "generalszh.presentation.object_emoticon";
+	static constexpr std::uint32_t Version = 1;
+	static constexpr PersistencePolicy Persistence = PersistencePolicy::Transient;
+	static constexpr ComponentStorage Storage = ComponentStorage::SideTable;
+};
+
 template<>
 struct ComponentTraits<generalszh::presentation::ObjectIcons>
 {

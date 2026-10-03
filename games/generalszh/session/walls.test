@@ -27,6 +27,8 @@ import engine.gameplay.rts.navigation.components.navigation;
 import engine.gameplay.rts.movement.components.move_order;
 import games.generalszh.gameplay.walls.algorithms.walls;
 import games.generalszh.gameplay.lifecycle.algorithms.retire_now;
+import engine.gameplay.common.health.components.health;
+import games.generalszh.gameplay.scripts.algorithms.object_edits;
 
 // The wall units walk on top of (the original's LAYER_WALL) on shipped maps: the FortressWall pieces of Fallen Empire
 // (else Iron Dragon) made into the wall layer at AIData's WallHeight, a unit on it falling when the piece under it falls
@@ -232,6 +234,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_map_wall_is_walked_on_and_falls_with_its_pi
 			under = piece;
 	BOOST_TEST_REQUIRE(under.has_value());
 	const ecs::Entity piece = wall.owner[*under];
+	// The map makes its wall indestructible (Object::kill ignores it): made destructible first, as a script's
+	// SET_INDESTRUCTIBLE false (ScriptActions::doNamedSetAttribute) would.
+	BOOST_TEST(world.Get<gp::Health>(piece)->indestructible);
+	ga::SetObjectPanelFlag(game.Game(), piece, "Indestructible", false);
 	ga::KillNow(game.Game(), piece);
 	game.Tick();
 	game.Tick();

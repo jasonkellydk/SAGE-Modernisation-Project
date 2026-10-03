@@ -181,8 +181,10 @@ struct JetSystem
 				// Flown by forces, each leg is done by the aircraft arrival rule (AIInternalMoveToState::update: what is left of it
 				// along its line under CloseEnoughDist, TrackFlightLeg; the next points within a cell skipped), its height the
 				// node's z, the next leg's length past it (setPathExtraDistance); kinematic (no body), within reach.
-				const auto followPath = [&] {
-					const bool done = jet.leg < jet.pathCount &&
+				// `entering`: the path just given (AIFollowPathState::onEnter sets the first point as its goal; whether it is
+				// there already is asked by its update, from the next frame on).
+				const auto followPath = [&](bool entering = false) {
+					const bool done = !entering && jet.leg < jet.pathCount &&
 						(motion.forced != 0 ? motion.tracking != 0 && motion.flightGoal == jet.path[jet.leg].XY() &&
 								TrackFlightLeg(transform, motion, motion.flightGoal).left < motion.locomotor.closeEnough
 											: arrived());
@@ -290,7 +292,7 @@ struct JetSystem
 						motion.preciseZ = 1;
 						motion.preciseHeight = transform.position.z;
 						motion.liftCap = Fixed{}; // setMaxLift(0)
-						followPath();
+						followPath(true);
 					}
 					break;
 				}
@@ -327,7 +329,7 @@ struct JetSystem
 				}
 				case JetState::Flying:
 				{
-					const bool busyInAir = (target != nullptr && target->target.IsValid()) || order.mode != MoveMode::Idle;
+					const bool busyInAir = (target != nullptr && target->target.IsValid()) || (order.mode != MoveMode::Idle && order.explicitGoal == 0);
 					if (busyInAir)
 						jet.idleSince = tick;
 					// JetAIUpdate::update: its first idle tick in the air arms m_returnToBaseFrame at that tick plus
@@ -409,7 +411,7 @@ struct JetSystem
 						motion.ultraAccurate = 1;
 						motion.preciseZ = 1;
 						motion.preciseHeight = deckPlaces.approach.z;
-						followPath();
+						followPath(true);
 					}
 					else
 						order = {}; // circling (setLocomotorGoalNone)

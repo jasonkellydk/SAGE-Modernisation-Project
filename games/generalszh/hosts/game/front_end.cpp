@@ -167,6 +167,7 @@ struct FrontEnd::State
 	void ApplyOptions()
 	{
 		game->SetUserVolumes(userOptions.musicVolume, userOptions.sound2DVolume, userOptions.sound3DVolume, userOptions.speechVolume);
+		game->SetScrollFactor(userOptions.scrollFactor);
 		// GameLODManager::init: the chosen level, or for Custom the player's own options (OptionPreferences).
 		presentation::CustomDetail custom;
 		custom.shadowVolumes = userOptions.shadowVolumes;

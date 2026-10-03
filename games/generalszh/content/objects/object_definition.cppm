@@ -116,6 +116,10 @@ struct ObjectDefinition
 	std::string maxSimultaneousLinkKey;
 	// Shadow (TheShadowNames bits: SHADOW_DECAL 1, SHADOW_VOLUME 2, SHADOW_PROJECTION 4, SHADOW_DYNAMIC_PROJECTION 8,
 	// SHADOW_DIRECTIONAL_PROJECTION 16, SHADOW_ALPHA_DECAL 32, SHADOW_ADDITIVE_DECAL 64).
+	// Its decal shadow's ShadowTexture, ShadowSizeX / ShadowSizeY and ShadowOffsetX / ShadowOffsetY (parseAsciiString,
+	// parseReal; 0: its model's box, no offset).
+	std::string shadowTexture;
+	Engine::Math::Fixed shadowSizeX, shadowSizeY, shadowOffsetX, shadowOffsetY;
 	std::uint8_t shadow{0}; // RefundValue: what selling it gives back (0: SellPercentage of its cost)
 	Engine::Math::Fixed placementViewAngleDegrees; // PlacementViewAngle: how it faces when placed
 	std::int32_t energyProduction{0}; // positive produces power, negative consumes it

@@ -10,6 +10,7 @@ import std;
 import games.generalszh.gameplay.powers.algorithms.special_power_state;
 import games.generalszh.content.objects.kind_of;
 import games.generalszh.gameplay.ai.components.tunnel_guard;
+import engine.gameplay.rts.containment.components.tunnel;
 import games.generalszh.gameplay.ai.components.attack_squad;
 import games.generalszh.gameplay.containment.components.scripted_evacuation;
 import games.generalszh.gameplay.ai.components.guard;
@@ -608,6 +609,10 @@ inline bool MayContain(GameWorld &game, ecs::Entity container, ecs::Entity rider
 	const auto *riderRef = world.Get<gp::DefinitionRef>(rider);
 	if (containerRef == nullptr || riderRef == nullptr)
 		return false;
+	// TunnelContain::isValidContainerFor -> TunnelTracker::isValidContainerFor: anything but aircraft (no kind or standing
+	// test: "Dustin wants ALL units to be able to use tunnels").
+	if (world.Has<gp::Tunnel>(asked))
+		return !game.templates.DefinitionAt(riderRef->index).Is("AIRCRAFT");
 	// RiderChangeContain::isValidContainerFor: not once scuttled, and only its listed riders.
 	if (const RiderChange *change = world.Get<RiderChange>(asked))
 	{

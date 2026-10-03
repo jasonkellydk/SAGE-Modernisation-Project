@@ -50,6 +50,9 @@ struct ObjectInstance
 	float trailer{0.0f};
 	float animationStart{0}; // where it started, as a share of the animation (0 its first frame, 1 its last)
 	bool castsShadow{false}; // it casts a shadow on the terrain (a directional shadow caster)
+	// Its decal shadow instead (SHADOW_DECAL: LookCatalog::shadowDecals' index; 0xFFFFFFFF: none), laid on the terrain
+	// under it while it would cast one.
+	std::uint32_t shadowDecal{0xFFFFFFFFu};
 	bool receivesDynamicLights{true};
 	// The sphere dynamic lights must reach to light it (centre, radius): its geometry's bounding sphere, centred half its
 	// height up (the original uses its render object's sphere; see the ledger).

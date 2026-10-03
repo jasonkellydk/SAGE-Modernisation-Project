@@ -94,6 +94,7 @@ struct Hideout
 		target.RegisterComponent<SightLooker>();
 		target.RegisterComponent<Slaved>();
 		target.RegisterComponent<SurfaceLayer>();
+		target.RegisterComponent<ContainedDefinitions>();
 		target.RegisterComponent<BlockedState>();
 		target.RegisterComponent<MoveOrder>();
 		target.RegisterComponent<PathCompleted>();

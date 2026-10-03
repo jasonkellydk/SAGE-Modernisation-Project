@@ -119,6 +119,7 @@ struct MissileFlightDefinition
 	Engine::Math::TurnAngle maxThrustAngle;
 	Engine::Math::Fixed preferredHeight;
 	Engine::Math::Fixed preferredHeightDamping{Engine::Math::Fixed::One()};
+	Engine::Math::Fixed closeEnough{Engine::Math::Fixed::One()}; // CloseEnoughDist (a waypoint path's legs end within it, 3D)
 	Engine::Math::Fixed radius{Engine::Math::Fixed::One()}; // GeometryMajorRadius
 };
 

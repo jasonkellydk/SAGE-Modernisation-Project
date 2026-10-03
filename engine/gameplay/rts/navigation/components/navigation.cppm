@@ -44,8 +44,10 @@ struct Route
 	bool planned{false};
 	// An ally stands fixed along it, in the mover's way (Path::getBlockedByAlly): the allies are asked to make way.
 	bool blockedByAlly{false};
-	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	bool hasStart{false}; // `start` holds where it was planned from (the path's first node)
+	std::uint8_t reserved[2]{}; // no padding: checkpoints hold its bytes
 	std::uint64_t plannedTick{0};
+	Engine::Math::FixedVector2 start; // where the mover stood when it was planned (its walk starts toward points[0])
 };
 
 // A destination that moved (a chased target) is planned for again at most this often; in between the route's end
@@ -86,7 +88,7 @@ template<>
 struct ComponentTraits<engine::gameplay::Route>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.route";
-	static constexpr std::uint32_t Version = 3;
+	static constexpr std::uint32_t Version = 4;
 	static constexpr PersistencePolicy Persistence = PersistencePolicy::Serializable;
 	static void HashState(const engine::gameplay::Route &value, StateHasher &hasher) noexcept
 	{
@@ -101,6 +103,11 @@ struct ComponentTraits<engine::gameplay::Route>
 		}
 		hasher.AppendU64((std::uint64_t{value.count} << 24) | (std::uint64_t{value.next} << 16) | (value.blockedByAlly ? 4u : 0u) | (value.complete ? 2u : 0u) | (value.planned ? 1u : 0u));
 		hasher.AppendU64(value.plannedTick);
+		if (value.hasStart)
+		{
+			hasher.AppendU64(static_cast<std::uint64_t>(value.start.x.Raw()));
+			hasher.AppendU64(static_cast<std::uint64_t>(value.start.y.Raw()));
+		}
 	}
 };
 }

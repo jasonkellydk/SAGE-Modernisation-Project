@@ -127,6 +127,7 @@ engine_add_module_library(engine_gameplay_teams
 engine_add_module_library(engine_gameplay_navigation
 	MODULES
 		rts/navigation/resources/waypoint_graph.cppm
+		rts/navigation/algorithms/waypoint_steps.cppm
 		rts/navigation/definitions/pathfind_cell.cppm
 		rts/navigation/resources/navigation_grid.cppm
 		rts/navigation/algorithms/grid_classification.cppm
@@ -177,6 +178,7 @@ engine_add_module_library(engine_gameplay_movement
 	MODULES
 		rts/movement/definitions/locomotor.cppm
 		rts/movement/components/locomotion.cppm
+		rts/movement/components/locomotor_choice.cppm
 		rts/movement/components/move_order.cppm
 		rts/movement/components/path_completed.cppm
 		rts/movement/components/move_ended.cppm
@@ -188,6 +190,7 @@ engine_add_module_library(engine_gameplay_movement
 		rts/movement/systems/route_request_system.cppm
 		rts/movement/resources/movement_penalty.cppm
 		rts/movement/systems/locomotor_damage_system.cppm
+		rts/movement/systems/locomotor_choice_system.cppm
 		rts/movement/components/wanderer.cppm
 		rts/movement/components/wander_anchor.cppm
 		rts/movement/components/face_target.cppm
@@ -352,6 +355,8 @@ engine_add_module_library(engine_gameplay_combat
 		rts/combat/systems/projectile_flight_system.cppm
 		rts/combat/algorithms/thrust.cppm
 		rts/combat/components/missile.cppm
+		rts/combat/components/missile_waypoint_path.cppm
+		rts/combat/systems/missile_waypoint_path_system.cppm
 		rts/combat/systems/missile_flight_system.cppm
 		rts/combat/systems/missile_jam_system.cppm
 		rts/combat/systems/projectile_launch_system.cppm
@@ -441,7 +446,7 @@ engine_add_module_library(engine_gameplay_blocking
 		rts/blocking/systems/unit_cell_system.cppm
 		rts/blocking/resources/move_away_requests.cppm
 	DEPENDS engine_gameplay_blocking_state engine_gameplay_collision engine_gameplay_movement engine_gameplay_navigation engine_gameplay_identity
-		engine_gameplay_status engine_gameplay_health engine_gameplay_spatial engine_gameplay_death engine_gameplay_weapons engine_gameplay_containment engine_gameplay_docking
+		engine_gameplay_status engine_gameplay_health engine_gameplay_spatial engine_gameplay_death engine_gameplay_weapons engine_gameplay_containment engine_gameplay_docking engine_gameplay_harvesting
 	TESTS rts/blocking/blocking.test
 	TESTS_OPTION ENGINE_GAMEPLAY_BUILD_TESTS)
 

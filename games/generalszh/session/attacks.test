@@ -3109,7 +3109,11 @@ BOOST_AUTO_TEST_CASE(legacy_parity_an_idle_rocket_buggy_reloads_its_clip)
 			shots.push_back(game.CurrentTick());
 	}
 	BOOST_TEST_REQUIRE(shots.size() == 2u);
+	// The shell map's GLA is a computer player, whose idle units take enemy buildings too
+	// (PartitionFilterRejectBuildings::m_acquireEnemies): asleep (ScriptActions::doTeamSetMood AI_SLEEP), it looks for
+	// nothing and stays idle.
 	gameplay::OrderStop(game.Game(), buggy, true);
+	world.Get<gp::Aggression>(buggy)->attitude = gp::attitude::Sleep;
 	BOOST_TEST(world.Get<gp::Armament>(buggy)->clip == 4u);
 	BOOST_TEST(world.Get<gp::FiringTracker>(buggy)->reloadTick == shots[1] + 183);
 	while (game.CurrentTick() < shots[1] + 182)
@@ -3138,7 +3142,8 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_designator_marks_a_target_and_gunners_shoot
 	auto &world = game.World();
 	// On the Scorpion's side, so nothing but the designator shots below touches it.
 	const ecs::Entity avenger = game.Place("AmericaTankAvenger", centre + FixedVector2{Fixed{}, Fixed::FromInt(100)}, {}, gla);
-	const ecs::Entity scorpion = game.Place("GLATankScorpion", centre + FixedVector2{Fixed::FromInt(120), Fixed{}}, {}, gla);
+	// West of the gunner, on the same flat ground (to the east the ground falls away and hides it: out of range).
+	const ecs::Entity scorpion = game.Place("GLATankScorpion", centre - FixedVector2{Fixed::FromInt(120), Fixed{}}, {}, gla);
 	game.Tick();
 	const std::uint32_t designator = game.Game().templates.Weapon("AvengerTargetDesignator");
 	BOOST_TEST_REQUIRE(designator != gp::WeaponCatalog::None);

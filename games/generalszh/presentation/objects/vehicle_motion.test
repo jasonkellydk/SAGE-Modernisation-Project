@@ -505,6 +505,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_upgraded_parts_leave_the_animation_running)
 	world.RegisterComponent<gp::EmpPulse>();
 	world.RegisterComponent<gp::IndicatorColor>();
 	world.RegisterComponent<gp::PartOverrides>();
+	world.RegisterComponent<gp::OcclusionSafe>();
 	RegisterVehicleMotion(world);
 	RegisterObjectPresentation(world);
 	world.FinalizeComponents();
@@ -1557,6 +1558,7 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_promotion_shows_chevrons_and_is_heard)
 	auto &animations = world.EmplaceResource<WorldAnimations>().shown;
 	auto &sounds = world.EmplaceResource<SoundRequests>().pending;
 	auto &promotions = world.EmplaceResource<engine::gameplay::Promotions>().list;
+	auto &bursts = world.EmplaceResource<engine::gameplay::BurstHeals>();
 	const auto unit = [&](std::uint32_t definition, int x) {
 		const ecs::Entity entity = world.Create();
 		world.Add<engine::gameplay::Transform>(entity);
@@ -1596,6 +1598,23 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_promotion_shows_chevrons_and_is_heard)
 	frame.clock = 6.0;
 	scheduler.Execute(engine::time::SimulationTime{3, engine::time::FixedStep{30}});
 	BOOST_TEST(animations.empty());
+	// AutoHealBehavior::update (SingleBurst, icon UI on): GetHealedAnimation over each one the burst reached hurt, its
+	// position raised by its geometry's height (getMaxHeightAbovePosition), rising, gone at its time.
+	catalog.getHealedAnimation = "GetHealedAnimation";
+	catalog.getHealedSeconds = 4.0f;
+	catalog.getHealedRise = 15.0f;
+	catalog.byDefinition[0].constructionHeight = 10.0f;
+	bursts.Reset(1);
+	bursts.SlotAt(0).push_back(ranger);
+	scheduler.Execute(engine::time::SimulationTime{4, engine::time::FixedStep{30}});
+	BOOST_TEST_REQUIRE(animations.size() == 1u);
+	BOOST_TEST(animations[0].animation == "GetHealedAnimation");
+	BOOST_TEST(animations[0].at[2] == 12.0f);
+	BOOST_TEST(animations[0].PositionAt(7.0)[2] == 27.0f);
+	// Icon UI off: none.
+	frame.drawIconUi = false;
+	scheduler.Execute(engine::time::SimulationTime{5, engine::time::FixedStep{30}});
+	BOOST_TEST(animations.size() == 1u);
 }
 
 // W3DModelDraw::setPauseAnimation(!Drawable::getShouldAnimate): an unmanned (hacked, paralyzed, EMPed,
@@ -2261,6 +2280,148 @@ BOOST_AUTO_TEST_CASE(damage_states_start_their_effects_on_bones_and_stop_them_as
 	show(2, false); // no longer presented: its effects stop
 	BOOST_TEST(attached() == 0u);
 	BOOST_TEST(stats.hurt == 3u);
+}
+
+// ActiveBody::evaluateVisualCondition / setAflame -> updateBodyParticleSystems (ActiveBody.cpp) with GameData's
+// AutoFireParticle* / AutoSmokeParticle* / AutoAflameParticle*: on each body state or aflame change the body's systems go
+// and new ones start on the bones of the model it shows (createParticleSystems: prefix01.., as many as its Max but no more
+// than there are bones, each on a different bone). Aflame: small fire bones take the medium fire system, small smoke bones
+// the small fire system, twice as many of each, and the Aflame bones their system too. No longer presented: they stop.
+BOOST_AUTO_TEST_CASE(legacy_parity_a_damaged_body_smokes_and_burns_on_its_bones)
+{
+	ecs::World world{ecs::WorldConfig{4}};
+	world.RegisterComponent<engine::gameplay::DefinitionRef>();
+	world.RegisterComponent<engine::gameplay::Owner>();
+	world.RegisterComponent<engine::gameplay::ObjectShroud>();
+	world.RegisterComponent<engine::gameplay::Transform>();
+	world.RegisterComponent<engine::gameplay::Health>();
+	world.RegisterComponent<engine::gameplay::Mounted>();
+	world.RegisterComponent<engine::gameplay::EmpPulse>();
+	world.RegisterComponent<engine::gameplay::IndicatorColor>();
+	world.RegisterComponent<engine::gameplay::OcclusionSafe>();
+	RegisterObjectPresentation(world);
+	world.FinalizeComponents();
+	EffectsContent effects;
+	for (const char *name : {"FireSmall", "FireMedium", "FireLarge", "SmokeSmall", "SmokeMedium", "SmokeLarge", "Burn"})
+		effects.particles.Define(name);
+	engine::effects::ParticleWorld particles([&](std::string_view name) { return effects.particles.Find(name); });
+	PresentationFrame &frame = world.EmplaceResource<PresentationFrame>();
+	LookCatalog &catalog = world.EmplaceResource<LookCatalog>();
+	world.EmplaceResource<LookClips>();
+	world.EmplaceResource<Breeze>();
+	world.EmplaceResource<TreeBreeze>();
+	world.EmplaceResource<engine::gameplay::Relationships>(8u);
+	world.EmplaceResource<engine::gameplay::Detections>();
+	world.EmplaceResource<engine::gameplay::ParachuteCatalog>();
+	world.EmplaceResource<engine::gameplay::PlayerSciences>();
+	world.EmplaceResource<engine::gameplay::MatchOutcome>();
+	world.EmplaceResource<engine::gameplay::WeaponCatalog>();
+	catalog.byDefinition = {DefinitionLooks{}};
+	catalog.known = {1};
+	catalog.looks = {{0, 0, 0}};
+	catalog.lookModels = {"BARRACKS_D"};
+	catalog.bits.damaged = 1;
+	catalog.bits.reallyDamaged = 2;
+	catalog.bits.rubble = 3;
+	catalog.bits.aflame = 4;
+	catalog.bodyParticles = {{{"FireS", "FireSmall", 2}, {"FireM", "FireMedium", 1}, {"FireL", "FireLarge", 1}, {"SmokeS", "SmokeSmall", 4},
+		{"SmokeM", "SmokeMedium", 2}, {"SmokeL", "SmokeLarge", 1}, {"Aflame", "Burn", 4}}};
+	// The damaged model's bones: three small fire, one small smoke, two aflame; none of the others.
+	world.EmplaceResource<BonePoses>(BonePoses{{}, [&](std::string_view, std::string_view bone, bool family) {
+		BOOST_TEST(family);
+		if (bone == "FireS")
+			return std::vector<std::array<float, 3>>{{1, 0, 0}, {2, 0, 0}, {3, 0, 0}};
+		if (bone == "SmokeS")
+			return std::vector<std::array<float, 3>>{{0, 1, 0}};
+		if (bone == "Aflame")
+			return std::vector<std::array<float, 3>>{{0, 0, 1}, {0, 0, 2}};
+		return std::vector<std::array<float, 3>>{};
+	}});
+	world.EmplaceResource<ParticleWorldHandle>(ParticleWorldHandle{&particles, &effects});
+	world.EmplaceResource<FxRequests>();
+	world.EmplaceResource<PresentationRandom>();
+	world.EmplaceResource<EffectStats>();
+	PresentedObjects &presented = world.EmplaceResource<PresentedObjects>();
+	ecs::SystemRegistry systems;
+	DamageEffectSystem damage;
+	systems.Register(damage);
+	systems.Finalize(world.Components());
+	ecs::Scheduler scheduler(world, systems, engine::jobs::JobSystemConfig{2});
+	scheduler.Finalize(engine::time::FixedStep{30});
+	const ecs::Entity entity = world.Create();
+	world.Add<engine::gameplay::DefinitionRef>(entity);
+	const auto show = [&](std::uint64_t flags, bool visible) {
+		engine::gameplay::Appearance look;
+		look.flags[0] = flags;
+		presented.Reset(1);
+		if (visible)
+			presented.SlotAt(0).push_back({entity, 0, 0, 0, 0, {100, 100, 10}, 0.0f, 1.0f, look, false});
+		++frame.frame;
+		scheduler.Execute(engine::time::SimulationTime{frame.frame, engine::time::FixedStep{30}});
+	};
+	const auto body = [&] {
+		const auto *emission = world.Side<DamageEmission>().Get(entity);
+		return emission != nullptr ? emission->body : std::vector<AttachedSystem>{};
+	};
+	const auto distinct = [](const std::vector<AttachedSystem> &systems) {
+		std::set<std::array<float, 3>> places;
+		for (const AttachedSystem &attached : systems)
+			places.insert(attached.local);
+		return places.size() == systems.size();
+	};
+	show(0, true); // first seen: its side table is added
+	show(0, true); // pristine: no bones of its sets, nothing
+	BOOST_TEST(body().size() == 0u);
+	show(1u << 2, true); // really damaged: two small fires on two of the three FireS bones, one small smoke
+	BOOST_TEST(body().size() == 3u);
+	BOOST_TEST(distinct(body()));
+	show((1u << 2) | (1u << 4), true); // aflame: three FireS (medium fire, 2 x 2 capped at 3), one SmokeS (small fire), two Aflame
+	BOOST_TEST(body().size() == 6u);
+	BOOST_TEST(distinct(body()));
+	show(1u << 2, true); // no longer aflame: back to the plain sets
+	BOOST_TEST(body().size() == 3u);
+	show(1u << 2, false); // no longer presented: they stop
+	BOOST_TEST(body().size() == 0u);
+}
+
+// W3DModelDraw::allocateShadows -> W3DProjectedShadowManager::addShadow (SHADOW_DECAL) and queueDecal
+// (W3DProjectedShadow.cpp), with ThingTemplate::validate's default texture: the texture is ShadowTexture + ".tga" (none:
+// "shadow" for a sphere or cylinder, "shadows" for a box; one letter: "shadow.tga"); u runs along the object's x axis over
+// ShadowSizeX, v along it turned a quarter clockwise over minus ShadowSizeY, both from 0.5 at its position, shifted by the
+// offsets; the box it covers is the size about it (moved by the offsets).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_decal_shadow_lies_under_its_object_turned_with_it)
+{
+	BOOST_TEST(ShadowDecalTexture("", true) == "shadows.tga");
+	BOOST_TEST(ShadowDecalTexture("", false) == "shadow.tga");
+	BOOST_TEST(ShadowDecalTexture("ShadowI", false) == "ShadowI.tga");
+	BOOST_TEST(ShadowDecalTexture("X", true) == "shadow.tga");
+	const auto within = [](float a, float b) { return std::abs(a - b) < 1e-5f; };
+	const ShadowDecalLook infantry{"ShadowI.tga", 15.0f, 15.0f, 0.0f, 0.0f};
+	// Facing east: u along +x, v along +y (over minus the size, of a v axis pointing -y).
+	ShadowDecalPlacement east = PlaceShadowDecal(infantry, {100.0f, 200.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {});
+	BOOST_TEST(within(east.uAxis[0], 1.0f / 15.0f));
+	BOOST_TEST(within(east.uAxis[1], 0.0f));
+	BOOST_TEST(within(east.vAxis[0], 0.0f));
+	BOOST_TEST(within(east.vAxis[1], 1.0f / 15.0f));
+	BOOST_TEST(within(east.uvOffset[0], 0.5f));
+	BOOST_TEST(within(east.uvOffset[1], 0.5f));
+	BOOST_TEST(within(east.extent[0], -7.5f));
+	BOOST_TEST(within(east.extent[1], 7.5f));
+	BOOST_TEST(within(east.extent[2], -7.5f));
+	BOOST_TEST(within(east.extent[3], 7.5f));
+	// Facing north (scaled 2: only the direction counts): u along +y, v along -x.
+	ShadowDecalPlacement north = PlaceShadowDecal(infantry, {0.0f, 0.0f}, {0.0f, 2.0f}, {-2.0f, 0.0f}, {});
+	BOOST_TEST(within(north.uAxis[0], 0.0f));
+	BOOST_TEST(within(north.uAxis[1], 1.0f / 15.0f));
+	BOOST_TEST(within(north.vAxis[0], -1.0f / 15.0f));
+	BOOST_TEST(within(north.vAxis[1], 0.0f));
+	// ShadowOffsetX 3: the texture's middle 3 along its x axis, its box from -4.5 to 10.5.
+	const ShadowDecalLook moved{"ShadowI.tga", 15.0f, 15.0f, 3.0f, 0.0f};
+	ShadowDecalPlacement offset = PlaceShadowDecal(moved, {0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {});
+	BOOST_TEST(within(offset.uvOffset[0], 0.3f));
+	BOOST_TEST(within(offset.uAxis[0] * 3.0f + offset.uvOffset[0], 0.5f));
+	BOOST_TEST(within(offset.extent[0], -4.5f));
+	BOOST_TEST(within(offset.extent[1], 10.5f));
 }
 
 BOOST_AUTO_TEST_CASE(a_detectors_scan_pings_louder_and_brighter_when_it_finds_something)

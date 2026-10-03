@@ -50,6 +50,7 @@ void RegisterObjectPresentation(ecs::World &world)
 	world.RegisterComponent<HeatVision>();
 	world.RegisterComponent<DisableHeard>();
 	world.RegisterComponent<ObjectIcons>();
+	world.RegisterComponent<ObjectEmoticon>();
 	world.RegisterComponent<TintEnvelope>();
 	world.RegisterComponent<SelectionFlash>();
 	world.RegisterComponent<ScriptFlash>();
@@ -92,6 +93,13 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 	looks.scale = Engine::Math::ToFloat(object.scale);
 	looks.castsShadow = object.shadow == 1u || object.shadow == 2u || object.shadow == 4u;
 	looks.shadowKind = looks.castsShadow ? object.shadow : std::uint8_t{0};
+	if (object.shadow == 1u)
+	{
+		looks.shadowDecal = static_cast<std::uint32_t>(catalog.shadowDecals.size());
+		catalog.shadowDecals.push_back({ShadowDecalTexture(object.shadowTexture, object.geometry.shape == content::GeometryShape::Box),
+			Engine::Math::ToFloat(object.shadowSizeX), Engine::Math::ToFloat(object.shadowSizeY), Engine::Math::ToFloat(object.shadowOffsetX),
+			Engine::Math::ToFloat(object.shadowOffsetY)});
+	}
 	looks.constructionHeight = Engine::Math::ToFloat(object.geometry.shape == content::GeometryShape::Sphere ? object.geometry.majorRadius : object.geometry.height);
 	looks.animatesWhileDisabled = object.Is("PRODUCED_AT_HELIPAD");
 	looks.ignoredInGui = object.Is("IGNORED_IN_GUI");
@@ -301,6 +309,8 @@ DefinitionLooks ReadDefinitionLooks(const session::SessionView &view, std::uint3
 		looks.extraDraws.push_back(std::move(extra));
 	}
 	const engine::time::FixedStep step{30};
+	// Without a StealthUpdate to say, a stealthed friend shows at GameData's StealthFriendlyOpacity.
+	looks.stealthMin = Engine::Math::ToFloat(view.Content().gameData.stealthFriendlyOpacity);
 	if (const auto stealth = content::ReadObjectStealth(object, step))
 	{
 		looks.stealth = true;
@@ -550,7 +560,7 @@ void KnowSupplyLooks(LookCatalog &catalog, ecs::World &world, const BonePoses &b
 void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 {
 	namespace mc = content::model_condition;
-	catalog.bits = {mc::FiringA, mc::StealthedLook, mc::DetectedLook, mc::Dying, mc::Aflame, mc::SpecialDamaged, mc::Damaged, mc::ReallyDamaged, mc::Rubble, mc::Night, mc::JetAfterburner, mc::Burned, mc::Toppled, mc::ActivelyBeingConstructed};
+	catalog.bits = {mc::FiringA, mc::StealthedLook, mc::DetectedLook, mc::Dying, mc::Aflame, mc::SpecialDamaged, mc::Damaged, mc::ReallyDamaged, mc::Rubble, mc::Night, mc::Snow, mc::JetAfterburner, mc::Burned, mc::Toppled, mc::ActivelyBeingConstructed};
 	const std::size_t count = view.DefinitionCount();
 	if (catalog.byDefinition.size() < count)
 	{
@@ -620,8 +630,17 @@ void KnowLooks(LookCatalog &catalog, const session::SessionView &view)
 	catalog.selectionFlashHouseColor = data.selectionFlashHouseColor;
 	catalog.selectionFlashSaturation = Engine::Math::ToFloat(data.selectionFlashSaturationFactor);
 	catalog.levelGainAnimation = data.levelGainAnimation;
+	{
+		const content::GameData::BodyParticleSet *sets[] = {&data.fireSmall, &data.fireMedium, &data.fireLarge, &data.smokeSmall, &data.smokeMedium,
+			&data.smokeLarge, &data.aflame};
+		for (std::size_t index = 0; index < catalog.bodyParticles.size(); ++index)
+			catalog.bodyParticles[index] = {sets[index]->prefix, sets[index]->system, sets[index]->max};
+	}
 	catalog.levelGainSeconds = Engine::Math::ToFloat(data.levelGainSeconds);
 	catalog.levelGainRise = Engine::Math::ToFloat(data.levelGainRise);
+	catalog.getHealedAnimation = data.getHealedAnimation;
+	catalog.getHealedSeconds = Engine::Math::ToFloat(data.getHealedSeconds);
+	catalog.getHealedRise = Engine::Math::ToFloat(data.getHealedRise);
 	for (std::uint32_t armor = static_cast<std::uint32_t>(catalog.armorNames.size()); armor < view.ArmorCount(); ++armor)
 		catalog.armorNames.emplace_back(view.ArmorName(armor));
 	// Models shown instead of a definition's (debris pieces), still and with each animation a piece plays (W3DDebrisDraw:

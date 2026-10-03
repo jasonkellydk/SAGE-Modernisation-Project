@@ -48,6 +48,7 @@ struct Hive
 		terrain.heights.assign(4, Fixed::FromInt(10));
 		world.EmplaceResource<GroundHeight>(terrain);
 		world.EmplaceResource<HealPulses>();
+		world.EmplaceResource<BurstHeals>();
 		world.EmplaceResource<SlaveOrders>();
 		world.RegisterComponent<Transform>();
 		world.RegisterComponent<Health>();

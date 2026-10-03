@@ -106,8 +106,10 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_bridge_has_a_model_and_texture_per_damage_s
 	BOOST_TEST(shape.length == 209.6704f, boost::test_tools::tolerance(1e-5f));
 	const auto &content = shell.game.bridges.at("KandaharBridge");
 	BOOST_TEST_REQUIRE(content.extentY.has_value());
-	BOOST_TEST(std::abs(shape.minY - Engine::Math::ToFloat(content.extentY->first)) < 1e-3f);
-	BOOST_TEST(std::abs(shape.maxY - Engine::Math::ToFloat(content.extentY->second)) < 1e-3f);
+	// The content side turns the mesh's points by its bone's quaternion in fixed point (16 fraction bits, ~100-unit
+	// coordinates): up to 4e-3 off the float measure.
+	BOOST_TEST(std::abs(shape.minY - Engine::Math::ToFloat(content.extentY->first)) < 4e-3f);
+	BOOST_TEST(std::abs(shape.maxY - Engine::Math::ToFloat(content.extentY->second)) < 4e-3f);
 }
 
 // W3DBridge::getIndicesNVertices on TBDoubWide (IronSectionalDoublewide: BRIDGE_LEFT 110 vertices, BRIDGE_SPAN 390,

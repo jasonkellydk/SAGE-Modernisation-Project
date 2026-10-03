@@ -5,6 +5,7 @@ import std;
 
 import games.generalszh.presentation.hud.algorithms.overlay_extract;
 import games.generalszh.presentation.objects.components.object_icons;
+import games.generalszh.presentation.objects.algorithms.object_icon_layout;
 import games.generalszh.presentation.objects.resources.presentation_resources;
 import games.generalszh.presentation.objects.resources.look_catalog;
 import games.generalszh.presentation.interaction.resources.interaction_resources;
@@ -101,6 +102,83 @@ BOOST_AUTO_TEST_CASE(legacy_parity_a_structure_being_built_shows_its_percent)
 	InGameOverlay hidden;
 	ExtractObjectIcons(world, source, hidden);
 	BOOST_TEST(hidden.texts.empty());
+}
+
+// Drawable::drawIconUI -> drawEmoticon (Drawable.cpp), with setEmoticon's m_keepTillFrame: a script's emoticon shows
+// over the health region (computeHealthRegion), centred on it, its bottom on the bar's bottom (PlaceEmoticon), its
+// Animation2D's image that many logic frames after it was made; on the dying too (drawn before the alive bail); not once
+// its frame has passed, nor for a name with no animation (findTemplate failed: setEmoticon set nothing).
+BOOST_AUTO_TEST_CASE(legacy_parity_a_scripted_emoticon_shows_over_the_bar_until_its_frame)
+{
+	ecs::World world{ecs::WorldConfig{2}};
+	world.RegisterComponent<gp::Transform>();
+	world.RegisterComponent<gp::DefinitionRef>();
+	world.RegisterComponent<gp::Health>();
+	world.RegisterComponent<gp::Experience>();
+	world.RegisterComponent<gp::Dying>();
+	world.RegisterComponent<gp::ConstructionProgress>();
+	world.RegisterComponent<gp::UnderConstruction>();
+	world.RegisterComponent<gp::Sale>();
+	world.RegisterComponent<ObjectIcons>();
+	world.RegisterComponent<ObjectEmoticon>();
+	world.FinalizeComponents();
+	world.EmplaceResource<InteractionView>().valid = true;
+	auto &frame = world.EmplaceResource<PresentationFrame>();
+	world.EmplaceResource<LookCatalog>();
+	auto &catalog = world.EmplaceResource<SelectionCatalog>();
+	catalog.byDefinition.resize(1);
+	catalog.byDefinition[0].top = 15.0f;
+	catalog.byDefinition[0].healthBoxWidth = 40.0f;
+	auto &visible = world.EmplaceResource<gp::VisibleObjects>();
+	visible.Reset(1);
+	const ecs::Entity unit = world.Create();
+	world.Add<gp::DefinitionRef>(unit);
+	gp::VisibleObject object;
+	object.entity = unit;
+	object.transform.position = {Fixed{}, Fixed::FromInt(100), Fixed{}};
+	visible.SlotAt(0).push_back(object);
+	generalszh::content::Anim2DTemplates animations;
+	auto &angry = animations["EmoticonAngry"];
+	angry.images = {"Angry0", "Angry1", "Angry2"};
+	angry.mode = generalszh::content::Anim2DMode::Loop;
+	angry.framesPerImage = 2;
+	OverlaySource source;
+	source.animations = &animations;
+	ObjectEmoticon emoticon{"EmoticonAngry", 1.0, 0, 40};
+	world.Side<ObjectEmoticon>().Insert(unit, &emoticon);
+	const auto emoticons = [&] {
+		InGameOverlay overlay;
+		ExtractObjectIcons(world, source, overlay);
+		std::vector<OverlayImage> found;
+		for (const OverlayImage &image : overlay.images)
+			if (image.placement == OverlayImage::Placement::Emoticon)
+				found.push_back(image);
+		return found;
+	};
+	// Five logic frames after it was made (two a frame): its third image... looping round its three: 5 / 2 = 2.
+	frame.tick = 40;
+	frame.clock = 1.0 + 5.0 / 30.0;
+	auto shown = emoticons();
+	BOOST_TEST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown[0].image == "Angry2");
+	// The region of its projected bar top (the image carries that screen point).
+	const IconRegion region = HealthRegion(static_cast<int>(shown[0].x), static_cast<int>(shown[0].y), 40.0f, 1.0f);
+	BOOST_TEST(shown[0].x == 400.0f);
+	BOOST_TEST(shown[0].region.loX == region.loX);
+	BOOST_TEST(shown[0].region.hiY == region.hiY);
+	const IconRect rect = PlaceEmoticon(region, 16, 12);
+	BOOST_TEST(rect.x == region.loX + 20 - 8);
+	BOOST_TEST(rect.y == region.hiY - 12);
+	// Dying: still there.
+	world.Add<gp::Dying>(unit);
+	BOOST_TEST(emoticons().size() == 1u);
+	// Its frame passed: gone.
+	frame.tick = 41;
+	BOOST_TEST(emoticons().empty());
+	// No such animation: nothing.
+	frame.tick = 40;
+	world.Side<ObjectEmoticon>().Get(unit)->animation = "NoSuchAnimation";
+	BOOST_TEST(emoticons().empty());
 }
 
 // ContainModuleInterface::getContainerPipsToShow and its overrides (ContainModule.h, HelixContain.h, OverlordContain.cpp,

@@ -307,6 +307,48 @@ struct MovementSystem
 		}
 	};
 
+	// Path::computePointOnPath (EA AIPathfind.cpp): the segment of its route nearest the mover (a segment it is already past
+	// the end of skipped, but the last), from where it walks now on; it heads for that segment's end node. A mover that
+	// came round a node (a vehicle turning wide past a corner) heads on for the next one instead of circling back.
+	static void AdvanceAlongRoute(Route &route, Engine::Math::FixedVector2 at) noexcept
+	{
+		using Engine::Math::Fixed;
+		std::uint32_t best = route.next;
+		Fixed bestDistance{};
+		bool found = false;
+		for (std::uint32_t index = route.next; index < route.count; ++index)
+		{
+			if (index == 0 && !route.hasStart)
+				continue;
+			const Engine::Math::FixedVector2 from = index == 0 ? route.start : route.points[index - 1];
+			const Engine::Math::FixedVector2 to = route.points[index];
+			const Engine::Math::FixedVector2 segment = to - from;
+			const Fixed length = Engine::Math::Length(segment);
+			Engine::Math::FixedVector2 point = from;
+			if (length > Fixed{})
+			{
+				const Fixed along = Engine::Math::Dot(at - from, segment) / length;
+				if (along > length)
+				{
+					if (index + 1u < route.count)
+						continue; // past its end: the next segment takes it
+					point = to;
+				}
+				else if (along > Fixed{})
+					point = from + segment * (along / length);
+			}
+			const Fixed distance = Engine::Math::DistanceSquared(at, point);
+			if (!found || distance < bestDistance)
+			{
+				found = true;
+				best = index;
+				bestDistance = distance;
+			}
+		}
+		if (found && best > route.next)
+			route.next = static_cast<std::uint8_t>(best);
+	}
+
 	static std::optional<std::uint8_t> FollowRoute(Transform &transform, Locomotion &motion, MoveOrder &order, Route *route, std::uint64_t tick,
 		Blocking *blocking = nullptr, bool aloft = true, FlightStep *flight = nullptr, bool finalLeg = true)
 	{
@@ -321,6 +363,8 @@ struct MovementSystem
 				Coast(transform, motion, aloft);
 			return std::nullopt;
 		}
+		if (flight == nullptr && IsGroundLocomotor(motion.locomotor))
+			AdvanceAlongRoute(*route, transform.position.XY());
 		const bool last = route->complete && route->next + 1u >= route->count;
 		// A leg of a waypoint path with more waypoints after it (setPathExtraDistance): no slowing for its end.
 		const bool ending = last && finalLeg;

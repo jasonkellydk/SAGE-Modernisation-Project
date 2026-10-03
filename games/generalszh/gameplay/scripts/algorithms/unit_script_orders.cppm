@@ -4,6 +4,8 @@ import std;
 export import games.generalszh.gameplay.world.resources.game_world;
 import games.generalszh.gameplay.orders.algorithms.unit_orders;
 import games.generalszh.gameplay.orders.algorithms.wander_orders;
+import engine.gameplay.common.spatial.components.off_map;
+import engine.gameplay.rts.containment.components.transport;
 import games.generalszh.gameplay.teams.algorithms.team_states;
 import games.generalszh.gameplay.teams.algorithms.team_actions;
 import games.generalszh.gameplay.ai.algorithms.guards;
@@ -206,6 +208,24 @@ inline void ExitSpecificBuilding(GameWorld &game, ecs::Entity building)
 		Evacuate(game, building);
 		return;
 	}
+	// orderAllPassengersToExit over getContainedItemsList: a tunnel's is its network's (TunnelContain), all let out through
+	// this one (the network's riders are one list: moved to its).
+	namespace gp = engine::gameplay;
+	if (const std::optional<std::uint32_t> network = game.manifest.NetworkOf(building))
+		for (const ecs::Entity other : game.manifest.Network(*network))
+		{
+			if (other == building)
+				continue;
+			const auto theirs = game.manifest.Aboard(other);
+			for (const ecs::Entity rider : std::vector<ecs::Entity>(theirs.begin(), theirs.end()))
+				if (game.manifest.Move(other, building, rider))
+				{
+					if (auto *seat = game.world.Get<gp::Passenger>(rider))
+						seat->transport = building;
+					if (auto *away = game.world.Get<gp::OffMap>(rider))
+						away->holder = building;
+				}
+		}
 	const auto aboard = game.manifest.Aboard(building);
 	const std::vector<ecs::Entity> riders(aboard.begin(), aboard.end());
 	for (const ecs::Entity rider : riders)

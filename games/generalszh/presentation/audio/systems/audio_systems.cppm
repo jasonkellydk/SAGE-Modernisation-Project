@@ -238,6 +238,7 @@ struct AudioMixSystem
 	using Query = ecs::Query<ecs::Read<engine::gameplay::DefinitionRef>>;
 	using Resources = ecs::Resources<ecs::Read<ListenerPose>, ecs::Write<AudioHandle>, ecs::Write<AudioState>, ecs::Write<AudioCommands>,
 		ecs::Write<SoundRequests>, ecs::Read<PresentationFrame>, ecs::Read<engine::gameplay::Relationships>>;
+	using SideTables = ecs::SideTables<ecs::Write<SpeakingVoice>>;
 
 	void Execute(Query &, ecs::SystemContext &context) const
 	{
@@ -353,15 +354,25 @@ struct AudioMixSystem
 		// One-shot world sounds where things happened, for whoever may hear them.
 		const std::uint32_t viewer = context.Read<PresentationFrame>().viewer;
 		const auto *relationships = &context.Read<engine::gameplay::Relationships>();
+		auto &speaking = context.Side<SideTables, SpeakingVoice>();
 		for (const SoundRequest &sound : sounds.pending)
 			if (const auto *event = AllowedSound(content, state, sound.sound); event != nullptr && Audible(*event, sound.owner, viewer, relationships))
 			{
+				// SoundManager::canPlayNow's violatesVoice: a voice for an object already saying one (isObjectPlayingVoice) is
+				// dropped unless it interrupts.
+				const bool voice = (event->type & engine::audio::sound_type::Voice) != 0 && sound.object.IsValid();
+				SpeakingVoice *talking = voice ? speaking.Get(sound.object) : nullptr;
+				if (talking != nullptr && player.Playing(talking->handle) && (event->control & engine::audio::sound_control::Interrupt) == 0)
+					continue;
 				const std::optional<engine::audio::Vec3> where =
 					sound.positioned ? std::optional(engine::audio::Vec3{sound.at[0], sound.at[1], sound.at[2]}) : std::nullopt;
-				if (sound.volume)
-					player.Play(*event, where, *sound.volume);
-				else
-					PlaySound(player, state, *event, where);
+				const engine::audio::SoundHandle handle = sound.volume ? player.Play(*event, where, *sound.volume) : PlaySound(player, state, *event, where);
+				if (voice)
+				{
+					if (talking == nullptr)
+						talking = speaking.Emplace(sound.object);
+					talking->handle = handle;
+				}
 			}
 		sounds.pending.clear();
 		if (const ListenerPose &pose = context.Read<ListenerPose>(); pose.placed)

@@ -23,6 +23,7 @@ import games.generalszh.gameplay.sciences.algorithms.general_ranks;
 import games.generalszh.gameplay.ai.algorithms.ai_team_building;
 import games.generalszh.gameplay.containment.algorithms.garrisons;
 import std;
+import games.generalszh.gameplay.combat.algorithms.waypoint_weapon_fire;
 
 export import games.generalszh.gameplay.world.resources.game_world;
 export import games.generalszh.scripting.unit_vocabulary;
@@ -101,6 +102,10 @@ public:
 	void NamedFollowWaypoints(const std::string &name, const std::string &pathLabel) override
 	{
 		domain::OrderFollowPath(m_game, m_game.names.Find(name), pathLabel);
+	}
+	void NamedFireWeaponFollowingWaypointPath(const std::string &name, const std::string &pathLabel) override
+	{
+		domain::FireWeaponFollowingWaypointPath(m_game, m_game.names.Find(name), pathLabel);
 	}
 	void MoveNamedTo(const std::string &name, const std::string &waypoint) override
 	{

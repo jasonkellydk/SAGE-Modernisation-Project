@@ -98,8 +98,11 @@ struct WaypointPathSystem
 			points.clear();
 			const auto *order = lookup.Get<gp::MoveOrder>(entity);
 			const auto *path = lookup.Get<gp::MovePath>(entity);
+			// (The move's own point as ordered: a claimed goal cell may have moved its destination.)
+			const auto *goal = lookup.Get<gp::MoveGoal>(entity);
+			const Engine::Math::FixedVector2 heading = goal != nullptr ? goal->ordered : order != nullptr ? order->destination : Engine::Math::FixedVector2{};
 			if (order == nullptr || path == nullptr || path->kind != gp::MovePathKind::Follow || path->next == 0 || path->next > path->count ||
-				order->mode == gp::MoveMode::Idle || !(order->destination == store.At(path->block, path->next - 1)))
+				order->mode == gp::MoveMode::Idle || !(heading == store.At(path->block, path->next - 1)))
 				return false;
 			for (std::uint32_t index = path->next - 1; index < path->count; ++index)
 				points.push_back(onGround(store.At(path->block, index)));

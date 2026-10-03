@@ -200,8 +200,18 @@ inline bool LinePassable(GameWorld &game, ecs::Entity unit, FixedVector2 to)
 	if (plane == nullptr)
 		return true;
 	const FixedVector2 from = At(game, unit);
+	// linePassableCallback -> checkForMovement: every cell of its footprint about each cell of the line (getRadiusAndCenter:
+	// from radius before it to radius after, one more when centred) one it may move on.
+	const gp::GoalFootprint footprint = FootprintOf(*agent);
+	const std::int32_t reach = footprint.radius, above = footprint.radius + (footprint.centered ? 1 : 0);
 	return gp::VisitCellsAlongLine(grid, gp::WorldToCell(from.x), gp::WorldToCell(from.y), gp::WorldToCell(to.x), gp::WorldToCell(to.y),
-			   [&](std::int32_t x, std::int32_t y) -> std::int32_t { return gp::Passable(grid, *plane, x, y, agent->radius) ? 0 : 1; }) == 0;
+			   [&](std::int32_t x, std::int32_t y) -> std::int32_t {
+				   for (std::int32_t cx = x - reach; cx < x + above; ++cx)
+					   for (std::int32_t cy = y - reach; cy < y + above; ++cy)
+						   if (!gp::Passable(grid, *plane, cx, cy, 0))
+							   return 1;
+				   return 0;
+			   }) == 0;
 }
 
 // Pathfinder::findGroundPath(from, to, 6, false): the goal cell moved (rings of up to 7 out) until the path's whole

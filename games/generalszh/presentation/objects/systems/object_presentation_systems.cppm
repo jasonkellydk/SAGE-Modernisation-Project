@@ -313,6 +313,8 @@ struct ObjectPresentationSystem
 			engine::gameplay::Appearance appearance = appearances.empty() ? engine::gameplay::Appearance{} : appearances[row];
 			if (catalog.night)
 				appearance.Set(catalog.bits.night); // as the original's Drawable::setTimeOfDay
+			if (catalog.snow)
+				appearance.Set(catalog.bits.snow); // Object::setDrawable's MODELCONDITION_SNOW
 			// GarrisonContain::getApparentControllingPlayer: a garrison hidden from the viewer looks empty and its
 			// original player's.
 			std::uint32_t player = owners.empty() ? 0u : owners[row].player;
@@ -761,6 +763,10 @@ struct ObjectPresentationSystem
 			instance.castsShadow = looks->castsShadow && shadowKindOn && !sinks && !(appearance.Test(catalog.bits.stealthed) && appearance.Test(catalog.bits.detected)) &&
 				!appearance.Test(catalog.bits.toppled) && !(looks->shrubbery && appearance.Test(catalog.bits.burned)) &&
 				!appearance.Test(content::ModelConditionBit("FLOODED"));
+			// A SHADOW_DECAL's is its texture laid on the terrain (W3DProjectedShadowManager's decal list), not a cast one.
+			instance.shadowDecal = instance.castsShadow ? looks->shadowDecal : DefinitionLooks::NoShadowDecal;
+			if (looks->shadowDecal != DefinitionLooks::NoShadowDecal)
+				instance.castsShadow = false;
 			instance.receivesDynamicLights = looks->receivesDynamicLights;
 			instance.infantry = looks->infantry;
 			instance.lightSphere = {at[0], at[1], at[2] + looks->constructionHeight * 0.5f, looks->lightRadius};

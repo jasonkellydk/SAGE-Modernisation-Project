@@ -29,7 +29,10 @@ struct Shot
 	ecs::Entity carrier;
 	// The weapon slot that fired it (PRIMARY 0, SECONDARY 1, TERTIARY 2).
 	std::uint8_t slot{0};
-	std::uint8_t reserved[3]{}; // no padding: checkpoints hold its bytes
+	// Its projectile is already out (a script fired it: Weapon::forceFireWeapon hands its projectile back): nothing
+	// launches one.
+	std::uint8_t launched{0};
+	std::uint8_t reserved[2]{}; // no padding: checkpoints hold its bytes
 	// What its firer rides in (a passenger allowed to fire): its shots never run into it.
 	ecs::Entity shelter;
 	// Its firer's veterancy level when it fired (the weapon's FX, creation lists and exhaust for that level).
@@ -112,6 +115,18 @@ struct MissileDetonations : ecs::ChunkOutputs<Shot>
 // system puts them among the tick's shots.
 struct DirectShots : ecs::ChunkOutputs<Shot>
 {
+};
+
+// Shots scripts fired from objects' own weapons before this tick's systems (Weapon::forceFireWeapon), their projectiles
+// already out: the weapon system puts them among the tick's shots.
+class ScriptShots
+{
+public:
+	void Add(const Shot &shot) { m_pending.push_back(shot); }
+	std::vector<Shot> Take() { return std::exchange(m_pending, {}); }
+
+private:
+	std::vector<Shot> m_pending;
 };
 
 // Weapons fired on their own, not from a weapon set (WeaponStore::createAndFireTempWeapon: an object creation list's
@@ -317,6 +332,12 @@ template<>
 struct ResourceTraits<engine::gameplay::DirectShots>
 {
 	static constexpr std::string_view StableName = "engine.gameplay.direct_shots";
+};
+
+template<>
+struct ResourceTraits<engine::gameplay::ScriptShots>
+{
+	static constexpr std::string_view StableName = "engine.gameplay.script_shots";
 };
 
 template<>

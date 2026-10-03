@@ -280,7 +280,11 @@ inline FoundRoute SearchRoute(const NavigationGrid &grid, const ClearancePlane &
 		}
 		return false;
 	};
-	if (towardGoal && !openOn(toLayer, goalX, goalY))
+	// A goal on terrain the mover cannot use (water, a cliff) is not adjusted: findPath fails and computePath falls back to
+	// findClosestPath (pathCostFactor 0), whose route ends at the reached cell nearest the goal on any layer (`best`).
+	const bool terrainGoal = toLayer == GroundLayer && grid.Contains(goalX, goalY) &&
+		(grid.Type(goalX, goalY) == PathfindCellType::Water || grid.Type(goalX, goalY) == PathfindCellType::Cliff);
+	if (towardGoal && !terrainGoal && !openOn(toLayer, goalX, goalY))
 		if (!adjust(toLayer) && toLayer != GroundLayer)
 		{
 			toLayer = GroundLayer;

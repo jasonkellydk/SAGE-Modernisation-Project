@@ -147,6 +147,7 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
     if (muzzle) sources[1] = sources[0];
     std::array<RHITextureHandle, 2> textures{};
     std::array<std::optional<TextureSampling>, 2> sampling;
+    std::array<bool, 2> leased{};
     for (unsigned stage = 0; stage < 2; ++stage) {
         if (!sources[stage]) continue;
         // Sampling metadata still applies when the material disables texturing.
@@ -154,7 +155,7 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
         if (!binding) return false;
         sampling[stage] = binding->sampling;
         if (textured) {
-            if (!submission.Retain_Borrowed_Texture(binding->texture)) return false;
+            if (!submission.Retain_Borrowed_Texture(binding->texture, &leased[stage])) return false;
             textures[stage] = binding->texture;
         }
     }
@@ -176,6 +177,10 @@ bool Submit_Prop_Material_In_Place(Device& device, PropRenderer& renderer, PropS
     const bool drawn = submission.Submit(mesh, style, parameters, textures, phase,
         context.sorting_depth.value_or(std::array<float, 4>{}),instance,false);
     if (!overrides.mesh.Is_Valid()) renderer.Destroy_Mesh(mesh);
+    // Drawn at once, its textures' leases taken here are done with (none deferred holds them).
+    if (drawn && phase == PropDrawPhase::Immediate)
+        for (unsigned stage = 0; stage < 2; ++stage)
+            if (leased[stage] && (stage == 0 || textures[1] != textures[0])) submission.Release_Borrowed_Texture(textures[stage]);
     return drawn;
 }
 

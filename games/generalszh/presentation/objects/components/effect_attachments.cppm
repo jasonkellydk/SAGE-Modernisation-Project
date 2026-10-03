@@ -47,6 +47,9 @@ struct ConditionEmission
 struct DamageEmission
 {
 	std::vector<AttachedSystem> systems;
+	// ActiveBody::updateBodyParticleSystems' systems on its bones for the body state shown, and whether it was aflame.
+	std::vector<AttachedSystem> body;
+	std::uint32_t aflame{0};
 	std::uint32_t level{0}; // the damage level shown (DamageLevel)
 	std::uint32_t known{0}; // a level has been seen
 	std::uint32_t seenFrame{0};

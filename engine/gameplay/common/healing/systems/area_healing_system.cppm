@@ -62,7 +62,8 @@ struct AreaHealingSystem
 					if (wholePlayer ? entry.player != player : relationships.Between(team, player, entry.team, entry.player) != Relationship::Allies)
 						return;
 					// The whole-player heal takes from anyone; the area heal locks its target.
-					offers.push_back({entry.entity, entities[row], healer.amount, wholePlayer ? 0 : healer.delay, entry.position});
+					offers.push_back({entry.entity, entities[row], healer.amount, wholePlayer ? 0 : healer.delay, entry.position,
+						static_cast<std::uint8_t>((healer.flags & area_healing::SingleBurst) != 0 ? 1 : 0)});
 				};
 				if (wholePlayer)
 					for (const SpatialEntry &entry : spatial.Entries())

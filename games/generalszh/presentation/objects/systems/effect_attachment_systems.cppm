@@ -548,7 +548,10 @@ struct AttachedParticleClearSystem
 			if (CrashTrailEmission *trail = trails.Get(entity))
 				destroy(trail->systems);
 			if (DamageEmission *emission = damage.Get(entity))
+			{
 				destroy(emission->systems);
+				destroy(emission->body);
+			}
 			if (ExhaustEmission *exhaust = exhausts.Get(entity); exhaust != nullptr && exhaust->id != 0)
 			{
 				particles.world->Stop(exhaust->id);
@@ -737,6 +740,11 @@ struct DamageEffectSystem
 				particles.world->Stop(attached.id);
 			emission.systems.clear();
 		};
+		const auto stopBody = [&](DamageEmission &emission) {
+			for (const AttachedSystem &attached : emission.body)
+				particles.world->Stop(attached.id);
+			emission.body.clear();
+		};
 		context.Read<PresentedObjects>().ForEach([&](const PresentedObject &object) {
 			const DefinitionLooks *looks = catalog.Of(object.definition);
 			if (looks == nullptr)
@@ -750,6 +758,18 @@ struct DamageEffectSystem
 			emission->seenFrame = serial;
 			const DamageLevel level = LevelOf(object, catalog.bits);
 			const auto levelIndex = static_cast<std::uint32_t>(level);
+			const std::uint32_t aflame = object.appearance.Test(catalog.bits.aflame) ? 1u : 0u;
+			// (A body seen first at its pristine state, not aflame, has had no change: none.)
+			if (emission->known == 0 ? (level != DamageLevel::Pristine || aflame != 0) : (emission->level != levelIndex || emission->aflame != aflame))
+			{
+				// ActiveBody::evaluateVisualCondition / setAflame -> updateBodyParticleSystems: the old ones go, new ones
+				// on the bones of the model it now shows.
+				stopBody(*emission);
+				const std::string_view bodyModel =
+					object.look < catalog.lookModels.size() ? std::string_view(catalog.lookModels[object.look]) : std::string_view{};
+				CreateBodyParticles(emission->body, catalog, aflame != 0, object, bodyModel, poses, particles, random);
+				emission->aflame = aflame;
+			}
 			if (emission->known == 0 || emission->level != levelIndex)
 			{
 				stop(*emission);
@@ -793,9 +813,12 @@ struct DamageEffectSystem
 			}
 			for (const AttachedSystem &attached : emission->systems)
 				particles.world->Move(attached.id, Place(object, attached));
+			for (const AttachedSystem &attached : emission->body)
+				particles.world->Move(attached.id, Place(object, attached));
 			// TransitionDamageFX's systems ride the object (attachToObject): none emitted while the viewer sees it
 			// fogged or shrouded (ParticleSystem::update's isShrouded).
 			ObscureSystems(*particles.world, emission->systems, shrouded(object.entity));
+			ObscureSystems(*particles.world, emission->body, shrouded(object.entity));
 		});
 		for (std::size_t index = 0; index < emissions.Size(); ++index)
 			if (DamageEmission &emission = emissions.Value(index); emission.seenFrame != serial && emission.known != 0)
@@ -805,11 +828,74 @@ struct DamageEffectSystem
 				{
 					FollowHidden(*particles.world, emission.systems, lookup.Get<engine::gameplay::Transform>(entity),
 						LookScale(catalog, lookup.Get<engine::gameplay::DefinitionRef>(entity)));
+					FollowHidden(*particles.world, emission.body, lookup.Get<engine::gameplay::Transform>(entity),
+						LookScale(catalog, lookup.Get<engine::gameplay::DefinitionRef>(entity)));
 					continue;
 				}
 				stop(emission);
+				stopBody(emission);
 				emission.known = 0;
 			}
+	}
+
+	// ActiveBody::updateBodyParticleSystems: aflame, small fire becomes medium, medium and large fire large, every smoke
+	// small fire, twice as many of each, and the aflame systems too; each set (createParticleSystems) on its bones
+	// prefix01.. of the model shown (at most 16), as many systems as its most (no more than there are bones), each at a
+	// bone not yet used picked at random among the first ones left (GameClientRandomValue(0, maxSystems - i - 1)).
+	static void CreateBodyParticles(std::vector<AttachedSystem> &out, const LookCatalog &catalog, bool aflame, const PresentedObject &object,
+		std::string_view model, const BonePoses &poses, ParticleWorldHandle &particles, PresentationRandom &random)
+	{
+		using namespace effect_attachment_detail;
+		const auto &sets = catalog.bodyParticles; // fire S/M/L, smoke S/M/L, aflame
+		const auto create = [&](const LookCatalog::BodyParticles &bones, const std::string &system, std::int32_t most) {
+			const auto *definition = system.empty() ? nullptr : particles.content->particles.Find(system);
+			if (definition == nullptr || bones.prefix.empty() || !poses.locate || model.empty())
+				return;
+			std::vector<std::array<float, 3>> found = poses.locate(model, bones.prefix, true);
+			if (found.size() > 16)
+				found.resize(16); // MAX_BONES
+			const auto count = static_cast<std::int32_t>(found.size());
+			if (count == 0)
+				return;
+			const std::int32_t systems = std::min(most, count);
+			std::array<bool, 16> used{};
+			for (std::int32_t i = 0; i < systems; ++i)
+			{
+				random.pick = random.pick * 1664525u + 1013904223u;
+				const auto span = static_cast<std::uint32_t>(systems - i);
+				const std::int32_t pick = static_cast<std::int32_t>((random.pick >> 8) % span);
+				std::int32_t seen = 0, bone = 0;
+				for (; bone < count; ++bone)
+				{
+					if (used[static_cast<std::size_t>(bone)])
+						continue;
+					if (seen == pick)
+						break;
+					++seen;
+				}
+				if (bone >= count)
+					return;
+				used[static_cast<std::size_t>(bone)] = true;
+				AttachedSystem attached{0, found[static_cast<std::size_t>(bone)], 0.0f};
+				attached.id = particles.world->Create(*definition, Place(object, attached));
+				out.push_back(attached);
+			}
+		};
+		const std::int32_t times = aflame ? 2 : 1;
+		const std::string &fireSmall = aflame ? sets[1].system : sets[0].system;
+		const std::string &fireMedium = aflame ? sets[2].system : sets[1].system;
+		const std::string &fireLarge = sets[2].system;
+		const std::string &smokeSmall = aflame ? sets[0].system : sets[3].system;
+		const std::string &smokeMedium = aflame ? sets[0].system : sets[4].system;
+		const std::string &smokeLarge = aflame ? sets[0].system : sets[5].system;
+		create(sets[0], fireSmall, sets[0].max * times);
+		create(sets[1], fireMedium, sets[1].max * times);
+		create(sets[2], fireLarge, sets[2].max * times);
+		create(sets[3], smokeSmall, sets[3].max * times);
+		create(sets[4], smokeMedium, sets[4].max * times);
+		create(sets[5], smokeLarge, sets[5].max * times);
+		if (aflame)
+			create(sets[6], sets[6].system, sets[6].max * times);
 	}
 };
 
