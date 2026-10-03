@@ -1,0 +1,51 @@
+#include <boost/test/unit_test.hpp>
+#include <string>
+import games.renegade.content.cameras.camera_profiles;
+
+BOOST_AUTO_TEST_CASE(camera_profile_transition_blends_all_source_scalar_fields) {
+    using namespace renegade::content;using Engine::Math::Fixed;
+    CameraProfile target,previous;target.distance=Fixed::FromInt(4);previous.distance={};
+    target.height=Fixed::FromInt(2);previous.height=Fixed::One();target.fov_degrees=Fixed::FromInt(90);previous.fov_degrees=Fixed::FromInt(60);
+    const auto half=BlendCameraProfile(target,previous,Fixed::Half());
+    BOOST_TEST(half.distance.Raw()==Fixed::FromInt(2).Raw());BOOST_TEST(half.height.Raw()==Fixed::FromRatio(3,2).Raw());
+    BOOST_TEST(half.fov_degrees.Raw()==Fixed::FromInt(75).Raw());
+    BOOST_TEST(BlendCameraProfile(target,previous,Fixed::FromInt(2)).height.Raw()==previous.height.Raw());
+    BOOST_TEST(BlendCameraProfile(target,previous,-Fixed::One()).height.Raw()==target.height.Raw());
+}
+
+BOOST_AUTO_TEST_CASE(camera_schema_follows_profile_list_defaults_and_replacements)
+{
+	using namespace renegade::content;
+	using Engine::Math::Fixed;
+	const auto profiles = ReadCameraProfiles("[Profile_List]\n9=Second\n1=First\n2=Partial\n"
+		"[Unlisted]\nName=Default\nFOV=invalid\n"
+		"[First]\nNAME=DEFAULT\nFOV=75\nHeight=1.6\nTranslationTilt=12.6\nViewTilt=5.5\nLagForward=0.2\n"
+		"[Second]\nName=default\nFOV=30\n[Partial]\nName=interior\nTilt=2.6\nDistance=0\n");
+	BOOST_REQUIRE_MESSAGE(profiles.has_value(), (profiles ? std::string{} : profiles.error()));
+	BOOST_TEST(profiles->by_name.size() == 2u);
+	const auto *first = profiles->Find("DeFaUlT"); BOOST_REQUIRE(first);
+	BOOST_TEST(first->fov_degrees.Raw() == 75 * Fixed::OneRaw); // list order, not section/numeric-key order
+	BOOST_TEST(first->height.Raw() == Fixed::ParseDecimal("1.6")->Raw());
+	BOOST_TEST(first->translation_tilt_degrees.Raw() == Fixed::ParseDecimal("12.6")->Raw());
+	BOOST_TEST(first->view_tilt_degrees.Raw() == Fixed::ParseDecimal("5.5")->Raw());
+	BOOST_TEST(first->lag_forward.Raw() == Fixed::ParseDecimal("0.2")->Raw());
+	const auto *partial = profiles->Find("interior"); BOOST_REQUIRE(partial);
+	BOOST_TEST(partial->height.Raw() == Fixed::FromRatio(195, 100).Raw());
+	BOOST_TEST(partial->view_tilt_degrees.Raw() == 20 * Fixed::OneRaw);
+	BOOST_TEST(partial->translation_tilt_degrees.Raw() == Fixed::FromRatio(199, 10).Raw());
+	BOOST_TEST(partial->tilt_tweak.Raw() == Fixed::FromRatio(6, 10).Raw());
+	BOOST_TEST(partial->distance.Raw() == 0); BOOST_TEST(partial->lag_up.Raw() == 0);
+	BOOST_TEST(!profiles->Find("unlisted"));
+}
+
+BOOST_AUTO_TEST_CASE(camera_schema_reports_invalid_listed_configuration)
+{
+	using renegade::content::ReadCameraProfiles;
+	BOOST_TEST(!ReadCameraProfiles("[Default]\nName=default\n"));
+	BOOST_TEST(!ReadCameraProfiles("[Profile_List]\n0=Missing\n"));
+	BOOST_TEST(!ReadCameraProfiles("[Profile_List]\n0=Default\n[Default]\nName=default\nFOV=180\n"));
+	BOOST_TEST(!ReadCameraProfiles("[Profile_List]\n0=Default\n[Default]\nName=default\nFOV=NaN\n"));
+	const auto diagnostic = ReadCameraProfiles("[Profile_List]\n0=Default\n[Default]\nName=default\nHeight=invalid\nDistance=bad\n");
+	BOOST_REQUIRE(!diagnostic); BOOST_TEST(diagnostic.error().find("cameras.ini:5") != std::string::npos);
+	BOOST_TEST(diagnostic.error().find("cameras.ini:6") != std::string::npos);
+}

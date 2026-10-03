@@ -1,0 +1,42 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.hud.player_hud_view_model;
+using namespace Engine::Math;
+BOOST_AUTO_TEST_CASE(source_health_numbers_keep_living_minimum_three_digits_and_explicit_retail_rounding) {
+    using renegade::hud::PlayerHudViewModel;
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed{},true)==u"000");
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed::FromRatio(1,10),true)==u"001");
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed::FromRatio(1,10),false)==u"000");
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed::FromRatio(151,2),true)==u"076");
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed::FromRatio(153,2),true)==u"076");
+    BOOST_CHECK(PlayerHudViewModel::Number(Fixed::FromInt(1200),true)==u"1200");
+}
+BOOST_AUTO_TEST_CASE(source_center_health_hint_fades_after_two_seconds_and_restarts_on_damage) {
+    renegade::hud::PlayerHudViewModel view;engine::gameplay::Health health;engine::gameplay::Shield shield;
+    health.current=health.maximum=Fixed::FromInt(100);
+    view.Update(health,shield,Fixed::One());BOOST_TEST(view.centerHealthAlpha.Get().Raw()==Fixed::OneRaw);
+    view.Update(health,shield,Fixed::FromRatio(1,2));BOOST_TEST(view.centerHealthAlpha.Get().Raw()==Fixed::OneRaw);
+    view.Update(health,shield,Fixed{});BOOST_TEST(view.centerHealthAlpha.Get().Raw()==Fixed::OneRaw/2);
+    view.Update(health,shield,Fixed::One());view.Update(health,shield,Fixed{});BOOST_TEST(view.centerHealthAlpha.Get().Raw()==0);
+    health.current=Fixed::FromInt(99);view.Update(health,shield,Fixed{});BOOST_TEST(view.centerHealthAlpha.Get().Raw()==Fixed::OneRaw);
+    health.current=Fixed::FromInt(25);view.Update(health,shield,Fixed::FromInt(10));view.Update(health,shield,Fixed{});BOOST_TEST(view.centerHealthAlpha.Get().Raw()==Fixed::OneRaw);
+}
+BOOST_AUTO_TEST_CASE(source_ammo_hud_formats_reserve_infinite_rounds_and_two_second_clip_hint) {
+    renegade::hud::PlayerHudViewModel view;engine::gameplay::Magazine stock{12,60,12,60};
+    view.UpdateWeapon(7,u"Pistol",&stock,Fixed::One());BOOST_CHECK(view.clipText.Get()==u"012");BOOST_CHECK(view.reserveText.Get()==u"060");BOOST_TEST(view.weaponDefinition.Get()==7u);
+    view.UpdateWeapon(7,u"Pistol",&stock,Fixed::FromRatio(1,2));view.UpdateWeapon(7,u"Pistol",&stock,Fixed{});BOOST_TEST(view.centerClipAlpha.Get().Raw()==Fixed::OneRaw/2);
+    stock.loaded=11;view.UpdateWeapon(7,u"Pistol",&stock,Fixed{});BOOST_TEST(view.centerClipAlpha.Get().Raw()==Fixed::OneRaw);
+    stock.loaded=stock.reserve=-1;view.UpdateWeapon(7,u"Pistol",&stock,Fixed{});BOOST_CHECK(view.clipText.Get()==u"999");BOOST_CHECK(view.reserveText.Get()==u"999");
+    view.UpdateWeapon(0,{},nullptr,Fixed{});BOOST_TEST(view.clipText.Get().empty());BOOST_TEST(view.weaponName.Get().empty());BOOST_TEST(view.centerClipAlpha.Get().Raw()==0);
+}
+BOOST_AUTO_TEST_CASE(source_bars_slew_one_fraction_per_second_and_freeze_without_simulation_time) {
+    renegade::hud::PlayerHudViewModel view;engine::gameplay::Health health;engine::gameplay::Shield shield;
+    health.current=health.maximum=Fixed::FromInt(100);shield.current=shield.maximum=Fixed::FromInt(100);
+    view.Update(health,shield,Fixed::FromRatio(1,4));BOOST_TEST(view.healthFraction.Get().Raw()==Fixed::OneRaw/4);BOOST_TEST(view.healthColorFraction.Get().Raw()==Fixed::OneRaw);
+    view.Update(health,shield,Fixed::One());BOOST_TEST(view.healthFraction.Get().Raw()==Fixed::OneRaw);
+    health.current=Fixed::FromInt(25);shield.current={};view.Update(health,shield,Fixed::FromRatio(1,4));
+    BOOST_TEST(view.healthFraction.Get().Raw()==3*Fixed::OneRaw/4);BOOST_TEST(view.shieldFraction.Get().Raw()==3*Fixed::OneRaw/4);BOOST_TEST(view.crossFlash.Get().Raw()==Fixed::OneRaw);
+    view.Update(health,shield,Fixed{});BOOST_TEST(view.healthFraction.Get().Raw()==3*Fixed::OneRaw/4);BOOST_TEST(view.crossFlash.Get().Raw()==Fixed::OneRaw);
+    view.Update(health,shield,Fixed::One());BOOST_TEST(view.healthFraction.Get().Raw()==Fixed::OneRaw/4);BOOST_TEST(!view.shieldVisible.Get());
+    health.current=Fixed::FromInt(26);view.Update(health,shield,Fixed::FromRatio(1,4));BOOST_TEST(view.crossFlash.Get().Raw()==0);
+}

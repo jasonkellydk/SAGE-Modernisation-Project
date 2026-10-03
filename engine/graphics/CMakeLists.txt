@@ -92,6 +92,7 @@ target_sources(generals_graphics
             scene/props/PropMaterial.cppm
             scene/props/PropSurface.cppm
             scene/props/PropAssetGeometry.cppm
+            scene/props/PropAssetPreparation.cppm
             scene/props/PropSkinning.cppm
             scene/props/PropAssetBinding.cppm
             scene/props/PropConstants.cppm
@@ -125,6 +126,7 @@ target_sources(generals_graphics
             scene/lighting/EnvironmentLighting.cppm
             scene/lighting/LightRenderer.cppm
             scene/environment/Environment.cppm
+            scene/environment/Dome.cppm
             scene/shadows/Shadows.cppm
             scene/shroud/ShroudImage.cppm
             scene/shadows/DirectionalShadowRenderer.cppm
@@ -139,6 +141,8 @@ target_sources(generals_graphics
             scene/particles/EmitterEmission.cppm
             scene/particles/EmitterDetail.cppm
             scene/particles/EmitterRenderer.cppm
+            scene/particles/EmitterView.cppm
+            scene/particles/EmitterAssetBinding.cppm
             scene/particles/LineGroupGeometry.cppm
             scene/beams/RibbonSubdivision.cppm
             scene/beams/RibbonMath.cppm

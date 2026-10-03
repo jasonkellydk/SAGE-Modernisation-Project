@@ -1,0 +1,61 @@
+#define BOOST_TEST_MODULE AuthoredTimelines
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.core.serialization.byte_stream;
+import engine.gameplay.common.timing.systems.timeline_system;
+import engine.gameplay.common.timing.systems.pose_track_system;
+namespace {
+using namespace engine::gameplay;using Engine::Math::Fixed;
+struct Timelines {
+    ecs::World world{ecs::WorldConfig{7}};TimelineSystem system;ecs::SystemRegistry registry;std::unique_ptr<ecs::Scheduler> scheduler;
+    std::vector<ecs::Entity> entities;
+    Timelines(unsigned workers,unsigned count) {
+        world.RegisterComponent<TimelinePlayback>();world.FinalizeComponents();
+        world.EmplaceResource<TimelineLibrary>().timelines.push_back({{{{},10},{Fixed::One(),11},{Fixed::One(),12},{Fixed::FromInt(71),13}}});
+        world.EmplaceResource<FiredTimelineCues>();registry.Register(system);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {auto entity=commands.Create();pending.push_back(entity);TimelinePlayback clock;clock.timeline=1;commands.Add<TimelinePlayback>(entity,clock);}
+        world.Commit(commands);for(auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+    std::vector<FiredTimelineCue> Fired() {std::vector<FiredTimelineCue> result;world.Resource<FiredTimelineCues>().AppendTo(result);return result;}
+};
+}
+BOOST_AUTO_TEST_CASE(authored_cues_fire_once_in_stable_order_at_exact_times_and_resume_from_checkpoint) {
+    Timelines sequence(4,1);sequence.Step(1);auto cues=sequence.Fired();BOOST_REQUIRE_EQUAL(cues.size(),1u);BOOST_TEST(cues[0].action==10u);
+    sequence.Step(60);BOOST_TEST(sequence.Fired().empty());sequence.Step(61);cues=sequence.Fired();BOOST_REQUIRE_EQUAL(cues.size(),2u);BOOST_TEST(cues[0].action==11u);BOOST_TEST(cues[1].action==12u);
+    sequence.Step(62);BOOST_TEST(sequence.Fired().empty());
+    engine::core::serialization::ByteWriter writer;sequence.world.SaveCheckpoint(writer);
+    Timelines restored(1,0);engine::core::serialization::ByteReader reader(writer.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));restored.entities=sequence.entities;
+    sequence.Step(4261);restored.Step(4261);BOOST_TEST(sequence.world.StateHash()==restored.world.StateHash());
+    cues=restored.Fired();BOOST_REQUIRE_EQUAL(cues.size(),1u);BOOST_TEST(cues[0].action==13u);BOOST_TEST(restored.world.Get<TimelinePlayback>(restored.entities[0])->complete==1u);
+    restored.Step(4262);BOOST_TEST(restored.Fired().empty());
+    BOOST_TEST(!engine::level::ValidateTimeline({{{Fixed::FromInt(-1),0}}}));
+    BOOST_TEST(!engine::level::ValidateTimeline({{{Fixed::One(),0},{Fixed{},1}}}));
+}
+BOOST_AUTO_TEST_CASE(timeline_parallel_chunks_emit_identical_events_and_soa_state) {
+    Timelines serial(1,513),parallel(4,513);
+    for(unsigned tick=1;tick<=62;++tick) {serial.Step(tick);parallel.Step(tick);const auto a=serial.Fired(),b=parallel.Fired();BOOST_REQUIRE_EQUAL(a.size(),b.size());for(std::size_t i=0;i<a.size();++i) {BOOST_CHECK(a[i].playback==b[i].playback);BOOST_TEST(a[i].action==b[i].action);}}
+    BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+}
+BOOST_AUTO_TEST_CASE(shared_pose_tracks_use_exact_integer_sample_boundaries_and_parallel_soa_columns) {
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<TimelinePlayback>();world.RegisterComponent<SampledPose>();world.RegisterComponent<AffinePose>();world.FinalizeComponents();
+        world.EmplaceResource<TimelineLibrary>().timelines.push_back({{{Fixed::FromInt(10),1}}});world.EmplaceResource<FiredTimelineCues>();
+        auto& library=world.EmplaceResource<PoseTrackLibrary>();engine::level::PoseTrack track;track.samples_per_second=30;
+        for(unsigned i=0;i<4;++i) track.samples.push_back(Engine::Math::FixedAffineTransform3::From_Translation({Fixed::FromInt(i),{}, {}}));library.tracks.push_back(std::move(track));
+        ecs::CommandBuffer clock_commands;const auto pending=clock_commands.Create();TimelinePlayback clock;clock.timeline=1;clock_commands.Add<TimelinePlayback>(pending,clock);world.Commit(clock_commands);const auto entity=clock_commands.Resolve(pending);
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> poses;
+        for(unsigned i=0;i<513;++i) {const auto p=commands.Create();poses.push_back(p);commands.Add<SampledPose>(p,SampledPose{entity,1});commands.Add<AffinePose>(p);}world.Commit(commands);
+        TimelineSystem timeline;PoseTrackSystem sampling;ecs::SystemRegistry registry;registry.Register(timeline);registry.Register(sampling);registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        for(unsigned tick=1;tick<=10;++tick) {
+            scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});
+            for(const auto p:poses) BOOST_TEST(world.Get<AffinePose>(commands.Resolve(p))->transform.elements[3].Raw()==Fixed::FromInt((std::min)((tick-1)/2,3u)).Raw());
+        }
+        return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

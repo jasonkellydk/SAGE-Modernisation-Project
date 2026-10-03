@@ -1,0 +1,53 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.session;
+using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+BOOST_AUTO_TEST_CASE(conversation_uses_shared_timeline_voices_and_delivers_completion_without_repeating_lines) {
+    const auto run=[](unsigned workers) {
+        Session session(workers,7);auto& world=session.World();ecs::CommandBuffer people;
+        const auto a=people.Create(),b=people.Create();people.Add<AffinePose>(a);people.Add<AffinePose>(b);world.Commit(people);
+        const auto speaker=people.Resolve(a),listener=people.Resolve(b);auto& scene=world.Resource<SceneState>();scene.player=listener;scene.authored_entities.emplace(400005,speaker);
+        content::PreparedBehaviors programs;programs.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+        programs.library.programs.push_back({"fixture","return { Created=function(self,obj) emit('Stop_All_Conversations');emit('Start_Conversation',obj,'fixture',100,300,5) end, Action_Complete=function(self,obj,action,reason) self[1]=self[1]+1;emit('done',obj,action,reason) end }","Created",{std::int64_t{400005}}});programs.bindings.push_back({400005,0,0});BOOST_REQUIRE(session.InstallBehaviors(programs));
+        engine::level::Timeline timeline;timeline.cues={{Fixed{},0},{Fixed::FromRatio(1,2),1},{Fixed::FromRatio(6,5),2}};world.Resource<TimelineLibrary>().timelines.push_back(timeline);
+        world.Resource<ConversationLibrary>().definitions.push_back({"fixture",1,{{0,7,100},{1,8,101}}});
+        unsigned lines{},completed{},callbacks{};
+        for(unsigned tick=1;tick<=100;++tick) {
+            session.Step();world.Resource<ConversationLineEvents>().ForEach([&](const auto& event) {
+                if(event.finished) {BOOST_TEST(tick==74u);BOOST_TEST(event.reason==6u);++completed;}
+                else {BOOST_TEST(tick==(lines ? 32u : 2u));BOOST_CHECK(event.speaker==(lines ? listener : speaker));BOOST_TEST(event.sound==(lines ? 8u : 7u));++lines;}
+            });
+            world.Resource<MissionRequests>().ForEach([&](const auto& request) {if(request.command.name=="done") {BOOST_TEST(tick==75u);BOOST_TEST(std::get<std::int64_t>(request.command.arguments[2])==6);++callbacks;}});
+            if(tick==3) {BOOST_TEST(world.Resource<SoundEmitterSnapshots>().Size()==1u);}
+            if(tick==76) {BOOST_TEST(world.Resource<SoundEmitterSnapshots>().Size()==0u);}
+        }
+        BOOST_TEST(lines==2u);BOOST_TEST(completed==1u);BOOST_TEST(callbacks==1u);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(stop_all_interrupts_only_conversations_started_before_its_ordered_command) {
+    const auto run=[](unsigned workers) {
+        Session session(workers,3);auto& world=session.World();ecs::CommandBuffer people;
+        const auto a=people.Create(),b=people.Create();people.Add<AffinePose>(a);people.Add<AffinePose>(b);world.Commit(people);
+        const auto speaker=people.Resolve(a);world.Resource<SceneState>().player=people.Resolve(b);world.Resource<SceneState>().authored_entities.emplace(400005,speaker);
+        content::PreparedBehaviors programs;programs.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+        programs.library.programs.push_back({"ordered","return { Created=function(self,obj) emit('Start_Conversation',obj,'fixture',100,300,4);emit('Stop_All_Conversations');emit('Start_Conversation',obj,'fixture',100,300,5) end, Action_Complete=function(self,obj,action,reason) emit('done',action,reason) end }","Created",{std::int64_t{400005}}});
+        programs.bindings.push_back({400005,0,0});BOOST_REQUIRE(session.InstallBehaviors(programs));
+        engine::level::Timeline timeline;timeline.cues={{Fixed{},0},{Fixed::FromRatio(1,20),1}};world.Resource<TimelineLibrary>().timelines.push_back(timeline);
+        world.Resource<ConversationLibrary>().definitions.push_back({"fixture",1,{{0,7,100}}});
+        unsigned lines{},interrupted{},ended{},callbacks{};
+        for(unsigned tick=1;tick<=10;++tick) {
+            session.Step();world.Resource<ConversationLineEvents>().ForEach([&](const auto& event) {
+                if(!event.finished) {BOOST_TEST(tick==2u);++lines;}
+                else if(event.reason==7) {BOOST_TEST(tick==1u);++interrupted;}
+                else {BOOST_TEST(event.reason==6u);BOOST_TEST(tick==5u);++ended;}
+            });
+            world.Resource<MissionRequests>().ForEach([&](const auto& request) {
+                if(request.command.name!="done") return;const auto action=std::get<std::int64_t>(request.command.arguments[0]),reason=std::get<std::int64_t>(request.command.arguments[1]);
+                BOOST_TEST(tick==(action==4 ? 2u : 6u));BOOST_TEST(reason==(action==4 ? 7 : 6));++callbacks;
+            });
+        }
+        BOOST_TEST(lines==1u);BOOST_TEST(interrupted==1u);BOOST_TEST(ended==1u);BOOST_TEST(callbacks==2u);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

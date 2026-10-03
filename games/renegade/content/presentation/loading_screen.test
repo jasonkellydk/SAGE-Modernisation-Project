@@ -1,0 +1,35 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.presentation.loading_screen;
+import games.renegade.content.install.install_mount;
+
+BOOST_AUTO_TEST_CASE(loading_backdrop_selection_and_ordered_text_state_follow_campaign_source)
+{
+	using namespace renegade::content;
+	BOOST_TEST(LoadingScreenNumber("M00_Tutorial.mix")==90);BOOST_TEST(LoadingScreenNumber("m13.mix")==13);
+	BOOST_TEST(LoadingScreenNumber("M07.mix")==7);BOOST_TEST(LoadingScreenNumber("C&C_Under.mix")==0);
+	const auto parsed=ReadLoadingScreen("[Backdrop0]\n0=Model fallback\n[Backdrop90]\n0=Model tutorial\n1=Wrap 220\n2=Wrap2 350\n3=Color 100,255,100\n4=Text2 50,17,TITLE\n5=Text 60,60,BODY\n6=Text 1,2,UNWRAPPED\n7=Test 3,4,Literal\n",90);
+	BOOST_REQUIRE(parsed.has_value());BOOST_TEST(parsed->number==90);BOOST_TEST(parsed->model=="tutorial");BOOST_REQUIRE(parsed->texts.size()==4u);
+	BOOST_TEST(parsed->texts[0].large);BOOST_TEST(parsed->texts[0].wrap==350.f);BOOST_TEST(parsed->texts[0].color==0xff64ff64u);
+	BOOST_TEST(parsed->texts[0].x==50.f);BOOST_TEST(parsed->texts[0].y==17.f);
+	BOOST_TEST(parsed->texts[1].wrap==220.f);BOOST_TEST(parsed->texts[1].color==0xffffffffu);
+	BOOST_TEST(parsed->texts[2].wrap==0.f);BOOST_TEST(parsed->texts[3].literal);
+	const auto fallback=ReadLoadingScreen("[Backdrop0]\n0=Model fallback\n",999);BOOST_REQUIRE(fallback.has_value());BOOST_TEST(fallback->number==0);
+	BOOST_CHECK((!ReadLoadingScreen("[Backdrop0]\n0=Text nan,0,BAD\n1=Model a\n",0)));
+	BOOST_CHECK((!ReadLoadingScreen("[Backdrop0]\n0=Color 256,0,0\n1=Model a\n",0)));
+	BOOST_CHECK((!ReadLoadingScreen("[Backdrop0]\n0=Wrap -1\n1=Model a\n",0)));
+	BOOST_TEST(AdvanceLoadingAnimation(0,1)==0.1f);
+	BOOST_TEST(AdvanceLoadingAnimation(0.5f,1)==0.55f);
+}
+BOOST_AUTO_TEST_CASE(retail_tutorial_loading_screen_has_authored_model_and_localization_positions)
+{
+	const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) {BOOST_TEST_MESSAGE("retail loading screen skipped: install not configured");return;}
+	const auto mounted=renegade::content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+	const auto& files=*mounted->files;
+	const auto screen=renegade::content::LoadLoadingScreen(files,"M00_Tutorial.mix");BOOST_REQUIRE_MESSAGE(screen.has_value(),(screen ? "" : screen.error()));
+	BOOST_TEST(screen->number==90);BOOST_TEST(screen->model=="IF_LVL90LOAD");BOOST_REQUIRE(screen->texts.size()==12u);
+	BOOST_TEST(screen->texts[0].text=="IDS_LoadScreen_Tutorial_Item_00_Title");BOOST_TEST(screen->texts[0].x==50.f);BOOST_TEST(screen->texts[0].y==17.f);
+	BOOST_TEST(screen->texts[2].wrap==350.f);BOOST_TEST(screen->texts[2].color==0xff64ff64u);
+	BOOST_TEST(screen->texts[5].wrap==220.f);BOOST_TEST(screen->texts[5].color==0xffff9664u);
+	BOOST_CHECK(files.Exists(screen->model+".w3d"));
+}

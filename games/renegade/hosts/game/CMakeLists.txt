@@ -1,10 +1,13 @@
 add_executable(renegade main.cppm)
+add_custom_command(TARGET renegade POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/../../content/scripts" "$<TARGET_FILE_DIR:renegade>/scripts")
 set(RENEGADE_HOST_OUTPUT_DIRECTORY "" CACHE PATH "Optional game output directory for an isolated development build")
 if(RENEGADE_HOST_OUTPUT_DIRECTORY)
     set_target_properties(renegade PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${RENEGADE_HOST_OUTPUT_DIRECTORY}")
 endif()
 set_source_files_properties(main.cppm PROPERTIES LANGUAGE CXX)
 target_link_libraries(renegade PRIVATE renegade_content renegade_menu renegade_menu_assets
+	renegade_level_view renegade_player_input
     engine_platform_sdl3 generals_graphics generals_video engine_gui_text engine_gui_w3d_rendering engine_audio_video engine_audio_ffmpeg engine_audio_output stb)
 get_target_property(renegade_shader_directory generals_graphics GRAPHICS_SHADER_ASSET_DIRECTORY)
 target_compile_definitions(renegade PRIVATE RENEGADE_SHADER_DIRECTORY="${renegade_shader_directory}")
@@ -21,6 +24,36 @@ endif()
 if(BUILD_TESTING AND RENEGADE_INSTALL_DIR)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     foreach(backend IN ITEMS dx11 dx12)
+        add_test(NAME renegade_retail_tutorial_course.${backend}
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tutorial_course_runtime_test.py"
+            "$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/tutorial-course-${backend}")
+        set_tests_properties(renegade_retail_tutorial_course.${backend} PROPERTIES
+            LABELS "retail;runtime;tutorial;scripting;audio;${backend}" TIMEOUT 200 RESOURCE_LOCK renegade_retail_menu
+            ENVIRONMENT "GRAPHICS_BACKEND=${backend}")
+        add_test(NAME renegade_retail_tutorial_speech.${backend}
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tutorial_runtime_test.py"
+            "$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/tutorial-speech-${backend}")
+        set_tests_properties(renegade_retail_tutorial_speech.${backend} PROPERTIES
+            LABELS "retail;runtime;tutorial;scripting;audio;${backend}" TIMEOUT 150 RESOURCE_LOCK renegade_retail_menu
+            ENVIRONMENT "GRAPHICS_BACKEND=${backend}")
+        add_test(NAME renegade_retail_cinematic.${backend}
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cinematic_runtime_test.py"
+            "$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cinematic-${backend}")
+        set_tests_properties(renegade_retail_cinematic.${backend} PROPERTIES
+            LABELS "retail;runtime;campaign;cinematic;particles;${backend}" TIMEOUT 170 RESOURCE_LOCK renegade_retail_menu
+            ENVIRONMENT "GRAPHICS_BACKEND=${backend}")
+        add_test(NAME renegade_retail_frame_timing.${backend}
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/frame_timing_runtime_test.py"
+            "$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/frame-timing-${backend}")
+        set_tests_properties(renegade_retail_frame_timing.${backend} PROPERTIES
+            LABELS "retail;runtime;campaign;timing;input;${backend}" TIMEOUT 220 RESOURCE_LOCK renegade_retail_menu
+            ENVIRONMENT "GRAPHICS_BACKEND=${backend}")
+		add_test(NAME renegade_retail_level_preview.${backend}
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/level_runtime_test.py"
+			"$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/level-preview-${backend}")
+		set_tests_properties(renegade_retail_level_preview.${backend} PROPERTIES
+			LABELS "retail;runtime;campaign;scene;loading;${backend}" TIMEOUT 250 RESOURCE_LOCK renegade_retail_menu
+			ENVIRONMENT "GRAPHICS_BACKEND=${backend}")
         set(scrollbars_instance "renegade_retail_scrollbars.${backend}")
         add_test(NAME ${scrollbars_instance} COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scrollbars_runtime_test.py"
             "$<TARGET_FILE:renegade>" "${RENEGADE_INSTALL_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/scrollbars-${backend}.png")

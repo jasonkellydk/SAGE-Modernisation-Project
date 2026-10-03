@@ -9,6 +9,7 @@ export namespace renegade::content
 // stored animation/skeleton files follow ww3d2/assetmgr.cpp.
 std::vector<std::string> AssetPaths(const Assets::AssetIdentity& identity) {
     std::string name = identity.canonical_name;
+	if (const auto selector = name.find("::"); selector != std::string::npos) name.erase(selector);
     if (identity.type == Assets::AssetType::Animation) {
         if (const auto separator=name.find('.'); separator!=std::string::npos) name.erase(0,separator+1);
     }

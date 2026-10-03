@@ -1,0 +1,79 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.timing.systems.pose_track_system;
+import engine.gameplay.common.physics.systems.suspension_system;
+import games.renegade.gameplay.humans.systems.animation_system;
+namespace {
+struct AnimatedHumans {
+    ecs::World world{ecs::WorldConfig{64}};renegade::HumanMotionSystem motion;renegade::HumanAnimationSystem animation;engine::gameplay::ClipPlaybackSystem playback;engine::gameplay::PoseTrackSystem track;engine::gameplay::SuspensionSystem suspension;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    AnimatedHumans(unsigned workers,unsigned count) {
+        world.RegisterComponent<engine::gameplay::InputPermission>();
+        using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+        world.RegisterComponent<HumanState>();world.RegisterComponent<Transform>();world.RegisterComponent<HumanAnimation>();world.RegisterComponent<ClipPlayback>();world.RegisterComponent<ClipTransition>();
+        world.RegisterComponent<HumanMovement>();world.RegisterComponent<HumanControl>();world.RegisterComponent<AffinePose>();world.RegisterComponent<SweptHull>();world.RegisterComponent<SweepContacts>();world.RegisterComponent<engine::gameplay::TimelinePlayback>();world.RegisterComponent<engine::gameplay::SampledPose>();world.RegisterComponent<engine::gameplay::Suspension>();world.RegisterComponent<engine::gameplay::SuspensionState>();world.FinalizeComponents();world.EmplaceResource<engine::gameplay::PoseTrackLibrary>();world.EmplaceResource<CollisionGeometry>();
+        auto& catalog=world.EmplaceResource<HumanAnimationCatalog>();std::array<ClipPlayback,HumanLocomotionClips> bank;
+        for(unsigned i=0;i<bank.size();++i) {bank[i].clip=i+1;bank[i].frame_count=13;bank[i].frames_per_second=Fixed::FromInt(30);bank[i].loop_period=Fixed::FromInt(12);bank[i].mode=i>=14 && i<=18 ? ClipMode::Once : ClipMode::Loop;}
+        catalog.banks.push_back(bank);registry.Register(motion);registry.Register(animation);registry.Register(playback);registry.Register(track);registry.Register(suspension);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {auto entity=commands.Create();pending.push_back(entity);commands.Add<HumanState>(entity,HumanState{{}, {},1,0});commands.Add<Transform>(entity);
+            commands.Add<HumanAnimation>(entity,HumanAnimation{1,1,0,0});commands.Add<ClipPlayback>(entity,bank[0]);commands.Add<ClipTransition>(entity);}
+        world.Commit(commands);for(const auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(human_animation_selects_source_direction_speeds_jump_landing_and_wall_idle) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    AnimatedHumans fixture(4,1);auto entity=fixture.entities[0];auto& state=*fixture.world.Get<HumanState>(entity);
+    auto& pose=*fixture.world.Get<Transform>(entity);auto& clip=*fixture.world.Get<ClipPlayback>(entity);
+    state.velocity={Fixed::FromInt(6),Fixed{},Fixed{}};fixture.Step(1);BOOST_TEST(clip.clip==2u);BOOST_TEST(clip.frames_per_second.Raw()==(Fixed::FromInt(30)*Fixed::FromRatio(12,11)).Raw());
+    BOOST_TEST(fixture.world.Get<ClipTransition>(entity)->previous.clip==1u);
+    state.velocity={Fixed::FromInt(-6),Fixed{},Fixed{}};fixture.Step(2);BOOST_TEST(clip.clip==3u);
+    state.velocity={Fixed::FromInt(4),Fixed::FromInt(4),Fixed{}};fixture.Step(3);BOOST_TEST(clip.clip==2u); // source 0.75 diagonal priority
+    state.velocity={Fixed{},Fixed::FromInt(2),Fixed{}};fixture.Step(4);BOOST_TEST(clip.clip==8u); // walking left
+    pose.facing=Engine::Math::TurnFromDegrees(90);state.velocity={Fixed{},Fixed::FromInt(6),Fixed{}};fixture.Step(5);BOOST_TEST(clip.clip==2u);
+    state.grounded=0;fixture.Step(6);BOOST_TEST(clip.clip==11u); // J1
+    state.grounded=1;fixture.Step(7);BOOST_TEST(clip.clip==16u);BOOST_CHECK(clip.mode==ClipMode::Once); // L1
+    for(unsigned tick=8;tick<=32;++tick) fixture.Step(tick);BOOST_TEST(clip.clip==2u);
+    state.velocity={};fixture.Step(33);BOOST_TEST(clip.clip==1u); // blocked movement supplies zero actual velocity
+    pose.facing+=Engine::Math::TurnFromDegrees(1);fixture.Step(34);BOOST_TEST(clip.clip==20u);
+}
+BOOST_AUTO_TEST_CASE(human_animation_selection_and_blend_state_are_parallel_deterministic) {
+    using Engine::Math::Fixed;AnimatedHumans serial(1,513),parallel(4,513);
+    for(unsigned tick=1;tick<=90;++tick) {
+        for(auto* fixture:{&serial,&parallel}) for(const auto entity:fixture->entities) {
+            auto& state=*fixture->world.Get<renegade::HumanState>(entity);state.velocity={Fixed::FromInt(tick<30 ? 6 : 2),Fixed{},Fixed{}};state.grounded=tick<30 || tick>50;
+        }
+        serial.Step(tick);parallel.Step(tick);
+    }
+    BOOST_CHECK(serial.world.StateHash()==parallel.world.StateHash());
+}
+BOOST_AUTO_TEST_CASE(source_ladder_selects_idle_up_down_clips_and_original_speed_clamp) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    AnimatedHumans fixture(4,1);const auto actor=fixture.entities.front();auto& state=*fixture.world.Get<HumanState>(actor);state.ladder=1;state.grounded=0;
+    fixture.Step(1);BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==22u);
+    state.velocity.z=Fixed::FromInt(3);fixture.Step(2);BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==23u);BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->frames_per_second.Raw()==Fixed::FromInt(90).Raw());
+    // Original MOVING_THRESHHOLD=.2 is strict in both directions.
+    for(const auto velocity:{Fixed::FromRatio(1,5),Fixed::FromRatio(-1,5),Fixed::FromRatio(-15,100)}) {
+        state.velocity.z=velocity;fixture.Step(3);BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==22u);
+    }
+    state.velocity.z=Fixed::FromRatio(-3,10);fixture.Step(4);BOOST_TEST(fixture.world.Get<ClipPlayback>(actor)->clip==24u);
+    BOOST_TEST(Engine::Math::Abs(fixture.world.Get<ClipPlayback>(actor)->frames_per_second-Fixed::FromInt(60)).Raw()<300);
+}
+
+BOOST_AUTO_TEST_CASE(transition_playhead_is_exclusive_until_last_frame_and_completion_uses_source_state) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    for(unsigned type=1;type<=4;++type) {
+        AnimatedHumans fixture(4,1);const auto actor=fixture.entities.front();auto& state=*fixture.world.Get<HumanState>(actor);
+        auto& clip=*fixture.world.Get<ClipPlayback>(actor);clip=fixture.world.Resource<HumanAnimationCatalog>().banks[0][23+type];clip.mode=ClipMode::Once;
+        state.transition=type;state.state_locked=1;state.ladder=type<=2;state.velocity.z=Fixed::FromInt(6);
+        for(unsigned tick=1;tick<=24;++tick) {
+            fixture.Step(tick);BOOST_TEST(state.transition==type);BOOST_TEST(state.state_locked==1u);BOOST_TEST(clip.clip==24+type);
+        }
+        fixture.Step(25);BOOST_TEST(state.transition==0u);BOOST_TEST(state.state_locked==0u);BOOST_TEST(state.ladder==(type>=3));
+        BOOST_TEST(state.velocity.z.Raw()==0);BOOST_TEST(clip.clip==(type>=3 ? 22u : 10u));
+    }
+}

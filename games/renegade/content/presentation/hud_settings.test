@@ -1,0 +1,16 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.presentation.hud_settings;
+import games.renegade.content.install.install_mount;
+BOOST_AUTO_TEST_CASE(retail_hud_colors_resolve_through_owning_global_settings_factory) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=renegade::content::MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto data=mounted->files->Read("objects.ddb");BOOST_REQUIRE(data);const auto definitions=renegade::content::ReadDefinitions(*data);BOOST_REQUIRE(definitions);
+    const auto settings=renegade::content::ReadHudSettings(*definitions);BOOST_REQUIRE_MESSAGE(settings,(settings ? "" : settings.error()));
+    BOOST_TEST(settings->health_high.y.Raw()>settings->health_high.x.Raw());
+    BOOST_TEST(settings->health_low.x.Raw()>settings->health_low.y.Raw());
+    // Objects.DDB's authored neutral reticle is tinted (125/255,150/255),
+    // not the constructor's white fallback.
+    BOOST_TEST(settings->neutral.x.Raw()==32125);BOOST_TEST(settings->neutral.y.Raw()==38551);
+    auto missing=*definitions;std::erase_if(missing.by_id,[](const auto& item) {return item.second.factory==0x40603;});BOOST_TEST(!renegade::content::ReadHudSettings(missing));
+}

@@ -3,7 +3,7 @@ if(NOT TARGET engine_gui_images)
     add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../images" "${CMAKE_CURRENT_BINARY_DIR}/images")
 endif()
 engine_add_module_library(engine_gui_w3d_rendering
-    MODULES text_view.cppm value_view.cppm button_view.cppm popup_view.cppm marquee_view.cppm list_view.cppm input_view.cppm text_edit_view.cppm scrollbar_view.cppm
+    MODULES text_view.cppm value_view.cppm button_view.cppm popup_view.cppm marquee_view.cppm list_view.cppm input_view.cppm text_edit_view.cppm scrollbar_view.cppm model_backdrop_view.cppm
     DEPENDS engine_gui_text engine_gui_w3d engine_gui_images)
 
 if(BUILD_TESTING AND RTS_BUILD_GRAPHICS_TESTS AND WIN32)

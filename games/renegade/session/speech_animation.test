@@ -1,0 +1,47 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.session;
+import games.renegade.content.characters.visemes;
+using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+BOOST_AUTO_TEST_CASE(source_viseme_rules_preserve_phrase_limit_combinations_and_closed_pose_index_contract) {
+    const auto check=[](std::string_view phrase,std::initializer_list<std::uint32_t> expected) {
+        const auto actual=content::SpeechVisemes(phrase);BOOST_CHECK_EQUAL_COLLECTIONS(actual.begin(),actual.end(),expected.begin(),expected.end());
+    };
+    check("",{});check("CAT",{12,0,11});check("hello",{11,4,10,3});check("bump",{9,5,9});check("air",{2});check("ow",{4,0});
+    // Source's partial initializer makes ow's second pose zero, not -1.
+    const auto long_phrase=std::string(127,'b')+"air";BOOST_TEST(content::SpeechVisemes(long_phrase)==std::vector<std::uint32_t>{9},boost::test_tools::per_element());
+}
+BOOST_AUTO_TEST_CASE(timeline_observers_and_speech_pose_clocks_use_parallel_SoA_without_early_or_repeated_Created) {
+    const auto run=[](unsigned workers) {
+        Session session(workers,3);auto& world=session.World();ecs::CommandBuffer actors;
+        const auto listener=actors.Create();actors.Add<AffinePose>(listener);
+        std::vector<ecs::DeferredEntity> people;
+        for(unsigned i=0;i<513;++i) {const auto actor=actors.Create();actors.Add<AffinePose>(actor);SpeechAnimation face;face.bank=1;face.first_bone=10;face.bone_count=5;actors.Add<SpeechAnimation>(actor,face);people.push_back(actor);}
+        world.Commit(actors);auto& scene=world.Resource<SceneState>();scene.player=actors.Resolve(listener);
+        content::PreparedBehaviors programs;programs.library.event_names={"Timer_Expired","Custom","Entered","Exited","Action_Complete"};
+        programs.library.programs.push_back({"generic","return {Created=function(self,obj,name) emit('Start_Conversation',obj,name,99,2000,100000) end}","Created",{}});
+        BOOST_REQUIRE(session.InstallBehaviors(programs));
+        engine::level::Timeline speech;speech.cues={{Fixed{},0},{Fixed::FromRatio(1,2),1}};world.Resource<TimelineLibrary>().timelines.push_back(speech);
+        engine::level::Timeline film;film.cues={{Fixed::FromRatio(1,10),27}};world.Resource<TimelineLibrary>().timelines.push_back(film);
+        world.Resource<ConversationLibrary>().definitions.push_back({"spoken",1,{{0,0,123,99}}});
+        ClipPlayback mouth;mouth.clip=12;mouth.frame_count=40;mouth.frames_per_second=Fixed::FromInt(30);mouth.mode=ClipMode::Once;
+        world.Resource<SpeechAnimations>().banks.push_back({{99,mouth,Fixed::FromRatio(1,2)}});
+        ecs::CommandBuffer clocks;const auto clock=clocks.Create();TimelinePlayback film_clock;film_clock.timeline=2;clocks.Add<TimelinePlayback>(clock,film_clock);world.Commit(clocks);
+        ecs::CommandBuffer bindings;auto& invocations=world.Resource<BehaviorInvocations>();
+        for(unsigned i=0;i<people.size();++i) {
+            const auto subject=actors.Resolve(people[i]);const auto id=1000+i;scene.authored_entities.emplace(id,subject);
+            LuaBehavior binding{subject,id,invocations.next_order++,0};binding.enabled=0;binding.invocation=std::uint32_t(invocations.arguments.size());invocations.arguments.push_back({std::int64_t(id),std::string("spoken")});
+            const auto observer=bindings.Create();bindings.Add<LuaBehavior>(observer,binding);bindings.Add<LuaBehaviorState>(observer);bindings.Add<TimelineBehavior>(observer,TimelineBehavior{clocks.Resolve(clock),27});
+        }world.Commit(bindings);
+        unsigned line_count{},finished{};std::uint64_t start{};
+        for(unsigned tick=1;tick<=60;++tick) {
+            session.Step();world.Resource<ConversationLineEvents>().ForEach([&](const auto& event){if(event.finished) ++finished;else {++line_count;start=tick;BOOST_TEST(event.face==99u);}});
+            const auto* face=world.Get<SpeechAnimation>(actors.Resolve(people.front()));
+            if(tick<=6) {BOOST_TEST(line_count==0u);BOOST_TEST(face->playback.clip==0u);}
+            if(start && tick>=start && tick<start+30) {BOOST_TEST(face->playback.clip==12u);BOOST_TEST(face->playback.frame.Raw()==Fixed::FromRatio((tick-start)*30,60).Raw());}
+        }
+        BOOST_TEST(line_count==513u);BOOST_TEST(finished==513u);
+        for(const auto person:people) BOOST_TEST(world.Get<SpeechAnimation>(actors.Resolve(person))->playback.clip==0u);
+        return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}

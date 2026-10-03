@@ -1,0 +1,73 @@
+#include <boost/test/unit_test.hpp>
+import engine.level.model.level;
+
+BOOST_AUTO_TEST_CASE(spatial_level_supports_planar_maps_and_full_3d_authored_bindings)
+{
+	using namespace engine::level;
+	using Engine::Math::Fixed;
+	Level level;
+	level.placements.emplace_back(); // Existing planar adapters need no ID or full pose.
+	BOOST_TEST(ValidateSpatialLevel(level).has_value());
+	Placement actor; actor.id = 100; actor.definition = 42;
+	actor.transform = Engine::Math::FixedAffineTransform3::From_Translation({Fixed::FromInt(4), Fixed::FromInt(5), Fixed::FromInt(6)});
+	level.placements.push_back(actor);
+	TriggerVolume volume; volume.subject = 100; volume.bounds.center.z = Fixed::FromInt(6);
+	volume.bounds.extent = {Fixed::One(), Fixed::One(), Fixed::One()}; level.volumes.push_back(volume);
+	level.behaviors.push_back({1, 100, "on_enter", "authored parameters"});
+	BOOST_TEST(ValidateSpatialLevel(level).has_value());
+	level.placements.push_back(actor); BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.placements.pop_back();
+	level.volumes[0].subject = 101; BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.volumes[0].subject = 100;
+	level.volumes[0].bounds.extent.z = -Fixed::One(); BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.volumes[0].bounds.extent.z = Fixed::One();
+	level.behaviors.push_back(level.behaviors.front()); BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.behaviors.pop_back();
+	level.behaviors[0].subject = 101; BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.behaviors[0].subject = 100;
+	level.behaviors[0].program.clear(); BOOST_TEST(!ValidateSpatialLevel(level).has_value()); level.behaviors[0].program = "on_enter";
+	level.placements[1].kind = PlacementKind::Geometry; level.placements[1].transform.reset();
+	BOOST_TEST(!ValidateSpatialLevel(level).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(authored_navigation_preserves_order_repeated_points_and_vertical_routes)
+{
+	using namespace engine::level;
+	using Engine::Math::Fixed;
+	Level level;
+	Marker lower; lower.id = 10; lower.position.z = Fixed::FromInt(-4);
+	Marker upper; upper.id = 20; upper.position.z = Fixed::FromInt(12);
+	level.markers = {upper, lower};
+	NavigationPath path; path.id = 7; path.markers = {10, 20, 10}; path.looping = true;
+	level.navigationPaths.push_back(path);
+	BOOST_TEST(ValidateSpatialLevel(level).has_value());
+	BOOST_TEST(level.navigationPaths[0].markers[0] == 10u);
+	BOOST_TEST(level.navigationPaths[0].markers[1] == 20u);
+	BOOST_TEST(level.markers[0].position.z.Raw() == Fixed::FromInt(12).Raw());
+	level.navigationPaths[0].markers.push_back(99); BOOST_TEST(!ValidateSpatialLevel(level)); level.navigationPaths[0].markers.pop_back();
+	level.navigationPaths.push_back(path); BOOST_TEST(!ValidateSpatialLevel(level)); level.navigationPaths.pop_back();
+	level.markers.push_back(upper); BOOST_TEST(!ValidateSpatialLevel(level)); level.markers.pop_back();
+	level.navigationPaths[0].markers.clear(); BOOST_TEST(ValidateSpatialLevel(level).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(traversal_portals_place_rotated_regions_and_destinations_without_game_rules)
+{
+	using namespace engine::level;using namespace Engine::Math;
+	Level level;Placement owner;owner.id=7;level.placements.push_back(owner);
+	TraversalPortal local;local.subject=7;local.ordinal=2;
+	local.bounds.center={Fixed::FromInt(2),Fixed::FromInt(3),Fixed::FromInt(4)};
+	local.bounds.extent={Fixed::FromInt(1),Fixed::FromInt(2),Fixed::FromInt(3)};
+	local.destination=FixedAffineTransform3::From_Translation({Fixed::FromInt(5),Fixed::FromInt(6),Fixed::FromInt(7)});
+	local.properties.Set("test.behavior",std::string("other game's interaction"));
+	FixedAffineTransform3 parent;parent.elements={Fixed{},-Fixed::One(),Fixed{},Fixed::FromInt(10),Fixed::One(),Fixed{},Fixed{},Fixed::FromInt(20),Fixed{},Fixed{},Fixed::One(),Fixed::FromInt(30)};
+	const auto placed=PlaceTraversalPortal(local,parent);BOOST_REQUIRE(placed.has_value());
+	BOOST_TEST(placed->bounds.center.x.Raw()==Fixed::FromInt(7).Raw());BOOST_TEST(placed->bounds.center.y.Raw()==Fixed::FromInt(22).Raw());
+	BOOST_TEST(placed->bounds.center.z.Raw()==Fixed::FromInt(34).Raw());
+	BOOST_TEST(placed->bounds.Contains({Fixed::FromInt(5),Fixed::FromInt(23),Fixed::FromInt(37)}));
+	BOOST_TEST(!placed->bounds.Contains({Fixed::FromInt(4),Fixed::FromInt(22),Fixed::FromInt(34)}));
+	BOOST_TEST(placed->destination.elements[3].Raw()==Fixed::FromInt(4).Raw());
+	BOOST_TEST(placed->destination.elements[7].Raw()==Fixed::FromInt(25).Raw());
+	BOOST_TEST(placed->destination.elements[11].Raw()==Fixed::FromInt(37).Raw());
+	BOOST_TEST(placed->destination.elements[1].Raw()==-Fixed::OneRaw);
+	BOOST_TEST(placed->properties.Get<std::string>("test.behavior").value()=="other game's interaction");
+	level.traversalPortals.push_back(*placed);BOOST_TEST(ValidateSpatialLevel(level).has_value());
+	level.traversalPortals.push_back(*placed);BOOST_TEST(!ValidateSpatialLevel(level));level.traversalPortals.pop_back();
+	level.traversalPortals[0].subject=8;BOOST_TEST(!ValidateSpatialLevel(level));level.traversalPortals[0].subject=7;
+	level.traversalPortals[0].bounds.extent.z=-Fixed::One();BOOST_TEST(!ValidateSpatialLevel(level));
+	parent.elements[0]=Fixed::FromInt(2);BOOST_TEST(!PlaceTraversalPortal(local,parent));
+}

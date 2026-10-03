@@ -82,6 +82,29 @@ export struct W3DChunkView final
 	W3DByteSpan payload;
 };
 
+export struct W3DMicroChunkView final
+{
+	std::uint8_t id{};
+	W3DByteSpan payload;
+};
+
+// ChunkSaveClass's byte-sized subrecords are also used by persisted scene
+// data. Interpret only the envelope here; callers own all schema identifiers.
+export template <typename Callback>
+bool W3DVisit_MicroChunks(W3DByteSpan bytes, Callback &&callback)
+{
+	std::size_t offset = 0;
+	while (offset < bytes.size()) {
+		if (bytes.size() - offset < 2) return false;
+		const auto id = std::to_integer<std::uint8_t>(bytes[offset]);
+		const auto size = std::to_integer<std::uint8_t>(bytes[offset + 1]);
+		if (size > bytes.size() - offset - 2) return false;
+		if (!callback(W3DMicroChunkView{id, bytes.subspan(offset + 2, size)})) return false;
+		offset += 2 + size;
+	}
+	return true;
+}
+
 export bool W3DRead_U32(W3DByteSpan bytes, std::size_t offset, std::uint32_t &value) noexcept
 {
 	if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint32_t))

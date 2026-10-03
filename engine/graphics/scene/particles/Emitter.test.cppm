@@ -14,6 +14,8 @@ import Graphics.Scene.Particles.EmitterVisualState;
 import Graphics.Scene.Particles.EmitterEmission;
 import Graphics.Scene.Particles.EmitterDetail;
 import Graphics.Scene.Particles.EmitterRenderer;
+import Graphics.Scene.Particles.EmitterView;
+import Graphics.Scene.AffineTransform;
 import Graphics.Scene.Beams.RibbonSubdivision;
 import Graphics.Scene.Beams.RibbonTextureCoordinates;
 import Graphics.Scene.Beams.SegmentedLine;
@@ -72,6 +74,56 @@ BOOST_AUTO_TEST_CASE(birth_queue_wrap_retains_slot_identity_order_and_expiry_bou
     BOOST_CHECK_EQUAL(particles.Positions(0)[0][0], 11);
     BOOST_REQUIRE(particles.Advance(111, 0));
     BOOST_CHECK_EQUAL(particles.Count(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(shared_emitter_view_advances_by_session_time_and_keeps_paused_particles) {
+    auto description=Description();EmitterView view(description,1);auto world=Affine_Identity();
+    BOOST_REQUIRE(view.Advance(0,world,true));BOOST_REQUIRE(view.Advance(100,world,true));BOOST_TEST(view.Count()>0u);const auto count=view.Count();
+    for(unsigned frame=0;frame<20;++frame) BOOST_REQUIRE(view.Advance(100,world,true));BOOST_TEST(view.Count()==count);
+    BOOST_REQUIRE(view.Advance(1200,world,false));BOOST_TEST(view.Count()==0u);BOOST_TEST(!view.Advance(1100,world,true));
+}
+BOOST_AUTO_TEST_CASE(shared_emitter_view_finite_bursts_stop_then_can_restart_after_hidden_interval) {
+    auto description=Description();description.emission_rate=100;description.max_emissions=3;description.burst_size=1;description.lifetime=.1f;
+    EmitterView view(description,7);auto world=Affine_Identity();BOOST_REQUIRE(view.Advance(0,world,true));BOOST_REQUIRE(view.Advance(40,world,true));BOOST_TEST(view.Count()==3u);
+    BOOST_REQUIRE(view.Advance(200,world,true));BOOST_TEST(view.Count()==0u);
+    BOOST_REQUIRE(view.Advance(210,world,false));BOOST_REQUIRE(view.Advance(220,world,true));BOOST_REQUIRE(view.Advance(260,world,true));BOOST_TEST(view.Count()==3u);
+}
+BOOST_AUTO_TEST_CASE(emitter_birth_pose_preserves_a_short_trail_before_its_first_render_and_after_impact) {
+    auto description=Description();description.emission_rate=50;description.lifetime=.1f;
+    EmitterView view(description,1);auto birth=Affine_Identity(),impact=birth;impact.matrix[3]=5;
+    BOOST_REQUIRE(view.Advance(1000,birth,true));BOOST_REQUIRE(view.Advance(1050,impact,true));BOOST_REQUIRE(view.Advance(1050,impact,false));BOOST_TEST(view.Count()==2u);
+    // No render was needed to create or retain these cosmetic SoA particles.
+    BOOST_REQUIRE(view.Advance(1066,impact,false));BOOST_TEST(view.Count()==2u);
+    for(unsigned frame=0;frame<10;++frame) BOOST_REQUIRE(view.Advance(1066,impact,false));BOOST_TEST(view.Count()==2u);
+    BOOST_REQUIRE(view.Advance(1140,impact,false));BOOST_TEST(view.Count()==0u);
+}
+
+BOOST_AUTO_TEST_CASE(shared_emitter_view_converts_authored_random_velocity_from_seconds_to_milliseconds) {
+    // ParticleEmitterClass's constructor and Set_Velocity_Randomizer in
+    // WW3D2/part_emt.cpp scale the authored randomizer by 0.001, just like
+    // base velocity. Creation-volume dimensions remain in world units.
+    auto description=Description();description.lifetime=2;
+    description.creation_volume.dimensions={.25f,.5f,.75f};
+    description.velocity_random.dimensions={2,4,6};
+    EmitterView view(description,19);auto world=Affine_Identity();world.matrix[3]=10;world.matrix[7]=20;world.matrix[11]=30;
+    BOOST_REQUIRE(view.Advance(0,world,true));BOOST_REQUIRE(view.Advance(1000,world,true));BOOST_REQUIRE(view.Count()>80u);
+    float maximum{};std::size_t count{};
+    view.ForEachParticle([&](const auto& position,const auto&,float) {
+        ++count;const std::array<float,3> bounds{2.25f,4.5f,6.75f};
+        for(unsigned axis=0;axis<3;++axis) {
+            const auto distance=std::abs(position[axis]-world.matrix[axis*4+3]);
+            BOOST_TEST(distance<=bounds[axis]);maximum=(std::max)(maximum,distance);
+        }
+    });BOOST_TEST(count==view.Count());BOOST_TEST(maximum>.5f);
+    description.velocity_random.dimensions={};EmitterView stationary(description,19);
+    BOOST_REQUIRE(stationary.Advance(0,world,true));BOOST_REQUIRE(stationary.Advance(1000,world,true));maximum=0;
+    stationary.ForEachParticle([&](const auto& position,const auto&,float) {
+        const std::array<float,3> bounds{.25f,.5f,.75f};
+        for(unsigned axis=0;axis<3;++axis) {
+            const auto distance=std::abs(position[axis]-world.matrix[axis*4+3]);
+            BOOST_TEST(distance<=bounds[axis]+.00001f);maximum=(std::max)(maximum,distance);
+        }
+    });BOOST_TEST(maximum>.5f);
 }
 
 BOOST_AUTO_TEST_CASE(accelerated_births_duplicate_time_and_empty_clones_keep_the_clock_contract)
@@ -356,6 +408,32 @@ BOOST_AUTO_TEST_CASE(line_emission_groups_keep_gaps_and_only_the_last_run_connec
     renderer.Shutdown();
     BOOST_REQUIRE(device.Destroy_Texture(target));
     BOOST_REQUIRE(device.Destroy_Texture(depth));
+}
+
+BOOST_AUTO_TEST_CASE(shared_emitter_view_connects_the_live_line_to_its_current_source_group)
+{
+    // The shared line renderer connects the final live run to the emitter
+    // only when its particle group is the current emission group.
+    GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());
+    PropRenderer renderer;BOOST_REQUIRE(renderer.Initialize(device,Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    DirectionalShadowRenderer shadows;PropSubmission submission;submission.Initialize(device,renderer,shadows);
+    const auto target=device.Create_Texture({64,16,1,RHITextureFormat::RGBA8_UNorm,static_cast<std::uint32_t>(RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({64,16,1,RHITextureFormat::D32_Float,static_cast<std::uint32_t>(RHITextureUsage::DepthStencil)});
+    auto& commands=device.Immediate_Command_List();BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Set_Viewport({0,0,64,16,0,1}));
+    auto description=Description();description.geometry_mode=Assets::EmitterGeometryMode::Line;description.lifetime=10;description.emission_rate=1;description.size.start=.3f;
+    EmitterView view(description,1);auto world=Affine_Identity();world.matrix[3]=-.8f;world.matrix[11]=-5;
+    BOOST_REQUIRE(view.Advance(0,world,true));world.matrix[3]=.8f;BOOST_REQUIRE(view.Advance(1501,world,true));BOOST_REQUIRE_EQUAL(view.Count(),1u);
+    EmitterDrawInput input;input.projection.values={1,0,0,0,0,1,0,0,0,0,-.1f,0,0,0,0,1};
+    const auto render=[&] {
+        BOOST_REQUIRE(commands.Clear({0,0,0,0},1));BOOST_REQUIRE(view.Submit(device,renderer,submission,input,{}));BOOST_REQUIRE(submission.Flush_Transparent());
+        std::array<std::byte,64*16*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,64*4));return std::to_integer<unsigned>(pixels[(8*64+55)*4]);
+    };
+    BOOST_TEST(render()>200u);
+    // A paused render retains the same anchor. Stopping must detach it;
+    // remaining particles continue aging without a bridge to a dead source.
+    BOOST_REQUIRE(view.Advance(1501,world,true));BOOST_TEST(render()>200u);
+    BOOST_REQUIRE(view.Advance(1501,world,false));BOOST_TEST(render()==0u);
+    submission.Shutdown();renderer.Shutdown();BOOST_REQUIRE(device.Destroy_Texture(target));BOOST_REQUIRE(device.Destroy_Texture(depth));
 }
 
 BOOST_AUTO_TEST_CASE(sprite_emitter_atlas_tracks_select_the_authored_frame_after_byte_wrap)

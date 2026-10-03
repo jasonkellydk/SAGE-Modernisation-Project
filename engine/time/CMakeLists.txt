@@ -1,6 +1,6 @@
 add_library(engine_time STATIC)
 target_sources(engine_time PUBLIC FILE_SET cxx_modules TYPE CXX_MODULES FILES
-	simulation_time.cppm simulation_clock.cppm)
+	simulation_time.cppm simulation_clock.cppm frame_accumulator.cppm value_transition.cppm)
 if(NOT TARGET engine_core_math_fixed)
 	add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../core/math" "${CMAKE_CURRENT_BINARY_DIR}/../engine_core_math")
 endif()
@@ -13,7 +13,7 @@ endif()
 
 if(ENGINE_TIME_BUILD_TESTS)
 	find_package(boost_included_unit_test_framework CONFIG REQUIRED)
-	set(time_tests simulation_time.test simulation_clock.test)
+	set(time_tests simulation_time.test simulation_clock.test frame_accumulator.test)
 	set_source_files_properties(${time_tests} PROPERTIES LANGUAGE CXX)
 	add_executable(engine_time_tests ${time_tests})
 	set_property(TARGET engine_time_tests PROPERTY CXX_SCAN_FOR_MODULES ON)

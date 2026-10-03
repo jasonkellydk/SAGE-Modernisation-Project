@@ -1,0 +1,42 @@
+#define BOOST_TEST_MODULE InputPermission
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.input.systems.input_permission_system;
+import engine.core.serialization.byte_stream;
+namespace {
+using namespace engine::gameplay;
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{7}};InputPermissionSystem system;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    Fixture(unsigned workers,bool create=true) {
+        world.RegisterComponent<InputPermission>();world.FinalizeComponents();world.EmplaceResource<InputPermissionRequests>();
+        registry.Register(system);registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        if(!create) return;
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) {const auto entity=commands.Create();pending.push_back(entity);commands.Add<InputPermission>(entity);}
+        world.Commit(commands);for(const auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(ordered_permissions_persist_without_requests_and_resume_from_checkpoint_across_parallel_chunks) {
+    const auto run=[](unsigned workers) {
+        Fixture f(workers);auto& requests=f.world.Resource<InputPermissionRequests>();requests.Reset(2);
+        for(unsigned i=0;i<f.entities.size();++i) {
+            requests.SlotAt(0).push_back({f.entities[i],8,0});requests.SlotAt(1).push_back({f.entities[i],2,1});
+        }
+        f.Step(1);for(const auto entity:f.entities) BOOST_TEST(f.world.Get<InputPermission>(entity)->enabled==0u);
+        requests.Reset(0);f.Step(2);for(const auto entity:f.entities) BOOST_TEST(f.world.Get<InputPermission>(entity)->enabled==0u);
+        engine::core::serialization::ByteWriter checkpoint;f.world.SaveCheckpoint(checkpoint);
+        Fixture restored(workers,false);restored.entities=f.entities;engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+        for(auto* fixture:{&f,&restored}) {
+            auto& inputs=fixture->world.Resource<InputPermissionRequests>();inputs.Reset(1);
+            for(unsigned i=0;i<fixture->entities.size();i+=2) inputs.SlotAt(0).push_back({fixture->entities[i],9,1});
+            fixture->Step(3);
+            for(unsigned i=0;i<fixture->entities.size();++i) BOOST_TEST(fixture->world.Get<InputPermission>(fixture->entities[i])->enabled==(i%2 ? 0u : 1u));
+        }
+        BOOST_TEST(f.world.StateHash()==restored.world.StateHash());return f.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

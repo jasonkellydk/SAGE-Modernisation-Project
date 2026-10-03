@@ -1,0 +1,21 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.hud.objective_view_model;
+using namespace renegade;using namespace renegade::hud;using namespace Engine::Math;
+BOOST_AUTO_TEST_CASE(source_objective_hud_filters_sorts_cycles_and_resets_changed_index) {
+    ObjectiveViewModel view;std::vector<ObjectiveRow> rows(4);
+    for(unsigned i=0;i<rows.size();++i) {rows[i].identity=i+1;rows[i].value.id=i+1;rows[i].value.priority=Fixed::FromInt(10+i);rows[i].value.pog=i+1;}
+    rows[2].value.status=ObjectiveStatus::Hidden;rows[3].value.priority={};view.Update(rows);
+    BOOST_REQUIRE(view.Rows().size()==2u);BOOST_TEST(view.Current()->value.id==2);BOOST_REQUIRE(view.cycle.Execute());BOOST_TEST(view.Current()->value.id==1);
+    view.Update(rows);BOOST_TEST(view.Current()->value.id==1);
+    rows[2].value.status=ObjectiveStatus::Pending;view.Update(rows);BOOST_TEST(view.Current()->value.id==3); // indexed object changed, source resets to first
+    rows[0].value.status=ObjectiveStatus::Accomplished;rows[1].value.status=ObjectiveStatus::Failed;rows[2].value.status=ObjectiveStatus::Hidden;view.Update(rows);BOOST_TEST(!view.visible.Get());BOOST_TEST(!view.cycle.Execute());
+}
+BOOST_AUTO_TEST_CASE(source_objective_pog_fly_stacking_and_ten_metre_range) {
+    ObjectiveViewModel view;ObjectiveRow row;row.identity=1;row.value.priority=Fixed::One();row.value.pog=1;row.position={Fixed::FromInt(3),Fixed::FromInt(4),Fixed::FromInt(12)};
+    for(const auto pair:{std::pair{Fixed{},Fixed::One()},std::pair{Fixed::One(),Fixed::One()},std::pair{Fixed::FromRatio(3,2),Fixed::Half()},std::pair{Fixed::FromInt(2),Fixed{}}}) {
+        row.age=pair.first;view.Update({row});const auto icon=view.Icons(1280,960).front();BOOST_TEST(icon.fly.Raw()==pair.second.Raw());BOOST_TEST(icon.left.Raw()==(Fixed::FromInt(1200)-Fixed::FromInt(480)*pair.second).Raw());BOOST_TEST(icon.top.Raw()==(Fixed::FromInt(8)+Fixed::FromInt(480)*pair.second).Raw());
+    }
+    BOOST_TEST(ObjectiveViewModel::Range(row,{})==10); // full XYZ range, floor to ten metres
+    ObjectiveRow second=row;second.identity=2;second.value.pog=2;view.Update({row,second});const auto icons=view.Icons(1280,960);BOOST_REQUIRE(icons.size()==2u);BOOST_TEST(icons[0].left.Raw()==1210*Fixed::OneRaw);BOOST_TEST(icons[1].left.Raw()==1200*Fixed::OneRaw);BOOST_TEST(icons[1].token==1u);
+}

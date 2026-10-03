@@ -1,0 +1,74 @@
+#define BOOST_TEST_MODULE SweptMotion
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.physics.systems.swept_motion_system;
+
+namespace {
+using namespace Engine::Math;
+using namespace engine::gameplay;
+FixedVector3 P(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+std::shared_ptr<const engine::level::CollisionScene3> Geometry() {
+    auto scene=std::make_shared<engine::level::CollisionScene3>();
+    scene->AddTriangle(P(-64,-64,0),P(64,-64,0),P(0,64,0),10,1,5);
+    scene->AddTriangle(P(4,-64,-64),P(4,64,-64),P(4,0,64),20,1,7);
+    scene->Prepare();return scene;
+}
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{64}};
+    SweptMotionSystem system;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    explicit Fixture(std::size_t workers,std::size_t count=1) {
+        world.RegisterComponent<Transform>();world.RegisterComponent<SweptHull>();world.RegisterComponent<SweptMotion>();world.RegisterComponent<SweepContacts>();world.FinalizeComponents();
+        world.EmplaceResource<CollisionGeometry>().scene=Geometry();registry.Register(system);registry.Finalize(world.Components());
+        scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(std::size_t i=0;i<count;++i) {
+            auto entity=commands.Create();pending.push_back(entity);
+            commands.Add<Transform>(entity,Transform{P(0,int(i%7)-3,2)});
+            SweptHull hull;hull.extent=P(1,1,1);hull.categories=1;
+            commands.Add<SweptHull>(entity,hull);commands.Add<SweptMotion>(entity,SweptMotion{P(10,2,-2)});commands.Add<SweepContacts>(entity);
+        }
+        world.Commit(commands);for(auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(swept_box_slides_along_wall_and_floor_without_replaying_consumed_motion) {
+    Fixture fixture(4);fixture.Step(1);auto entity=fixture.entities.front();
+    const auto* pose=fixture.world.Get<Transform>(entity);BOOST_REQUIRE(pose);
+    BOOST_TEST(pose->position.x.Raw()<=Fixed::FromInt(3).Raw());BOOST_TEST(pose->position.x.Raw()>Fixed::FromInt(3).Raw()-16);
+    BOOST_TEST(Abs(pose->position.y-Fixed::FromInt(-1)).Raw()<=2);BOOST_TEST(pose->position.z.Raw()>=Fixed::FromInt(1).Raw());BOOST_TEST(pose->position.z.Raw()<Fixed::FromInt(1).Raw()+4);
+    const auto* motion=fixture.world.Get<SweptMotion>(entity);BOOST_CHECK(motion->requested==FixedVector3{});
+    BOOST_TEST(motion->applied.x.Raw()<=Fixed::FromInt(3).Raw());BOOST_TEST(Abs(motion->applied.y-Fixed::FromInt(2)).Raw()<=2);
+    const auto* contacts=fixture.world.Get<SweepContacts>(entity);BOOST_REQUIRE(contacts->count==2u);
+    BOOST_TEST(contacts->subjects[0]==20u);BOOST_TEST(contacts->surfaces[0]==7u);BOOST_TEST(contacts->subjects[1]==10u);BOOST_TEST(contacts->surfaces[1]==5u);
+    const auto stopped=pose->position;
+    const auto overlap=fixture.world.Resource<CollisionGeometry>().scene->Cast({pose->position,P(1,1,1)},{},1);BOOST_CHECK(!overlap || !overlap->starts_overlapping);
+    fixture.Step(2);BOOST_CHECK(pose->position==stopped);BOOST_TEST(contacts->count==0u);BOOST_CHECK(motion->applied==FixedVector3{});
+}
+BOOST_AUTO_TEST_CASE(swept_motion_is_identical_across_parallel_chunks_and_worker_counts) {
+    Fixture serial(1,513),parallel(4,513);serial.Step(1);parallel.Step(1);
+    for(std::size_t i=0;i<serial.entities.size();++i) {
+        const auto* a=serial.world.Get<Transform>(serial.entities[i]);const auto* b=parallel.world.Get<Transform>(parallel.entities[i]);
+        BOOST_CHECK(a->position==b->position);
+        const auto* ca=serial.world.Get<SweepContacts>(serial.entities[i]);const auto* cb=parallel.world.Get<SweepContacts>(parallel.entities[i]);
+        BOOST_TEST(ca->count==cb->count);BOOST_CHECK(ca->surfaces==cb->surfaces);BOOST_CHECK(ca->subjects==cb->subjects);
+    }
+    BOOST_CHECK(serial.world.StateHash()==parallel.world.StateHash());
+}
+BOOST_AUTO_TEST_CASE(unpublished_geometry_cannot_allow_unchecked_movement_and_categories_filter_contacts) {
+    Fixture missing(1);missing.world.Resource<CollisionGeometry>().scene.reset();missing.Step(1);
+    BOOST_TEST(missing.world.Get<Transform>(missing.entities[0])->position.x.Raw()==0);
+    BOOST_CHECK(missing.world.Get<SweptMotion>(missing.entities[0])->requested==FixedVector3{});
+    Fixture filtered(1);filtered.world.Get<SweptHull>(filtered.entities[0])->categories=2;filtered.Step(1);
+    BOOST_TEST(filtered.world.Get<Transform>(filtered.entities[0])->position.x.Raw()==Fixed::FromInt(10).Raw());
+    BOOST_TEST(filtered.world.Get<SweepContacts>(filtered.entities[0])->count==0u);
+}
+BOOST_AUTO_TEST_CASE(overlapping_geometry_and_invalid_contact_limits_fail_conservatively) {
+    auto scene=Geometry();SweptHull hull;hull.extent=P(1,1,1);hull.categories=1;SweepContacts contacts;
+    const auto move=SweepAndSlide(*scene,P(0,0,0),P(2,0,0),hull,contacts);
+    BOOST_CHECK(move==FixedVector3{});BOOST_TEST(contacts.overlapping==1u);
+    hull.maximum_contacts=0;BOOST_CHECK_THROW(SweepAndSlide(*scene,P(0,0,2),P(2,0,0),hull,contacts),std::invalid_argument);
+    hull.maximum_contacts=SweepContacts::Capacity+1;BOOST_CHECK_THROW(SweepAndSlide(*scene,P(0,0,2),P(2,0,0),hull,contacts),std::invalid_argument);
+}

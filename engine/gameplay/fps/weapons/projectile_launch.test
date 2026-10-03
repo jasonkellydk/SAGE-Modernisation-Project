@@ -1,0 +1,89 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.fps.weapons.systems.projectile_launch_system;
+import engine.gameplay.common.spatial.systems.affine_snapshot_system;
+BOOST_AUTO_TEST_CASE(projectile_snapshot_preserves_birth_and_first_tick_impact_after_deferred_destruction) {
+    using namespace Engine::Math;using namespace engine::gameplay;
+    const auto point=[](Fixed x,int y,int z) {return FixedVector3{x,Fixed::FromInt(y),Fixed::FromInt(z)};};
+    const auto run=[&](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<AffinePose>();world.RegisterComponent<ModelOverride>();world.RegisterComponent<FireTrigger>();world.RegisterComponent<FireSequence>();world.RegisterComponent<ProjectileLauncher>();world.RegisterComponent<LinearFlight>();world.FinalizeComponents();
+        auto geometry=std::make_shared<engine::level::CollisionScene3>();geometry->AddTriangle(point(Fixed::FromRatio(1,2),-64,-64),point(Fixed::FromRatio(1,2),64,-64),point(Fixed::FromRatio(1,2),0,64),99,2);geometry->Prepare();world.EmplaceResource<CollisionGeometry>().scene=geometry;world.EmplaceResource<AffineVisibleObjects>();world.EmplaceResource<ProjectileVisuals>();
+        FireSequenceSystem fire;ProjectileLaunchSystem launch;LinearFlightSystem flight;ProjectileSnapshotSystem projectiles;AffineSnapshotSystem snapshot;ecs::SystemRegistry registry;registry.Register(fire);registry.Register(launch);registry.Register(flight);registry.Register(projectiles);registry.Register(snapshot);registry.Finalize(world.Components());ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;const auto pending=commands.Create();commands.Add<AffinePose>(pending);world.Commit(commands);const auto socket=commands.Resolve(pending);
+        ecs::CommandBuffer shooters;for(unsigned i=0;i<513;++i) {
+            const auto entity=shooters.Create();FireTrigger trigger;trigger.target={Fixed::FromInt(20),{}, {}};trigger.pressed=1;shooters.Add<FireTrigger>(entity,trigger);FireSequence cadence;cadence.period=Fixed::One();shooters.Add<FireSequence>(entity,cadence);
+            ProjectileLauncher binding;binding.muzzle=socket;binding.speed=Fixed::FromInt(60);binding.range=Fixed::FromInt(100);binding.model=1;binding.categories=2;shooters.Add<ProjectileLauncher>(entity,binding);
+        }world.Commit(shooters);
+        scheduler.Execute(engine::time::SimulationTime{1,engine::time::FixedStep{60}});BOOST_TEST(world.EntityCount()==1027u);
+        scheduler.Execute(engine::time::SimulationTime{2,engine::time::FixedStep{60}});BOOST_TEST(world.EntityCount()==514u);
+        std::size_t count{};world.Resource<ProjectileVisuals>().ForEach([&](const auto& item) {
+            ++count;BOOST_CHECK(!world.IsAlive(item.entity));BOOST_TEST(item.birth_tick==1u);BOOST_TEST(item.expired==1u);BOOST_TEST(item.model==1u);
+            BOOST_TEST(item.birth_pose.elements[3].Raw()==0);BOOST_TEST(Abs(item.pose.elements[3]-Fixed::FromRatio(1,2)).Raw()<32);
+        });BOOST_TEST(count==513u);
+        scheduler.Execute(engine::time::SimulationTime{3,engine::time::FixedStep{60}});count=0;world.Resource<ProjectileVisuals>().ForEach([&](const auto&) {++count;});BOOST_TEST(count==0u);return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(projectile_aim_modes_separate_muzzle_orientation_from_the_action_target) {
+    using namespace Engine::Math;using namespace engine::gameplay;
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<AffinePose>();world.RegisterComponent<ModelOverride>();world.RegisterComponent<FireTrigger>();world.RegisterComponent<FireSequence>();world.RegisterComponent<ProjectileLauncher>();world.RegisterComponent<LinearFlight>();world.FinalizeComponents();
+        world.EmplaceResource<CollisionGeometry>();world.EmplaceResource<AffineVisibleObjects>();world.EmplaceResource<ProjectileVisuals>();
+        FireSequenceSystem fire;ProjectileLaunchSystem launch;LinearFlightSystem flight;ProjectileSnapshotSystem projectiles;AffineSnapshotSystem snapshot;ecs::SystemRegistry registry;registry.Register(fire);registry.Register(launch);registry.Register(flight);registry.Register(projectiles);registry.Register(snapshot);registry.Finalize(world.Components());ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        // A pitched muzzle points up along +Y while the AI requests a target
+        // behind it. Authored muzzle scale must not change projectile speed.
+        AffinePose muzzle;muzzle.transform.elements={Fixed{},-Fixed::One(),Fixed{},Fixed::FromInt(4),Fixed::FromInt(2),Fixed{},-Fixed::FromInt(2),Fixed::FromInt(6),Fixed::FromInt(2),Fixed{},Fixed::FromInt(2),Fixed::FromInt(8)};
+        ecs::CommandBuffer commands;const auto pending=commands.Create();commands.Add<AffinePose>(pending,muzzle);world.Commit(commands);const auto socket=commands.Resolve(pending);
+        ecs::CommandBuffer shooters;
+        for(unsigned i=0;i<513;++i) {
+            const auto entity=shooters.Create();FireTrigger trigger;trigger.target={Fixed::FromInt(4),Fixed::FromInt(-94),Fixed::FromInt(8)};trigger.pressed=1;shooters.Add<FireTrigger>(entity,trigger);
+            FireSequence cadence;cadence.period=Fixed::One();shooters.Add<FireSequence>(entity,cadence);ProjectileLauncher binding;binding.muzzle=socket;binding.speed=Fixed::FromInt(60);binding.range=Fixed::FromInt(400);binding.model=i%3+1;binding.aim=static_cast<ProjectileAim>(i%3);binding.target_cone_cosine=Fixed::FromRatio(9,10);shooters.Add<ProjectileLauncher>(entity,binding);
+        }
+        world.Commit(shooters);scheduler.Execute(engine::time::SimulationTime{1,engine::time::FixedStep{60}});scheduler.Execute(engine::time::SimulationTime{2,engine::time::FixedStep{60}});
+        std::size_t count{};world.Resource<AffineVisibleObjects>().ForEach([&](const auto& object) {
+            const auto* projectile=world.Get<LinearFlight>(object.entity);BOOST_REQUIRE(projectile);++count;
+            BOOST_TEST(Abs(Length(projectile->velocity)-Fixed::FromInt(60)).Raw()<256);
+            if(object.model!=1) {BOOST_TEST(projectile->velocity.y.Raw()>0);BOOST_TEST(projectile->velocity.z.Raw()>0);BOOST_TEST(Abs(projectile->velocity.y-projectile->velocity.z).Raw()<32);BOOST_TEST(object.transform.elements[7].Raw()>Fixed::FromInt(6).Raw());BOOST_TEST(object.transform.elements[11].Raw()>Fixed::FromInt(8).Raw());}
+            else {BOOST_TEST(projectile->velocity.y.Raw()==-Fixed::FromInt(60).Raw());BOOST_TEST(projectile->velocity.z.Raw()==0);BOOST_TEST(object.transform.elements[7].Raw()<Fixed::FromInt(6).Raw());}
+        });BOOST_TEST(count==513u);return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(target_cone_accepts_its_boundary_and_falls_back_for_missing_or_off_axis_targets) {
+    using namespace Engine::Math;using namespace engine::gameplay;
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<AffinePose>();world.RegisterComponent<ModelOverride>();world.RegisterComponent<FireTrigger>();world.RegisterComponent<FireSequence>();world.RegisterComponent<ProjectileLauncher>();world.RegisterComponent<LinearFlight>();world.FinalizeComponents();
+        world.EmplaceResource<CollisionGeometry>();world.EmplaceResource<AffineVisibleObjects>();world.EmplaceResource<ProjectileVisuals>();
+        FireSequenceSystem fire;ProjectileLaunchSystem launch;LinearFlightSystem flight;ProjectileSnapshotSystem projectiles;AffineSnapshotSystem snapshot;ecs::SystemRegistry registry;registry.Register(fire);registry.Register(launch);registry.Register(flight);registry.Register(projectiles);registry.Register(snapshot);registry.Finalize(world.Components());ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;const auto pending=commands.Create();commands.Add<AffinePose>(pending);world.Commit(commands);const auto socket=commands.Resolve(pending);
+        ecs::CommandBuffer shooters;
+        for(unsigned i=0;i<513;++i) {
+            const auto entity=shooters.Create();FireTrigger trigger;trigger.target=i%4==0 ? FixedVector3{Fixed::FromInt(4),Fixed::One(),{}} : i%4==1 ? FixedVector3{Fixed::FromInt(3),Fixed::FromInt(4),{}} : i%4==2 ? FixedVector3{{},Fixed::One(),{}} : FixedVector3{};trigger.pressed=1;shooters.Add<FireTrigger>(entity,trigger);
+            FireSequence cadence;cadence.period=Fixed::One();shooters.Add<FireSequence>(entity,cadence);ProjectileLauncher binding;binding.muzzle=socket;binding.speed=Fixed::FromInt(60);binding.range=Fixed::FromInt(400);binding.model=i%4+1;binding.aim=ProjectileAim::ConstrainedTarget;binding.target_cone_cosine=Fixed::FromRatio(3,5);shooters.Add<ProjectileLauncher>(entity,binding);
+        }
+        world.Commit(shooters);scheduler.Execute(engine::time::SimulationTime{1,engine::time::FixedStep{60}});scheduler.Execute(engine::time::SimulationTime{2,engine::time::FixedStep{60}});
+        std::size_t count{};world.Resource<AffineVisibleObjects>().ForEach([&](const auto& object) {
+            const auto* projectile=world.Get<LinearFlight>(object.entity);BOOST_REQUIRE(projectile);++count;
+            if(object.model==1) {BOOST_TEST(projectile->velocity.y.Raw()>0);BOOST_TEST(Abs(projectile->velocity.x-projectile->velocity.y*Fixed::FromInt(4)).Raw()<128);}
+            else if(object.model==2) {BOOST_TEST(Abs(projectile->velocity.x-Fixed::FromInt(36)).Raw()<128);BOOST_TEST(Abs(projectile->velocity.y-Fixed::FromInt(48)).Raw()<128);}
+            else {BOOST_TEST(projectile->velocity.x.Raw()==Fixed::FromInt(60).Raw());BOOST_TEST(projectile->velocity.y.Raw()==0);}
+        });BOOST_TEST(count==513u);return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(projectiles_are_deferred_follow_the_muzzle_and_hit_the_shared_level_bvh) {
+    using namespace Engine::Math;using namespace engine::gameplay;
+    const auto point=[](int x,int y,int z) {return FixedVector3{Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};};
+    const auto run=[&](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<AffinePose>();world.RegisterComponent<ModelOverride>();world.RegisterComponent<FireTrigger>();world.RegisterComponent<FireSequence>();world.RegisterComponent<ProjectileLauncher>();world.RegisterComponent<LinearFlight>();world.FinalizeComponents();
+        auto geometry=std::make_shared<engine::level::CollisionScene3>();geometry->AddTriangle(point(3,-64,-64),point(3,64,-64),point(3,0,64),98,2);geometry->AddTriangle(point(10,-64,-64),point(10,64,-64),point(10,0,64),99,1);geometry->Prepare();world.EmplaceResource<CollisionGeometry>().scene=geometry;world.EmplaceResource<AffineVisibleObjects>();world.EmplaceResource<ProjectileVisuals>();
+        FireSequenceSystem fire;ProjectileLaunchSystem launch;LinearFlightSystem flight;ProjectileSnapshotSystem projectiles;AffineSnapshotSystem snapshot;ecs::SystemRegistry registry;registry.Register(fire);registry.Register(launch);registry.Register(flight);registry.Register(projectiles);registry.Register(snapshot);registry.Finalize(world.Components());ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer muzzle_command;const auto pending_muzzle=muzzle_command.Create();muzzle_command.Add<AffinePose>(pending_muzzle,AffinePose{FixedAffineTransform3::From_Translation(point(0,0,2))});world.Commit(muzzle_command);const auto muzzle=muzzle_command.Resolve(pending_muzzle);
+        ecs::CommandBuffer shooters;
+        for(unsigned i=0;i<513;++i) {const auto entity=shooters.Create();FireTrigger trigger;trigger.target=point(20,0,2);trigger.pressed=1;shooters.Add<FireTrigger>(entity,trigger);FireSequence cadence;cadence.period=Fixed::One();shooters.Add<FireSequence>(entity,cadence);ProjectileLauncher binding;binding.muzzle=muzzle;binding.speed=Fixed::FromInt(60);binding.range=Fixed::FromInt(40);binding.model=7;binding.categories=1;shooters.Add<ProjectileLauncher>(entity,binding);}world.Commit(shooters);
+        const auto step=[&](unsigned tick) {scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});};step(1);BOOST_TEST(world.EntityCount()==1027u);
+        step(2);std::vector<AffineVisibleObject> visible;world.Resource<AffineVisibleObjects>().AppendTo(visible);BOOST_REQUIRE_EQUAL(visible.size(),513u);
+        for(const auto& object:visible) {BOOST_TEST(object.model==7u);BOOST_TEST(Abs(object.transform.elements[3]-Fixed::One()).Raw()<32);BOOST_TEST(object.transform.elements[11].Raw()==2*Fixed::OneRaw);}
+        for(unsigned tick=3;tick<=5;++tick) step(tick);BOOST_TEST(world.EntityCount()==1027u); // the differently categorized wall does not stop these projectiles
+        for(unsigned tick=6;tick<=20;++tick) step(tick);BOOST_TEST(world.EntityCount()==514u);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}

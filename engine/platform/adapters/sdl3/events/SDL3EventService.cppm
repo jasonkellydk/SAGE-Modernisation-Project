@@ -35,6 +35,9 @@ public:
 		if (input.type != EventType::quit && SDL_GetWindowFromID(input.window) == nullptr) return false;
 		switch (input.type) {
 		case EventType::quit: event.type = SDL_EVENT_QUIT; break;
+		case EventType::focus_gained: case EventType::focus_lost:
+			event.type = input.type == EventType::focus_gained ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST;
+			event.window.windowID = input.window; break;
 		case EventType::key_down: case EventType::key_up: {
 			event.type = input.type == EventType::key_down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 			event.key.windowID = input.window; event.key.down = input.type == EventType::key_down; event.key.repeat = input.repeat;
@@ -58,8 +61,10 @@ public:
             break;
         }
         case EventType::mouse_moved:
+			if (!std::isfinite(input.position.x) || !std::isfinite(input.position.y) || !std::isfinite(input.x) || !std::isfinite(input.y)) return false;
 			event.type = SDL_EVENT_MOUSE_MOTION; event.motion.windowID = input.window;
-			event.motion.x = input.position.x; event.motion.y = input.position.y; break;
+			event.motion.x = input.position.x; event.motion.y = input.position.y;
+			event.motion.xrel = input.x; event.motion.yrel = input.y; break;
 		case EventType::mouse_wheel:
 			if (!std::isfinite(input.x) || !std::isfinite(input.y)) return false;
 			event.type = SDL_EVENT_MOUSE_WHEEL; event.wheel.windowID = input.window;
@@ -109,7 +114,7 @@ public:
             case SDL_EVENT_TEXT_EDITING:
                 out.type=EventType::text_editing;out.window=event.edit.windowID;out.text_start=event.edit.start;out.text_length=event.edit.length;
                 SDL_strlcpy(out.text,event.edit.text ? event.edit.text : "",sizeof(out.text));ForgetPostedText(event.edit.text);break;
-			case SDL_EVENT_MOUSE_MOTION: out.type = EventType::mouse_moved; out.window = event.motion.windowID; out.position = {event.motion.x, event.motion.y}; break;
+			case SDL_EVENT_MOUSE_MOTION: out.type = EventType::mouse_moved; out.window = event.motion.windowID; out.position = {event.motion.x, event.motion.y}; out.x = event.motion.xrel; out.y = event.motion.yrel; break;
 			case SDL_EVENT_MOUSE_BUTTON_DOWN: out.type = EventType::mouse_button_down; out.window = event.button.windowID; out.code = event.button.button; out.position = {event.button.x, event.button.y}; out.clicks = event.button.clicks; break;
 			case SDL_EVENT_MOUSE_BUTTON_UP: out.type = EventType::mouse_button_up; out.window = event.button.windowID; out.code = event.button.button; out.position = {event.button.x, event.button.y}; out.clicks = event.button.clicks; break;
 			case SDL_EVENT_MOUSE_WHEEL: out.type = EventType::mouse_wheel; out.window = event.wheel.windowID; out.x = event.wheel.x; out.y = event.wheel.y; out.flipped = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED; break;

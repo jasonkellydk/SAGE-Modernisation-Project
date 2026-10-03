@@ -1,0 +1,16 @@
+#include <boost/test/unit_test.hpp>
+#include <cmath>
+#include <numbers>
+import std;
+import Engine.Core.Math.FixedLookAngles;
+using namespace Engine::Math;
+BOOST_AUTO_TEST_CASE(fixed_look_angles_match_independent_heading_and_elevation_for_every_octant) {
+    for(int x=-19;x<=19;x+=3) for(int y=-17;y<=17;y+=3) for(int z=-13;z<=13;z+=3) {
+        const auto result=LookAnglesForDirection({Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)});BOOST_REQUIRE(result);
+        const auto heading=result->heading.units*(2*std::numbers::pi/4294967296.0);
+        BOOST_TEST(std::abs(std::remainder(heading-std::atan2(double(y),double(x)),2*std::numbers::pi))<1e-6);
+        BOOST_TEST(std::abs(result->pitch.Raw()/65536.0-std::atan2(double(z),std::hypot(double(x),double(y))))<2.0/65536);
+    }
+    BOOST_TEST(!LookAnglesForDirection({}));
+    for(const auto z:{-1,1}) {const auto result=LookAnglesForDirection({{},{},Fixed::FromInt(z)});BOOST_REQUIRE(result);BOOST_TEST(result->heading.units==0u);BOOST_TEST(result->pitch.Raw()==z*Radians(TurnFromDegrees(90)).Raw());}
+}

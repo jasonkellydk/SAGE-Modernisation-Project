@@ -48,7 +48,7 @@ ModelDescriptionLoadResult Load_Model_Description(
 		if (selected == nullptr)
 			return {nullptr, "no model adapter accepts the requested asset"};
 
-		ModelImportResult imported = (*selected)->Import(identity, bytes);
+		ModelImportResult imported = (*selected)->Import_With_Source(identity, bytes, source);
 		if (!imported.Succeeded())
 			return {nullptr, imported.error.empty() ? "model import failed" : std::move(imported.error)};
 

@@ -6,6 +6,12 @@ import std;
 import Assets.Adapters.W3D.Rig;
 import Assets.Adapters.W3D.Chunks;
 import Assets.ModelRig;
+import Assets.Adapters.W3D.ResolvedModel;
+import Assets.Adapters.W3D;
+import Assets.Cache;
+import Assets.States;
+import Assets.Identity;
+import Assets.Models;
 using Bytes=std::vector<std::byte>;
 namespace {
 void U32(Bytes& b,std::uint32_t x) { for(unsigned i=0;i<4;++i)b.push_back(std::byte(x>>(8*i))); }
@@ -38,6 +44,22 @@ BOOST_AUTO_TEST_CASE(retains_rig_channels_and_visibility_defaults) {
     BOOST_REQUIRE_EQUAL(clip.channels.size(),2u);BOOST_TEST(clip.channels[0].first_frame==10u);
     BOOST_TEST(clip.channels[0].samples[1][0]==5);BOOST_TEST(clip.channels[1].default_visible);
     BOOST_TEST(clip.channels[1].samples[0][0]==0);BOOST_TEST(clip.channels[1].samples[1][0]==1);
+}
+BOOST_AUTO_TEST_CASE(transform_only_null_hierarchies_load_through_the_shared_model_cache) {
+    auto bytes=Hierarchy();Bytes header;U32(header,0x10000);U32(header,1);Name(header,"MODEL");Name(header,"RIG");
+    Bytes array_header;U32(array_header,1);F32(array_header,100);Bytes child;U32(child,1);Name(child,"MODEL.HOST",32);
+    Bytes array;Chunk(array,0x703,array_header);Chunk(array,0x704,child);
+    Bytes lod;Chunk(lod,0x701,header);Chunk(lod,0x702,array,true);Chunk(bytes,0x700,lod,true);
+    const auto unresolved=bytes;Bytes empty(16);Name(empty,"MODEL.HOST",32);Chunk(bytes,0x750,empty);
+    Assets::AssetCache cache([&](const Assets::AssetIdentity& identity) {return identity.type==Assets::AssetType::Model ? bytes : Bytes{};});
+    BOOST_REQUIRE(cache.Register_Model_Adapter(std::make_shared<Assets::W3DAdapter>()));const auto handle=cache.Request_Model("model.w3d");cache.Wait(handle);
+    BOOST_REQUIRE_MESSAGE(cache.Get_State(handle)==Assets::AssetState::Ready,cache.Get_Error(handle));const auto* model=cache.Try_Get_Model(handle);BOOST_REQUIRE(model);
+    BOOST_TEST(model->Vertices().empty());BOOST_TEST(model->Indices().empty());BOOST_TEST(model->Submeshes().empty());BOOST_TEST(model->Bounds().Is_Valid());
+    BOOST_REQUIRE_EQUAL(model->Rig().bones.size(),2u);BOOST_TEST(model->Rig().bones[1].translation.x==3.f);
+    // hlod.cpp adds only non-null Create_Render_Obj results: absent helper
+    // prototypes do not invalidate the enclosing animated hierarchy.
+    const auto absent=Assets::W3D::W3DResolve_Model({Assets::AssetType::Model,"model.w3d"},unresolved,[](const auto&) {return Bytes{};});BOOST_TEST(absent.Succeeded());
+    auto malformed=bytes;malformed.pop_back();const auto rejected=Assets::W3D::W3DResolve_Model({Assets::AssetType::Model,"model.w3d"},malformed,[](const auto&) {return Bytes{};});BOOST_TEST(!rejected.Succeeded());
 }
 BOOST_AUTO_TEST_CASE(rejects_cycles_duplicate_chunks_and_truncation_without_partial_output) {
     Assets::ModelRigDesc rig;rig.skeleton_name="preserved";std::string error;

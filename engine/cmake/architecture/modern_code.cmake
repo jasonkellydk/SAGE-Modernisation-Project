@@ -12,6 +12,8 @@
 #                    ecs::Lookup for reads and Commands() for writes
 #   native-platform game/W3D UI bypassing engine/platform through native headers,
 #                    SDL calls, DLL imports or OS-specific entry points
+#   configuration-boundary Renegade consumers parse/read raw INI rather than
+#                    consuming structs bound by game-local content adapters
 # Graphics, gui, assets and video are still shared with the legacy build and
 # are outside this guard's scope for now.
 cmake_minimum_required(VERSION 3.25)
@@ -58,8 +60,19 @@ foreach(path IN LISTS sources)
     string(REGEX MATCHALL "#[ \t]*include[ \t]*[<\"][^>\"\n]*[>\"]" includes "${text}")
     string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" " " text "${text}")
     string(REGEX REPLACE "//[^\n]*" " " text "${text}")
+    # Keep literal filenames for this check; remove comments first so source
+    # evidence notes are harmless. Portable preferences adapters remain valid.
+    if(path MATCHES "^games/renegade/" AND NOT path MATCHES "^games/renegade/content/"
+       AND text MATCHES "[.]Read(Text)?[ \t\n]*[(][ \t\n]*\"[^\"\n]*[.]ini\"")
+        report("${path}" configuration-boundary)
+    endif()
     string(REGEX REPLACE "\"([^\"\\\\\n]|\\\\.)*\"" "\"\"" text "${text}")
     string(REGEX REPLACE "'([^'\\\\\n]|\\\\.)*'" "''" text "${text}")
+    if(path MATCHES "^games/renegade/" AND NOT path MATCHES "^games/renegade/content/"
+       AND (text MATCHES "(^|[;\n])[ \t]*(export[ \t]+)?import[ \t]+engine[.]config[.]adapters[.]ini[.]"
+            OR text MATCHES "ini::(ReadSections|ReadINI|FindSection)[ \t\n]*[(]"))
+        report("${path}" configuration-boundary)
+    endif()
 
     foreach(include IN LISTS includes)
         if(include MATCHES "(GeneralsMD|Core/|WWVegas|WW3D2|GameLogic/|GameClient/|GameNetwork/|Common/|Lib/BaseType|always\\.h|PreRTS)")

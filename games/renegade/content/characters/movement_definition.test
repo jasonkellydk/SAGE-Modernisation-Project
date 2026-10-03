@@ -1,0 +1,64 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.characters.movement_definition;
+import games.renegade.content.campaign.campaign_content;
+import games.renegade.content.install.install_mount;
+import games.renegade.content.levels.level_scene;
+namespace {
+using Bytes=std::vector<std::byte>;
+void Word(Bytes& data,std::uint32_t word) {for(unsigned s=0;s<32;s+=8) data.push_back(static_cast<std::byte>(word>>s));}
+void Append(Bytes& target,const Bytes& source) {target.insert(target.end(),source.begin(),source.end());}
+Bytes Chunk(std::uint32_t id,const Bytes& data,bool children=false) {
+    Bytes result;Word(result,id);Word(result,static_cast<std::uint32_t>(data.size())|(children ? 0x80000000u : 0));Append(result,data);return result;
+}
+void Float(Bytes& data,unsigned id,float value) {data.push_back(static_cast<std::byte>(id));data.push_back(std::byte{4});Word(data,std::bit_cast<std::uint32_t>(value));}
+auto Fixture() {
+    // Independent wire fixture: the same leaf ID has different meanings in
+    // the Soldier/Physical and Phys3/Moveable inheritance scopes (EA Save enums).
+    renegade::content::LegacyDefinition soldier,physics;Bytes inherited,fields;
+    Append(inherited,Chunk(909991661,{},true));Float(fields,2,99);Append(inherited,Chunk(909991657,fields));
+    Append(soldier.data,Chunk(909991656,inherited,true));fields.clear();Float(fields,1,6);Float(fields,2,4);Float(fields,3,1.9f);Float(fields,4,.8f);Append(soldier.data,Chunk(909991657,fields));
+    inherited.clear();fields.clear();Append(inherited,Chunk(0x04486002,{},true));Float(fields,0,80);Float(fields,1,.75f);Append(inherited,Chunk(0x04486001,fields));
+    Append(physics.data,Chunk(0x04486000,inherited,true));fields.clear();Float(fields,0,7);Float(fields,1,.6f);Float(fields,2,.3f);Append(physics.data,Chunk(0x04486001,fields));
+    return std::pair{soldier,physics};
+}
+}
+BOOST_AUTO_TEST_CASE(human_definition_disambiguates_inherited_ids) {
+    const auto [soldier,physics]=Fixture();const auto value=renegade::content::ReadHumanMovementDefinition(soldier,physics);BOOST_REQUIRE(value.has_value());
+    using Engine::Math::Fixed;
+    BOOST_TEST(value->speed.Raw()==Fixed::FromInt(7).Raw());BOOST_TEST(value->mass.Raw()==Fixed::FromInt(80).Raw());
+    BOOST_TEST(value->gravity_scale.Raw()==Fixed::FromRatio(3,4).Raw());BOOST_TEST(value->jump_velocity.Raw()==Fixed::FromInt(4).Raw());
+    BOOST_TEST(value->step_height.Raw()==Fixed::FromBinary32Bits(std::bit_cast<std::uint32_t>(.3f)).Raw());
+    BOOST_TEST(value->slide_angle.Raw()==Fixed::FromBinary32Bits(std::bit_cast<std::uint32_t>(.6f)).Raw());
+    BOOST_TEST(value->skeleton_width.Raw()==Fixed::FromBinary32Bits(std::bit_cast<std::uint32_t>(.8f)).Raw());
+}
+BOOST_AUTO_TEST_CASE(human_definition_rejects_missing_duplicate_and_invalid_parameters) {
+    auto [soldier,physics]=Fixture();BOOST_TEST(!renegade::content::ReadHumanMovementDefinition({},physics));BOOST_TEST(!renegade::content::ReadHumanMovementDefinition(soldier,{}));
+    Bytes fields;Float(fields,0,7);Float(fields,0,8);Append(physics.data,Chunk(0x04486001,fields));BOOST_TEST(!renegade::content::ReadHumanMovementDefinition(soldier,physics));
+    for(const auto bits:{0x7f800000u,0xbf800000u}) {
+        auto fixture=Fixture();fields={std::byte{0},std::byte{4}};Word(fields,bits);
+        fixture.second.data.resize(fixture.second.data.size()-26);Append(fixture.second.data,Chunk(0x04486001,fields));
+        BOOST_TEST(!renegade::content::ReadHumanMovementDefinition(fixture.first,fixture.second));
+    }
+}
+BOOST_AUTO_TEST_CASE(human_definition_retains_original_signed_skeleton_interpolation_weights) {
+    auto [soldier,physics]=Fixture();soldier.data.resize(soldier.data.size()-32);Bytes fields;
+    Float(fields,1,6);Float(fields,2,4);Float(fields,3,-.5f);Float(fields,4,-.5f);Append(soldier.data,Chunk(909991657,fields));
+    const auto value=renegade::content::ReadHumanMovementDefinition(soldier,physics);BOOST_REQUIRE(value);
+    // soldier.cpp Adjust_Skeleton and the retail Mobius tutorial preset use
+    // -0.5 interpolation weights to make a shorter and narrower male skeleton.
+    BOOST_TEST(value->skeleton_height.Raw()==Engine::Math::Fixed::FromRatio(-1,2).Raw());
+    BOOST_TEST(value->skeleton_width.Raw()==Engine::Math::Fixed::FromRatio(-1,2).Raw());
+}
+BOOST_AUTO_TEST_CASE(retail_player_movement_definition_tutorial_and_campaign) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) {BOOST_TEST_MESSAGE("Retail movement fixture requires RENEGADE_INSTALL_DIR");return;}
+    const auto mounted=renegade::content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    const auto content=renegade::content::LoadCampaignContent(*mounted->files);BOOST_REQUIRE(content.has_value());
+    for(const char* map:{"M00_Tutorial.mix","M13.mix"}) {
+        const auto level=renegade::content::LoadLevelScene(*mounted->files,map);BOOST_REQUIRE(level.has_value());
+        const auto start=renegade::content::ResolvePlayerStart(*level,content->definitions);BOOST_REQUIRE(start.has_value());
+        const auto movement=renegade::content::ReadHumanMovementDefinition(*content->definitions.Find(start->definition),*content->definitions.Find(start->physics));
+        BOOST_REQUIRE_MESSAGE(movement.has_value(),(movement ? std::string{} : movement.error()));BOOST_TEST(movement->speed.Raw()>0);BOOST_TEST(movement->jump_velocity.Raw()>0);
+        BOOST_TEST_MESSAGE(map<<" speed.raw="<<movement->speed.Raw()<<" jump.raw="<<movement->jump_velocity.Raw()<<" step.raw="<<movement->step_height.Raw());
+    }
+}

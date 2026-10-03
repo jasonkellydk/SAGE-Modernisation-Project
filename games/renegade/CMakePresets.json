@@ -20,8 +20,8 @@
     }
   ],
   "buildPresets": [
-    { "name": "llvm-release", "configurePreset": "llvm-release", "targets": ["renegade_headless", "renegade_session_tests", "renegade_content_tests", "renegade_hud_tests", "renegade_mission_tests", "engine_gui_w3d_tests", "engine_net_authority_tests", "engine_scripting_lua_tests", "engine_config_tests", "engine_filesystem_tests", "engine_ecs_tests", "engine_net_tests", "engine_gui_mvvm_tests"] },
-    { "name": "llvm-windows-release", "configurePreset": "llvm-windows-release", "inherits": "llvm-release" }
+    { "name": "llvm-release", "configurePreset": "llvm-release", "targets": ["renegade_headless", "renegade_levels_tests", "renegade_session_tests", "renegade_content_tests", "renegade_hud_tests", "renegade_mission_tests", "engine_gui_w3d_tests", "engine_net_authority_tests", "engine_scripting_lua_tests", "engine_config_tests", "engine_filesystem_tests", "engine_ecs_tests", "engine_net_tests", "engine_gui_mvvm_tests"] },
+    { "name": "llvm-windows-release", "configurePreset": "llvm-windows-release", "inherits": "llvm-release", "targets": ["renegade", "renegade_headless", "renegade_levels_tests", "renegade_session_tests", "renegade_content_tests", "renegade_hud_tests", "renegade_mission_tests", "engine_gui_w3d_tests", "engine_net_authority_tests", "engine_scripting_lua_tests", "engine_config_tests", "engine_filesystem_tests", "engine_ecs_tests", "engine_net_tests", "engine_gui_mvvm_tests"] }
   ],
   "testPresets": [
     { "name": "llvm-release", "configurePreset": "llvm-release", "filter": { "include": { "name": "renegade|engine_gui_w3d|engine_gui_mvvm|engine_net|engine_scripting_lua|engine_config|engine_filesystem|engine_ecs|architecture|modern_code" } }, "output": { "outputOnFailure": true } },

@@ -1,0 +1,37 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.characters.actor_animation;
+import games.renegade.content.install.install_mount;
+import games.renegade.content.levels.level_scene;
+namespace {
+using AnimationBytes=std::vector<std::byte>;
+AnimationBytes AnimationHex(std::string_view value) {AnimationBytes bytes;for(unsigned i=0;i<value.size();i+=2) bytes.push_back(static_cast<std::byte>(std::stoul(std::string(value.substr(i,2)),nullptr,16)));return bytes;}
+}
+BOOST_AUTO_TEST_CASE(actor_animation_wire_preserves_current_clip_frame_mode_and_target) {
+    renegade::content::ActorPlacement actor;actor.factory=0x4010e;
+    // PhysicalGameObj::ANIM_CONTROL -> HumanAnimControl::CHANNEL1 ->
+    // BlendableAnimChannel::NEW -> AnimChannel variables (EA Save enums).
+    actor.data=AnimationHex("319f4c36320000809fa04c362a0000809da04c36220000809ba04c361a00000006065249472e410003040000c03f050402000000090400002040");
+    const auto animation=renegade::content::ReadActorAnimation(actor);BOOST_REQUIRE_MESSAGE(animation.has_value(),(animation ? std::string{} : animation.error()));BOOST_REQUIRE(animation->has_value());
+    BOOST_TEST((**animation).clip=="RIG.A");BOOST_TEST((**animation).frame.Raw()==Engine::Math::Fixed::FromRatio(3,2).Raw());BOOST_TEST((**animation).mode==2u);BOOST_TEST((**animation).target.Raw()==Engine::Math::Fixed::FromRatio(5,2).Raw());
+    actor.data.pop_back();BOOST_TEST(!renegade::content::ReadActorAnimation(actor));
+    BOOST_TEST(renegade::content::StandingAnimation('A',7)=="S_A_HUMAN.H_A_A0A0");BOOST_TEST(renegade::content::StandingAnimation('B',5)=="S_B_HUMAN.H_B_F2A0");
+    const auto clips=renegade::content::LocomotionAnimations('A',4);
+    BOOST_TEST(clips.size()==21u);BOOST_TEST(clips[0]=="S_A_HUMAN.H_A_E2A0");
+    BOOST_TEST(clips[1]=="S_A_HUMAN.H_A_E2A1");BOOST_TEST(clips[8]=="S_A_HUMAN.H_A_E2B4");
+    BOOST_TEST(clips[10]=="S_A_HUMAN.H_A_E2J1");BOOST_TEST(clips[15]=="S_A_HUMAN.H_A_A0L1");
+    BOOST_TEST(clips[20]=="S_A_HUMAN.H_A_E2A6");
+    const auto all=renegade::content::HumanAnimations('A',4);
+    BOOST_TEST(all.size()==28u);BOOST_TEST(all[24]=="S_A_HUMAN.H_A_4262");BOOST_TEST(all[25]=="S_A_HUMAN.H_A_4243");
+    BOOST_TEST(all[26]=="S_A_HUMAN.H_A_4263");BOOST_TEST(all[27]=="S_A_HUMAN.H_A_4242");
+}
+BOOST_AUTO_TEST_CASE(retail_tutorial_soldier_animation_controls_decode_without_rendering_policy) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) {BOOST_TEST_MESSAGE("Retail animation fixture requires RENEGADE_INSTALL_DIR");return;}
+    const auto mounted=renegade::content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());const auto level=renegade::content::LoadLevelScene(*mounted->files,"M00_Tutorial.mix");BOOST_REQUIRE(level.has_value());
+    unsigned humans{};
+    for(const auto& actor:level->dynamic.actors) if(!actor.pending_delete && actor.factory==0x4010e) {
+        const auto animation=renegade::content::ReadActorAnimation(actor);BOOST_REQUIRE_MESSAGE(animation.has_value(),(animation ? std::string{} : animation.error()));BOOST_REQUIRE(animation->has_value());++humans;
+        BOOST_TEST_MESSAGE("actor="<<actor.instance<<" clip="<<(**animation).clip<<" hold="<<(**animation).hold_style);
+    }
+    BOOST_TEST(humans==9u); // independently inventoried active tutorial soldier records, IDs 400005..400013
+}

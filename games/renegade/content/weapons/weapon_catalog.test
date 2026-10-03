@@ -1,0 +1,46 @@
+#define BOOST_TEST_MODULE RenegadeWeaponContent
+#include <boost/test/included/unit_test.hpp>
+import std;
+import games.renegade.content.weapons.weapon_catalog;
+import games.renegade.content.install.install_mount;
+using namespace renegade::content;using Engine::Math::Fixed;
+namespace {
+std::vector<std::byte> WeaponBytes(std::string_view hex) {
+    std::vector<std::byte> result;for(std::size_t i=0;i<hex.size();i+=2) result.push_back(std::byte(std::stoul(std::string(hex.substr(i,2)),nullptr,16)));return result;
+}
+}
+BOOST_AUTO_TEST_CASE(source_weapon_schema_reads_key_37_first_person_fields_and_primary_ammo_sound_62) {
+    DefinitionCatalog definitions;
+    // Raw original chunk tags and micro IDs, independent of the adapter.
+    // Weapon: handgun, first-person name, key 1, 12 clip / 60 reserve, primary 2.
+    LegacyDefinition weapon;weapon.id=1;weapon.name="pistol";
+    weapon.data=WeaponBytes("463dd44740000000"
+        "010405000000160746505f47554e00"
+        "1b04020000001d040c00000023043c00000025040000803f"
+        "08040000003f09040000803f");
+    // The fixture envelope length is set independently after constructing the
+    // captured field payload so malformed-envelope checks can reuse it.
+    const auto bytes=std::uint32_t(weapon.data.size()-8);for(unsigned i=0;i<4;++i) weapon.data[4+i]=std::byte(bytes>>(i*8));
+    LegacyDefinition ammo;ammo.id=2;ammo.name="bullet";
+    ammo.data=WeaponBytes("a57ee347000000000304050000000404000020413e042a000000300400000041");
+    const auto ammo_bytes=std::uint32_t(ammo.data.size()-8);for(unsigned i=0;i<4;++i) ammo.data[4+i]=std::byte(ammo_bytes>>(i*8));
+    definitions.by_id.emplace(1,weapon);definitions.by_id.emplace(2,ammo);
+    const auto catalog=ReadWeaponCatalog(definitions);BOOST_REQUIRE_MESSAGE(catalog,(catalog ? "" : catalog.error()));
+    const auto& value=*catalog->Find(1);BOOST_TEST(value.style==5u);BOOST_TEST(value.key_number.Raw()==Fixed::OneRaw);
+    BOOST_TEST(value.first_person_model=="FP_GUN");BOOST_TEST(value.clip_size==12);BOOST_TEST(value.maximum_reserve==60);
+    BOOST_TEST(value.switch_time.Raw()==Fixed::OneRaw/2);BOOST_TEST(value.reload_time.Raw()==Fixed::OneRaw);
+    const auto& shot=catalog->ammunition.at(value.primary);BOOST_TEST(shot.warhead==5u);BOOST_TEST(shot.damage.Raw()==10*Fixed::OneRaw);BOOST_TEST(shot.fire_sound==42u);BOOST_TEST(shot.rate.Raw()==8*Fixed::OneRaw);
+    definitions.by_id.erase(2);BOOST_TEST(!ReadWeaponCatalog(definitions));
+    definitions.by_id.at(1).data.pop_back();BOOST_TEST(!ReadWeaponCatalog(definitions));
+}
+BOOST_AUTO_TEST_CASE(retail_weapon_catalog_resolves_first_person_assets_and_all_ammunition_links) {
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto data=mounted->files->Read("objects.ddb");BOOST_REQUIRE(data);const auto definitions=ReadDefinitions(*data);BOOST_REQUIRE(definitions);
+    const auto catalog=ReadWeaponCatalog(*definitions);BOOST_REQUIRE_MESSAGE(catalog,(catalog ? "" : catalog.error()));
+    BOOST_TEST(catalog->weapons.size()>50u);BOOST_TEST(catalog->ammunition.size()>50u);
+    for(const auto name:{"Weapon_Pistol_Player","Weapon_AutoRifle_Player"}) {
+        const auto* value=catalog->Find(name);BOOST_REQUIRE(value);BOOST_TEST(!value->model.empty());BOOST_TEST(!value->first_person_model.empty());BOOST_TEST(value->clip_size>0);
+        const auto& ammo=catalog->ammunition.at(value->primary);BOOST_TEST(ammo.damage.Raw()>0);BOOST_TEST(ammo.rate.Raw()>0);BOOST_TEST(ammo.fire_sound!=0u);
+    }
+}

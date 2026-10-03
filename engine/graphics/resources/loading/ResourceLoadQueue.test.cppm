@@ -24,6 +24,7 @@ struct Job final : ResourceLoadJob
     bool prepare_ok=true,decode_ok=true,throw_decode=false;
     std::promise<void>* entered=nullptr;
     std::shared_future<void> release;
+    std::atomic<unsigned>* cancelled=nullptr;
     explicit Job(Record& value) : record(value) {}
     ~Job() override { ++record.destroyed; record.destroy_thread=std::this_thread::get_id(); }
     bool Prepare() override { ++record.prepared; record.prepare_thread=std::this_thread::get_id(); return prepare_ok; }
@@ -37,6 +38,7 @@ struct Job final : ResourceLoadJob
     void Complete(bool success) noexcept override {
         ++record.completed; record.complete_thread=std::this_thread::get_id(); record.success=success;
     }
+    void Cancel() noexcept override {if(cancelled) cancelled->fetch_add(1);}
 };
 auto Source(Record& record)
 {
@@ -234,4 +236,44 @@ BOOST_AUTO_TEST_CASE(worker_preparation_publishes_complete_texture_rgb_and_alpha
     BOOST_REQUIRE(queue.Shutdown());
     renderer.Destroy_Mesh(mesh); renderer.Shutdown();
     device.Destroy_Texture(published); device.Destroy_Texture(target); device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(frame_budget_and_queued_cancellation_do_not_construct_unwanted_jobs)
+{
+    std::array<Record,3> records;
+    ResourceLoadQueue queue;BOOST_REQUIRE(queue.Start());
+    const std::array sources{Source(records[0]),Source(records[1]),Source(records[2])};
+    bool accepted=true;
+    std::thread producer([&] {for(const auto& source:sources) accepted=queue.Request(source,ResourceLoadPriority::Background) && accepted;});
+    producer.join();BOOST_REQUIRE(accepted);
+    BOOST_TEST(queue.Update_Until(std::chrono::steady_clock::now(),100)==0u);
+    BOOST_TEST(queue.Update_Until(std::chrono::steady_clock::time_point::max(),1)==1u);
+    BOOST_TEST(records[0].created==1u);BOOST_TEST(records[1].created==0u);
+    BOOST_REQUIRE(queue.Cancel(sources[1]));
+    BOOST_REQUIRE(queue.Drain());
+    BOOST_TEST(records[1].created==0u);BOOST_TEST(records[1].decoded==0u);
+    BOOST_TEST(records[0].completed==1u);BOOST_TEST(records[2].completed==1u);
+    BOOST_TEST(!queue.Pending(sources[1]));BOOST_TEST(!queue.Cancel(sources[1]));
+}
+
+BOOST_AUTO_TEST_CASE(cancelling_a_blocked_decoder_returns_before_it_finishes_and_rejects_its_result)
+{
+    Record record;ResourceLoadQueue queue;BOOST_REQUIRE(queue.Start());
+    // Broken promise on a failed assertion also releases the worker before
+    // queue teardown. No timing race or sleep is used as a correctness oracle.
+    std::promise<void> entered,release;auto started=entered.get_future();
+    const auto gate=release.get_future().share();std::atomic<unsigned> cancelled{};
+    const auto source=std::make_shared<const ResourceLoadSource>([&] {
+        ++record.created;record.factory_thread=std::this_thread::get_id();
+        auto job=std::make_unique<Job>(record);job->entered=&entered;job->release=gate;job->cancelled=&cancelled;return job;
+    });
+    BOOST_REQUIRE(queue.Request(source,ResourceLoadPriority::Background));
+    BOOST_REQUIRE(started.wait_for(std::chrono::seconds(5))==std::future_status::ready);
+    BOOST_REQUIRE(queue.Cancel(source));BOOST_TEST(cancelled.load()==1u);
+    // The owner keeps servicing frames without waiting for the held decoder.
+    for(unsigned frame=0;frame<32;++frame) queue.Update_Until(std::chrono::steady_clock::now()+std::chrono::milliseconds(1),1);
+    BOOST_TEST(record.completed==0u);BOOST_TEST(queue.Pending(source));
+    release.set_value();BOOST_REQUIRE(queue.Drain());
+    BOOST_TEST(record.decoded==1u);BOOST_TEST(!record.success);
+    Check_Owner_Phases(record,std::this_thread::get_id());
 }

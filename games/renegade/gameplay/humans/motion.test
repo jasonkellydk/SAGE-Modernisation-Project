@@ -1,0 +1,114 @@
+#define BOOST_TEST_MODULE RenegadeHumanMotion
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.timing.systems.pose_track_system;
+import engine.gameplay.common.physics.systems.suspension_system;
+import games.renegade.gameplay.humans.systems.motion_system;
+namespace {
+using namespace Engine::Math;using namespace engine::gameplay;using namespace renegade;
+FixedVector3 P(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+struct Fixture {
+    ecs::World world{ecs::WorldConfig{64}};HumanMotionSystem system;engine::gameplay::PoseTrackSystem track;engine::gameplay::SuspensionSystem suspension;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    Fixture(unsigned workers,unsigned count=1,bool floor=true) {
+        world.RegisterComponent<InputPermission>();
+        world.RegisterComponent<Transform>();world.RegisterComponent<AffinePose>();world.RegisterComponent<HumanMovement>();world.RegisterComponent<HumanState>();world.RegisterComponent<HumanControl>();world.RegisterComponent<SweptHull>();world.RegisterComponent<SweepContacts>();world.RegisterComponent<engine::gameplay::TimelinePlayback>();world.RegisterComponent<engine::gameplay::SampledPose>();world.RegisterComponent<engine::gameplay::Suspension>();world.RegisterComponent<engine::gameplay::SuspensionState>();world.FinalizeComponents();world.EmplaceResource<engine::gameplay::PoseTrackLibrary>();
+        auto scene=std::make_shared<engine::level::CollisionScene3>();
+        if(floor) {scene->AddTriangle(P(-128,-128,0),P(128,-128,0),P(128,128,0),1,1);scene->AddTriangle(P(-128,-128,0),P(128,128,0),P(-128,128,0),1,1);}
+        scene->AddTriangle(P(5,-128,-128),P(5,128,-128),P(5,128,128),2,1);scene->AddTriangle(P(5,-128,-128),P(5,128,128),P(5,-128,128),2,1);scene->Prepare();
+        world.EmplaceResource<CollisionGeometry>().scene=scene;registry.Register(system);registry.Register(track);registry.Register(suspension);registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<count;++i) {
+            const auto entity=commands.Create();pending.push_back(entity);const FixedVector3 start{Fixed{},Fixed::FromInt(int(i%7)-3),Fixed::FromRatio(1,50)};
+            commands.Add<Transform>(entity,Transform{start});commands.Add<AffinePose>(entity,AffinePose{FixedAffineTransform3::From_Translation(start)});
+            HumanMovement movement;movement.definition.speed=Fixed::FromInt(6);movement.definition.jump_velocity=Fixed::FromRatio(11,2);commands.Add<HumanMovement>(entity,movement);
+            commands.Add<HumanState>(entity);commands.Add<HumanControl>(entity);
+            SweptHull hull;hull.offset=P(0,0,1);hull.extent={Fixed::Half(),Fixed::Half(),Fixed::One()};hull.categories=1;hull.clip_bias=Fixed::FromRatio(101,100);hull.maximum_contacts=4;hull.support_normal_z=Cos(TurnFromDegrees(45));hull.support_clearance=Fixed::FromRatio(1,50);hull.blocking_clearance=Fixed::Half();
+            commands.Add<SweptHull>(entity,hull);commands.Add<SweepContacts>(entity);
+        }
+        world.Commit(commands);for(const auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(human_ground_input_obeys_retail_speed_facing_wall_spacing_and_updates_affine_pose) {
+    Fixture fixture(4);const auto entity=fixture.entities.front();auto* input=fixture.world.Get<HumanControl>(entity);input->forward=Fixed::One();
+    fixture.Step(1);const auto* pose=fixture.world.Get<Transform>(entity);
+    BOOST_TEST(Abs(pose->position.x-Fixed::FromRatio(1,10)).Raw()<8);BOOST_TEST(fixture.world.Get<HumanState>(entity)->grounded==1u);
+    for(unsigned tick=2;tick<=120;++tick) fixture.Step(tick);
+    BOOST_TEST(pose->position.x.Raw()<Fixed::FromRatio(9,2).Raw());BOOST_TEST(pose->position.x.Raw()>Fixed::FromRatio(39,10).Raw());
+    input->facing=TurnFromDegrees(90);fixture.Step(121);BOOST_TEST(pose->position.y.Raw()>Fixed::FromInt(-3).Raw());
+    const auto* matrix=fixture.world.Get<AffinePose>(entity);BOOST_TEST(matrix->transform.elements[3].Raw()==pose->position.x.Raw());BOOST_TEST(matrix->transform.elements[7].Raw()==pose->position.y.Raw());
+}
+
+BOOST_AUTO_TEST_CASE(script_permission_survives_replaced_input_and_blocks_turn_jump_and_air_control_without_freezing_gravity) {
+    for(const auto workers:{1u,4u}) {
+        Fixture fixture(workers,1,false);const auto entity=fixture.entities.front();
+        ecs::CommandBuffer commands;commands.Add<InputPermission>(entity,InputPermission{0});fixture.world.Commit(commands);
+        const auto start=*fixture.world.Get<Transform>(entity);fixture.world.Get<HumanState>(entity)->velocity.z=Fixed::FromInt(2);
+        for(unsigned tick=1;tick<=12;++tick) {
+            HumanControl input;input.forward=Fixed::One();input.left=Fixed::One();input.facing=TurnFromDegrees(90);input.jump=1;
+            *fixture.world.Get<HumanControl>(entity)=input;fixture.Step(tick);
+            BOOST_TEST(fixture.world.Get<Transform>(entity)->position.x.Raw()==start.position.x.Raw());BOOST_TEST(fixture.world.Get<Transform>(entity)->position.y.Raw()==start.position.y.Raw());
+            BOOST_TEST(fixture.world.Get<Transform>(entity)->facing.units==start.facing.units);
+            BOOST_TEST(fixture.world.Get<HumanState>(entity)->just_jumped==0u);
+        }
+        BOOST_TEST(fixture.world.Get<Transform>(entity)->position.z.Raw()>start.position.z.Raw());
+        BOOST_TEST(fixture.world.Get<HumanState>(entity)->velocity.z.Raw()<Fixed::FromInt(2).Raw());
+        fixture.world.Get<InputPermission>(entity)->enabled=1;
+        HumanControl input;input.forward=Fixed::One();input.facing=TurnFromDegrees(90);*fixture.world.Get<HumanControl>(entity)=input;fixture.Step(13);
+        BOOST_TEST(fixture.world.Get<Transform>(entity)->facing.units==TurnFromDegrees(90).units);BOOST_TEST(fixture.world.Get<HumanState>(entity)->velocity.y.Raw()>0);
+    }
+}
+BOOST_AUTO_TEST_CASE(human_jump_is_consumed_once_and_analytical_gravity_returns_to_ground) {
+    Fixture fixture(1);const auto entity=fixture.entities.front();fixture.world.Get<HumanControl>(entity)->jump=1;fixture.Step(1);
+    auto* state=fixture.world.Get<HumanState>(entity);const auto* pose=fixture.world.Get<Transform>(entity);
+    BOOST_TEST(state->just_jumped==1u);BOOST_TEST(state->grounded==0u);BOOST_TEST(fixture.world.Get<HumanControl>(entity)->jump==0u);
+    BOOST_TEST(Abs(pose->position.z-(Fixed::FromRatio(1,50)+Fixed::FromRatio(11,2)*Fixed::FromRatio(1,60))).Raw()<8);
+    fixture.Step(2);BOOST_TEST(Abs(state->velocity.z-(Fixed::FromRatio(11,2)+Fixed::FromRatio(-98,10)*Fixed::FromRatio(1,60))).Raw()<8);
+    for(unsigned tick=3;tick<=120;++tick) fixture.Step(tick);
+    BOOST_TEST(state->grounded==1u);BOOST_TEST(state->just_jumped==0u);BOOST_TEST(pose->position.z.Raw()>=0);BOOST_TEST(pose->position.z.Raw()<=Fixed::FromRatio(1,50).Raw()+16);
+}
+BOOST_AUTO_TEST_CASE(human_ballistic_air_control_uses_original_scale_and_missing_scene_blocks_motion) {
+    Fixture fixture(1,1,false);const auto entity=fixture.entities.front();fixture.world.Get<HumanControl>(entity)->forward=Fixed::One();fixture.Step(1);
+    const auto* state=fixture.world.Get<HumanState>(entity);BOOST_TEST(Abs(state->velocity.x-Fixed::FromRatio(3,5)).Raw()<4);
+    BOOST_TEST(Abs(state->velocity.z-Fixed::FromRatio(-98,10)*Fixed::FromRatio(1,60)).Raw()<8);
+    const auto start=fixture.world.Get<Transform>(entity)->position;fixture.world.Resource<CollisionGeometry>().scene.reset();fixture.Step(2);BOOST_CHECK(fixture.world.Get<Transform>(entity)->position==start);
+}
+BOOST_AUTO_TEST_CASE(human_motion_is_identical_across_parallel_soa_chunks) {
+    Fixture serial(1,513),parallel(4,513);
+    for(unsigned tick=1;tick<=90;++tick) {
+        for(auto* fixture:{&serial,&parallel}) for(const auto entity:fixture->entities) {auto* control=fixture->world.Get<HumanControl>(entity);control->forward=Fixed::One();control->left=Fixed::FromRatio(1,4);if(tick==5) control->jump=1;}
+        serial.Step(tick);parallel.Step(tick);
+    }
+    BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+    for(unsigned i=0;i<serial.entities.size();++i) BOOST_CHECK(serial.world.Get<Transform>(serial.entities[i])->position==parallel.world.Get<Transform>(parallel.entities[i])->position);
+}
+BOOST_AUTO_TEST_CASE(source_ladder_input_is_vertical_masked_until_release_and_has_no_gravity_turn_strafe_or_jump) {
+    using namespace renegade;
+    for(const auto top:{false,true}) {
+        Fixture fixture(4,1,false);const auto actor=fixture.entities.front();auto* state=fixture.world.Get<HumanState>(actor);auto* control=fixture.world.Get<HumanControl>(actor);
+        state->ladder=1;state->ladder_up_mask=top;state->ladder_down_mask=!top;control->forward=top ? Fixed::One() : -Fixed::One();
+        control->left=Fixed::One();control->jump=1;control->facing=TurnFromDegrees(90);const auto original=*fixture.world.Get<Transform>(actor);
+        fixture.Step(1);BOOST_CHECK(fixture.world.Get<Transform>(actor)->position==original.position);BOOST_TEST(fixture.world.Get<Transform>(actor)->facing.units==original.facing.units);
+        BOOST_TEST(control->jump==0u);BOOST_TEST(state->velocity.z.Raw()==0);
+        control->forward={};fixture.Step(2);BOOST_TEST(state->ladder_up_mask==0u);BOOST_TEST(state->ladder_down_mask==0u);
+        control->forward=Fixed::One();fixture.Step(3);const auto* pose=fixture.world.Get<Transform>(actor);
+        // Phys3::User_Move uses NormSpeed * CLIMB_SCALE(.3) and fixed dt.
+        BOOST_TEST(Abs(pose->position.z-original.position.z-Fixed::FromRatio(3,100)).Raw()<8);
+        BOOST_TEST(Abs(state->velocity.z-Fixed::FromRatio(18,10)).Raw()<100);BOOST_TEST(pose->position.x.Raw()==original.position.x.Raw());
+        control->enabled=0;fixture.Step(4);BOOST_TEST(state->velocity.z.Raw()==0);BOOST_TEST(state->ladder==1u);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(source_transition_immovable_state_ignores_control_and_gravity_until_animation_completion) {
+    Fixture fixture(4,1,false);const auto actor=fixture.entities.front();auto* state=fixture.world.Get<HumanState>(actor);state->transition=1;state->state_locked=1;
+    const auto pose=*fixture.world.Get<Transform>(actor);
+    for(unsigned tick=1;tick<=60;++tick) {
+        auto* control=fixture.world.Get<HumanControl>(actor);control->forward=Fixed::One();control->left=Fixed::One();control->jump=1;control->facing=TurnFromDegrees(90);
+        state->velocity=P(10,20,30);fixture.Step(tick);
+        BOOST_CHECK(fixture.world.Get<Transform>(actor)->position==pose.position);BOOST_TEST(fixture.world.Get<Transform>(actor)->facing.units==pose.facing.units);
+        BOOST_CHECK(state->velocity==FixedVector3{});BOOST_TEST(control->jump==0u);
+    }
+}

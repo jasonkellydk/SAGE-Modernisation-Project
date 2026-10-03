@@ -6,6 +6,7 @@ export import Assets.Adapters.W3D.Geometry;
 import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.PassBindings;
 import Assets.Adapters.W3D.SurfaceMaterial;
+import Assets.Adapters.W3D.MeshData;
 import Assets.Math;
 import Assets.Models;
 
@@ -20,6 +21,7 @@ export inline constexpr std::uint32_t W3DChunkSkinBindings = 0x00FE0001;
 export struct W3DParsedMesh final
 {
 	W3DMeshHeader header;
+	std::uint32_t prelit_chunk = 0xffffffffu;
 	std::vector<Vector3f> positions;
 	std::vector<Vector3f> normals;
 	std::vector<Vector3f> tangents;
@@ -31,6 +33,7 @@ export struct W3DParsedMesh final
 	std::vector<std::array<std::uint16_t, 4>> skin_indices;
 	std::vector<std::array<float, 4>> skin_weights;
 	std::vector<std::array<std::uint32_t, 3>> triangles;
+	std::vector<std::uint32_t> triangle_surfaces;
 	W3DMaterialData materials;
 	std::vector<W3DPassBindings> shader_pass_bindings;
 	std::vector<ModelMaterialDesc> surface_materials;
@@ -66,7 +69,8 @@ bool Read_UV_Array(W3DByteSpan bytes, std::uint32_t count, std::vector<Vector2f>
 
 }
 
-export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &error)
+export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &error,
+	W3DMeshPrelighting preference = W3DMeshPrelighting::LightmapMultiPass)
 {
 	if (!W3DValidate_Chunk_Tree(bytes)) {
 		error = "malformed chunk tree";
@@ -107,7 +111,11 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
                 std::vector<W3DTriangleRecord> records;
                 if(!W3DRead_Geometry_Triangles(chunk.payload,mesh.header.triangle_count,records))return false;
                 mesh.triangles.resize(records.size());
-                for(std::size_t i=0;i<records.size();++i)mesh.triangles[i]=records[i].indices;
+                mesh.triangle_surfaces.resize(records.size());
+                for(std::size_t i=0;i<records.size();++i) {
+                    mesh.triangles[i]=records[i].indices;
+                    mesh.triangle_surfaces[i]=records[i].surface_type;
+                }
                 return true;
             }
 			case W3DChunkVertexColors:
@@ -173,7 +181,26 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 		return false;
 	}
 
-	if (!W3DParse_Materials(bytes, mesh.header.vertex_count, mesh.materials)) {
+	// Prelit blocks hold alternative complete material sets. Flatten only the
+	// selected set alongside ordinary material chunks, retaining source order.
+	// The geometry and other sets stay in the immutable source container.
+	const auto prelit = W3DSelect_Prelighting(mesh.header.attributes, preference);
+	mesh.prelit_chunk = prelit;
+	std::vector<std::byte> material_bytes;
+	bool selected = false;
+	if (!W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+		if (chunk.id >= W3DChunkPrelitUnlit && chunk.id <= W3DChunkPrelitLightmapMultiTexture) {
+			if (chunk.id != prelit) return true;
+			if (selected || !W3DValidate_Chunk_Tree(chunk.payload)) return false;
+			selected = true;
+			material_bytes.insert(material_bytes.end(), chunk.payload.begin(), chunk.payload.end());
+		} else {
+			const auto offset = static_cast<std::size_t>(chunk.payload.data() - bytes.data()) - 8;
+			material_bytes.insert(material_bytes.end(), bytes.begin() + offset, bytes.begin() + offset + 8 + chunk.payload.size());
+		}
+		return true;
+	}) || (prelit != 0xffffffffu && !selected)) { error = "missing or duplicate selected W3D prelighting set"; return false; }
+	if (!W3DParse_Materials(material_bytes, mesh.header.vertex_count, mesh.materials)) {
 		error = "invalid material chunk";
 		return false;
 	}
@@ -201,7 +228,7 @@ export bool W3DParse_Mesh(W3DByteSpan bytes, W3DParsedMesh &mesh, std::string &e
 	mesh.surface_materials.resize(mesh.materials.shader_materials.size());
 	std::vector<bool> resolved(mesh.materials.shader_materials.size());
 	std::size_t pass_index = 0;
-	if (!W3DVisit_Chunks(bytes, [&](const W3DChunkView &chunk) {
+	if (!W3DVisit_Chunks(material_bytes, [&](const W3DChunkView &chunk) {
 		if (chunk.id != W3DChunkMaterialPass) return true;
 		const auto index = pass_index++;
 		if (!mesh.materials.passes[index].uses_shader_material) return true;

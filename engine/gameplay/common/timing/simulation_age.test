@@ -1,0 +1,17 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.timing.systems.simulation_age_system;
+using namespace engine::gameplay;
+BOOST_AUTO_TEST_CASE(simulation_age_pauses_resets_and_converts_total_ticks_without_drift) {
+    const auto run=[](unsigned workers) {
+        ecs::World world(ecs::WorldConfig{7});world.RegisterComponent<SimulationAge>();world.FinalizeComponents();
+        SimulationAgeSystem system;ecs::SystemRegistry registry;registry.Register(system);registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer commands;for(unsigned i=0;i<513;++i) {const auto e=commands.Create();commands.Add<SimulationAge>(e,SimulationAge{0,i%2});}world.Commit(commands);
+        for(unsigned tick=1;tick<=120;++tick) scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});
+        ecs::Query<ecs::Write<SimulationAge>> query(world);query.ForEachChunk([&](auto chunk) {for(auto& age:chunk.template Get<SimulationAge>()) {BOOST_TEST(age.ticks==(age.enabled ? 120u : 0u));BOOST_TEST(age.Seconds(60).Raw()==(age.enabled ? Engine::Math::Fixed::FromInt(2).Raw() : 0));age.ticks=0;age.enabled=1;}});
+        scheduler.Execute(engine::time::SimulationTime{121,engine::time::FixedStep{60}});
+        query.ForEachChunk([&](auto chunk) {for(const auto& age:chunk.template Get<SimulationAge>()) BOOST_TEST(age.ticks==1u);});return world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}

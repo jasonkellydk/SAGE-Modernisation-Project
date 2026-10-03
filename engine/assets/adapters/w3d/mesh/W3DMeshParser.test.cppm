@@ -6,10 +6,15 @@ module;
 
 export module Assets.Tests.W3DMeshParser;
 import std;
+import Assets.Adapters.W3D;
+import Assets.Identity;
 
 import Assets.Adapters.W3D.Chunks;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Materials;
+import Assets.Models;
+import Assets.Adapters.W3D.Model;
+import Assets.Adapters.W3D.MeshData;
 
 namespace
 {
@@ -158,6 +163,103 @@ BOOST_AUTO_TEST_CASE(mesh_parser_extracts_geometry_and_bounds)
 	BOOST_CHECK(mesh.triangles[0][2] == 2);
 	BOOST_CHECK(mesh.header.bounds.Is_Valid());
 	BOOST_CHECK(mesh.header.name == "mesh");
+}
+
+BOOST_AUTO_TEST_CASE(authored_triangle_surface_and_hidden_physical_category_survive_decode) {
+    using namespace Assets::W3D;
+    auto bytes=Make_Mesh(false);Write_U32(bytes,12,W3DMeshAttributeHidden|0x10);
+    BOOST_REQUIRE(W3DVisit_Chunks(bytes,[&](const W3DChunkView& chunk) {
+        if(chunk.id==W3DChunkTriangles) Write_U32(bytes,static_cast<std::size_t>(chunk.payload.data()-bytes.data())+12,23);
+        return true;
+    }));
+    W3DParsedMesh mesh;std::string error;BOOST_REQUIRE(W3DParse_Mesh(bytes,mesh,error));
+    BOOST_REQUIRE(mesh.triangle_surfaces.size()==1u);BOOST_TEST(mesh.triangle_surfaces[0]==23u);
+    Assets::ModelAssetDesc model;W3DAppend_Mesh(model,mesh);
+    BOOST_REQUIRE(model.collision.parts.size()==1u);BOOST_TEST(model.collision.parts[0].categories==1u);
+    BOOST_TEST(model.collision.surfaces[0]==23u);BOOST_TEST(model.collision.triangles[0][2]==2u);
+}
+
+BOOST_AUTO_TEST_CASE(prelit_runtime_selects_source_default_and_preserves_each_lightmap_pass)
+{
+	using namespace Assets::W3D;
+	auto bytes = Make_Mesh(false);
+	Write_U32(bytes, 12, 0x06000000); // Vertex and multipass sets available.
+	Write_U32(bytes, 56, 1);
+	const auto materials = [](unsigned passes, unsigned emissive) {
+		std::vector<Byte> result, info;
+		for (const auto value : {passes, 1u, 1u, 0u}) Append_U32(info, value);
+		Append_Chunk(result, W3DChunkMaterialInfo, info, false);
+		std::vector<Byte> table, material, values(32, Byte{0});
+		values[16] = values[17] = values[18] = Byte(emissive);
+		Write_F32(values, 20, 1); Write_F32(values, 24, 1);
+		Append_Chunk(material, W3DChunkVertexMaterialName, {Byte{'M'}, Byte{0}}, false);
+		Append_Chunk(material, W3DChunkVertexMaterialInfo, values, false);
+		// Shipped prelit containers omit the advisory child bit for these
+		// semantic containers. Their bounded payload still contains chunks.
+		Append_Chunk(table, W3DChunkVertexMaterial, material, false);
+		Append_Chunk(result, W3DChunkVertexMaterials, table, false);
+		std::vector<Byte> shader(16, Byte{0}); shader[0] = Byte{3}; shader[1] = Byte{1}; shader[6] = Byte{1};
+		Append_Chunk(result, W3DChunkShaders, shader, false);
+		for (unsigned i = 0; i < passes; ++i) {
+			std::vector<Byte> pass, id, uv, stage;
+			Append_U32(id, 0);
+			Append_Chunk(pass, W3DChunkVertexMaterialIds, id, false);
+			Append_Chunk(pass, W3DChunkShaderIds, id, false);
+			for (unsigned vertex = 0; vertex < 3; ++vertex) {Append_F32(uv, i ? .75f : .25f); Append_F32(uv, i ? .1f : .9f);}
+			Append_Chunk(stage, W3DChunkStageTextureCoords, uv, false);
+			Append_Chunk(pass, W3DChunkTextureStage, stage, true);
+			if (!i) {
+				std::vector<Byte> dcg, dig;
+				for (unsigned vertex = 0; vertex < 3; ++vertex) {Append_U32(dcg, 0xff0080ff); Append_U32(dig, 0x00ff80ff);}
+				Append_Chunk(pass, 0x3b, dcg, false); Append_Chunk(pass, 0x3c, dig, false);
+			}
+			Append_Chunk(result, W3DChunkMaterialPass, pass, false);
+		}
+		return result;
+	};
+	Append_Chunk(bytes, W3DChunkPrelitVertex, materials(1, 64), true);
+	Append_Chunk(bytes, W3DChunkPrelitLightmapMultiPass, materials(2, 255), true);
+	W3DParsedMesh mesh; std::string error;
+	BOOST_REQUIRE_MESSAGE(W3DParse_Mesh(bytes, mesh, error), error);
+	BOOST_TEST(mesh.materials.passes.size() == 2u);
+	BOOST_TEST(mesh.materials.vertex_materials[0].material.emissive_color.r == 1.f);
+	Assets::ModelAssetDesc model; W3DAppend_Mesh(model, mesh);
+	BOOST_REQUIRE_EQUAL(model.submeshes.size(), 2u);
+	const auto &base = model.vertices[model.indices[model.submeshes[0].first_index]];
+	const auto &lightmap = model.vertices[model.indices[model.submeshes[1].first_index]];
+	BOOST_TEST(base.texcoord.x == .25f); BOOST_TEST(lightmap.texcoord.x == .75f);
+	BOOST_TEST(base.texcoord.y == .1f, boost::test_tools::tolerance(.0001f));
+	BOOST_TEST(lightmap.texcoord.y == .9f, boost::test_tools::tolerance(.0001f));
+	BOOST_TEST(base.color.g == (128.f / 255.f) * (128.f / 255.f));
+	BOOST_TEST(lightmap.color.g == 1.f);
+	W3DParsedMesh vertex;
+	BOOST_REQUIRE(W3DParse_Mesh(bytes, vertex, error, W3DMeshPrelighting::Vertex));
+	BOOST_TEST(vertex.materials.passes.size() == 1u);
+	BOOST_TEST(vertex.prelit_chunk == W3DChunkPrelitVertex);
+	Assets::ModelAssetDesc vertex_model;W3DAppend_Mesh(vertex_model,vertex);
+	BOOST_TEST(!vertex_model.submeshes[0].lighting_enabled);
+	BOOST_TEST(vertex.materials.vertex_materials[0].material.emissive_color.r == 64.f / 255.f);
+	Append_Chunk(bytes, W3DChunkPrelitLightmapMultiPass, materials(2, 255), true);
+	W3DParsedMesh duplicate; BOOST_TEST(!W3DParse_Mesh(bytes, duplicate, error));
+}
+
+BOOST_AUTO_TEST_CASE(container_mesh_selection_is_exact_and_keeps_whole_file_requests)
+{
+	using namespace Assets::W3D;
+	auto first = Make_Mesh(false), second = Make_Mesh(false);
+	Write_Fixed_String(first, 16, 16, "first"); Write_Fixed_String(second, 16, 16, "second");
+	std::vector<Byte> source;
+	Append_Chunk(source, W3DChunkMesh, first, true); Append_Chunk(source, W3DChunkMesh, second, true);
+	Assets::W3DAdapter adapter;
+	const auto whole = adapter.Import({Assets::AssetType::Model, "container.w3d"}, source);
+	BOOST_REQUIRE_MESSAGE(whole.description, whole.error); BOOST_TEST(whole.description->indices.size() == 6u);
+	const auto selected = adapter.Import({Assets::AssetType::Model, "container.w3d::container.second"}, source);
+	BOOST_REQUIRE_MESSAGE(selected.description, selected.error); BOOST_TEST(selected.description->indices.size() == 3u);
+	BOOST_TEST(selected.description->name == "second"); BOOST_TEST(selected.description->rig.bones.empty());
+	BOOST_TEST(!adapter.Import({Assets::AssetType::Model, "container.w3d::container.second_suffix"}, source).description);
+	BOOST_TEST(!adapter.Import({Assets::AssetType::Model, "container.w3d::"}, source).description);
+	Append_Chunk(source, W3DChunkMesh, second, true);
+	BOOST_TEST(!adapter.Import({Assets::AssetType::Model, "container.w3d::container.second"}, source).description);
 }
 
 BOOST_AUTO_TEST_CASE(mesh_parser_rejects_out_of_range_indices)

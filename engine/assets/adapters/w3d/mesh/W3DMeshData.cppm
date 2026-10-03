@@ -30,8 +30,9 @@ export struct W3DMeshData final {
     std::vector<W3DMeshMaterialRecord> materials;
 };
 
-namespace MeshDataDetail {
-std::uint32_t Select_Prelighting(std::uint32_t attributes, W3DMeshPrelighting preference) {
+// Used by retention and runtime conversion so both choose the same authored
+// material set (MeshModelClass::Load_W3D's descending quality selection).
+export std::uint32_t W3DSelect_Prelighting(std::uint32_t attributes, W3DMeshPrelighting preference) {
     if (!(attributes & 0x0f000000u)) return 0xffffffffu;
     if (preference >= W3DMeshPrelighting::LightmapMultiTexture && (attributes & 0x08000000u)) return 0x26;
     if (preference >= W3DMeshPrelighting::LightmapMultiPass && (attributes & 0x04000000u)) return 0x25;
@@ -39,6 +40,7 @@ std::uint32_t Select_Prelighting(std::uint32_t attributes, W3DMeshPrelighting pr
     return 0x23;
 }
 
+namespace MeshDataDetail {
 bool Read_Material(const W3DChunkView& chunk, W3DMeshData& mesh, W3DMaterialInfo& info) {
     const auto bytes = chunk.payload;
     switch (chunk.id) {
@@ -102,7 +104,7 @@ export bool W3DRead_Mesh_Data(W3DByteSpan bytes, W3DMeshPrelighting preference,
         if (!has_header) {
             if (chunk.id != W3DChunkMeshHeader3 || !W3DRead_Mesh_Header(chunk.payload, mesh.header)) return false;
             has_header = true;
-            mesh.prelit_chunk = MeshDataDetail::Select_Prelighting(mesh.header.attributes, preference);
+            mesh.prelit_chunk = W3DSelect_Prelighting(mesh.header.attributes, preference);
             return true;
         }
         const auto payload = chunk.payload;

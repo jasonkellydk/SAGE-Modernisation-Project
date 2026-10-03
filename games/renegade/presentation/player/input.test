@@ -1,0 +1,87 @@
+#define BOOST_TEST_MODULE RenegadePlayerInput
+#include <boost/test/included/unit_test.hpp>
+import std;
+import games.renegade.presentation.player.input;
+BOOST_AUTO_TEST_CASE(script_orientation_changes_camera_input_while_locked_and_preserves_held_control_state) {
+    using namespace engine::platform;using namespace renegade;using namespace Engine::Math;
+    content::InputConfiguration config;config.Set("MoveForward",false,unsigned(KeyCode::w));presentation::PlayerInput input(config);
+    PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::w;input.Handle(event);BOOST_TEST(input.Sample().forward.Raw()==Fixed::OneRaw);
+    const LookAngles forced{TurnFromDegrees(210),Radians(TurnFromDegrees(35))};input.SetOrientation(forced);
+    BOOST_TEST(input.Sample().forward.Raw()==Fixed::OneRaw);BOOST_TEST(input.Orientation().heading.units==forced.heading.units);BOOST_TEST(input.Pitch().Raw()==-forced.pitch.Raw());
+    input.SetControlAllowed(false);const LookAngles locked{TurnFromDegrees(45),-Radians(TurnFromDegrees(20))};input.SetOrientation(locked);
+    const auto sample=input.Sample();BOOST_TEST(sample.enabled==0u);BOOST_TEST(sample.forward.Raw()==0);BOOST_TEST(sample.facing.units==locked.heading.units);
+    event.type=EventType::mouse_moved;event.x=25;event.y=25;input.Handle(event);BOOST_TEST(input.Orientation().heading.units==locked.heading.units);BOOST_TEST(input.Orientation().pitch.Raw()==locked.pitch.Raw());
+    input.SetControlAllowed(true);BOOST_TEST(input.Sample().facing.units==locked.heading.units);BOOST_TEST(input.Sample().forward.Raw()==0);
+}
+BOOST_AUTO_TEST_CASE(player_input_uses_injected_primary_secondary_bindings_consumes_jump_and_clears_on_focus_loss) {
+    using namespace engine::platform;using namespace renegade;using Engine::Math::Fixed;
+    content::InputConfiguration config;config.Set("MoveForward",false,unsigned(KeyCode::w));config.Set("MoveForward",true,unsigned(KeyCode::up));config.Set("MoveBackward",false,unsigned(KeyCode::s));config.Set("Jump",false,unsigned(KeyCode::space));
+    presentation::PlayerInput input(config);input.Reset(Engine::Math::TurnFromDegrees(90));PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::up;input.Handle(event);
+    BOOST_TEST(input.Sample().forward.Raw()==Fixed::OneRaw);event.key=KeyCode::space;input.Handle(event);BOOST_TEST(input.Sample().jump==1u);BOOST_TEST(input.Sample().jump==0u);
+    event.repeat=true;input.Handle(event);BOOST_TEST(input.Sample().jump==0u);event.repeat=false;event.key=KeyCode::s;input.Handle(event);BOOST_TEST(input.Sample().forward.Raw()==0);
+    event.type=EventType::focus_lost;input.Handle(event);const auto lost=input.Sample();BOOST_TEST(lost.forward.Raw()==0);BOOST_TEST(lost.enabled==0u);
+    event.type=EventType::focus_gained;input.Handle(event);BOOST_TEST(input.Sample().enabled==1u);BOOST_TEST(input.Sample().forward.Raw()==0);
+}
+BOOST_AUTO_TEST_CASE(player_view_toggle_uses_profile_binding_and_does_not_repeat_while_held) {
+    using namespace engine::platform;renegade::content::InputConfiguration config;config.Set("FirstPersonToggle",false,unsigned(KeyCode::v));
+    renegade::presentation::PlayerInput input(config);PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::v;input.Handle(event);
+    BOOST_TEST(input.TakeViewToggle());BOOST_TEST(!input.TakeViewToggle());event.repeat=true;input.Handle(event);BOOST_TEST(!input.TakeViewToggle());
+    event.type=EventType::key_up;input.Handle(event);event.type=EventType::key_down;event.repeat=false;input.Handle(event);BOOST_TEST(input.TakeViewToggle());
+}
+BOOST_AUTO_TEST_CASE(script_control_lock_discards_keyboard_mouse_and_view_toggle_and_focus_cannot_unlock_it) {
+    using namespace engine::platform;using namespace renegade;using namespace Engine::Math;
+    content::InputConfiguration config;config.Set("MoveForward",false,unsigned(KeyCode::w));config.Set("Jump",false,unsigned(KeyCode::space));config.Set("FirstPersonToggle",false,unsigned(KeyCode::v));
+    presentation::PlayerInput input(config);input.Reset(TurnFromDegrees(90));PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::w;input.Handle(event);
+    BOOST_TEST(input.Sample().forward.Raw()==Fixed::OneRaw);input.SetControlAllowed(false);
+    const auto facing=input.Sample().facing;const auto pitch=input.Pitch();
+    for(const auto key:{KeyCode::w,KeyCode::space,KeyCode::v}) {event.type=EventType::key_down;event.key=key;input.Handle(event);}
+    event.type=EventType::mouse_moved;event.x=80;event.y=90;input.Handle(event);
+    event.type=EventType::focus_lost;input.Handle(event);event.type=EventType::focus_gained;input.Handle(event);
+    const auto locked=input.Sample();BOOST_TEST(locked.enabled==0u);BOOST_TEST(locked.forward.Raw()==0);BOOST_TEST(locked.jump==0u);
+    BOOST_TEST(locked.facing.units==facing.units);BOOST_TEST(input.Pitch().Raw()==pitch.Raw());BOOST_TEST(!input.TakeViewToggle());
+    input.SetControlAllowed(true);BOOST_TEST(input.Sample().enabled==1u);BOOST_TEST(input.Sample().forward.Raw()==0);BOOST_TEST(input.Sample().jump==0u);
+    event.type=EventType::key_down;event.key=KeyCode::w;input.Handle(event);BOOST_TEST(input.Sample().forward.Raw()==Fixed::OneRaw);
+    event.type=EventType::mouse_moved;event.x=40;event.y=20;input.Handle(event);BOOST_TEST(input.Sample().facing.units!=facing.units);BOOST_TEST(input.Pitch().Raw()!=pitch.Raw());
+}
+BOOST_AUTO_TEST_CASE(player_input_relative_mouse_uses_saved_sensitivity_inversion_and_pitch_limits) {
+    using namespace engine::platform;using namespace renegade;using namespace Engine::Math;
+    content::InputConfiguration config;config.misc.sensitivity=.5f;config.misc.invert=true;presentation::PlayerInput inverted(config);
+    config.misc.invert=false;presentation::PlayerInput normal(config);PlatformEvent event;event.type=EventType::mouse_moved;event.x=40;event.y=20;
+    inverted.Handle(event);normal.Handle(event);BOOST_TEST(inverted.Sample().facing.units==normal.Sample().facing.units);BOOST_TEST(inverted.Pitch().Raw()==-normal.Pitch().Raw());
+    BOOST_TEST(Abs(normal.Pitch()-Fixed::FromRatio(1,20)).Raw()<4);
+    // Positive camera tilt points down: ordinary mouse-down must have a
+    // negative vertical view direction; inverted mouse-down points up.
+    BOOST_TEST((-Sin(TurnFromRadians(normal.Pitch()))).Raw()<0);
+    BOOST_TEST((-Sin(TurnFromRadians(inverted.Pitch()))).Raw()>0);
+    event.y=100000;inverted.Handle(event);BOOST_TEST(inverted.Pitch().Raw()==-Radians(TurnFromDegrees(80)).Raw());
+    const auto pitch=inverted.Pitch();event.y=std::numeric_limits<float>::quiet_NaN();inverted.Handle(event);BOOST_TEST(inverted.Pitch().Raw()==pitch.Raw());
+}
+BOOST_AUTO_TEST_CASE(action_uses_bound_edge_is_consumed_once_and_clears_on_focus_or_script_lock) {
+    using namespace engine::platform;renegade::content::InputConfiguration config;config.Set("Action",false,unsigned(KeyCode::e));
+    renegade::presentation::PlayerInput input(config);PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::e;input.Handle(event);
+    BOOST_TEST(input.Sample().action==1u);BOOST_TEST(input.Sample().action==0u);event.repeat=true;input.Handle(event);BOOST_TEST(input.Sample().action==0u);
+    event.type=EventType::key_up;input.Handle(event);event.type=EventType::key_down;event.repeat=false;input.Handle(event);input.SetControlAllowed(false);BOOST_TEST(input.Sample().action==0u);
+    input.SetControlAllowed(true);input.Handle(event);event.type=EventType::focus_lost;input.Handle(event);BOOST_TEST(input.Sample().action==0u);
+}
+BOOST_AUTO_TEST_CASE(source_cycle_pog_uses_configured_button_hit_without_keyboard_repeat) {
+    using namespace engine::platform;renegade::content::InputConfiguration config;config.Set("CyclePog",false,unsigned(KeyCode::y));
+    renegade::presentation::PlayerInput input(config);PlatformEvent event;event.type=EventType::key_down;event.key=KeyCode::y;input.Handle(event);
+    BOOST_TEST(input.TakeObjectiveCycle());BOOST_TEST(!input.TakeObjectiveCycle());event.repeat=true;input.Handle(event);BOOST_TEST(!input.TakeObjectiveCycle());
+    event.type=EventType::key_up;input.Handle(event);event.type=EventType::key_down;event.repeat=false;input.Handle(event);BOOST_TEST(input.TakeObjectiveCycle());
+    input.ClearHeld();input.Handle(event);event.type=EventType::focus_lost;input.Handle(event);BOOST_TEST(!input.TakeObjectiveCycle());
+}
+BOOST_AUTO_TEST_CASE(weapon_buttons_wheel_and_number_groups_follow_typed_bindings_and_clear_on_lost_control) {
+    using namespace engine::platform;using namespace engine::gameplay;renegade::content::InputConfiguration config;
+    config.Set("FireWeaponPrimary",false,260);config.Set("FireWeaponSecondary",false,261);config.Set("ReloadWeapon",false,unsigned(KeyCode::r));
+    config.Set("NextWeapon",false,269);config.Set("PrevWeapon",false,270);config.Set("SelectWeapon2",false,unsigned(KeyCode::digit_2));
+    renegade::presentation::PlayerInput input(config);PlatformEvent event;event.type=EventType::mouse_button_down;event.code=1;input.Handle(event);
+    BOOST_TEST(input.SampleWeapon().input.primary==1u);BOOST_TEST(input.SampleWeapon().input.primary==1u);
+    event.code=3;input.Handle(event);BOOST_TEST(input.SampleWeapon().input.secondary==1u);event.type=EventType::mouse_button_up;event.code=1;input.Handle(event);BOOST_TEST(input.SampleWeapon().input.primary==0u);
+    event.type=EventType::key_down;event.key=KeyCode::r;input.Handle(event);BOOST_TEST(input.SampleWeapon().input.reload==1u);BOOST_TEST(input.SampleWeapon().input.reload==0u);
+    event.repeat=true;input.Handle(event);BOOST_TEST(input.SampleWeapon().input.reload==0u);event.repeat=false;
+    event.type=EventType::mouse_wheel;event.y=1;input.Handle(event);BOOST_TEST(std::uint32_t(input.SampleWeapon().inventory.operation)==std::uint32_t(InventoryOperation::Next));
+    BOOST_TEST(std::uint32_t(input.SampleWeapon().inventory.operation)==0u);event.flipped=true;input.Handle(event);BOOST_TEST(std::uint32_t(input.SampleWeapon().inventory.operation)==std::uint32_t(InventoryOperation::Previous));
+    event.type=EventType::key_down;event.key=KeyCode::digit_2;input.Handle(event);const auto selection=input.SampleWeapon();BOOST_TEST(selection.inventory.value==2u);BOOST_TEST(std::uint32_t(selection.inventory.operation)==std::uint32_t(InventoryOperation::Group));
+    input.SetControlAllowed(false);input.Handle(event);const auto locked=input.SampleWeapon();BOOST_TEST(locked.input.secondary==0u);BOOST_TEST(locked.input.permitted==0u);BOOST_TEST(std::uint32_t(locked.inventory.operation)==0u);
+    input.SetControlAllowed(true);event.type=EventType::mouse_button_down;event.code=1;input.Handle(event);event.type=EventType::focus_lost;input.Handle(event);BOOST_TEST(input.SampleWeapon().input.primary==0u);
+}

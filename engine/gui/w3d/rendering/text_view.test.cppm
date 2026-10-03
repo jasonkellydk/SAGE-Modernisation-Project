@@ -4,6 +4,7 @@ module;
 export module engine.gui.w3d.text_view.tests;
 import std;
 import engine.gui.w3d.text_view;
+import engine.gui.w3d.model_backdrop_view;
 import engine.gui.w3d.value_view;
 import engine.gui.w3d.input_view;
 import engine.gui.w3d.input_capture;
@@ -772,5 +773,30 @@ BOOST_AUTO_TEST_CASE(text_boxes_align_each_line_wrap_words_and_restore_intersect
     BOOST_TEST(channel(36,6,0)==0);BOOST_TEST(channel(6,7,1)==255); // shadow at (-1,+1)
     BOOST_TEST(channel(3,22,0)==255);BOOST_TEST(channel(3,26,0)==255);BOOST_TEST(channel(8,22,0)==0);
     BOOST_TEST(channel(51,4,0)==255);BOOST_TEST(channel(50,4,0)==0);BOOST_TEST(channel(54,4,0)==0);
+    ui.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
+}
+
+BOOST_AUTO_TEST_CASE(authored_backdrop_text_scales_truncates_wraps_and_selects_independent_font_roles)
+{
+    using namespace engine::gui::w3d;
+    engine::gui::text::FontFace normal,large;
+    BOOST_REQUIRE(normal.Build(Assets::FontAsset("BackdropSmall",4,false,4,0,{{65,4,5,std::vector<std::uint8_t>(16,255)},{32,0,3,{}}})));
+    BOOST_REQUIRE(large.Build(Assets::FontAsset("BackdropLarge",8,false,8,0,{{65,8,9,std::vector<std::uint8_t>(64,255)}})));
+    Graphics::GraphicsTestDevice device({true});BOOST_REQUIRE(device.Is_Valid());Graphics::Renderer2D ui;
+    BOOST_REQUIRE(ui.Initialize(device,Graphics::Test_Shader_Directory(GRAPHICS_TERRAIN_SHADER_DIRECTORY)));
+    const auto target=device.Create_Texture({64,32,1,Graphics::RHITextureFormat::RGBA8_UNorm,static_cast<unsigned>(Graphics::RHITextureUsage::RenderTarget)});
+    const auto depth=device.Create_Texture({64,32,1,Graphics::RHITextureFormat::D32_Float,static_cast<unsigned>(Graphics::RHITextureUsage::DepthStencil)});
+    BOOST_REQUIRE(target.Is_Valid());BOOST_REQUIRE(depth.Is_Valid());auto& commands=device.Immediate_Command_List();
+    BOOST_REQUIRE(commands.Set_Render_Targets(target,depth));BOOST_REQUIRE(commands.Clear({0,0,0,1},1));ui.Begin(64,32);
+    const std::array lines{BackdropText{u"A A",1.9f,2.9f,5.5f,0xff00ff00,false},BackdropText{u"A",15.9f,2.9f,0,0xffff0000,true}};
+    BOOST_REQUIRE(ModelBackdropView::DrawLabels(ui,lines,normal,large,32,16,64,32));
+    BOOST_REQUIRE(ui.Execute(device,commands,target,depth,{0,0,64,32}));
+    std::array<std::byte,64*32*4> pixels{};BOOST_REQUIRE(device.Readback_Texture(target,pixels,64*4));
+    const auto channel=[&](unsigned x,unsigned y,unsigned c) {return std::to_integer<unsigned>(pixels[(y*64+x)*4+c]);};
+    // Positions 3.8/5.8 truncate to (3,5); wrap width 11 selects two rows.
+    BOOST_TEST(channel(3,5,1)==255u);BOOST_TEST(channel(3,9,1)==255u);BOOST_TEST(channel(8,5,1)==0u);
+    // The large role uses an eight-pixel glyph, independent of small text.
+    BOOST_TEST(channel(31,5,0)==255u);BOOST_TEST(channel(38,12,0)==255u);BOOST_TEST(channel(39,12,0)==0u);
+    BOOST_TEST(!ModelBackdropView::DrawLabels(ui,lines,normal,large,0,16,64,32));
     ui.Shutdown();device.Destroy_Texture(target);device.Destroy_Texture(depth);
 }

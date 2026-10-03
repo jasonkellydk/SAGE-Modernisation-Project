@@ -131,6 +131,40 @@ bool Shader_Blends(const W3DShaderSettings &shader) noexcept
 	return (shader.destination_blend != 0 || shader.source_blend != 1) && shader.alpha_test == 0;
 }
 
+struct ColorUsage {bool diffuse{},ambient{},emissive{};};
+bool Nonzero(Color4f color) noexcept {return color.r!=0 || color.g!=0 || color.b!=0;}
+ColorUsage Pass_Color_Usage(const W3DParsedMesh& mesh,const W3DMaterialPass& pass) {
+    ColorUsage usage;
+    const auto visit=[&](std::uint32_t index) {
+        if(index>=mesh.materials.vertex_materials.size()) return;
+        const auto& material=mesh.materials.vertex_materials[index].material;
+        usage.diffuse|=Nonzero(material.base_color);usage.ambient|=Nonzero(material.ambient_color);usage.emissive|=Nonzero(material.emissive_color);
+    };
+    if(pass.vertex_material_ids.empty()) visit(pass.vertex_material_index);
+    else for(auto index:pass.vertex_material_ids) visit(index);
+    return usage;
+}
+bool Emissive_Color_Passes(const W3DParsedMesh& mesh) {
+    // MeshMatDescClass::Post_Load_Process turns lighting off when every
+    // colored pass uses only emissive materials, including lightmap passes.
+    if(mesh.materials.passes.empty() || !std::ranges::any_of(mesh.materials.passes,[](const auto& pass) {return !pass.colors.empty();})) return false;
+    for(const auto& pass:mesh.materials.passes) {
+        if(pass.uses_shader_material) return false;
+        const auto usage=Pass_Color_Usage(mesh,pass);
+        if(usage.diffuse || usage.ambient || !usage.emissive) return false;
+    }
+    return true;
+}
+void Configure_Prelit_Color(ModelMaterialDesc& material,ColorUsage usage) {
+    // The original folds the single active material color into COLOR1.
+    // Generic unlit geometry multiplies its vertex colors by base_color;
+    // select the same factor instead of multiplying an emissive-only solve
+    // by the authored zero diffuse color. Mixed sources leave COLOR1 alone.
+    if(!usage.diffuse && !usage.ambient && usage.emissive) material.base_color=material.emissive_color;
+    else if(!usage.diffuse && usage.ambient && !usage.emissive) material.base_color=material.ambient_color;
+    else if(usage.emissive || !usage.diffuse) material.base_color={1,1,1,1};
+}
+
 void Add_Dependency(ModelAssetDesc &description, AssetType type, std::string_view name)
 {
 	if (name.empty())
@@ -192,6 +226,19 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 	const std::uint32_t vertex_base = static_cast<std::uint32_t>(description.vertices.size());
 	const std::uint32_t index_base = static_cast<std::uint32_t>(description.indices.size());
 	const std::uint32_t material_base = static_cast<std::uint32_t>(description.materials.size());
+	// w3d_file.h mesh collision categories occupy bits 4..11. Hidden
+	// collision-only meshes remain collidable; shader passes cannot duplicate
+	// their triangles. The generic asset stores category bits starting at zero.
+	if(const auto categories=(mesh.header.attributes>>4)&0xffu;categories) {
+		const auto first=static_cast<std::uint32_t>(description.collision.triangles.size());
+		for(std::size_t i=0;i<mesh.triangles.size();++i) {
+			auto triangle=mesh.triangles[i];for(auto& index:triangle) index+=vertex_base;
+			description.collision.triangles.push_back(triangle);
+			description.collision.surfaces.push_back(mesh.triangle_surfaces.empty() ? 0 : mesh.triangle_surfaces.at(i));
+		}
+		description.collision.parts.push_back({mesh.header.name,first,static_cast<std::uint32_t>(mesh.triangles.size()),categories,
+			!mesh.bone_indices.empty() || !mesh.skin_indices.empty()});
+	}
 
 	description.vertices.reserve(description.vertices.size() + mesh.positions.size());
 	for (std::size_t index = 0; index < mesh.positions.size(); ++index) {
@@ -238,6 +285,8 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 	}
 	const auto legacy_index_count = static_cast<std::uint32_t>(description.indices.size() - index_base);
 	const auto submesh_base = description.submeshes.size();
+	const bool prelit_vertex=mesh.prelit_chunk==W3DChunkPrelitVertex;
+	const bool emissive_colors=ModelBuilderDetail::Emissive_Color_Passes(mesh);
 	if (mesh.materials.passes.empty()) {
 		for (auto &source : mesh.materials.vertex_materials) {
 			source.material.surface.house_color = ModelBuilderDetail::House_Color(mesh.header.name, source.material.primary_texture);
@@ -249,6 +298,25 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 			if (pass.uses_shader_material) {
 				ModelBuilderDetail::Append_Surface_Pass(description, mesh, mesh.shader_pass_bindings[pass_index], vertex_base);
 				continue;
+			}
+			// Each fixed-function pass can use a different UV/color array (for
+			// example a second lightmap pass). Keep the ordinary shared indices
+			// for the common case, and publish a separate vertex stream only
+			// when that pass's attributes differ.
+			auto pass_index_base = index_base;
+			const bool own_vertices = !pass.colors.empty() || (!pass.texcoords.empty() &&
+				!std::ranges::equal(pass.texcoords, mesh.stage_texcoords, {}, &Vector2f::x, &Vector2f::x)) ||
+				(!pass.texcoords.empty() && !std::ranges::equal(pass.texcoords, mesh.stage_texcoords, {}, &Vector2f::y, &Vector2f::y));
+			if (own_vertices) {
+				const auto base = static_cast<std::uint32_t>(description.vertices.size());
+				for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
+					auto vertex = description.vertices[vertex_base + i];
+					if (!pass.texcoords.empty()) vertex.texcoord = pass.texcoords[i];
+					if (!pass.colors.empty()) vertex.color = pass.colors[i];
+					description.vertices.push_back(vertex);
+				}
+				pass_index_base = static_cast<std::uint32_t>(description.indices.size());
+				for (const auto &triangle : mesh.triangles) for (const auto index : triangle) description.indices.push_back(base + index);
 			}
 			// The pass's polygons in authored order, in runs that share a shader, a stage 0 texture and the vertex
 			// material of their first vertex: where the original's mesh drawing starts a new batch (ModelMeshDrawing::
@@ -281,6 +349,7 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 						material_index = (*found)[3];
 					else {
 						ModelMaterialDesc material = mesh.materials.vertex_materials[vertex_material].material;
+						if(prelit_vertex || emissive_colors) ModelBuilderDetail::Configure_Prelit_Color(material,ModelBuilderDetail::Pass_Color_Usage(mesh,pass));
 						if (texture < mesh.materials.textures.size())
 							material.primary_texture = mesh.materials.textures[texture].name;
 						if (shader < mesh.materials.shaders.size())
@@ -290,7 +359,7 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 						description.materials.push_back(std::move(material));
 						made.push_back({vertex_material, shader, texture, material_index});
 					}
-					description.submeshes.push_back({index_base + static_cast<std::uint32_t>(first * 3), static_cast<std::uint32_t>((end - first) * 3),
+					description.submeshes.push_back({pass_index_base + static_cast<std::uint32_t>(first * 3), static_cast<std::uint32_t>((end - first) * 3),
 						material_index, mesh.header.name, !mesh.bone_indices.empty() || !mesh.skin_indices.empty(), mesh.header.attributes,
 						static_cast<std::uint8_t>(std::min<std::size_t>(pass_index, 255)),
 						shader < mesh.materials.shaders.size() && ModelBuilderDetail::Shader_Blends(mesh.materials.shaders[shader])});
@@ -306,8 +375,12 @@ export void W3DAppend_Mesh(ModelAssetDesc &description, W3DParsedMesh &mesh)
 			mesh.header.attributes});
 	// A flattened hierarchy retains each mesh's own static ordering bin.
 	// The root model's last-mesh value cannot represent mixed child bins.
-	for (std::size_t submesh_index = submesh_base; submesh_index < description.submeshes.size(); ++submesh_index)
+	for (std::size_t submesh_index = submesh_base; submesh_index < description.submeshes.size(); ++submesh_index) {
 		description.submeshes[submesh_index].sort_level = mesh.header.sort_level;
+		// meshmdlio.cpp post_process enables lighting except when the selected
+		// material set is PRELIT_VERTEX, whose DCG/DIG arrays are the solve.
+		description.submeshes[submesh_index].lighting_enabled = !prelit_vertex && !emissive_colors;
+	}
 
 	for (std::size_t material_index = material_base; material_index < description.materials.size(); ++material_index) {
 		ModelMaterialDesc &material = description.materials[material_index];

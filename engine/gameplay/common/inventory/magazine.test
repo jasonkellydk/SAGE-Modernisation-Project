@@ -1,0 +1,11 @@
+#include <boost/test/unit_test.hpp>
+import engine.gameplay.common.inventory.components.magazine;
+BOOST_AUTO_TEST_CASE(magazines_conserve_finite_rounds_and_preserve_unlimited_supply) {
+    using namespace engine::gameplay;
+    Magazine magazine{3,2,6,12};Consume(magazine,2);BOOST_TEST(magazine.loaded==1);Reload(magazine);
+    BOOST_TEST(magazine.loaded==3);BOOST_TEST(magazine.reserve==0);
+    Consume(magazine,9);BOOST_TEST(magazine.loaded==0);Reload(magazine);BOOST_TEST(magazine.loaded==0);
+    magazine={1,-1,6,12};Reload(magazine);BOOST_TEST(magazine.loaded==6);BOOST_TEST(magazine.reserve==-1);
+    magazine={-1,-1,-1,0};Consume(magazine,999);Reload(magazine);BOOST_TEST(magazine.loaded==-1);BOOST_TEST(magazine.reserve==-1);
+    magazine={6,20,6,20};Reload(magazine);BOOST_TEST(magazine.loaded==6);BOOST_TEST(magazine.reserve==20);
+}

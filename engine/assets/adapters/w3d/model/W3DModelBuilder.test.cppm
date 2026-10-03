@@ -10,6 +10,7 @@ import std;
 import Assets.Adapters.W3D.Mesh;
 import Assets.Adapters.W3D.Model;
 import Assets.Models;
+import Assets.Identity;
 import Assets.Materials;
 import Assets.Adapters.W3D.Materials;
 import Assets.Adapters.W3D.PassBindings;
@@ -30,6 +31,55 @@ BOOST_AUTO_TEST_CASE(model_builder_keeps_optional_skin_weights)
     BOOST_TEST(description.vertices[0].bone_weights[0] == 0.4f);
     BOOST_TEST(description.vertices[0].bone_weights[1] == 0.6f);
     BOOST_TEST(description.skin_bone_count == 8u);
+}
+
+BOOST_AUTO_TEST_CASE(selected_vertex_prelighting_disables_scene_lighting_without_affecting_unlit_alternative) {
+    Assets::W3D::W3DParsedMesh mesh;mesh.header.attributes=0x03000000; // both alternative wrappers are present
+    mesh.positions={{0,0,0},{1,0,0},{0,1,0}};mesh.normals.assign(3,{0,0,1});mesh.stage_texcoords.assign(3,{});mesh.colors.assign(3,{.2f,.3f,.4f,1});mesh.triangles={{0,1,2}};
+    mesh.prelit_chunk=0x24;Assets::ModelAssetDesc vertex;Assets::W3D::W3DAppend_Mesh(vertex,mesh);
+    BOOST_REQUIRE_EQUAL(vertex.submeshes.size(),1u);BOOST_TEST(!vertex.submeshes[0].lighting_enabled);
+    mesh.prelit_chunk=0x23;Assets::ModelAssetDesc unlit;Assets::W3D::W3DAppend_Mesh(unlit,mesh);BOOST_TEST(unlit.submeshes[0].lighting_enabled);
+}
+
+BOOST_AUTO_TEST_CASE(hidden_collision_mesh_retains_one_topology_across_material_passes) {
+    Assets::W3D::W3DParsedMesh mesh;
+    mesh.header.name="physical";mesh.header.attributes=0x1000|0x30;
+    mesh.positions={{0,0,0},{1,0,0},{0,1,0}};mesh.normals.assign(3,{0,0,1});mesh.stage_texcoords.assign(3,{});mesh.colors.assign(3,{});
+    mesh.triangles={{0,1,2}};mesh.triangle_surfaces={23};
+    mesh.materials.vertex_materials.push_back({{"surface",""}});mesh.materials.shaders.push_back({});
+    Assets::W3D::W3DMaterialPass first;first.vertex_material_index=0;first.shader_index=0;
+    mesh.materials.passes={first,first};
+    Assets::ModelAssetDesc description;Assets::W3D::W3DAppend_Mesh(description,mesh);
+    BOOST_REQUIRE(description.collision.triangles.size()==1u);BOOST_REQUIRE(description.collision.parts.size()==1u);
+    BOOST_TEST(description.collision.parts[0].categories==3u);BOOST_TEST(description.collision.surfaces[0]==23u);
+    BOOST_TEST(description.collision.parts[0].name=="physical");BOOST_TEST(description.submeshes.size()==2u);
+    Assets::ModelAsset asset({Assets::AssetType::Model,"physical"},std::move(description));
+    BOOST_TEST(asset.Collision().triangles[0][2]==2u);BOOST_TEST(asset.Collision().surfaces[0]==23u);
+}
+
+BOOST_AUTO_TEST_CASE(emissive_only_vertex_and_lightmap_solves_use_authored_colors_instead_of_zero_diffuse) {
+    // Frozen EA MeshMatDescClass::Post_Load_Process semantics. Retail terrain
+    // uses DCG, zero ambient/diffuse and white or tinted emissive materials.
+    // PRELIT_VERTEX disables lighting; all-emissive lightmap passes do too.
+    for(auto selected:{0x24u,0x25u}) {
+        Assets::W3D::W3DParsedMesh mesh;mesh.prelit_chunk=selected;
+        mesh.positions={{0,0,0},{1,0,0},{0,1,0}};mesh.normals.assign(3,{0,0,1});mesh.stage_texcoords.assign(3,{});mesh.colors.assign(3,{1,1,1,1});mesh.triangles={{0,1,2}};
+        Assets::W3D::W3DVertexMaterialData source;source.material.ambient_color={0,0,0,1};source.material.base_color={0,0,0,1};source.material.emissive_color={146/255.f,146/255.f,146/255.f,1};
+        mesh.materials.vertex_materials.push_back(source);
+        Assets::W3D::W3DMaterialPass pass;pass.vertex_material_index=0;pass.colors={{66/255.f,59/255.f,57/255.f,1},{.2f,.3f,.4f,1},{.4f,.2f,.1f,1}};
+        mesh.materials.passes.push_back(pass);if(selected==0x25) mesh.materials.passes.push_back(pass);
+        Assets::ModelAssetDesc converted;Assets::W3D::W3DAppend_Mesh(converted,mesh);
+        BOOST_REQUIRE_EQUAL(converted.submeshes.size(),selected==0x25 ? 2u : 1u);
+        for(const auto& part:converted.submeshes) {
+            BOOST_TEST(!part.lighting_enabled);const auto& material=converted.materials.at(part.material_index);
+            const auto& vertex=converted.vertices.at(converted.indices.at(part.first_index));
+            BOOST_TEST(material.base_color.r==146/255.f);BOOST_TEST(vertex.color.r==66/255.f);
+            const auto shaded=vertex.color.r*material.base_color.r;BOOST_CHECK_SMALL(shaded-66.f*146/(255*255),0.000001f);
+        }
+        mesh.materials.vertex_materials[0].material.base_color={1,1,1,1};
+        Assets::ModelAssetDesc mixed;Assets::W3D::W3DAppend_Mesh(mixed,mesh);
+        BOOST_TEST(mixed.submeshes[0].lighting_enabled==(selected!=0x24));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(authored_screen_blend_and_depth_survive_shader_decode_and_model_building)

@@ -1,0 +1,379 @@
+#include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <string>
+#include <vector>
+#include <cmath>
+#include <numbers>
+import games.renegade.session;
+import games.renegade.content.install.install_mount;
+import engine.core.serialization.byte_stream;
+import std;
+import engine.filesystem.adapters.directory.directory_source;
+
+BOOST_AUTO_TEST_CASE(script_camera_angles_match_original_ccamera_force_look_with_profile_tilt) {
+    using namespace renegade;using namespace Engine::Math;
+    // CCameraClass::Force_Look: heading=atan2(-diffY,-diffX),
+    // Tilt=asin(diffZ/length)-CurrentProfile->ViewTilt. Use independent
+    // floating-point source equations across octants and signed profiles.
+    const FixedVector3 origin{Fixed::FromInt(-7),Fixed::FromInt(4),Fixed::FromInt(3)};
+    for(const auto point:std::array<FixedVector3,4>{{{Fixed::FromInt(8),Fixed::FromInt(-9),Fixed::FromInt(2)},{Fixed::FromInt(-20),Fixed::FromInt(9),Fixed::FromInt(6)},{Fixed::FromInt(4),Fixed::FromInt(10),Fixed::FromInt(20)},{Fixed::FromInt(-9),Fixed::FromInt(-14),Fixed::FromInt(-9)}}}) {
+        for(const auto profile:{-15,0,12}) {
+            const auto result=CameraLookOrientation(origin,point,Fixed::FromInt(profile));BOOST_REQUIRE(result);
+            const auto diff=origin-point;const double x=diff.x.Raw()/65536.0,y=diff.y.Raw()/65536.0,z=diff.z.Raw()/65536.0;
+            const auto heading=result->heading.units*(2*std::numbers::pi/4294967296.0);
+            const auto source_tilt=std::asin(z/std::sqrt(x*x+y*y+z*z))-profile*std::numbers::pi/180;
+            BOOST_TEST(std::abs(std::remainder(heading-std::atan2(-y,-x),2*std::numbers::pi))<1e-6);
+            BOOST_TEST(std::abs(-result->pitch.Raw()/65536.0-source_tilt)<3.0/65536);
+        }
+    }
+    BOOST_TEST(!CameraLookOrientation(origin,origin,Fixed{})); // reject the source's zero-distance NaN
+}
+
+BOOST_AUTO_TEST_CASE(retail_course_zone_fixture_drives_deferred_Lua_lifetime_Logan_actions_and_player_lock) {
+    using namespace renegade;using namespace engine::gameplay;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto scripts=std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path()/"content/scripts";
+    mounted->files->Mount(std::make_unique<engine::filesystem::DirectorySource>(scripts));
+    const auto level=content::LoadLevelScene(*mounted->files,"M00_Tutorial.mix");BOOST_REQUIRE(level);
+    const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes);const auto catalog=content::ReadDefinitions(*bytes);BOOST_REQUIRE(catalog);
+    const auto armor=content::LoadArmorCatalog(*mounted->files);BOOST_REQUIRE(armor);
+    const auto programs=content::LoadBehaviorPrograms(*mounted->files,level->level,0,level->start_script);BOOST_REQUIRE(programs);
+    for(const auto id:{300001ull,400015ull,400016ull,400017ull,400018ull}) {
+        BOOST_TEST_CONTEXT("retail zone "<<id) {
+            const auto run=[&](unsigned workers) {
+                Session session(workers,7);BOOST_REQUIRE(session.LoadScene(*level,*catalog,*armor));BOOST_REQUIRE(session.InstallBehaviors(*programs));
+                auto& world=session.World();const auto& scene=world.Resource<SceneState>();const auto zone=scene.authored_entities.at(id),logan=scene.authored_entities.at(400005),player=scene.player;
+                session.Step();session.Step();BOOST_REQUIRE(world.IsAlive(zone));
+                const auto& volumes=world.Resource<TriggerVolumes>().volumes;const auto found=std::ranges::find(volumes,zone,&TriggerVolume::subject);BOOST_REQUIRE(found!=volumes.end());
+                // Explicit placement fixture: proves the retail volume -> Lua
+                // -> deferred ECS pipeline, not a player course playthrough.
+                world.Get<Transform>(player)->position=found->bounds.center;
+                unsigned custom{},help{},speech{},camera_requests{};
+                for(unsigned tick=0;tick<8;++tick) {
+                    session.Step();world.Resource<BehaviorEmissions>().ForEach([&](const auto& emission) {
+                        if(emission.subject==zone && emission.command.name=="Send_Custom_Event") ++custom;
+                        if(emission.subject==zone && emission.command.name=="Set_HUD_Help_Text") ++help;
+                    });world.Resource<MissionRequests>().ForEach([&](const auto& request) {
+                        if(request.subject!=logan) return;
+                        if(request.command.name=="Start_Conversation") ++speech;
+                    });
+                    world.Resource<CameraLookRequests>().ForEach([&](const auto& request) {
+                        ++camera_requests;const auto point=ResolveCameraLook(world,request);BOOST_REQUIRE(point);
+                        if(id==400016) {BOOST_CHECK(request.target==logan);BOOST_TEST(request.height_offset.Raw()==Engine::Math::Fixed::FromRatio(3,2).Raw());}
+                        if(id==400018) {BOOST_TEST(!request.actor_target);BOOST_TEST(point->x.Raw()==Engine::Math::Fixed::ParseDecimal("-12.776")->Raw());BOOST_TEST(point->z.Raw()==Engine::Math::Fixed::OneRaw);}
+                    });
+                }
+                BOOST_TEST(!world.IsAlive(zone));BOOST_TEST(custom==(id==300001 ? 0u : 1u));BOOST_TEST(help==(id==300001 ? 1u : 0u));
+                const auto* permission=world.Get<InputPermission>(player);BOOST_REQUIRE(permission);BOOST_TEST(permission->enabled==(id==300001 ? 1u : 0u));
+                if(id==400015 || id==400017) {
+                    const auto* action=world.Get<HumanGoto>(logan);BOOST_REQUIRE(action);BOOST_TEST(action->enabled==1u);BOOST_TEST(action->action==(id==400015 ? 1u : 3u));
+                    BOOST_TEST(action->speed.Raw()==Engine::Math::Fixed::OneRaw);BOOST_TEST(action->priority==100u);
+                    const auto& routes=world.Resource<MissionRoutes>().routes;const auto route=std::ranges::find(routes,id==400015 ? 400049u : 400074u,&MissionRoute::id);BOOST_REQUIRE(route!=routes.end());
+                    BOOST_TEST(world.Get<RouteTraversal>(logan)->curve==route->traversal.curve);BOOST_TEST(speech==0u);
+                } else {BOOST_TEST(speech==(id==300001 ? 0u : 1u));BOOST_TEST(camera_requests==(id==300001 ? 0u : 1u));}
+                // Dead zone contacts and their script observers must retire.
+                ecs::Query<ecs::Read<VolumeContact>> contacts(world);
+                contacts.ForEachChunk([&](auto chunk) {for(const auto& contact:chunk.template Get<VolumeContact>()) BOOST_CHECK(volumes.at(contact.volume).subject!=zone);});
+                ecs::Query<ecs::Read<LuaBehavior>> observers(world);
+                observers.ForEachChunk([&](auto chunk) {for(const auto& observer:chunk.template Get<LuaBehavior>()) BOOST_CHECK(observer.subject!=zone);});
+                std::vector<VolumeTransition> transitions;world.Resource<VolumeTransitions>().AppendTo(transitions);
+                BOOST_TEST(std::ranges::none_of(transitions,[&](const auto& transition) {return transition.subject==zone;}));return world.StateHash();
+            };BOOST_TEST(run(1)==run(4));
+        }
+    }
+}
+BOOST_AUTO_TEST_CASE(retail_Logan_action_result_fixture_relocates_both_poses_before_pending_speech) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto scripts=std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path()/"content/scripts";
+    mounted->files->Mount(std::make_unique<engine::filesystem::DirectorySource>(scripts));
+    const auto level=content::LoadLevelScene(*mounted->files,"M00_Tutorial.mix");BOOST_REQUIRE(level);
+    const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes);const auto catalog=content::ReadDefinitions(*bytes);BOOST_REQUIRE(catalog);
+    const auto armor=content::LoadArmorCatalog(*mounted->files);BOOST_REQUIRE(armor);const auto programs=content::LoadBehaviorPrograms(*mounted->files,level->level,0,level->start_script);BOOST_REQUIRE(programs);
+    for(const auto action:{1,3}) {
+        const auto run=[&](unsigned workers) {
+            Session session(workers,7);BOOST_REQUIRE(session.LoadScene(*level,*catalog,*armor));BOOST_REQUIRE(session.InstallBehaviors(*programs));session.Step();session.Step();
+            auto& world=session.World();const auto& scene=world.Resource<SceneState>();const auto logan=scene.authored_entities.at(400005);
+            BehaviorMessage message;message.recipient=logan;message.event=std::uint32_t(content::MissionEvent::ActionComplete);message.arguments={400005,action,0,0};message.argument_count=3;
+            world.Resource<BehaviorInbox>().messages.push_back(message);session.Step();
+            const auto& position=world.Get<Transform>(logan)->position;const auto& affine=world.Get<AffinePose>(logan)->transform.elements;
+            const auto scalar=[](const char* value) {return *Fixed::ParseDecimal(value);};
+            BOOST_TEST(position.x.Raw()==scalar(action==1 ? "-53.697" : "-35.01").Raw());BOOST_TEST(position.y.Raw()==scalar(action==1 ? "-5.334" : "-15.658").Raw());BOOST_TEST(position.z.Raw()==scalar(action==1 ? "2" : "0.705").Raw());
+            BOOST_TEST(affine[3].Raw()==position.x.Raw());BOOST_TEST(affine[7].Raw()==position.y.Raw());BOOST_TEST(affine[11].Raw()==position.z.Raw());
+            // Independent source formula: Set_Position precedes Say_Something's
+            // -90 - atan2(myX-starX,myY-starY), including retained control yaw.
+            const auto target=world.Get<Transform>(scene.player)->position;
+            const auto expected=Engine::Math::TurnFromDegrees(-90)-Engine::Math::Atan2(position.x-target.x,position.y-target.y);
+            const auto facing=world.Get<Transform>(logan)->facing;
+            BOOST_TEST(std::abs(std::int64_t(std::bit_cast<std::int32_t>(facing.units-expected.units)))<=8);
+            BOOST_TEST(world.Get<HumanControl>(logan)->facing.units==facing.units);
+            unsigned speech{},camera{};world.Resource<MissionRequests>().ForEach([&](const auto& request) {
+                if(request.subject!=logan) return;
+                if(request.command.name=="Start_Conversation") {BOOST_TEST(std::get<std::string>(request.command.arguments[1])==(action==1 ? "MTU_LOGAN_JUMP_TEST" : "MTU_LOGAN_COURSE_DONE"));++speech;}
+            });world.Resource<CameraLookRequests>().ForEach([&](const auto& request) {
+                BOOST_CHECK(request.target==logan);BOOST_TEST(request.actor_target);const auto point=ResolveCameraLook(world,request);BOOST_REQUIRE(point);
+                BOOST_TEST(point->x.Raw()==position.x.Raw());BOOST_TEST(point->y.Raw()==position.y.Raw());BOOST_TEST(point->z.Raw()==(position.z+Fixed::FromRatio(3,2)).Raw());++camera;
+            });BOOST_TEST(speech==1u);BOOST_TEST(camera==1u);session.Step();BOOST_TEST(world.Get<Transform>(logan)->facing.units==facing.units);return world.StateHash();
+        };BOOST_TEST(run(1)==run(4));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(source_camera_actor_resolution_suppresses_zero_x_and_stale_generation_without_affecting_literal_points) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    Session session;auto& world=session.World();ecs::CommandBuffer creation;const auto pending=creation.Create();creation.Add<Transform>(pending);world.Commit(creation);const auto actor=creation.Resolve(pending);
+    CameraLookRequest request;request.target=actor;request.actor_target=true;request.height_offset=Fixed::FromRatio(3,2);
+    BOOST_TEST(!ResolveCameraLook(world,request));world.Get<Transform>(actor)->position={Fixed::FromInt(3),Fixed::FromInt(-4),Fixed::FromInt(2)};
+    const auto point=ResolveCameraLook(world,request);BOOST_REQUIRE(point);BOOST_TEST(point->z.Raw()==Fixed::FromRatio(7,2).Raw());
+    ecs::CommandBuffer deletion;deletion.Destroy(actor);world.Commit(deletion);ecs::CommandBuffer replacement;const auto new_actor=replacement.Create();replacement.Add<Transform>(new_actor);world.Commit(replacement);
+    BOOST_TEST(!ResolveCameraLook(world,request));request.actor_target=false;request.point={Fixed{},Fixed::FromInt(-8),Fixed::FromInt(2)};
+    const auto literal=ResolveCameraLook(world,request);BOOST_REQUIRE(literal);BOOST_CHECK(*literal==request.point);
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_lua_binding_timer_and_custom_delivery_request_Logan_intro_after_two_seconds) {
+    using namespace renegade;using namespace engine::gameplay;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto scripts=std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path()/"content/scripts";
+    mounted->files->Mount(std::make_unique<engine::filesystem::DirectorySource>(scripts));
+    const auto level=content::LoadLevelScene(*mounted->files,"M00_Tutorial.mix");BOOST_REQUIRE(level);
+    const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes);
+    const auto definitions=content::ReadDefinitions(*bytes);BOOST_REQUIRE(definitions);
+    const auto armor=content::LoadArmorCatalog(*mounted->files);BOOST_REQUIRE(armor);
+    const auto programs=content::LoadBehaviorPrograms(*mounted->files,level->level);BOOST_REQUIRE_MESSAGE(programs,(programs ? "" : programs.error()));
+    BOOST_TEST(programs->bindings.size()>=2u);
+    BOOST_REQUIRE(programs->animations.size()==1u);BOOST_TEST(programs->animations.front()=="CHT_JAIL.CHT_JAIL");
+    const auto run=[&](unsigned workers) {
+        Session session(workers,7);BOOST_REQUIRE(session.LoadScene(*level,*definitions,*armor));BOOST_REQUIRE(session.InstallBehaviors(*programs));
+        unsigned starts{};
+        for(unsigned tick=1;tick<=122;++tick) {
+            session.Step();session.World().Resource<MissionRequests>().ForEach([&](const auto& request) {
+                if(request.command.name!="Start_Conversation") return;
+                BOOST_TEST(tick==122u);BOOST_TEST(std::get<std::string>(request.command.arguments[1])=="MTU_LOGAN_START");++starts;
+            });
+        }
+        BOOST_TEST(starts==1u);return session.World().StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+
+BOOST_AUTO_TEST_CASE(retail_saved_player_startup_attaches_commando_once_and_original_custom_events_change_persistent_permission) {
+    using namespace renegade;using namespace engine::gameplay;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted);
+    const auto scripts=std::filesystem::path(std::source_location::current().file_name()).parent_path().parent_path()/"content/scripts";
+    mounted->files->Mount(std::make_unique<engine::filesystem::DirectorySource>(scripts));
+    const auto level=content::LoadLevelScene(*mounted->files,"M00_Tutorial.mix");BOOST_REQUIRE(level);BOOST_TEST(level->start_script=="MTU_Commando_Startup");
+    const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes);const auto definitions=content::ReadDefinitions(*bytes);BOOST_REQUIRE(definitions);
+    const auto armor=content::LoadArmorCatalog(*mounted->files);BOOST_REQUIRE(armor);
+    const auto programs=content::LoadBehaviorPrograms(*mounted->files,level->level,0,level->start_script);BOOST_REQUIRE_MESSAGE(programs,(programs ? "" : programs.error()));
+    const auto run=[&](unsigned workers) {
+        Session session(workers,7);BOOST_REQUIRE(session.LoadScene(*level,*definitions,*armor));BOOST_REQUIRE(session.InstallBehaviors(*programs));
+        auto& world=session.World();const auto player=world.Resource<SceneState>().player;const auto sources=world.Resource<BehaviorPrograms>().programs.size();
+        const auto before=world.EntityCount();session.Step();BOOST_TEST(world.EntityCount()==before+9u); // six source objectives, two controller timers and one deferred commando observer
+        ecs::Query<ecs::Read<MissionObjective>,ecs::Read<SimulationAge>> objectives(world);unsigned hidden{};
+        objectives.ForEachChunk([&](auto chunk) {const auto values=chunk.template Get<MissionObjective>();const auto ages=chunk.template Get<SimulationAge>();for(std::size_t row=0;row<values.size();++row) {BOOST_CHECK(values[row].status==ObjectiveStatus::Hidden);BOOST_TEST(values[row].id>=1);BOOST_TEST(values[row].id<=6);BOOST_TEST(values[row].short_text==7503+2*values[row].id);BOOST_TEST(ages[row].enabled==0u);++hidden;}});BOOST_TEST(hidden==6u);
+        unsigned reveal{},weapon{};session.Step();world.Resource<MissionRequests>().ForEach([&](const auto& request) {
+            if(request.command.name=="Reveal_Encyclopedia_Weapon") {BOOST_TEST(std::get<std::int64_t>(request.command.arguments[0])==14);++reveal;}
+            if(request.subject==player && request.command.name=="Select_Weapon") {BOOST_TEST(std::get<std::string>(request.command.arguments[1]).empty());++weapon;}
+        });BOOST_TEST(reveal==1u);BOOST_TEST(weapon==1u);BOOST_TEST(world.Resource<BehaviorPrograms>().programs.size()==sources);
+        const auto send=[&](std::int64_t parameter) {
+            BehaviorMessage message;message.recipient=player;message.event=std::uint32_t(content::MissionEvent::Custom);message.arguments={1,1,parameter,400005};message.argument_count=4;
+            world.Resource<BehaviorInbox>().messages.push_back(message);session.Step();
+        };
+        send(2);BOOST_TEST(world.Get<InputPermission>(player)->enabled==0u);
+        for(unsigned tick=0;tick<8;++tick) {*world.Get<HumanControl>(player)=HumanControl{};session.Step();BOOST_TEST(world.Get<InputPermission>(player)->enabled==0u);}
+        send(1);BOOST_TEST(world.Get<InputPermission>(player)->enabled==1u);
+        unsigned follow{};world.Resource<MissionRequests>().ForEach([&](const auto& request) {if(request.command.name=="Action_Follow_Input") {BOOST_TEST(std::get<std::int64_t>(request.command.arguments[1])==100);BOOST_TEST(std::get<std::int64_t>(request.command.arguments[2])==0);++follow;}});BOOST_TEST(follow==1u);
+        // Follow-input arbitration, encyclopedia and weapon selection are
+        // still pending game capabilities, not complete claims from this test.
+        session.Step();BOOST_TEST(world.Resource<MissionRequests>().Size()==0u);return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+
+BOOST_AUTO_TEST_CASE(cinematic_fixed_clock_controls_actor_lifetime_fades_and_original_71_second_release) {
+    using namespace renegade;using namespace engine::gameplay;using Engine::Math::Fixed;
+    const auto definition=content::ReadCinematic("0 Create_Object,0,\"X00_CAMERA\"\n0 Play_Animation,0,\"X00_CAMERA.X00_CAMERA\",0\n0 Control_Camera,0\n0 Set_Screen_Fade_Color,0,0,0,0\n0 Set_Screen_Fade_Opacity,1,0\n0 Set_Screen_Fade_Opacity,0,2\n0 Enable_Letterbox,1,1\n-2130 Control_Camera,-1\n-2130 Destroy_Object,0\n-2250 Destroy_Object,1\n");BOOST_REQUIRE(definition.has_value());
+    const auto run=[&](unsigned workers) {
+        Session session(workers,7);auto& world=session.World();world.Resource<TimelineLibrary>().timelines.push_back(definition->timeline);
+        auto& library=world.Resource<CinematicLibrary>();library.definition=*definition;ClipPlayback clip;clip.clip=1;clip.frame_count=2251;clip.frames_per_second=Fixed::FromInt(30);clip.mode=ClipMode::Once;library.animations.emplace(1,clip);
+        ecs::CommandBuffer clock_commands;auto pending=clock_commands.Create();TimelinePlayback playback;playback.timeline=1;clock_commands.Add<TimelinePlayback>(pending,playback);clock_commands.Add<CinematicDirector>(pending);world.Commit(clock_commands);const auto clock=clock_commands.Resolve(pending);
+        ecs::CommandBuffer actors;std::vector<ecs::DeferredEntity> pending_actors;
+        for(unsigned i=0;i<37;++i) {const auto actor=actors.Create();pending_actors.push_back(actor);actors.Add<CinematicActor>(actor,CinematicActor{clock,std::int32_t(i),0});actors.Add<ClipPlayback>(actor);actors.Add<ClipTransition>(actor);actors.Add<FireTrigger>(actor);actors.Add<AffinePose>(actor);actors.Add<DrawHidden>(actor);}world.Commit(actors);const auto camera=actors.Resolve(pending_actors[0]);
+        session.Step();BOOST_TEST(world.Get<CinematicDirector>(clock)->camera==0);BOOST_TEST(world.Get<CinematicActor>(camera)->active==1u);BOOST_TEST(!world.Get<DrawHidden>(camera));BOOST_TEST(world.Get<ClipPlayback>(camera)->frame.Raw()==0);
+        for(unsigned tick=2;tick<=61;++tick) session.Step();const auto& state=*world.Get<CinematicDirector>(clock);
+        BOOST_TEST(engine::time::Sample(state.fade,Fixed::One()).Raw()==Fixed::FromRatio(1,2).Raw());BOOST_TEST(engine::time::Sample(state.letterbox,Fixed::One()).Raw()==Fixed::OneRaw);BOOST_TEST(world.Get<ClipPlayback>(camera)->frame.Raw()==30*Fixed::OneRaw);
+        for(unsigned tick=62;tick<=4260;++tick) session.Step();BOOST_TEST(world.Get<CinematicDirector>(clock)->camera==0);
+        session.Step();BOOST_TEST(world.Get<CinematicDirector>(clock)->camera==-1);BOOST_TEST(!world.IsAlive(camera));
+        for(unsigned tick=4262;tick<=4501;++tick) session.Step();BOOST_TEST(world.Get<TimelinePlayback>(clock)->complete==1u);BOOST_TEST(world.Get<CinematicDirector>(clock)->commands_seen==10u);
+        return world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+
+BOOST_AUTO_TEST_CASE(scene_parallel_snapshot_and_deferred_load_retain_authored_basis)
+{
+	using namespace renegade;
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = content::MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto bytes = mounted->files->Read("objects.ddb"); BOOST_REQUIRE(bytes.has_value());
+	const auto catalog = content::ReadDefinitions(*bytes); BOOST_REQUIRE_MESSAGE(catalog.has_value(), (catalog ? std::string{} : catalog.error()));
+	const auto armor_text = mounted->files->ReadText("armor.ini"); BOOST_REQUIRE(armor_text.has_value());
+	const auto armor = content::ReadArmor(*armor_text); BOOST_REQUIRE(armor.has_value());
+	const auto level = content::LoadLevelScene(*mounted->files, "M00_Tutorial.mix"); BOOST_REQUIRE_MESSAGE(level.has_value(), (level ? std::string{} : level.error()));
+	std::vector<engine::gameplay::AffineVisibleObject> reference;
+	for (const auto workers : {1u, 4u}) for (const auto capacity : {7u, 64u, 128u}) {
+		Session session(workers, capacity);
+		const auto loaded = session.LoadScene(*level, *catalog, *armor); BOOST_REQUIRE_MESSAGE(loaded.has_value(), (loaded ? std::string{} : loaded.error()));
+		BOOST_TEST(session.World().EntityCount() == 591u); // 495 statics, 59 actors, star, 31 contacts, five authored weapon items
+		ecs::Query<ecs::Read<engine::gameplay::InventoryItem>,ecs::Read<engine::gameplay::Magazine>> inventory(session.World());std::size_t weapon_items{};
+		inventory.ForEachChunk([&](auto chunk) {weapon_items+=chunk.Size();});BOOST_TEST(weapon_items==5u);
+		BOOST_TEST(!session.LoadScene(*level, *catalog, *armor));
+		const auto player = session.World().Resource<SceneState>().player;
+		BOOST_REQUIRE(session.World().Get<engine::gameplay::Health>(player));
+		BOOST_REQUIRE(session.World().Get<engine::gameplay::Shield>(player));
+		BOOST_REQUIRE(session.World().Get<Defense>(player));
+		BOOST_TEST(session.World().Get<engine::gameplay::Health>(player)->current.Raw() == 100 * Fixed::OneRaw);
+		BOOST_TEST(session.World().Get<engine::gameplay::Shield>(player)->current.Raw() == 100 * Fixed::OneRaw);
+		BOOST_TEST(session.World().Get<Defense>(player)->skin == armor->ArmorBySaveId(2));
+		BOOST_TEST(session.World().Get<engine::gameplay::Shield>(player)->armor == armor->ArmorBySaveId(17));
+		for (unsigned tick = 0; tick < 3; ++tick) session.Step();
+		std::vector<engine::gameplay::AffineVisibleObject> visible;
+		session.World().Resource<engine::gameplay::AffineVisibleObjects>().AppendTo(visible);
+		std::sort(visible.begin(), visible.end(), [](const auto &a, const auto &b) { return a.entity.index < b.entity.index; });
+		if (reference.empty()) reference = visible;
+		BOOST_REQUIRE_EQUAL(visible.size(), reference.size()); BOOST_REQUIRE_EQUAL(visible.size(), level->statics.size() + 19u);
+		for (std::size_t i = 0; i < visible.size(); ++i) {
+			BOOST_TEST(visible[i].entity.index == reference[i].entity.index); BOOST_TEST(visible[i].model == reference[i].model);
+			for (unsigned j = 0; j < 12; ++j) {
+				BOOST_TEST(visible[i].transform.elements[j].Raw() == reference[i].transform.elements[j].Raw());
+			}
+		}
+		const auto &scene = session.World().Resource<SceneState>();
+		for (std::size_t i = 0; i < scene.statics.size(); ++i) {
+			const auto found = std::ranges::find(visible, scene.statics[i], &engine::gameplay::AffineVisibleObject::entity);
+			BOOST_REQUIRE(found != visible.end());
+			for (unsigned j = 0; j < 12; ++j) BOOST_TEST(found->transform.elements[j].Raw() == level->statics[i].transform.elements[j].Raw());
+		}
+		const auto logan = scene.authored_entities.at(400005);
+		BOOST_REQUIRE(session.World().Get<engine::gameplay::ModelOverride>(logan));
+		BOOST_TEST(scene.models.at(session.World().Get<engine::gameplay::ModelOverride>(logan)->model) == "C_AG_Logan");
+		engine::core::serialization::ByteWriter checkpoint; session.World().SaveCheckpoint(checkpoint);
+		Session restored(workers, capacity); engine::core::serialization::ByteReader reader(checkpoint.Bytes());
+		BOOST_REQUIRE(restored.World().LoadCheckpoint(reader)); BOOST_TEST(reader.AtEnd());
+		BOOST_TEST(restored.World().StateHash() == session.World().StateHash());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(retail_editor_helpers_keep_script_identity_and_hidden_blockers_keep_their_model)
+{
+    using namespace renegade;using namespace engine::gameplay;
+    const auto* install=std::getenv("RENEGADE_INSTALL_DIR");if(!install) return;
+    const auto mounted=content::MountInstall(install);BOOST_REQUIRE(mounted.has_value());
+    const auto bytes=mounted->files->Read("objects.ddb");BOOST_REQUIRE(bytes.has_value());
+    const auto catalog=content::ReadDefinitions(*bytes);BOOST_REQUIRE(catalog.has_value());
+    const auto armor_text=mounted->files->ReadText("armor.ini");BOOST_REQUIRE(armor_text.has_value());
+    const auto armor=content::ReadArmor(*armor_text);BOOST_REQUIRE(armor.has_value());
+    // SimpleGameObj::On_Post_Load substitutes NULL for editor-only objects;
+    // hidden objects keep their physical model. Counts are independently
+    // inventoried from the retail definition and active actor records.
+    for(const auto* map:{"M00_Tutorial.mix","M13.mix"}) {
+        const bool tutorial=std::string_view(map).starts_with("M00");
+        const auto level=content::LoadLevelScene(*mounted->files,map);BOOST_REQUIRE(level.has_value());
+        for(const auto workers:{1u,4u}) {
+            Session session(workers,7);BOOST_REQUIRE(session.LoadScene(*level,*catalog,*armor).has_value());
+            const auto& scene=session.World().Resource<SceneState>();unsigned editor_count{},hidden_count{};
+            for(const auto& actor:level->dynamic.actors) if(!actor.pending_delete) {
+                const auto* definition=catalog->Find(actor.definition);BOOST_REQUIRE(definition);
+                const auto entity=scene.authored_entities.at(actor.LevelId());
+                BOOST_TEST(session.World().Get<LevelIdentity>(entity)->value==actor.LevelId());
+                if(definition->editor_only) {
+                    ++editor_count;BOOST_REQUIRE(session.World().Get<DrawHidden>(entity));
+                    BOOST_TEST(!session.World().Get<ModelOverride>(entity));
+                } else if(definition->hidden) {
+                    ++hidden_count;BOOST_REQUIRE(session.World().Get<DrawHidden>(entity));
+                    BOOST_REQUIRE(session.World().Get<ModelOverride>(entity));
+                }
+            }
+            BOOST_TEST(editor_count==(tutorial ? 1u : 94u));BOOST_TEST(hidden_count==(tutorial ? 0u : 10u));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(retail_tutorial_3d_zones_follow_the_shared_player_soa_position)
+{
+	using namespace renegade; using namespace engine::gameplay;
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = content::MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto bytes = mounted->files->Read("objects.ddb"); BOOST_REQUIRE(bytes.has_value());
+	const auto catalog = content::ReadDefinitions(*bytes); BOOST_REQUIRE(catalog.has_value());
+	const auto armor_text = mounted->files->ReadText("armor.ini"); BOOST_REQUIRE(armor_text.has_value());
+	const auto armor = content::ReadArmor(*armor_text); BOOST_REQUIRE(armor.has_value());
+	const auto level = content::LoadLevelScene(*mounted->files, "M00_Tutorial.mix"); BOOST_REQUIRE(level.has_value());
+	for (const auto workers : {1u, 4u}) {
+		Session session(workers, 7); BOOST_REQUIRE(session.LoadScene(*level, *catalog, *armor).has_value());
+		const auto &scene = session.World().Resource<SceneState>(); const auto player = scene.player;
+		auto *transform = session.World().Get<Transform>(player); BOOST_REQUIRE(transform);
+		const auto &volumes = session.World().Resource<TriggerVolumes>().volumes; BOOST_REQUIRE_EQUAL(volumes.size(), 31u);
+		const auto &volume = volumes.front();
+		transform->position = volume.bounds.WorldPoint({{}, {}, volume.bounds.extent.z + Fixed::One()}); session.Step();
+		transform->position = volume.bounds.center; session.Step();
+		std::vector<VolumeTransition> events; session.World().Resource<VolumeTransitions>().AppendTo(events);
+		const auto entered = std::ranges::find(events, volume.subject, &VolumeTransition::subject);
+		BOOST_REQUIRE(entered != events.end()); BOOST_TEST(entered->entered); BOOST_CHECK(entered->probe == player);
+		BOOST_TEST(session.World().Get<LevelIdentity>(entered->subject)->value == level->level.volumes.front().subject);
+		session.Step(); events.clear(); session.World().Resource<VolumeTransitions>().AppendTo(events); BOOST_TEST(events.empty());
+		transform->position = volume.bounds.WorldPoint({{}, {}, volume.bounds.extent.z + Fixed::One()}); session.Step();
+		events.clear(); session.World().Resource<VolumeTransitions>().AppendTo(events);
+		const auto exited = std::ranges::find(events, volume.subject, &VolumeTransition::subject);
+		BOOST_REQUIRE(exited != events.end()); BOOST_TEST(!exited->entered);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(retail_campaign_player_vitals_enter_the_shared_damage_system)
+{
+	using namespace renegade;
+	const auto *install = std::getenv("RENEGADE_INSTALL_DIR");
+	if (!install) { BOOST_TEST_MESSAGE("Retail fixture requires RENEGADE_INSTALL_DIR"); return; }
+	const auto mounted = content::MountInstall(install); BOOST_REQUIRE(mounted.has_value());
+	const auto bytes = mounted->files->Read("objects.ddb"); BOOST_REQUIRE(bytes.has_value());
+	const auto catalog = content::ReadDefinitions(*bytes); BOOST_REQUIRE(catalog.has_value());
+	const auto armor_text = mounted->files->ReadText("armor.ini"); BOOST_REQUIRE(armor_text.has_value());
+	const auto armor = content::ReadArmor(*armor_text); BOOST_REQUIRE(armor.has_value());
+	for (const char *map : {"M00_Tutorial.mix", "M13.mix", "M01.mix", "M02.mix", "M03.mix", "M04.mix", "M05.mix",
+		"M06.mix", "M07.mix", "M08.mix", "M09.mix", "M10.mix", "M11.mix"}) {
+		BOOST_TEST_CONTEXT(map) {
+			const auto level = content::LoadLevelScene(*mounted->files, map); BOOST_REQUIRE(level.has_value());
+			for (int difficulty = 0; difficulty < 3; ++difficulty) {
+				Session session(4, 7);
+				BOOST_TEST(!session.LoadScene(*level, *catalog, content::ArmorCatalog{}, difficulty));
+				BOOST_TEST(session.World().EntityCount() == 0u); // failure is before deferred commit
+				const auto loaded = session.LoadScene(*level, *catalog, *armor, difficulty);
+				BOOST_REQUIRE_MESSAGE(loaded.has_value(), (loaded ? std::string{} : loaded.error()));
+				const auto player = session.World().Resource<SceneState>().player;
+				const int maximum = difficulty == 0 ? 200 : difficulty == 1 ? 100 : 75;
+				BOOST_TEST(session.World().Get<engine::gameplay::Health>(player)->maximum.Raw() == maximum * Fixed::OneRaw);
+				BOOST_TEST(session.World().Get<engine::gameplay::Shield>(player)->maximum.Raw() == maximum * Fixed::OneRaw);
+				// A normal mission hit now reaches real health/shield columns, using
+				// the retail response table, rather than remaining a callback trace.
+				const auto skin = session.World().Get<Defense>(player)->skin;
+				auto &rules = session.World().Resource<DamageRules>();
+				BOOST_TEST(rules.At(skin, 0).multiplier.Raw() == armor->rules.At(skin, 0).multiplier.Raw());
+				// Named alternate-skin damage bypasses shields in the original.
+				// Use a known source multiplier to make the state transition exact.
+				rules.responses[{skin, 0}] = {Fixed::One(), {}};
+				DamageRequest hit{player, {}, Fixed::FromInt(10)}; hit.alternateSkin = skin;
+				session.World().Resource<DamageRequests>().Push(hit); session.Step();
+				BOOST_TEST(session.World().Get<engine::gameplay::Health>(player)->current.Raw() == (maximum - 10) * Fixed::OneRaw);
+				BOOST_TEST(session.World().Get<engine::gameplay::Shield>(player)->current.Raw() == maximum * Fixed::OneRaw);
+				session.Step(); BOOST_TEST(session.World().Get<engine::gameplay::Health>(player)->current.Raw() == (maximum - 10) * Fixed::OneRaw);
+			}
+		}
+	}
+}

@@ -1,0 +1,36 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.level.model.path_curve;
+using namespace Engine::Math;
+namespace {FixedVector3 P(int x, int y, int z) {return {Fixed::FromInt(x), Fixed::FromInt(y), Fixed::FromInt(z)};}}
+BOOST_AUTO_TEST_CASE(path_curve_samples_hermite_basis_and_retains_vertical_coordinates)
+{
+	const std::array points{P(0,0,-2), P(8,4,2)};
+	const auto sharp = engine::level::BuildCardinalPathCurve3(points, Fixed::One()); BOOST_REQUIRE(sharp);
+	// Hermite endpoint tangents are zero at cardinal tightness one. At t=1/4,
+	// h1=5/32; source wwmath/hermitespline.cpp evaluates this same cubic basis.
+	const auto quarter = sharp->Sample(Fixed::FromRatio(1,4));
+	BOOST_TEST(quarter.x.Raw() == Fixed::FromRatio(5,4).Raw());
+	BOOST_TEST(quarter.y.Raw() == Fixed::FromRatio(5,8).Raw());
+	BOOST_TEST(quarter.z.Raw() == Fixed::FromRatio(-11,8).Raw());
+	BOOST_CHECK(sharp->Sample(Fixed::FromInt(-1)) == points.front()); BOOST_CHECK(sharp->Sample(Fixed::FromInt(2)) == points.back());
+	const auto soft = engine::level::BuildCardinalPathCurve3(points, Fixed::Half()); BOOST_REQUIRE(soft);
+	// Nonzero cardinal tangents contribute (h2+h3)/2=3/64 at t=1/4.
+	BOOST_TEST(soft->Sample(Fixed::FromRatio(1,4)).x.Raw() == Fixed::FromRatio(13,8).Raw());
+	auto invalid = *soft; invalid.incoming.pop_back(); BOOST_TEST(!invalid.IsValid());
+	BOOST_CHECK_THROW(invalid.Sample(Fixed{}), std::invalid_argument);
+}
+BOOST_AUTO_TEST_CASE(path_curve_handles_duplicate_and_single_points_and_uneven_cardinal_knots)
+{
+	const std::array points{P(0,0,0), P(3,0,0), P(3,0,0), P(3,4,0)};
+	const auto curve = engine::level::BuildCardinalPathCurve3(points, Fixed::Half()); BOOST_REQUIRE(curve);
+	BOOST_REQUIRE_EQUAL(curve->keys.size(), 3); BOOST_TEST(curve->length.Raw() == Fixed::FromInt(7).Raw());
+	BOOST_CHECK(curve->Sample(curve->keys[1]) == P(3,0,0));
+	BOOST_TEST(Abs(curve->outgoing[0].x - Fixed::FromRatio(9,7)).Raw() <= 4);
+	BOOST_TEST(Abs(curve->incoming[2].y - Fixed::FromRatio(16,7)).Raw() <= 4);
+	const std::array same{P(1,2,3), P(1,2,3)};
+	const auto hold = engine::level::BuildCardinalPathCurve3(same, Fixed::One()); BOOST_REQUIRE(hold);
+	BOOST_TEST(hold->keys.size() == 1u); BOOST_CHECK(hold->Sample(Fixed::Half()) == same[0]);
+	BOOST_TEST(!engine::level::BuildCardinalPathCurve3({}, Fixed{}));
+	BOOST_TEST(!engine::level::BuildCardinalPathCurve3(points, Fixed::FromInt(2)));
+}

@@ -38,6 +38,12 @@ function(engine_add_module_library target)
         set_property(TARGET ${target}_tests PROPERTY CXX_SCAN_FOR_MODULES ON)
         target_compile_definitions(${target}_tests PRIVATE BOOST_TEST_INCLUDED)
         target_link_libraries(${target}_tests PRIVATE ${target} ${arg_TEST_DEPENDS} Boost::included_unit_test_framework)
+		if(WIN32)
+			add_custom_command(TARGET ${target}_tests POST_BUILD
+				COMMAND "${CMAKE_COMMAND}" "-DRUNTIME_FILES=$<TARGET_RUNTIME_DLLS:${target}_tests>"
+					"-DOUTPUT_DIRECTORY=$<TARGET_FILE_DIR:${target}_tests>"
+					-P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/copy_runtime_files.cmake")
+		endif()
         enable_testing()
         add_test(NAME ${target}_tests COMMAND ${target}_tests)
     endif()

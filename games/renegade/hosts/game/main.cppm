@@ -2,6 +2,7 @@
 #include <stb_image_write.h>
 
 import std;
+import Engine.Core.Math.FixedPresentation;
 import engine.platform;
 import engine.platform.adapters.sdl3;
 import games.renegade.content.install.install_mount;
@@ -12,6 +13,14 @@ import games.renegade.content.presentation.credits;
 import games.renegade.presentation.menu.main_menu;
 import games.renegade.presentation.menu.intro;
 import games.renegade.presentation.menu.navigation;
+import games.renegade.presentation.menu.single_player;
+import games.renegade.presentation.menu.pause;
+import games.renegade.content.campaign.campaign_flow;
+import games.renegade.presentation.scene.level_view;
+import games.renegade.session;
+import games.renegade.presentation.player.input;
+import Graphics.Resources.Loading.Queue;
+import Graphics.Frame.RenderServices;
 import games.renegade.presentation.menu.audio_settings;
 import games.renegade.presentation.menu.audio_preview;
 import games.renegade.presentation.menu.audio_preferences;
@@ -165,6 +174,11 @@ struct MenuModel {
     }
 };
 struct MenuScene {
+    std::unique_ptr<renegade::presentation::LevelView> level_view;
+    std::unique_ptr<renegade::presentation::PauseMenu> pause;
+	bool verify_level_return{};
+    unsigned loading_frames{},loading_events{},level_ready_frames{};
+    bool capture_loading{},loading_captured{},capture_loading_progress{},loading_progress_captured{};
     struct Entry {
         engine::gui::w3d::MenuEntryModel state{renegade::presentation::menu_entry_timings};
         renegade::presentation::MenuEntryVisual visual;
@@ -186,6 +200,7 @@ struct MenuScene {
     std::map<std::string,std::uint64_t> expected_movie_frames;
     unsigned frames{};
     engine::gui::text::FontFace font;
+    engine::gui::text::FontFace loading_font,loading_large_font;
     engine::gui::text::FontFace small_font,control_font,title_font,large_control_font,tooltip_font,header_font;
     engine::gui::text::FontFace list_font;
     renegade::presentation::MovieGallery gallery;
@@ -223,6 +238,7 @@ struct MenuScene {
     Graphics::ColorTransferFrame::Curve color_curve{};
     std::array<engine::gui::w3d::HitRect,3> video_caption_bounds;
     bool check_video_frame{};unsigned video_frame_checks{};
+    bool check_cinematic_effects{},check_tutorial_gates{},check_player_body{},check_objective_hud{},check_speech_pose{};
     renegade::presentation::AudioPreview audio_preview;
     std::array<std::shared_ptr<const engine::audio::PcmBuffer>,4> preview_pcm;
     std::array<engine::audio::VoiceId,4> preview_voices{};
@@ -280,6 +296,7 @@ void RefreshProfileRows(MenuScene& menu) {
     }
 }
 unsigned MenuPage(const MenuScene& menu) {
+    if(menu.displayed_dialog==153) return renegade::presentation::PauseMenu::pages[menu.pause->selected_tab.Get()];
     if(menu.displayed_dialog==136) return renegade::presentation::controls_tabs[menu.controls_tabs.position.Get()].resource;
     return menu.displayed_dialog==169 ? menu.tech_options.Resource() : 0;
 }
@@ -570,11 +587,14 @@ bool VerifyMovieImage(const MenuScene& menu,const Engine::Video::DecodedVideoFra
 }
 bool InitRenderers(Graphics::Device& device) {
     const auto shaders=Graphics::Frame_Shader_Directory(RENEGADE_SHADER_DIRECTORY);
-    return Graphics::Initialize_Scene_Renderers(device,shaders) && scene->video_renderer.Initialize(device,shaders);
+    return Graphics::Initialize_Scene_Renderers(device,shaders) && scene->video_renderer.Initialize(device,shaders) &&
+        (Graphics::Get_Render_Services().Is_Initialized() || Graphics::Get_Render_Services().Initialize());
 }
 bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Graphics::FrameTargets& targets) noexcept {
     try {
         auto& s=*scene;
+        Graphics::RenderBeginOptions begin;begin.clear_depth=false;
+        if(!Graphics::Get_Render_Services().Begin_Render(begin)) return false;
         if(!s.color_transfer.Prepare(device,targets.backbuffer.width,targets.backbuffer.height,s.color_curve)) return false;
         auto draw_targets=targets;draw_targets.backbuffer.texture=s.color_transfer.Source_Target();draw_targets.identity=0;
         if(!commands.Set_Render_Targets(draw_targets.backbuffer.texture,targets.depth.texture) ||
@@ -586,7 +606,83 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
                 !s.video_renderer.Render(commands,draw_targets)) return false;
             s.presented_movie_frames[s.movie_name].insert(s.movie_frame.frame_index);
         }
-        if(!s.movie_visible) {
+        if(s.level_view && s.level_view->Ready() && !s.movie_visible && !s.pause->active.Get()) {
+            s.targets.clear();s.interface_kinds.clear();
+            if(s.check_cinematic_effects || s.check_tutorial_gates || s.check_player_body || s.check_objective_hud || s.check_speech_pose) {
+                const auto tick=s.level_view->Simulation().Tick();const auto hash=s.level_view->Simulation().World().StateHash();
+                std::array<std::vector<std::byte>,2> comparison;
+                for(unsigned pass=0;pass<(s.check_tutorial_gates || s.check_player_body || s.check_objective_hud || s.check_speech_pose ? 1u : 2u);++pass) {
+                    renegade::presentation::LevelDrawLayers layers{pass!=0,false};
+                    if(s.check_tutorial_gates) {layers.projectile_models=layers.projectile_emitters=true;layers.mechanism_frame=Engine::Math::Fixed{};}
+                    if(s.check_player_body) {layers.projectile_models=layers.projectile_emitters=true;layers.player_body=false;}
+                    if(s.check_objective_hud) {layers.projectile_models=layers.projectile_emitters=true;}
+                    if(s.check_speech_pose) {layers.projectile_models=layers.projectile_emitters=true;layers.speech_animation=false;}
+                    if(!commands.Set_Render_Targets(draw_targets.backbuffer.texture,targets.depth.texture) ||
+                        !commands.Clear_Color_Target(draw_targets.backbuffer.texture,{0,0,0,1}) || !commands.Clear_Depth(1) ||
+                        !commands.Set_Viewport({0,0,targets.backbuffer.width,targets.backbuffer.height,0,1}) ||
+                        !s.level_view->Draw(commands,targets.backbuffer.width,targets.backbuffer.height,static_cast<std::uint32_t>(s.seconds*1000),layers) ||
+                        !s.level_view->DrawCinematicOverlay(Graphics::Get_Renderer2D(),targets.backbuffer.width,targets.backbuffer.height) ||
+                        (s.check_objective_hud && !s.level_view->DrawHelp(Graphics::Get_Renderer2D(),s.loading_large_font,targets.backbuffer.width,targets.backbuffer.height)) ||
+                        !Graphics::Get_Renderer2D().Execute(device,commands,draw_targets.backbuffer.texture,targets.depth.texture,{0,0,targets.backbuffer.width,targets.backbuffer.height,0,1}) ||
+                        !s.color_transfer.Draw_Output(Graphics::Get_Screen_Filter_Renderer(),commands,targets.backbuffer.texture,targets.depth.texture)) return false;
+                    Graphics::FrameCapture capture;const auto frame=capture.Read(device,targets.backbuffer.texture,targets.backbuffer.width,targets.backbuffer.height,Graphics::RHITextureFormat::RGBA8_UNorm);
+                    if(!frame.Is_Valid()) return false;
+                    comparison[pass].assign(frame.pixels.begin(),frame.pixels.end());
+                    const auto path=s.capture.parent_path()/(s.capture.stem().string()+(s.check_speech_pose ? "-without-speech-pose.png" : s.check_objective_hud ? "-without-objective.png" : s.check_player_body ? "-without-body.png" : s.check_tutorial_gates ? "-gates-closed.png" : pass ? "-without-trails.png" : "-without-projectiles.png"));
+                    if(!stbi_write_png(path.string().c_str(),int(frame.width),int(frame.height),4,frame.pixels.data(),int(frame.row_pitch))) return false;
+                }
+                // Restore the complete frame without advancing any simulation
+                // or presentation clocks between the three GPU readbacks.
+                if(!commands.Set_Render_Targets(draw_targets.backbuffer.texture,targets.depth.texture) ||
+                    !commands.Clear_Color_Target(draw_targets.backbuffer.texture,{0,0,0,1}) || !commands.Clear_Depth(1) ||
+                    !commands.Set_Viewport({0,0,targets.backbuffer.width,targets.backbuffer.height,0,1}) ||
+                    !s.level_view->Draw(commands,targets.backbuffer.width,targets.backbuffer.height,static_cast<std::uint32_t>(s.seconds*1000)) ||
+                    !s.level_view->DrawCinematicOverlay(Graphics::Get_Renderer2D(),targets.backbuffer.width,targets.backbuffer.height) ||
+                    (s.check_objective_hud && (!s.level_view->DrawHelp(Graphics::Get_Renderer2D(),s.loading_large_font,targets.backbuffer.width,targets.backbuffer.height) || !s.level_view->DrawObjectives(Graphics::Get_Renderer2D(),s.loading_font,targets.backbuffer.width,targets.backbuffer.height))) ||
+                    !Graphics::Get_Renderer2D().Execute(device,commands,draw_targets.backbuffer.texture,targets.depth.texture,{0,0,targets.backbuffer.width,targets.backbuffer.height,0,1}) ||
+                    !s.color_transfer.Draw_Output(Graphics::Get_Screen_Filter_Renderer(),commands,targets.backbuffer.texture,targets.depth.texture)) return false;
+                Graphics::FrameCapture capture;const auto frame=capture.Read(device,targets.backbuffer.texture,targets.backbuffer.width,targets.backbuffer.height,Graphics::RHITextureFormat::RGBA8_UNorm);
+                if(!frame.Is_Valid() || s.level_view->Simulation().Tick()!=tick || s.level_view->Simulation().World().StateHash()!=hash) return false;
+                const auto changed=[](std::span<const std::byte> first,std::span<const std::byte> second) {
+                    std::size_t count{};for(std::size_t pixel=0;pixel+3<first.size();pixel+=4) {
+                        bool visible=false;for(unsigned channel=0;channel<3;++channel) visible|=std::abs(std::to_integer<int>(first[pixel+channel])-std::to_integer<int>(second[pixel+channel]))>4;
+                        count+=visible;
+                    }return count;
+                };
+                if(s.check_speech_pose) {
+                    const auto pixels=changed(comparison[0],frame.pixels);
+                    std::printf("SDL3 cinematic visible speech pose: tick=%llu changed_pixels=%zu; unchanged authoritative state\n",static_cast<unsigned long long>(tick),pixels);
+                    if(pixels<4) return false;
+                } else if(s.check_objective_hud) {
+                    const auto pixels=changed(comparison[0],frame.pixels);
+                    std::printf("SDL3 tutorial visible objective HUD: tick=%llu changed_pixels=%zu; unchanged authoritative state\n",static_cast<unsigned long long>(tick),pixels);
+                    if(pixels<64) return false;
+                } else if(s.check_player_body) {
+                    const auto pixels=changed(comparison[0],frame.pixels);
+                    std::printf("SDL3 tutorial visible transition body: tick=%llu changed_pixels=%zu; unchanged authoritative state\n",static_cast<unsigned long long>(tick),pixels);
+                    if(pixels<64) return false;
+                } else if(s.check_tutorial_gates) {
+                    const auto pixels=changed(comparison[0],frame.pixels);
+                    std::printf("SDL3 tutorial visible gates: tick=%llu changed_pixels=%zu; unchanged authoritative state\n",static_cast<unsigned long long>(tick),pixels);
+                    if(pixels<16) return false;
+                } else std::printf("SDL3 cinematic visible effects: tick=%llu meshes=%zu trail_pixels=%zu; unchanged authoritative state\n",static_cast<unsigned long long>(tick),changed(comparison[0],comparison[1]),changed(comparison[1],frame.pixels));
+                s.check_cinematic_effects=false;
+                s.check_tutorial_gates=false;
+                s.check_player_body=false;
+                s.check_objective_hud=false;
+                s.check_speech_pose=false;
+                if(!commands.Set_Render_Targets(draw_targets.backbuffer.texture,targets.depth.texture) ||
+                    !commands.Clear_Color_Target(draw_targets.backbuffer.texture,{0,0,0,1}) || !commands.Clear_Depth(1) ||
+                    !commands.Set_Viewport({0,0,targets.backbuffer.width,targets.backbuffer.height,0,1})) return false;
+            }
+            if(!s.level_view->Draw(commands,targets.backbuffer.width,targets.backbuffer.height,
+                static_cast<std::uint32_t>(s.seconds*1000))) return false;
+            if(!s.level_view->DrawCinematicOverlay(Graphics::Get_Renderer2D(),targets.backbuffer.width,targets.backbuffer.height)) return false;
+            if(!s.level_view->DrawHelp(Graphics::Get_Renderer2D(),s.loading_large_font,targets.backbuffer.width,targets.backbuffer.height)) return false;
+            if(!s.level_view->DrawObjectives(Graphics::Get_Renderer2D(),s.loading_font,targets.backbuffer.width,targets.backbuffer.height)) return false;
+            if(!s.level_view->DrawPlayerHud(Graphics::Get_Renderer2D(),s.loading_font,s.loading_font,targets.backbuffer.width,targets.backbuffer.height)) return false;
+        }
+        if(!s.movie_visible && (!s.level_view || s.pause->active.Get())) {
         if(!s.backdrop.Sample(s.seconds*s.backdrop.rate,true) || !s.title.Sample(s.transition.Frame(),false) ||
             !s.gizmo.Sample(s.seconds*s.gizmo.rate,true)) return false;
         Graphics::PropParameters parameters;
@@ -678,6 +774,7 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
             }
             s.targets.clear();
             for(const auto& control:dialog.controls) {
+                if(s.pause->active.Get() && !renegade::presentation::PauseMenu::SoloControlVisible(control.id)) continue;
                 const bool button=control.kind.ordinal==0x80 || control.kind.text==u"Button";
                 const auto bounds=engine::gui::w3d::LayoutControl(dialog,control,float(targets.backbuffer.width),float(targets.backbuffer.height),400,300);
                 const auto* check=ControlCheck(s,control.id);
@@ -785,14 +882,15 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
                     if(!engine::gui::w3d::Draw_Marquee(ui,*s.credits_layout,fonts,s.credits_scroll.position.Get(),ControlPalette(true).shadow)) return false;
                 }
                 else if(!DrawControlText(font,ui,label,bounds,control.style,formatted.title,button,color)) return false;
-                if((s.displayed_dialog==169 && control.id==1223) || (s.displayed_dialog==136 && control.id==1337)) {
+                if((s.displayed_dialog==169 && control.id==1223) || (s.displayed_dialog==136 && control.id==1337) || (s.displayed_dialog==153 && control.id==40002)) {
                     // The tab control owns keyboard focus; its individual tab
                     // hit regions are pointer choices, not separate controls.
                     s.targets.push_back({control.id,{},true});
                     std::vector<unsigned> pages;
                     if(s.displayed_dialog==169) pages={231,233,232};
+                    else if(s.displayed_dialog==153) pages.assign(renegade::presentation::PauseMenu::pages.begin(),renegade::presentation::PauseMenu::pages.end());
                     else for(const auto& page:renegade::presentation::controls_tabs) pages.push_back(page.resource);
-                    const auto selected=s.displayed_dialog==169 ? s.tech_options.selected_tab.Get() : s.controls_tabs.position.Get();
+                    const auto selected=s.displayed_dialog==153 ? s.pause->selected_tab.Get() : s.displayed_dialog==169 ? s.tech_options.selected_tab.Get() : s.controls_tabs.position.Get();
                     const auto page_resource=MenuPage(s);
                     const float scale=targets.backbuffer.width/800.0f;
                     const float tab_height=(bounds.bottom-bounds.top)/pages.size();
@@ -879,6 +977,11 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
         }
         s.targets_dialog=s.displayed_dialog;
         }
+        if(s.level_view && !s.level_view->Ready() && !s.movie_visible) {
+            s.targets.clear();s.interface_kinds.clear();
+            if(!s.level_view->DrawLoading(commands,Graphics::Get_Renderer2D(),s.loading_font,s.loading_large_font,
+                targets.backbuffer.width,targets.backbuffer.height,static_cast<std::uint32_t>(s.seconds*1000))) return false;
+        }
         if(!Graphics::Get_Renderer2D().Execute(device,commands,draw_targets.backbuffer.texture,targets.depth.texture,
             {0,0,targets.backbuffer.width,targets.backbuffer.height,0,1})) return false;
         if(!s.color_transfer.Draw_Output(Graphics::Get_Screen_Filter_Renderer(),commands,targets.backbuffer.texture,targets.depth.texture)) return false;
@@ -891,7 +994,7 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
             for(const auto& row:engine::gui::w3d::Visible_Marquee_Rows(*s.credits_layout,s.credits_scroll.position.Get()))
                 if(row.top>=s.credits_layout->client.top && row.top+s.credits_layout->rows[row.index].height<=s.credits_layout->client.bottom)
                     s.credits_seen_rows.insert(row.index);
-        if(s.capture_next || s.capture_step || s.capture_movie || capture_credits || check_credit_rows || s.credits_checkpoint || capture_gallery || s.check_video_frame || s.check_performance_frame) {
+        if(s.capture_loading_progress || s.capture_loading || s.capture_next || s.capture_step || s.capture_movie || capture_credits || check_credit_rows || s.credits_checkpoint || capture_gallery || s.check_video_frame || s.check_performance_frame) {
             Graphics::FrameCapture capture;
             const auto frame=capture.Read(device,targets.backbuffer.texture,targets.backbuffer.width,targets.backbuffer.height,Graphics::RHITextureFormat::RGBA8_UNorm);
             if(!frame.Is_Valid()) return false;
@@ -912,8 +1015,18 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
                 }
                 ++s.video_frame_checks;s.check_video_frame=false;
             }
+            if(s.capture_loading_progress) {
+                const auto path=s.capture.parent_path()/(s.capture.stem().string()+"-loading-progress.png");
+                if(!stbi_write_png(path.string().c_str(),int(frame.width),int(frame.height),4,frame.pixels.data(),int(frame.row_pitch))) return false;
+                s.capture_loading_progress=false;s.loading_progress_captured=true;
+            }
+            if(s.capture_loading) {
+                const auto path=s.capture.parent_path()/(s.capture.stem().string()+"-loading.png");
+                if(!stbi_write_png(path.string().c_str(),int(frame.width),int(frame.height),4,frame.pixels.data(),int(frame.row_pitch))) return false;
+                s.capture_loading=false;s.loading_captured=true;
+            }
             if(s.capture_next) {
-                if(s.verify_capture && !VerifyMenuLabels(s,frame)) return false;
+                if((s.verify_capture || (s.verify_level_return && !s.level_view)) && !VerifyMenuLabels(s,frame)) return false;
                 s.captured=s.capture.empty() || stbi_write_png(s.capture.string().c_str(),int(frame.width),int(frame.height),4,frame.pixels.data(),int(frame.row_pitch))!=0;
             }
             if(s.capture_step) {
@@ -963,17 +1076,31 @@ bool DrawFrame(Graphics::Device& device,Graphics::CommandList& commands,const Gr
             s.capture_next=false;
         }
         ++s.frames;
-        return true;
+        return Graphics::Get_Render_Services().End_Render();
     } catch(const std::exception& error) { std::fprintf(stderr,"render: %s\n",error.what());return false; }
 }
 }
 
 int main(int argc,char** argv) {
     std::filesystem::path install,capture,user_data;
+    std::string level_preview,validate_single_player_menu;
+	bool validate_level_preview = false,validate_level_cancel=false,validate_player_motion=false,validate_level_audio=false,validate_frame_timing=false;
+    bool skip_mission_cinematics=false,validate_mission_cinematic=false,validate_tutorial_intro=false,validate_tutorial_course=false;
     unsigned frames=0; bool skip_intro=false,realtime=false,validate_menu=false,validate_intro_skip=false,inspect_dialogs=false,validate_quit=false,validate_credits=false,validate_gallery=false,validate_video=false,validate_performance=false,validate_controls=false,validate_profiles=false,validate_multiplayer_options=false,validate_scrollbars=false;
     for(int i=1;i<argc;++i) {
         const std::string_view arg=argv[i];
         if(arg=="--install" && i+1<argc) install=argv[++i];
+        else if(arg=="--level-preview" && i+1<argc) level_preview=argv[++i];
+        else if(arg=="--validate-single-player-menu" && i+1<argc) {validate_single_player_menu=argv[++i];validate_level_preview=true;}
+		else if(arg=="--validate-level-preview") validate_level_preview=true;
+        else if(arg=="--validate-level-cancel") validate_level_cancel=true;
+        else if(arg=="--validate-player-motion") validate_player_motion=true;
+        else if(arg=="--validate-level-audio") validate_level_audio=true;
+        else if(arg=="--validate-frame-timing") validate_frame_timing=true;
+        else if(arg=="--skip-mission-cinematics") skip_mission_cinematics=true;
+        else if(arg=="--validate-mission-cinematic") {validate_mission_cinematic=true;validate_level_preview=true;}
+        else if(arg=="--validate-tutorial-intro") {validate_tutorial_intro=true;validate_level_preview=true;}
+        else if(arg=="--validate-tutorial-course") {validate_tutorial_course=true;validate_level_preview=true;}
         else if(arg=="--user-data" && i+1<argc) user_data=argv[++i];
         else if(arg=="--frames" && i+1<argc) frames=static_cast<unsigned>(std::stoul(argv[++i]));
         else if(arg=="--screenshot" && i+1<argc) capture=argv[++i];
@@ -991,9 +1118,27 @@ int main(int argc,char** argv) {
         else if(arg=="--validate-multiplayer-options") validate_multiplayer_options=true;
         else if(arg=="--validate-scrollbars") validate_scrollbars=true;
         else if(arg=="--inspect-dialogs") inspect_dialogs=true;
-        else { std::fprintf(stderr,"usage: renegade --install <retail directory> [--user-data directory] [--frames N] [--screenshot file.png] [--skip-intro] [--realtime] [--validate-menu] [--validate-credits] [--validate-gallery] [--validate-video] [--validate-performance] [--validate-quit] [--validate-intro-skip] [--inspect-dialogs]\n");return 2; }
+        else { std::fprintf(stderr,"usage: renegade --install <retail directory> [--user-data directory] [--frames N] [--screenshot file.png] [--skip-intro] [--realtime] [--level-preview map.mix] [--validate-level-preview] [--validate-menu] [--validate-credits] [--validate-gallery] [--validate-video] [--validate-performance] [--validate-quit] [--validate-intro-skip] [--inspect-dialogs]\n");return 2; }
     }
+    if(!validate_single_player_menu.empty() && (validate_single_player_menu!="tutorial" && validate_single_player_menu!="campaign" || !level_preview.empty())) {std::fprintf(stderr,"menu launch validation requires tutorial or campaign and no direct preview map\n");return 2;}
+    if(validate_level_cancel && !validate_level_preview) {std::fprintf(stderr,"loading cancellation validation requires --validate-level-preview\n");return 2;}
+    if(validate_player_motion && (!validate_level_preview || validate_level_cancel)) {std::fprintf(stderr,"player motion validation requires a loaded-level runtime check\n");return 2;}
+    if(validate_tutorial_intro && (validate_single_player_menu!="tutorial" || validate_player_motion || validate_frame_timing || validate_mission_cinematic || validate_level_cancel)) {
+        std::fprintf(stderr,"tutorial speech validation requires independent tutorial menu entry\n");return 2;
+    }
+    if(validate_tutorial_course && (validate_single_player_menu!="tutorial" || validate_tutorial_intro || validate_player_motion || validate_frame_timing || validate_mission_cinematic || validate_level_cancel)) {
+        std::fprintf(stderr,"tutorial course validation requires independent tutorial menu entry\n");return 2;
+    }
+    if(validate_level_audio && !validate_player_motion) {std::fprintf(stderr,"level audio validation requires player motion validation\n");return 2;}
+    if(validate_frame_timing && (!validate_level_preview || validate_player_motion || validate_level_cancel)) {std::fprintf(stderr,"frame timing requires an independent loaded-level runtime check\n");return 2;}
+    if(skip_mission_cinematics && (!validate_level_preview || !(validate_player_motion || validate_frame_timing))) {std::fprintf(stderr,"cinematic bypass is restricted to movement and timing fixtures\n");return 2;}
+    if(validate_mission_cinematic && (validate_player_motion || validate_frame_timing || skip_mission_cinematics)) {std::fprintf(stderr,"cinematic validation requires an independent full playback\n");return 2;}
     if(install.empty()) { std::fprintf(stderr,"--install is required\n");return 2; }
+	if(validate_level_preview && (level_preview.empty() && validate_single_player_menu.empty() || !skip_intro || capture.empty() || frames < 180 ||
+		validate_menu || validate_quit || validate_intro_skip || validate_credits || validate_gallery || validate_video ||
+		validate_performance || validate_controls || validate_profiles || validate_multiplayer_options || validate_scrollbars)) {
+		std::fprintf(stderr,"level preview validation requires an independent map, skip-intro, capture path and at least 180 frames\n");return 2;
+	}
     if(validate_menu && !frames) frames=skip_intro ? 1800 : 6000;
     if(validate_quit && !frames) frames=600;
     if(validate_quit && (validate_menu || validate_intro_skip)) {std::fprintf(stderr,"quit validation requires an independent process\n");return 2;}
@@ -1055,9 +1200,7 @@ int main(int argc,char** argv) {
         }
         return 0;
     }
-    const auto style_bytes=files.Read("stylemgr.ini");
-    const auto style=style_bytes ? renegade::content::ReadMenuStyle(std::string(reinterpret_cast<const char*>(style_bytes->data()),style_bytes->size())) :
-        std::expected<renegade::content::MenuStyle,std::string>(std::unexpected("stylemgr.ini missing"));
+    const auto style=renegade::content::LoadMenuStyle(files);
     if(!style) { std::fprintf(stderr,"menu style: %s\n",style.error().c_str());return 1; }
     std::map<std::string,std::filesystem::path> root_files;
     for(const auto& file:std::filesystem::directory_iterator(install)) if(file.is_regular_file())
@@ -1072,6 +1215,8 @@ int main(int argc,char** argv) {
         for(const auto& family:*families) font_sources.emplace(Assets::Canonicalize_Asset_Name(family),*bytes);
     }
     engine::platform::sdl3::SDL3PlatformAdapter platform;
+    const auto scripts=platform.application().executable_directory()/"scripts";
+    if(std::filesystem::is_directory(scripts)) mounted->files->Mount(std::make_unique<engine::filesystem::DirectorySource>(scripts));
     if(user_data.empty()) user_data=platform.application().preference_directory("SAGE Modernisation","Renegade");
     if(user_data.empty()) {std::fprintf(stderr,"user data directory unavailable: %s\n",platform.last_error());return 1;}
     const auto preferences_path=user_data/"Options.ini";
@@ -1164,14 +1309,17 @@ int main(int argc,char** argv) {
         };
         log_performance("restored",menu.performance_settings->Applied());
         menu.verify_credits_cycle=validate_credits;menu.style=*style;
-        const auto audio_ini=files.Read("WWAudio.ini");
-        const auto defaults=renegade::presentation::ReadAudioDefaults(audio_ini ? std::string(reinterpret_cast<const char*>(audio_ini->data()),audio_ini->size()) : "");
+        const auto defaults_config=renegade::content::LoadDefaultAudioSettings(files);
+        const auto defaults=defaults_config.transform([](const auto& settings) {return settings.Volumes();});
         if(!defaults) { std::fprintf(stderr,"audio defaults: %s\n",defaults.error().c_str());result=1; }
         else menu.audio_settings=std::make_unique<renegade::presentation::AudioSettings>(*defaults,[&mixer](auto category,int value,bool enabled) {
             constexpr std::array buses{engine::audio::Bus::Effects,engine::audio::Bus::Music,engine::audio::Bus::Speech,engine::audio::Bus::Cinematic};
             const float gain=enabled ? value/100.0f : 0;
             mixer.SetBusGain(buses[static_cast<unsigned>(category)],gain);
-            if(category==renegade::presentation::AudioCategory::Effects) mixer.SetBusGain(engine::audio::Bus::Interface,gain);
+            if(category==renegade::presentation::AudioCategory::Effects) {
+                mixer.SetBusGain(engine::audio::Bus::Interface,gain);
+                mixer.SetBusGain(engine::audio::Bus::Ambient,gain);
+            }
         });
         if(menu.audio_settings) {
             const auto saved=renegade::presentation::ReadAudioPreferences(preferences,*defaults);
@@ -1253,7 +1401,7 @@ int main(int argc,char** argv) {
             menu.navigation.RememberFocus(menu.input.focused);menu.navigation.Open(209);
         });
         for(std::size_t i=0;i<6;++i) menu.commands[i]=std::make_unique<engine::gui::w3d::CommandBinding>(menu.navigation.For(menu.dialog.controls[i].id),menu.controls[i]);
-        for(unsigned id:{129,130,131,135,136,137,139,140,141,143,145,166,167,168,169,170,171,172,174,209,210,216,231,232,233}) {
+        for(unsigned id:{129,130,131,135,136,137,139,140,141,143,145,146,147,148,149,150,151,152,153,166,167,168,169,170,171,172,174,209,210,211,216,231,232,233}) {
             const auto resource=engine::filesystem::pe::Resource(executable,5,id);
             const auto definition=resource ? engine::gui::w3d::ReadDialogTemplate(*resource) : std::expected<engine::gui::w3d::DialogDefinition,std::string>(std::unexpected("resource missing"));
             if(!definition) { std::fprintf(stderr,"dialog %u: %s\n",id,definition.error().c_str());result=1;break; }
@@ -1278,6 +1426,10 @@ int main(int argc,char** argv) {
             }
         });
         menu.navigation.dialog.Subscribe([&menu,&play_sound,&files,&mixer,&apply_previews,&save_settings,&preferences,&apply_performance,validate_menu,&result](const auto id) {
+            if(id==209 && menu.pause && menu.pause->ExitPending()) {
+                auto& popup=menu.dialogs.at(209);popup.title.text=menu.strings.Lookup("IDS_MENU_TEXT054");
+                for(auto& control:popup.controls) if(control.id==1313) control.title.text=menu.strings.Lookup("IDS_EXIT_GAME_VERIFICATION");
+            }
             if(id!=menu.displayed_dialog) {
                 if(auto* list=ActiveList(menu)) list->scrollbar.CaptureLost();
                 menu.profile_scroll_layout.reset();menu.gallery_scroll_layout.reset();
@@ -1388,7 +1540,8 @@ int main(int argc,char** argv) {
                 load(renegade::content::FontRole::Controls,menu.control_font) && load(renegade::content::FontRole::Title,menu.title_font) &&
                 load(renegade::content::FontRole::LargeControls,menu.large_control_font) && load(renegade::content::FontRole::Tooltips,menu.tooltip_font) &&
                 load(renegade::content::FontRole::Header,menu.header_font) && load(renegade::content::FontRole::Lists,menu.list_font) &&
-                load(renegade::content::FontRole::Credits,menu.credits_fonts[0]) && load(renegade::content::FontRole::CreditsBold,menu.credits_fonts[1]);
+                load(renegade::content::FontRole::Credits,menu.credits_fonts[0]) && load(renegade::content::FontRole::CreditsBold,menu.credits_fonts[1]) &&
+                load(renegade::content::FontRole::InGame,menu.loading_font) && load(renegade::content::FontRole::InGameBig,menu.loading_large_font);
         };
         if(!load_fonts(initial_pixels.height)) { std::fprintf(stderr,"retail style fonts failed\n");result=1; }
         if(!result && (!menu.backdrop.Load(gpu,assets,renegade::content::MenuAssets::backdrop,true) ||
@@ -1496,10 +1649,37 @@ int main(int argc,char** argv) {
             }
             }
         };
+        std::unique_ptr<renegade::presentation::PlayerInput> player_input;
+        const auto start_level=[&](const renegade::presentation::SinglePlayerStart& request)->std::expected<void,std::string> {
+            auto view=std::make_unique<renegade::presentation::LevelView>(renegade::presentation::LevelViewServices{
+                gpu,assets,files,Graphics::Get_Prop_Renderer(),Graphics::Get_Prop_Submission(),Graphics::Get_Resource_Load_Queue(),menu.strings,mixer,!skip_mission_cinematics});
+            if(!view->BeginLoad(request.map,request.difficulty)) return std::unexpected(view->Error());
+            menu.level_view=std::move(view);menu.input.pressed.reset();menu.dragging_slider.reset();
+            menu.level_ready_frames=0;player_input.reset();mixer.Stop(music_voice);
+            std::printf("single player start requested: %s, difficulty %d, %s\n",request.map.c_str(),request.difficulty,request.tutorial ? "tutorial" : "campaign");
+            return {};
+        };
+        const auto campaign_flow=renegade::content::LoadCampaignFlow(files);
+        if(!campaign_flow) {std::fprintf(stderr,"campaign flow: %s\n",campaign_flow.error().c_str());result=1;running=false;}
+        renegade::presentation::SinglePlayerMenu single_player(menu.navigation,campaign_flow ? *campaign_flow : renegade::content::CampaignFlow{},start_level);
+        const auto leave_level=[&] {
+            platform.input().set_relative_mouse_mode(window->id(),false);platform.input().show_cursor(true);
+            player_input.reset();menu.level_view.reset();mixer.Stop(music_voice);menu_started=false;single_player.ReturnToMenu();menu.input={};
+            std::printf("level preview returned to menu after confirmed teardown\n");
+        };
+        menu.pause=std::make_unique<renegade::presentation::PauseMenu>(menu.navigation,[&](bool paused) {
+            if(menu.level_view) menu.level_view->SetPaused(paused);
+            if(player_input) {player_input->Configure(menu.controls_settings->Configuration());player_input->SetFocused(window->has_focus());}
+            if(paused) {platform.input().set_relative_mouse_mode(window->id(),false);platform.input().show_cursor(true);}
+            else {mixer.Stop(music_voice);menu.input={};menu.entries.clear();}
+            menu_started=false;
+            std::printf("single player %s, session retained\n",paused ? "paused" : "resumed");
+        },leave_level);
         const auto activate=[&](std::uint32_t id) {
             menu.navigation.RememberFocus(menu.input.focused);
             if(menu.displayed_dialog==209 && (id==6 || id==7)) {
-                if(menu.control_profiles->Pending()) {
+                if(menu.pause->ExitPending()) menu.pause->ConfirmExit(id==6);
+                else if(menu.control_profiles->Pending()) {
                     const auto request=menu.control_profiles->Confirm(id==6);menu.navigation.back.Execute();process_profile(request);
                 } else {menu.controls_settings->Confirm(id==6);menu.navigation.back.Execute();}
             } else if(menu.displayed_dialog==210 && id==1) menu.navigation.back.Execute();
@@ -1509,6 +1689,8 @@ int main(int argc,char** argv) {
             else if(menu.displayed_dialog==136 && id==1339) menu.controls_settings->Defaults(*default_controls);
             else if(menu.displayed_dialog==136 && id>=0x10000 && id<0x10005) {
                 menu.controls_tabs.Select(id-0x10000);menu.input.focused=1337;menu.input.pressed.reset();menu.dragging_slider.reset();
+            } else if(menu.displayed_dialog==153 && id>=0x10000 && id<0x10007) {
+                menu.pause->SelectTab(id-0x10000);menu.input.focused=40002;menu.input.pressed.reset();
             } else if(menu.displayed_dialog==170 && id==1032) menu.gallery.play.Execute();
             else if(menu.displayed_dialog==169 && id>=0x10000 && id<0x10003) {
                 menu.tech_options.Select(id-0x10000);menu.input.focused=1223;menu.input.pressed.reset();menu.dragging_slider.reset();
@@ -1517,6 +1699,11 @@ int main(int argc,char** argv) {
             else menu.navigation.For(id).Execute();
             if(menu.navigation.quitting.Get()) running=false;
         };
+		menu.verify_level_return=validate_level_preview;
+        if(!level_preview.empty()) {
+            const auto started=start_level({level_preview,1,false});
+            if(!started) {std::fprintf(stderr,"level preview: %s\n",started.error().c_str());result=1;running=false;}
+        }
         bool text_input_active{};
         std::optional<std::uint32_t> previous_widget_focus;
         const auto focus_entries=[&] {
@@ -1787,9 +1974,84 @@ int main(int argc,char** argv) {
         std::set<std::string> skip_requests;
         unsigned accepted_skips=0,blocked_skips=0;bool skip_validation_complete=false;
         unsigned quit_step{};
+		bool level_return_posted = false;
+        unsigned pause_probe{};std::uint64_t pause_tick{},pause_hash{},pause_posted{};
+        unsigned cinematic_stage{};bool cinematic_capture_pending{},cinematic_complete{};std::array<float,3> cinematic_first_camera{};std::uint64_t cinematic_audio_start{};
+        bool tutorial_started{},tutorial_complete{},tutorial_silence_checked{},tutorial_closed_gates{};std::uint64_t tutorial_audio_start{};
+        unsigned tutorial_control_phase{};std::uint64_t tutorial_control_tick{};
+        Engine::Math::FixedVector3 tutorial_control_position;Engine::Math::TurnAngle tutorial_control_facing;
+        unsigned course_phase{};bool course_complete{},course_locked{},course_animation{},course_relocated{},course_help_captured{};
+        std::uint64_t course_start_tick{},course_audio_start{},course_locked_tick{};Engine::Math::Fixed course_distance;
+        Engine::Math::FixedVector3 course_logan_start,course_player_locked;Engine::Math::TurnAngle course_player_facing;
+        Engine::Math::FixedVector3 course_ladder_exit;std::size_t course_ladder_motion_start{};
+        unsigned course_exit_frames{},course_descent_frames{};bool course_exit_capture{},course_descent_capture{};
+        std::uint64_t course_placement_tick{};
+        std::optional<float> course_exit_body_start,course_descent_body_start;
+        float course_exit_body_motion{},course_descent_body_motion{},course_camera_weight{};
+        const auto script_look_alignment=[](const renegade::presentation::LevelView& view) {
+            const auto origin=view.CameraPosition(),forward=view.CameraForward();const auto target=view.LastCameraLookTarget();
+            const std::array<float,3> direction{Engine::Math::ToFloat(target.x)-origin[0],Engine::Math::ToFloat(target.y)-origin[1],Engine::Math::ToFloat(target.z)-origin[2]};
+            const auto length=std::sqrt(direction[0]*direction[0]+direction[1]*direction[1]+direction[2]*direction[2]);
+            return length>0 ? (direction[0]*forward[0]+direction[1]*forward[1]+direction[2]*forward[2])/length : 0.f;
+        };
+        const auto facing_alignment=[](const ecs::World& world,ecs::Entity subject,ecs::Entity target) {
+            using namespace Engine::Math;const auto* actor=world.Get<engine::gameplay::Transform>(subject);const auto* point=world.Get<engine::gameplay::Transform>(target);
+            const auto direction=Normalize(point->position.XY()-actor->position.XY());return ToFloat(direction.x*Cos(actor->facing)+direction.y*Sin(actor->facing));
+        };
+        constexpr std::array<unsigned,9> cinematic_checkpoints_ms{3000,23500,25000,36000,40250,40750,48000,48750,55000};
+        std::size_t cinematic_projectile_frames{},cinematic_particle_frames{},cinematic_peak_particles{},cinematic_trail_frames{},cinematic_peak_trail_particles{};
+        unsigned motion_phase{};std::uint64_t motion_tick{};bool motion_complete{},motion_jump_released{};
+        Engine::Math::FixedVector3 motion_start,motion_jump_start;Engine::Math::Fixed motion_distance,motion_peak;
+        Engine::Math::TurnAngle motion_facing;
+        float motion_forward_z{};std::uint64_t motion_audio_start{};
+        unsigned walk_captures{};bool walk_capture_pending{},jump_clip_seen{},land_clip_seen{};
+        Engine::Math::Fixed walk_frame;
+        bool frame_timing_started{},frame_timing_complete{};
+        std::chrono::steady_clock::time_point frame_timing_start;
+        std::uint64_t frame_timing_tick{},timing_drawn{},timing_culled{};
+        std::vector<double> frame_durations;
+        unsigned single_player_menu_step{};
+        std::uint64_t single_player_menu_posted{};
         std::set<std::string> credits_checkpoints;
         auto drawable=initial_pixels;
-        while(running && (!frames || menu.frames<frames)) {
+        auto last_loading_frame=std::chrono::steady_clock::now();
+        double maximum_loading_gap_ms{};
+        const auto load_deadline=last_loading_frame+std::chrono::seconds(validate_mission_cinematic || validate_tutorial_course ? 180 : 90);
+        while(running && ((!frames || menu.frames<frames) || (validate_level_preview && !level_return_posted))) {
+            const auto frame_start=std::chrono::steady_clock::now();
+            if(validate_level_preview && !level_return_posted && std::chrono::steady_clock::now()>load_deadline) {std::fprintf(stderr,"menu entry or level loading timed out\n");result=1;break;}
+            if(!validate_single_player_menu.empty() && single_player_menu_step<(validate_single_player_menu=="tutorial" ? 2u : 3u) &&
+                !menu.level_view && !menu.pending_dialog && menu.transition.Done() && menu.frames>3 &&
+                menu.preview_milliseconds-single_player_menu_posted>=400) {
+                const unsigned resource=single_player_menu_step==0 ? 128 : single_player_menu_step==1 ? 130 : 131;
+                const unsigned control=single_player_menu_step==0 ? 11000 : single_player_menu_step==1 ?
+                    (validate_single_player_menu=="tutorial" ? 11005 : 11004) : 11008;
+                if(menu.displayed_dialog==resource && menu.targets_dialog==resource) {
+                    const auto target=std::ranges::find_if(menu.targets,[&](const auto& item){return item.id==control && item.enabled && item.visible;});
+                    if(target==menu.targets.end()) {std::fprintf(stderr,"single-player menu control %u unavailable\n",control);result=1;break;}
+                    const auto logical=window->size(),pixels=window->drawable_size();
+                    engine::platform::PlatformEvent input;input.window=window->id();input.code=1;
+                    input.position={(target->bounds.left+target->bounds.right)*.5f*logical.width/pixels.width,
+                        (target->bounds.top+target->bounds.bottom)*.5f*logical.height/pixels.height};
+                    input.type=engine::platform::EventType::mouse_moved;bool posted=platform.events().post(input);
+                    input.type=engine::platform::EventType::mouse_button_down;posted=platform.events().post(input) && posted;
+                    input.type=engine::platform::EventType::mouse_button_up;posted=platform.events().post(input) && posted;
+                    if(!posted) {std::fprintf(stderr,"SDL3 menu launch input failed\n");result=1;break;}
+                    std::printf("SDL3 single-player menu click: dialog=%u control=%u\n",resource,control);
+                    ++single_player_menu_step;single_player_menu_posted=menu.preview_milliseconds;
+                }
+            }
+            if(menu.level_view && !menu.level_view->Ready()) {
+                const auto now=std::chrono::steady_clock::now();
+                if(menu.loading_frames) maximum_loading_gap_ms=std::max(maximum_loading_gap_ms,std::chrono::duration<double,std::milli>(now-last_loading_frame).count());
+                last_loading_frame=now;++menu.loading_frames;
+                if(validate_level_preview && now>load_deadline) {std::fprintf(stderr,"level loading timed out\n");result=1;break;}
+                if(validate_level_preview && menu.loading_frames%5==0) {
+                    engine::platform::PlatformEvent event;event.window=window->id();event.type=engine::platform::EventType::key_down;event.key=KeyCode::f12;
+                    if(!platform.events().post(event)) {result=1;break;}
+                    event.type=engine::platform::EventType::key_up;if(!platform.events().post(event)) {result=1;break;}
+                }
+            }
             menu.preview_milliseconds=platform.clock().monotonic_nanoseconds()/1000000;
             for(const auto finished:mixer.TakeFinished()) for(unsigned index=0;index<4;++index)
                 if(menu.preview_voices[index]==finished) {
@@ -2053,6 +2315,425 @@ int main(int argc,char** argv) {
                     posted_frame=menu.frames;posted_milliseconds=menu.preview_milliseconds;++playback_step;
                 }
             }
+            if(validate_player_motion && !motion_complete && menu.level_view && menu.level_view->Ready() && player_input) {
+                using namespace Engine::Math;
+                const auto& simulation=menu.level_view->Simulation();const auto player=simulation.World().Resource<renegade::SceneState>().player;
+                const auto* pose=simulation.World().Get<engine::gameplay::Transform>(player);const auto* state=simulation.World().Get<renegade::HumanState>(player);
+                const auto key=[&](std::string_view function,engine::platform::EventType type) {
+                    const auto binding=menu.controls_settings->Configuration().Get(function);engine::platform::PlatformEvent event;event.window=window->id();event.type=type;
+                    if(!binding.primary || binding.primary>=unsigned(KeyCode::count)) return false;event.key=static_cast<KeyCode>(binding.primary);return platform.events().post(event);
+                };
+                if(motion_phase==0 && simulation.Tick()>=61) {
+                    if(!state->grounded) {std::fprintf(stderr,"retail player failed to reach ground: z.raw=%lld contacts=%u\n",static_cast<long long>(pose->position.z.Raw()),simulation.World().Get<engine::gameplay::SweepContacts>(player)->overlapping);result=1;break;}
+                    motion_start=pose->position;motion_tick=simulation.Tick();motion_phase=1;
+                    motion_audio_start=mixer.OutputStats().nonSilentFrames;
+                    if(!key("FirstPersonToggle",engine::platform::EventType::key_down) || !key("FirstPersonToggle",engine::platform::EventType::key_up) ||
+                        !key("MoveForward",engine::platform::EventType::key_down)) {result=1;break;}
+                } else if(motion_phase==1 && walk_capture_pending && menu.captured) {
+                    const auto* playback=simulation.World().Get<engine::gameplay::ClipPlayback>(player);
+                    if(!playback || playback->clip!=2 || !menu.level_view->BodyPartsDrawn() || walk_captures && playback->frame==walk_frame) {
+                        std::fprintf(stderr,"retail running animation did not advance through rendered player body\n");result=1;break;
+                    }
+                    walk_frame=playback->frame;++walk_captures;walk_capture_pending=false;
+                    std::printf("SDL3 retail locomotion capture: run-forward clip=%u frame.raw=%lld body_parts=%zu capture=%u\n",playback->clip,static_cast<long long>(playback->frame.Raw()),menu.level_view->BodyPartsDrawn(),walk_captures);
+                } else if(motion_phase==1 && walk_captures<2 && simulation.Tick()>=motion_tick+15+walk_captures*12) {
+                    menu.capture=capture.parent_path()/(capture.stem().string()+"-walk-"+std::to_string(walk_captures+1)+".png");menu.captured=false;walk_capture_pending=true;
+                } else if(motion_phase==1 && simulation.Tick()>=motion_tick+45) {
+                    motion_distance=Length(FixedVector2{pose->position.x-motion_start.x,pose->position.y-motion_start.y});
+                    std::printf("retail movement checkpoint: position.raw=%lld,%lld,%lld grounded=%u velocity.raw=%lld,%lld,%lld\n",static_cast<long long>(pose->position.x.Raw()),static_cast<long long>(pose->position.y.Raw()),static_cast<long long>(pose->position.z.Raw()),state->grounded,static_cast<long long>(state->velocity.x.Raw()),static_cast<long long>(state->velocity.y.Raw()),static_cast<long long>(state->velocity.z.Raw()));
+                    if(motion_distance<Fixed::FromRatio(3,10)) {std::fprintf(stderr,"SDL3 movement did not advance retail player: distance.raw=%lld\n",static_cast<long long>(motion_distance.Raw()));result=1;break;}
+                    motion_jump_start=pose->position;motion_peak={};motion_tick=simulation.Tick();motion_phase=2;
+                    if(walk_captures!=2 || !key("FirstPersonToggle",engine::platform::EventType::key_down) || !key("FirstPersonToggle",engine::platform::EventType::key_up) ||
+                        !key("MoveForward",engine::platform::EventType::key_up) || !key("Jump",engine::platform::EventType::key_down)) {result=1;break;}
+                } else if(motion_phase==2) {
+                    const auto* playback=simulation.World().Get<engine::gameplay::ClipPlayback>(player);
+                    if(playback) {jump_clip_seen|=playback->clip>=10 && playback->clip<=14;land_clip_seen|=playback->clip>=15 && playback->clip<=19;}
+                    motion_peak=std::max(motion_peak,pose->position.z-motion_jump_start.z);
+                    if(!motion_jump_released && simulation.Tick()>motion_tick) {motion_jump_released=true;if(!key("Jump",engine::platform::EventType::key_up)) {result=1;break;}}
+                    if(simulation.Tick()>=motion_tick+90) {
+                        if(motion_peak<Fixed::FromRatio(1,10) || !state->grounded) {
+                            const auto* contact=simulation.World().Get<engine::gameplay::SweepContacts>(player);const auto* hull=simulation.World().Get<engine::gameplay::SweptHull>(player);
+                            std::fprintf(stderr,"retail jump/landing failed: peak.raw=%lld grounded=%u start_z.raw=%lld final.raw=%lld,%lld,%lld velocity.raw=%lld,%lld,%lld overlaps=%u contacts=%u proxy.raw=%lld,%lld,%lld offset.raw=%lld,%lld,%lld\n",static_cast<long long>(motion_peak.Raw()),state->grounded,static_cast<long long>(motion_jump_start.z.Raw()),static_cast<long long>(pose->position.x.Raw()),static_cast<long long>(pose->position.y.Raw()),static_cast<long long>(pose->position.z.Raw()),static_cast<long long>(state->velocity.x.Raw()),static_cast<long long>(state->velocity.y.Raw()),static_cast<long long>(state->velocity.z.Raw()),contact->overlapping,contact->count,static_cast<long long>(hull->extent.x.Raw()),static_cast<long long>(hull->extent.y.Raw()),static_cast<long long>(hull->extent.z.Raw()),static_cast<long long>(hull->offset.x.Raw()),static_cast<long long>(hull->offset.y.Raw()),static_cast<long long>(hull->offset.z.Raw()));result=1;break;
+                        }
+                        if(!jump_clip_seen || !land_clip_seen || !playback || playback->clip!=1) {std::fprintf(stderr,"retail jump, landing and idle clips did not follow player motion\n");result=1;break;}
+                        motion_facing=pose->facing;motion_forward_z=menu.level_view->CameraForwardZ();motion_tick=simulation.Tick();motion_phase=3;
+                        engine::platform::PlatformEvent look;look.window=window->id();look.type=engine::platform::EventType::mouse_moved;look.x=37;look.y=-18;
+                        if(!platform.events().post(look)) {result=1;break;}
+                    }
+                } else if(motion_phase==3 && simulation.Tick()>=motion_tick+2) {
+                    if(pose->facing.units==motion_facing.units || simulation.World().Get<engine::gameplay::SweepContacts>(player)->overlapping) {std::fprintf(stderr,"retail look or final collision state failed\n");result=1;break;}
+                    if(menu.level_view->CameraForwardZ()<=motion_forward_z) {std::fprintf(stderr,"upward SDL3 mouse motion failed to turn camera upward\n");result=1;break;}
+                    std::printf("SDL3 retail vertical look passed: upward mouse delta, camera forward z %.5f -> %.5f\n",motion_forward_z,menu.level_view->CameraForwardZ());
+                    motion_tick=simulation.Tick();motion_phase=4;
+                    if(!key("FirstPersonToggle",engine::platform::EventType::key_down) || !key("FirstPersonToggle",engine::platform::EventType::key_up)) {result=1;break;}
+                } else if(motion_phase==4 && simulation.Tick()>=motion_tick+2) {
+                    if(menu.level_view->FirstPerson() || simulation.World().Get<engine::gameplay::DrawHidden>(player)) {std::fprintf(stderr,"third-person body visibility did not change\n");result=1;break;}
+                    menu.capture=capture.parent_path()/(capture.stem().string()+"-body.png");menu.captured=false;motion_phase=5;
+                } else if(motion_phase==5 && menu.captured) {
+                    if(!menu.level_view->BodyPartsDrawn()) {std::fprintf(stderr,"third-person player body did not reach the shared renderer\n");result=1;break;}
+                    std::printf("SDL3 retail camera toggle passed: third-person player body, %zu visible parts, GPU capture\n",menu.level_view->BodyPartsDrawn());
+                    motion_tick=simulation.Tick();motion_phase=6;
+                    if(!key("FirstPersonToggle",engine::platform::EventType::key_down) || !key("FirstPersonToggle",engine::platform::EventType::key_up)) {result=1;break;}
+                } else if(motion_phase==6 && simulation.Tick()>=motion_tick+2) {
+                    if(!menu.level_view->FirstPerson() || !simulation.World().Get<engine::gameplay::DrawHidden>(player)) {std::fprintf(stderr,"first-person body hiding did not return\n");result=1;break;}
+                    motion_complete=true;menu.capture=capture.parent_path()/(capture.stem().string()+"-motion.png");menu.captured=false;
+                    std::printf("SDL3 retail locomotion passed: two run-forward GPU captures, airborne clip, landing clip, standing recovery\n");
+                    if(validate_level_audio) {
+                        const auto delivered=mixer.OutputStats().nonSilentFrames-motion_audio_start;
+                        if(!menu.level_view->PlayingSounds() || delivered<4800) {std::fprintf(stderr,"retail scene audio failed: playing=%zu delivered=%llu\n",menu.level_view->PlayingSounds(),static_cast<unsigned long long>(delivered));result=1;break;}
+                        std::printf("SDL3 retail scene audio passed: %zu owned emitters, %llu non-silent stereo frames delivered to audio output during movement\n",menu.level_view->PlayingSounds(),static_cast<unsigned long long>(delivered));
+                    }
+                    std::printf("SDL3 retail player motion passed: distance.raw=%lld jump_peak.raw=%lld grounded=%u relative_look=1 fixed_ticks=%llu\n",static_cast<long long>(motion_distance.Raw()),static_cast<long long>(motion_peak.Raw()),state->grounded,static_cast<unsigned long long>(simulation.Tick()));
+                }
+            }
+            if(validate_tutorial_intro && menu.level_view && menu.level_view->Ready() && !tutorial_complete) {
+                auto& view=*menu.level_view;
+                if(!tutorial_started) {tutorial_started=true;tutorial_audio_start=mixer.OutputStats().nonSilentFrames;}
+                const auto& world=view.Simulation().World();const auto& scene=world.Resource<renegade::SceneState>();
+                const auto gate_open=[&](std::uint64_t id) {
+                    const auto entity=scene.authored_entities.at(id);const auto* clip=world.Get<engine::gameplay::ClipPlayback>(entity);
+                    const auto* collider=world.Get<engine::gameplay::KinematicCollider>(entity);return clip && collider && clip->frame==Engine::Math::Fixed::FromInt(2);
+                };
+                const auto gate_hit=[&](std::uint64_t id) {
+                    using namespace Engine::Math;const auto entity=scene.authored_entities.at(id);const auto& pose=world.Get<engine::gameplay::AffinePose>(entity)->transform;
+                    const auto start=pose.Point({{},Fixed::FromInt(-2),Fixed::One()});const auto end=pose.Point({{},Fixed::FromInt(2),Fixed::One()});
+                    return world.Resource<engine::gameplay::CollisionGeometry>().scene->Cast({start,{Fixed::FromRatio(1,5),Fixed::FromRatio(1,5),Fixed::FromRatio(9,10)}},end-start,1);
+                };
+                if(!tutorial_closed_gates && view.Simulation().Tick()>=180) {
+                    const auto logan=scene.authored_entities.at(400005);const auto alignment=script_look_alignment(view);
+                    const auto face=facing_alignment(world,logan,scene.player);
+                    if(view.ScriptCameraLooks()!=1 || view.LastCameraLookTick()!=122 || alignment<0.999f || face<0.999f) {
+                        std::fprintf(stderr,"source intro camera/facing failed: looks=%zu tick=%llu camera=%.6f actor=%.6f\n",view.ScriptCameraLooks(),static_cast<unsigned long long>(view.LastCameraLookTick()),alignment,face);result=1;break;
+                    }
+                    std::printf("SDL3 tutorial source camera/facing passed: actor toward player, camera toward original actor height offset, alignment=%.6f\n",alignment);
+                    for(const auto id:{400142ull,400143ull,400144ull,400146ull}) {
+                        const auto hit=gate_hit(id);if(gate_open(id) || !hit || hit->subject!=id) {std::fprintf(stderr,"tutorial closed gate collision failed: %llu\n",id);result=1;break;}
+                    }
+                    if(result) break;tutorial_closed_gates=true;
+                    std::printf("SDL3 tutorial closed gates passed: all four source IDs block the entrance with posed W3D collision\n");
+                }
+                const auto control_message=[&](std::int64_t parameter) {
+                    engine::gameplay::BehaviorMessage message;message.recipient=scene.player;message.event=std::uint32_t(renegade::content::MissionEvent::Custom);
+                    message.arguments={1,1,parameter,400005};message.argument_count=4;message.due_tick=view.Simulation().Tick()+1;
+                    view.QueueBehaviorMessage(message);
+                };
+                const auto control_key=[&](engine::platform::EventType type) {
+                    engine::platform::PlatformEvent event;event.type=type;event.key=KeyCode::w;event.window=window->id();
+                    return platform.events().post(event);
+                };
+                const auto* player_pose=world.Get<engine::gameplay::Transform>(scene.player);
+                if(tutorial_closed_gates && !tutorial_control_phase) {
+                    if(view.InitializedBehaviors(scene.player,scene.start_script)!=1 || view.InitializedBehaviors(scene.player,"MTU_Commando")!=1) {
+                        std::fprintf(stderr,"saved tutorial startup did not attach exactly one initialized commando observer\n");result=1;break;
+                    }
+                    std::printf("SDL3 tutorial player startup passed: saved MTU_Commando_Startup attached one initialized MTU_Commando observer in shared SoA\n");
+                    control_message(2);tutorial_control_phase=1;
+                } else if(tutorial_control_phase==1 && !view.InputAllowed()) {
+                    tutorial_control_tick=view.Simulation().Tick();tutorial_control_position=player_pose->position;tutorial_control_facing=player_pose->facing;
+                    if(!control_key(engine::platform::EventType::key_down)) {result=1;break;}tutorial_control_phase=2;
+                } else if(tutorial_control_phase==2) {
+                    if(view.InputAllowed() || player_pose->position.x!=tutorial_control_position.x || player_pose->position.y!=tutorial_control_position.y || player_pose->facing!=tutorial_control_facing) {
+                        std::fprintf(stderr,"script control permission failed with actual SDL3 held movement\n");result=1;break;
+                    }
+                    if(view.Simulation().Tick()>=tutorial_control_tick+12) {
+                        std::printf("SDL3 tutorial script control lock passed: 12 fixed ticks with SDL3 movement held and unchanged planar pose/facing\n");
+                        control_message(1);tutorial_control_phase=3;
+                    }
+                } else if(tutorial_control_phase==3 && view.InputAllowed()) {
+                    tutorial_control_tick=view.Simulation().Tick();tutorial_control_position=player_pose->position;
+                    if(!control_key(engine::platform::EventType::key_down)) {result=1;break;}tutorial_control_phase=4;
+                } else if(tutorial_control_phase==4 && view.Simulation().Tick()>=tutorial_control_tick+12) {
+                    using namespace Engine::Math;const auto distance=Length(FixedVector2{player_pose->position.x-tutorial_control_position.x,player_pose->position.y-tutorial_control_position.y});
+                    if(!view.InputAllowed() || distance<Fixed::FromRatio(1,10) || !control_key(engine::platform::EventType::key_up)) {
+                        std::fprintf(stderr,"script control enable did not restore SDL3 movement through real scene collision\n");result=1;break;
+                    }
+                    std::printf("SDL3 tutorial script control enable passed: 12 fixed ticks, actual planar displacement.raw=%lld\n",static_cast<long long>(distance.Raw()));tutorial_control_phase=5;
+                }
+                if(!tutorial_silence_checked && view.ConversationLines()==1 && view.Simulation().Tick()>=180) {
+                    if(mixer.OutputStats().nonSilentFrames!=tutorial_audio_start) {std::fprintf(stderr,"tutorial dialogue isolation failed before first voiced remark\n");result=1;break;}
+                    tutorial_silence_checked=true;std::printf("SDL3 tutorial dialogue isolation passed: original silent intro remark, muted music/effects/ambient/cinematic output\n");
+                }
+                if(tutorial_control_phase==5 && view.ConversationsFinished() && !view.HelpText().text.Get().empty() && view.HelpTextDrawn() && gate_open(400142) && gate_open(400143)) {
+                    if(!tutorial_closed_gates || gate_hit(400142) || gate_hit(400143) || gate_open(400144) || gate_open(400146)) {std::fprintf(stderr,"tutorial entrance gate opening/collision failed\n");result=1;break;}
+                    std::printf("SDL3 tutorial opened gates passed: original Logan completion opens 400142/400143 to frame 2 at 5fps; entrance sweeps clear, remaining gates held closed\n");
+                    const auto delivered=mixer.OutputStats().nonSilentFrames-tutorial_audio_start;
+                    if(!tutorial_silence_checked || !view.PreparedConversationLines("MTU_LOGAN_START") || view.ConversationLines()!=view.PreparedConversationLines("MTU_LOGAN_START") || delivered<4800) {
+                        std::fprintf(stderr,"tutorial intro speech incomplete: lines=%zu/%zu delivered=%llu\n",view.ConversationLines(),view.PreparedConversationLines("MTU_LOGAN_START"),static_cast<unsigned long long>(delivered));result=1;break;
+                    }
+                    std::printf("SDL3 retail tutorial speech passed: %zu original remarks, %llu non-silent output frames, shared Lua timers/custom events and ECS audio; remaining tutorial behavior is incomplete\n",view.ConversationLines(),static_cast<unsigned long long>(delivered));
+                    std::printf("SDL3 tutorial HUD help passed: original localized help-screen instruction, source font, half-opacity sentence above reticle\n");
+                    menu.capture=capture;menu.captured=false;menu.check_tutorial_gates=true;tutorial_complete=true;
+                }
+            }
+            if(validate_tutorial_course && menu.level_view && menu.level_view->Ready() && !course_complete) {
+                using namespace Engine::Math;using namespace engine::gameplay;
+                auto& view=*menu.level_view;auto& simulation=view.Simulation();auto& world=simulation.World();const auto& state=world.Resource<renegade::SceneState>();
+                const auto logan=state.authored_entities.at(400005),zone=state.authored_entities.at(400015);
+                const auto key=[&](engine::platform::EventType type,KeyCode button=KeyCode::w) {engine::platform::PlatformEvent event;event.type=type;event.key=button;event.window=window->id();return platform.events().post(event);};
+                const auto* logan_pose=world.Get<Transform>(logan);const auto* action=world.Get<renegade::HumanGoto>(logan);
+                const auto* player_pose=world.Get<Transform>(state.player);
+                if(!course_phase && view.ConversationsFinished()==1 && world.Get<ClipPlayback>(state.authored_entities.at(400142))->frame==Fixed::FromInt(2)) {
+                    const auto& volumes=world.Resource<TriggerVolumes>().volumes;const auto trigger=std::ranges::find(volumes,zone,&TriggerVolume::subject);
+                    if(trigger==volumes.end() || !world.IsAlive(zone)) {std::fprintf(stderr,"retail jump trigger is unavailable before course fixture\n");result=1;break;}
+                    // Explicit fixture placement only. All following callbacks,
+                    // NPC movement, collision and speech run through the game.
+                    auto* pose=world.Get<Transform>(state.player);pose->position=trigger->bounds.center;
+                    auto& affine=world.Get<AffinePose>(state.player)->transform.elements;affine[3]=pose->position.x;affine[7]=pose->position.y;affine[11]=pose->position.z;
+                    *world.Get<renegade::HumanState>(state.player)=renegade::HumanState{};player_input->ClearHeld();
+                    course_start_tick=simulation.Tick();course_audio_start=mixer.OutputStats().nonSilentFrames;course_logan_start=logan_pose->position;course_phase=1;
+                    std::printf("SDL3 tutorial course fixture: player placed inside retail zone 400015; no lesson callback or NPC completion injected, tick=%llu\n",static_cast<unsigned long long>(course_start_tick));
+                } else if(course_phase) {
+                    if(simulation.Tick()>course_start_tick+6000) {
+                        const auto* contacts=world.Get<SweepContacts>(logan);const auto* route=world.Get<RouteTraversal>(logan);
+                        const auto* player_state=world.Get<renegade::HumanState>(state.player);const auto* player_contacts=world.Get<SweepContacts>(state.player);
+                        std::fprintf(stderr,"tutorial course timeout: phase=%u action=%u active=%u curve=%u parameter.raw=%lld Logan=(%lld,%lld,%lld) contacts=%u overlap=%u player=(%.3f,%.3f,%.3f) grounded=%u contacts=%u\n",course_phase,action->action,action->enabled,route->curve,static_cast<long long>(route->parameter.Raw()),static_cast<long long>(logan_pose->position.x.Raw()),static_cast<long long>(logan_pose->position.y.Raw()),static_cast<long long>(logan_pose->position.z.Raw()),contacts ? contacts->count : 0,contacts ? contacts->overlapping : 0,ToFloat(player_pose->position.x),ToFloat(player_pose->position.y),ToFloat(player_pose->position.z),player_state->grounded,player_contacts->count);result=1;break;
+                    }
+                    if(course_phase==1 && action->enabled && action->action==1 && !view.InputAllowed()) {
+                        if(world.IsAlive(zone)) {std::fprintf(stderr,"one-shot jump zone survived its callback\n");result=1;break;}
+                        course_locked=true;course_locked_tick=simulation.Tick();course_player_locked=player_pose->position;course_player_facing=player_pose->facing;
+                        if(!key(engine::platform::EventType::key_down)) {result=1;break;}course_phase=2;
+                        std::printf("SDL3 tutorial course trigger passed: actual volume entry destroyed zone and started Logan action 1 with persistent player lock\n");
+                    }
+                    if(course_phase==2) {
+                        const auto distance=Length(logan_pose->position.XY()-course_logan_start.XY());if(action->enabled && action->action==1) course_distance=(std::max)(course_distance,distance);
+                        const auto* clip=world.Get<ClipPlayback>(logan);course_animation|=clip && clip->clip!=1;
+                        if(simulation.Tick()<=course_locked_tick+12 && (view.InputAllowed() || player_pose->position.x!=course_player_locked.x || player_pose->position.y!=course_player_locked.y || player_pose->facing!=course_player_facing)) {
+                            std::fprintf(stderr,"lesson-driven player lock failed with SDL3 movement\n");result=1;break;
+                        }
+                        const auto x=*Fixed::ParseDecimal("-53.697"),y=*Fixed::ParseDecimal("-5.334");
+                        if(!action->enabled && Length(logan_pose->position.XY()-FixedVector2{x,y})<Fixed::FromRatio(1,50)) {
+                            if(course_distance<Fixed::One() || !course_animation || simulation.Tick()<course_locked_tick+12) {std::fprintf(stderr,"Logan route did not move and animate before its source relocation\n");result=1;break;}
+                            if(!key(engine::platform::EventType::key_up)) {result=1;break;}
+                            const auto alignment=script_look_alignment(view);const auto face=facing_alignment(world,logan,state.player);
+                            const FixedVector3 expected{x,y,Fixed::FromRatio(7,2)};const auto look=view.LastCameraLookTarget();
+                            if(view.ScriptCameraLooks()!=2 || look!=expected || view.InputAllowed() || player_pose->facing!=course_player_facing || player_input->Orientation().heading==player_pose->facing || alignment<0.999f || face<0.999f) {
+                                std::fprintf(stderr,"locked source camera/facing failed: looks=%zu camera=%.6f actor=%.6f input=%u\n",view.ScriptCameraLooks(),alignment,face,unsigned(view.InputAllowed()));result=1;break;
+                            }
+                            std::printf("SDL3 tutorial locked camera/facing passed: alignment=%.6f body_heading_held=1 source_target.raw=(%lld,%lld,%lld)\n",alignment,static_cast<long long>(look.x.Raw()),static_cast<long long>(look.y.Raw()),static_cast<long long>(look.z.Raw()));
+                            course_relocated=true;course_phase=3;
+                            std::printf("SDL3 tutorial course route passed: natural action 1 completion, source relocation, locomotion clip, distance.raw=%lld\n",static_cast<long long>(course_distance.Raw()));
+                        }
+                    }
+                    if(course_phase==3 && action->action==2 && world.Get<ClipPlayback>(state.authored_entities.at(400144))->frame==Fixed::FromInt(2) && view.InputAllowed() && view.HelpTextDrawn()) {
+                        const auto expected=menu.strings.Lookup("IDS_MTUDSGN_DSGN0383I1DSGN_TXT");
+                        if(view.HelpText().text.Get()!=expected) {std::fprintf(stderr,"jump speech did not publish its original localized help\n");result=1;break;}
+                        menu.capture=capture;menu.captured=false;course_help_captured=true;course_phase=4;
+                        std::printf("SDL3 tutorial course speech passed: jump remarks finished, player enabled, EVA walk requested, third gate open, original HUD help rendered\n");
+                    }
+                    if(course_phase==4 && menu.captured && !action->enabled && action->action==2) {
+                        const auto remarks=view.PreparedConversationLines("MTU_LOGAN_START")+view.PreparedConversationLines("MTU_LOGAN_JUMP_TEST");
+                        const auto delivered=mixer.OutputStats().nonSilentFrames-course_audio_start;
+                        if(view.ConversationsFinished()!=2 || view.ConversationLines()!=remarks || delivered<4800 || !course_locked || !course_relocated || !course_help_captured || !view.ObjectsDrawn()) {
+                            std::fprintf(stderr,"tutorial course speech/render proof incomplete: lines=%zu/%zu finished=%zu output=%llu\n",view.ConversationLines(),remarks,view.ConversationsFinished(),static_cast<unsigned long long>(delivered));result=1;break;
+                        }
+                        ecs::Query<ecs::Read<VolumeContact>> contacts(world);bool stale{};
+                        contacts.ForEachChunk([&](auto chunk) {for(const auto& contact:chunk.template Get<VolumeContact>()) stale|=world.Resource<TriggerVolumes>().volumes.at(contact.volume).subject==zone;});
+                        if(stale) {std::fprintf(stderr,"destroyed retail jump zone retained contacts\n");result=1;break;}
+                        std::printf("SDL3 retail tutorial course passed: original jump zone, natural Logan jump and EVA routes, source relocation, %zu jump remarks, %llu non-silent output frames, HUD and gate; placement fixture, remaining tutorial incomplete\n",view.PreparedConversationLines("MTU_LOGAN_JUMP_TEST"),static_cast<unsigned long long>(delivered));
+                        const auto& portals=world.Resource<renegade::LadderPortals>().portals;
+                        if(portals.size()!=8 || portals[0].style!=renegade::content::TransitionStyle::LadderEnterBottom || portals[3].style!=renegade::content::TransitionStyle::LadderExitTop) {std::fprintf(stderr,"retail tutorial ladder portals changed\n");result=1;break;}
+                        // Explicit setup placement and upright state, not an
+                        // injected transition. E/W go through SDL3 and the DI
+                        // tick command; both poses come from shared level data.
+                        auto* pose=world.Get<Transform>(state.player);pose->position=portals[0].geometry.bounds.center;
+                        world.Get<AffinePose>(state.player)->transform=Engine::Math::FixedAffineTransform3::From_Translation(pose->position);
+                        auto* placed_human=world.Get<renegade::HumanState>(state.player);const auto sequence=placed_human->transition_sequence;
+                        *placed_human=renegade::HumanState{};placed_human->grounded=1;placed_human->transition_sequence=sequence;
+                        player_input->ClearHeld();player_input->SetOrientation({Atan2(portals[0].geometry.destination.elements[4],portals[0].geometry.destination.elements[0]),Fixed{}});
+                        if(!view.FirstPerson()) view.ToggleFirstPerson();
+                        const auto& ending=portals[3].geometry.destination.elements;course_ladder_exit={ending[3],ending[7],ending[11]};course_ladder_motion_start=view.LadderMotionTicks();
+                        window->raise();
+                        engine::platform::PlatformEvent event;event.window=window->id();event.type=engine::platform::EventType::focus_gained;
+                        if(!platform.events().post(event)) {result=1;break;}
+                        event.key=KeyCode::e;event.type=engine::platform::EventType::key_down;
+                        const auto down=platform.events().post(event);event.type=engine::platform::EventType::key_up;
+                        if(!down || !platform.events().post(event)) {result=1;break;}
+                        course_phase=5;std::printf("SDL3 tutorial ladder fixture: player placed upright in original bottom portal; SDL3 focus restoration and E posted, no transition callback injected\n");
+                    }
+                    const auto* human=world.Get<renegade::HumanState>(state.player);
+                    const auto* blend=world.Get<ClipTransition>(state.player);
+                    if(course_phase==5 && human->ladder && !human->transition && view.LadderView() && view.FirstPerson() && view.BodyPartsDrawn() && blend->elapsed>=blend->duration) {
+                        const auto* clip=world.Get<ClipPlayback>(state.player);const auto& bank=world.Resource<renegade::HumanAnimationCatalog>().banks.at(world.Get<renegade::HumanAnimation>(state.player)->bank-1);
+                        if(clip->clip!=bank[21].clip || human->velocity.z!=Fixed{}) {std::fprintf(stderr,"retail ladder entry did not select idle pose with reset velocity\n");result=1;break;}
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder-idle.png");menu.captured=false;course_phase=6;
+                    }
+                    if(course_phase==6 && menu.captured) {
+                        // Default first-person preference stays retained while
+                        // ladder view reveals the body; use third person only
+                        // for the separate authored exit-animation GPU proof.
+                        view.ToggleFirstPerson();
+                        if(!key(engine::platform::EventType::key_down)) {result=1;break;}course_phase=7;
+                    }
+                    if(course_phase==7 && human->transition==1) {
+                        ++course_exit_frames;const auto bone=view.PlayerBonePosition(1);if(!bone) {result=1;break;}
+                        if(!course_exit_body_start) course_exit_body_start=(*bone)[2];
+                        course_exit_body_motion=(std::max)(course_exit_body_motion,(*bone)[2]-*course_exit_body_start);
+                        course_camera_weight=(std::max)(course_camera_weight,view.CameraTransitionWeight());
+                        const auto frame=world.Get<ClipPlayback>(state.player)->frame;
+                        if(!course_exit_capture && frame>=Fixed::FromInt(4) && frame<Fixed::FromInt(8) && view.BodyPartsDrawn()) {
+                            menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder-exit-motion.png");menu.captured=false;menu.check_player_body=true;course_exit_capture=true;
+                        }
+                    }
+                    if(course_phase==7 && !human->ladder && !human->transition && view.LadderMotionTicks()>course_ladder_motion_start) {
+                        if(!key(engine::platform::EventType::key_up)) {result=1;break;}
+                        const auto& bank=world.Resource<renegade::HumanAnimationCatalog>().banks.at(world.Get<renegade::HumanAnimation>(state.player)->bank-1);
+                        const auto distance=Length(player_pose->position-course_ladder_exit);
+                        if(view.LastLadderMotionClip()!=bank[22].clip || distance>Fixed::FromRatio(1,5) || !view.BodyPartsDrawn() || !course_exit_capture || course_exit_frames<10 || course_exit_body_motion<1.2f || course_camera_weight<.5f) {std::fprintf(stderr,"retail ladder ascent/automatic exit failed: distance.raw=%lld clip=%u transition_frames=%u body_motion=%f\n",static_cast<long long>(distance.Raw()),view.LastLadderMotionClip(),course_exit_frames,course_exit_body_motion);result=1;break;}
+                        std::printf("SDL3 retail ladder animated exit passed: frames=%u body_ascent=%.6f camera_previous_weight=%.6f, intermediate original GPU pose captured\n",course_exit_frames,course_exit_body_motion,course_camera_weight);
+                        std::printf("SDL3 retail tutorial ladder passed: SDL3 E entry, rendered original idle pose, SDL3 W ascent, %zu fixed climbing ticks with source up clip, natural velocity-gated top exit, distance.raw=%lld; placement fixture\n",view.LadderMotionTicks()-course_ladder_motion_start,static_cast<long long>(distance.Raw()));
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder-exit.png");menu.captured=false;course_phase=8;
+                    }
+                    const auto& ladder_portals=world.Resource<renegade::LadderPortals>().portals;
+                    if(course_phase==8 && menu.captured) {
+                        if(ladder_portals[6].style!=renegade::content::TransitionStyle::LadderEnterTop) {result=1;break;}
+                        auto* pose=world.Get<Transform>(state.player);pose->position=ladder_portals[6].geometry.bounds.center;
+                        world.Get<AffinePose>(state.player)->transform=Engine::Math::FixedAffineTransform3::From_Translation(pose->position);
+                        auto* placed_human=world.Get<renegade::HumanState>(state.player);const auto sequence=placed_human->transition_sequence;
+                        *placed_human=renegade::HumanState{};placed_human->grounded=1;placed_human->transition_sequence=sequence;
+                        player_input->ClearHeld();const auto& destination=ladder_portals[6].geometry.destination.elements;
+                        if(!view.FirstPerson()) view.ToggleFirstPerson();
+                        player_input->SetOrientation({Atan2(destination[4],destination[0]),Fixed{}});
+                        const auto& ending=ladder_portals[5].geometry.destination.elements;course_ladder_exit={ending[3],ending[7],ending[11]};course_ladder_motion_start=view.LadderMotionTicks();course_phase=9;course_placement_tick=simulation.Tick();
+                    }
+                    if(course_phase==9 && simulation.Tick()>course_placement_tick+2 && human->grounded && !human->just_jumped) {
+                        // Publish/render the setup position before E. Otherwise
+                        // the camera blends across the unrelated fixture warp.
+                        if(!key(engine::platform::EventType::key_down,KeyCode::e) || !key(engine::platform::EventType::key_up,KeyCode::e)) {result=1;break;}
+                        course_phase=10;
+                        std::printf("SDL3 tutorial second ladder fixture: player placed upright in original top portal; SDL3 E posted, no transition callback injected\n");
+                    }
+                    if(course_phase==10 && human->transition==3) {
+                        ++course_descent_frames;const auto bone=view.PlayerBonePosition(1);if(!bone) {result=1;break;}
+                        if(!course_descent_body_start) course_descent_body_start=(*bone)[2];
+                        course_descent_body_motion=(std::max)(course_descent_body_motion,*course_descent_body_start-(*bone)[2]);
+                        const auto frame=world.Get<ClipPlayback>(state.player)->frame;
+                        if(!course_descent_capture && frame>=Fixed::FromInt(4) && frame<Fixed::FromInt(8) && view.BodyPartsDrawn()) {
+                            menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder2-entry-motion.png");menu.captured=false;menu.check_player_body=true;course_descent_capture=true;
+                        }
+                    }
+                    if(course_phase==10 && human->ladder && !human->transition && view.LadderView() && view.FirstPerson() && view.BodyPartsDrawn() && blend->elapsed>=blend->duration) {
+                        const auto& bank=world.Resource<renegade::HumanAnimationCatalog>().banks.at(world.Get<renegade::HumanAnimation>(state.player)->bank-1);
+                        if(world.Get<ClipPlayback>(state.player)->clip!=bank[21].clip) {std::fprintf(stderr,"second ladder entry idle pose failed\n");result=1;break;}
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder2-idle.png");menu.captured=false;course_phase=11;
+                    }
+                    if(course_phase==11 && menu.captured) {
+                        if(!key(engine::platform::EventType::key_down,KeyCode::s)) {result=1;break;}course_phase=12;
+                    }
+                    if(course_phase==12 && !human->ladder && !human->transition && view.LadderMotionTicks()>course_ladder_motion_start) {
+                        if(!key(engine::platform::EventType::key_up,KeyCode::s)) {result=1;break;}
+                        const auto& bank=world.Resource<renegade::HumanAnimationCatalog>().banks.at(world.Get<renegade::HumanAnimation>(state.player)->bank-1);
+                        const auto distance=Length(player_pose->position-course_ladder_exit);
+                        if(view.LastLadderMotionClip()!=bank[23].clip || distance>Fixed::FromRatio(1,5) || view.LadderView() || !view.FirstPerson() || !course_descent_capture || course_descent_frames<10 || course_descent_body_motion<1.2f || !world.Get<DrawHidden>(state.player)) {std::fprintf(stderr,"second ladder descent/automatic exit failed\n");result=1;break;}
+                        std::printf("SDL3 retail ladder animated descent passed: frames=%u body_descent=%.6f, intermediate original GPU pose captured, first-person preference and body hiding restored\n",course_descent_frames,course_descent_body_motion);
+                        std::printf("SDL3 retail tutorial second ladder passed: SDL3 E entry, settled original idle GPU pose, SDL3 S descent, %zu fixed climbing ticks with source down clip, natural bottom exit, distance.raw=%lld; placement fixture\n",view.LadderMotionTicks()-course_ladder_motion_start,static_cast<long long>(distance.Raw()));
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-ladder2-exit.png");menu.captured=false;course_phase=13;
+                    }
+                    if(course_phase==13 && menu.captured) {
+                        const auto eva_zone=state.authored_entities.at(400016);const auto& volumes=world.Resource<TriggerVolumes>().volumes;const auto trigger=std::ranges::find(volumes,eva_zone,&TriggerVolume::subject);
+                        if(trigger==volumes.end() || !world.IsAlive(eva_zone)) {std::fprintf(stderr,"retail EVA zone missing\n");result=1;break;}
+                        auto* pose=world.Get<Transform>(state.player);pose->position=trigger->bounds.center;auto& affine=world.Get<AffinePose>(state.player)->transform.elements;affine[3]=pose->position.x;affine[7]=pose->position.y;affine[11]=pose->position.z;
+                        player_input->ClearHeld();course_phase=14;
+                        std::printf("SDL3 tutorial EVA fixture: player placed inside original zone 400016; no objective or conversation callbacks injected\n");
+                    }
+                    if(course_phase==14 && view.ConversationsFinished()==3 && view.Objectives().Current() && view.Objectives().Current()->age>=Fixed::FromInt(2) && view.ObjectivesDrawn()) {
+                        const auto& objective=*view.Objectives().Current();const auto& value=objective.value;
+                        if(value.id!=1 || value.status!=renegade::ObjectiveStatus::Pending || value.priority!=Fixed::FromInt(99) || value.hud_message!=7384 || world.Resource<renegade::ObjectiveVocabulary>().tokens.at(value.pog)!="POG_M00_1_01.tga" || world.IsAlive(state.authored_entities.at(400016))) {std::fprintf(stderr,"source EVA objective state failed\n");result=1;break;}
+                        const FixedVector3 expected{*Fixed::ParseDecimal("-12.39"),*Fixed::ParseDecimal("20.78"),*Fixed::ParseDecimal("1.81")};if(Length(objective.position-expected)>Fixed::FromRatio(1,1000)) {std::fprintf(stderr,"source EVA objective position failed\n");result=1;break;}
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-objective.png");menu.captured=false;menu.check_objective_hud=true;course_phase=15;
+                        std::printf("SDL3 tutorial EVA objective passed: id=1 status=0 priority=99 hud_message=7384 texture=POG_M00_1_01.tga; natural EVA completion, destroyed source zone, ECS marker and localized HUD\n");
+                    }
+                    if(course_phase==15 && menu.captured && view.ConversationsFinished()==4 && view.InputAllowed() && view.ObjectivesDrawn()) {
+                        const auto expected=view.PreparedConversationLines("MTU_LOGAN_START")+view.PreparedConversationLines("MTU_LOGAN_JUMP_TEST")+view.PreparedConversationLines("MTU_LOGAN_EVA")+view.PreparedConversationLines("MTU_LOGAN_POKE");
+                        if(view.ConversationLines()!=expected || !view.HelpTextDrawn()) {std::fprintf(stderr,"EVA/poke speech or restored controls incomplete\n");result=1;break;}
+                        std::printf("SDL3 tutorial EVA/poke speech passed: %zu EVA remarks, %zu poke remarks, original help and controls restored; pistol selection effect remains pending\n",view.PreparedConversationLines("MTU_LOGAN_EVA"),view.PreparedConversationLines("MTU_LOGAN_POKE"));
+                        menu.capture=capture.parent_path()/(capture.stem().string()+"-objective-settled.png");menu.captured=false;course_phase=16;
+                    }
+                    if(course_phase==16 && menu.captured) course_complete=true;
+                }
+            }
+            if(validate_mission_cinematic && menu.level_view && menu.level_view->Ready() && !cinematic_complete) {
+                auto& view=*menu.level_view;const auto now=view.CinematicTime();
+                cinematic_projectile_frames+=view.ProjectilePartsDrawn()!=0;cinematic_particle_frames+=view.ParticleCount()!=0;
+                cinematic_peak_particles=std::max(cinematic_peak_particles,view.ParticleCount());
+                cinematic_trail_frames+=view.ProjectileParticleCount()!=0;cinematic_peak_trail_particles=std::max(cinematic_peak_trail_particles,view.ProjectileParticleCount());
+                if(cinematic_capture_pending && menu.captured) {
+                    if(!view.ObjectsDrawn()) {std::fprintf(stderr,"cinematic GPU frame contains no submitted world objects\n");result=1;break;}
+                    const auto position=view.CameraPosition();
+                    std::printf("SDL3 retail cinematic capture: stage=%u time.raw=%lld camera=(%.3f,%.3f,%.3f) drawn=%zu projectile_parts=%zu particles=%zu trail_particles=%zu\n",cinematic_stage,static_cast<long long>(now.Raw()),position[0],position[1],position[2],view.ObjectsDrawn(),view.ProjectilePartsDrawn(),view.ParticleCount(),view.ProjectileParticleCount());
+                    cinematic_capture_pending=false;++cinematic_stage;
+                }
+                if(cinematic_stage<cinematic_checkpoints_ms.size() && !cinematic_capture_pending && now>=Engine::Math::Fixed::FromInt(cinematic_checkpoints_ms[cinematic_stage])/Engine::Math::Fixed::FromInt(1000)) {
+                    if(!view.CinematicActive() || view.CinematicActors()!=37) {std::fprintf(stderr,"original cinematic camera/actor composition is missing\n");result=1;break;}
+                    if(!cinematic_stage) {cinematic_first_camera=view.CameraPosition();cinematic_audio_start=mixer.OutputStats().nonSilentFrames;}
+                    else if(view.CameraPosition()==cinematic_first_camera) {std::fprintf(stderr,"retail cinematic camera did not animate\n");result=1;break;}
+                    menu.capture=capture.parent_path()/(capture.stem().string()+"-intro-ms-"+std::to_string(cinematic_checkpoints_ms[cinematic_stage])+".png");menu.captured=false;cinematic_capture_pending=true;
+                    menu.check_cinematic_effects=cinematic_stage>=4 && cinematic_stage<=7;
+                    menu.check_speech_pose=cinematic_stage==1;
+                }
+                if(cinematic_stage==cinematic_checkpoints_ms.size() && view.CinematicFinished()) {
+                    if(view.CinematicActive() || view.CinematicCommandsSeen()!=250 || now<Engine::Math::Fixed::FromInt(75)) {std::fprintf(stderr,"authored cinematic release/completion boundary failed\n");result=1;break;}
+                    const auto delivered=mixer.OutputStats().nonSilentFrames-cinematic_audio_start;
+                    if(delivered<4800 || view.ConversationLines()!=25 || view.ConversationsFinished()!=25) {std::fprintf(stderr,"cinematic dialogue did not complete all 25 available authored conversations or reach audio output: %zu lines, %zu finished\n",view.ConversationLines(),view.ConversationsFinished());result=1;break;}
+                    if(!cinematic_projectile_frames || !cinematic_particle_frames || !cinematic_trail_frames) {std::fprintf(stderr,"cinematic projectile rendering failed: mesh_frames=%zu particle_frames=%zu peak_particles=%zu trail_frames=%zu\n",cinematic_projectile_frames,cinematic_particle_frames,cinematic_peak_particles,cinematic_trail_frames);result=1;break;}
+                    std::printf("SDL3 retail cinematic shots passed: %zu projectile mesh frames, %zu particle frames, %zu peak live particles through shared GPU submission\n",cinematic_projectile_frames,cinematic_particle_frames,cinematic_peak_particles);
+                    std::printf("SDL3 retail cinematic trails passed: %zu projectile emitter frames, %zu peak projectile particles; detached particles expire after projectile destruction\n",cinematic_trail_frames,cinematic_peak_trail_particles);
+                    std::printf("SDL3 retail cinematic speech passed: 26 original conversation attachments, 25 available remarks and natural completions, %llu non-silent dialogue output frames; absent MX0_GDITROOPER4_HIT6 retained without substitution\n",static_cast<unsigned long long>(delivered));
+                    std::printf("SDL3 retail cinematic passed: Lua Created startup, 37 prepared actors, nine moving-camera GPU captures, fixed 60Hz playback, 71-second control release, 75-second timeline completion; remaining combat script effects remain incomplete\n");
+                    menu.capture=capture;menu.captured=false;cinematic_capture_pending=true;
+                }
+                if(cinematic_stage==cinematic_checkpoints_ms.size()+1) cinematic_complete=true;
+            }
+            const auto pause_key=[&] {
+                engine::platform::PlatformEvent input;input.window=window->id();input.key=KeyCode::escape;input.type=engine::platform::EventType::key_down;
+                const bool posted=platform.events().post(input);input.type=engine::platform::EventType::key_up;
+                return platform.events().post(input) && posted;
+            };
+            const auto pause_click=[&](unsigned id) {
+                const auto target=std::ranges::find_if(menu.targets,[&](const auto& item) {return item.id==id && item.visible && item.enabled;});
+                if(target==menu.targets.end()) return false;
+                const auto logical=window->size(),pixels=window->drawable_size();engine::platform::PlatformEvent input;input.window=window->id();input.code=1;
+                input.position={(target->bounds.left+target->bounds.right)*.5f*logical.width/pixels.width,(target->bounds.top+target->bounds.bottom)*.5f*logical.height/pixels.height};
+                input.type=engine::platform::EventType::mouse_moved;bool posted=platform.events().post(input);
+                input.type=engine::platform::EventType::mouse_button_down;posted=platform.events().post(input) && posted;
+                input.type=engine::platform::EventType::mouse_button_up;posted=platform.events().post(input) && posted;
+                pause_posted=menu.preview_milliseconds;return posted;
+            };
+            if(validate_level_preview && !level_return_posted && pause_probe && menu.preview_milliseconds>=pause_posted+500 && !menu.pending_dialog) {
+                if(menu.level_view && menu.pause->active.Get() && (menu.level_view->Simulation().Tick()!=pause_tick || menu.level_view->Simulation().World().StateHash()!=pause_hash)) {
+                    std::fprintf(stderr,"paused authoritative mission advanced or changed\n");result=1;break;
+                }
+                const auto page=[&](unsigned id) {return menu.displayed_dialog==id && menu.targets_dialog==id;};
+                bool posted=true;
+                switch(pause_probe) {
+                case 1:if(page(153)) {menu.capture=capture.parent_path()/(capture.stem().string()+"-pause.png");menu.captured=false;pause_probe=2;}break;
+                case 2:if(page(153) && menu.captured) {posted=pause_click(11003);pause_probe=3;}break;
+                case 3:if(page(135)) {posted=pause_click(11034);pause_probe=4;}break;
+                case 4:if(page(153)) {posted=pause_click(11034);pause_probe=5;}break;
+                case 5:if(!menu.pause->active.Get() && menu.level_view->Simulation().Tick()>=pause_tick+3) {
+                    pause_tick=menu.level_view->Simulation().Tick();pause_hash=menu.level_view->Simulation().World().StateHash();posted=pause_key();pause_posted=menu.preview_milliseconds;pause_probe=6;
+                }break;
+                case 6:if(page(153)) {posted=pause_click(11020);pause_probe=7;}break;
+                case 7:if(page(209)) {posted=pause_click(7);pause_probe=8;}break;
+                case 8:if(page(153)) {posted=pause_click(11020);pause_probe=9;}break;
+                case 9:if(page(209)) {posted=pause_click(6);pause_probe=10;}break;
+                case 10:if(!menu.level_view && page(128)) {
+                    std::printf("SDL3 retail pause passed: EVA GPU capture, frozen ECS tick and state hash, nested options, resume, cancelled exit, confirmed teardown\n");
+                    menu.capture=capture.parent_path()/(capture.stem().string()+"-menu.png");menu.captured=false;level_return_posted=true;frames=menu.frames+180;
+                }break;
+                }
+                if(!posted) {std::fprintf(stderr,"SDL3 pause menu control input failed at step %u\n",pause_probe);result=1;break;}
+            }
+			if(validate_level_preview && !level_return_posted && !pause_probe && (!validate_player_motion || motion_complete) && (!validate_frame_timing || frame_timing_complete) && (!validate_mission_cinematic || cinematic_complete) && (!validate_tutorial_intro || tutorial_complete) && (!validate_tutorial_course || course_complete) &&
+                (validate_level_cancel ? (menu.level_view && !menu.level_view->Ready() && menu.loading_frames>=10 && menu.loading_captured && menu.loading_events>0)
+                                       : (menu.level_ready_frames>=3 && menu.captured))) {
+				engine::platform::PlatformEvent key; key.window=window->id(); key.key=KeyCode::escape;
+				key.type=engine::platform::EventType::key_down;
+				const bool down=platform.events().post(key);
+				key.type=engine::platform::EventType::key_up;
+				if(!down || !platform.events().post(key)) {std::fprintf(stderr,"SDL3 level return post failed\n");result=1;break;}
+                if(validate_level_cancel) {menu.capture=capture.parent_path()/(capture.stem().string()+"-menu.png");menu.captured=false;level_return_posted=true;frames=menu.frames+180;}
+                else {pause_probe=1;pause_tick=menu.level_view->Simulation().Tick();pause_hash=menu.level_view->Simulation().World().StateHash();pause_posted=menu.preview_milliseconds;}
+			}
             engine::platform::PlatformEvent event;
             while(platform.events().poll(event)) {
                 if(event.type==engine::platform::EventType::quit || event.type==engine::platform::EventType::window_close_requested) running=false;
@@ -2072,6 +2753,23 @@ int main(int argc,char** argv) {
                         if(accepted && !start_movie()) { result=1;running=false; }
                     }
                     continue;
+                }
+                if(menu.level_view) {
+                    if(!menu.level_view->Ready() && event.type==engine::platform::EventType::key_down && event.key==KeyCode::f12) ++menu.loading_events;
+                    if(event.type==engine::platform::EventType::key_down && !event.repeat && event.key==KeyCode::escape) {
+                        if(!menu.level_view->Ready()) {leave_level();continue;}
+                        if(!menu.pause->active.Get()) {menu.pause->Open();continue;}
+                        if(menu.displayed_dialog==153) {menu.pause->Resume();continue;}
+                        if(menu.pause->ExitPending()) {menu.pause->ConfirmExit(false);continue;}
+                    }
+                    if(!menu.pause->active.Get()) {
+                        if(player_input && menu.level_view->Ready()) {
+                            player_input->SetControlAllowed(menu.level_view->InputAllowed());
+                            player_input->Handle(event);if(player_input->TakeViewToggle()) menu.level_view->ToggleFirstPerson();
+                            if(player_input->TakeObjectiveCycle()) menu.level_view->CycleObjective();
+                        }
+                        continue;
+                    }
                 }
                 if(menu.gallery.playing.Get()) {
                     if(event.type==engine::platform::EventType::key_down && !event.repeat && event.key==KeyCode::escape) {
@@ -2207,6 +2905,15 @@ int main(int argc,char** argv) {
                         case KeyCode::home:action=A::First;break;case KeyCode::end:action=A::Last;break;default:break;
                         }
                         if(action) {menu.controls_tabs.Key(*action);continue;}
+                    }
+                    if(menu.displayed_dialog==153 && menu.input.focused==40002) {
+                        using A=SelectionAction;std::optional<A> action;
+                        switch(event.key) {
+                        case KeyCode::left:case KeyCode::up:action=A::Previous;break;
+                        case KeyCode::right:case KeyCode::down:action=A::Next;break;
+                        case KeyCode::home:action=A::First;break;case KeyCode::end:action=A::Last;break;default:break;
+                        }
+                        if(action) {menu.pause->tabs.Key(*action);continue;}
                     }
                     if((menu.displayed_dialog==170 || menu.displayed_dialog==216) && menu.input.focused==1206) {
                         std::optional<ListAction> action;
@@ -2352,8 +3059,9 @@ int main(int argc,char** argv) {
             const auto now=std::chrono::steady_clock::now();
             // This independent runtime fixture advances the ordinary marquee
             // in quarter-second steps; normal gameplay and real-time tests retain their clocks.
-            const float elapsed=validate_credits && menu.displayed_dialog==172 ? 0.25f :
-                frames ? 1.0f/60 : std::chrono::duration<float>(now-last).count();last=now;
+            const bool interactive_clock=!frames || validate_frame_timing && menu.level_view && menu.level_view->Ready() && !frame_timing_complete;
+            const auto frame_elapsed=interactive_clock ? std::chrono::duration_cast<std::chrono::nanoseconds>(now-last) : std::chrono::nanoseconds{16'666'667};
+            const float elapsed=validate_credits && menu.displayed_dialog==172 ? 0.25f : std::chrono::duration<float>(frame_elapsed).count();last=now;
             if(const auto requested=menu.gallery.TakeRequest()) {
                 movie.Close();auto bytes=files.Read(std::string_view(*requested).substr(5));
                 if(!bytes) {std::fprintf(stderr,"gallery movie is unavailable: %s\n",requested->c_str());menu.gallery.Complete();}
@@ -2430,9 +3138,33 @@ int main(int argc,char** argv) {
                 if(due) activate(*due);
             }
             if(!intro.Playing()) {
-                if(!menu_started) { engine::audio::VoiceStart voice;voice.buffer=music_pcm;voice.bus=engine::audio::Bus::Music;voice.loop=true;
+                if(!menu_started && (!menu.level_view || menu.pause->active.Get())) { engine::audio::VoiceStart voice;voice.buffer=music_pcm;voice.bus=engine::audio::Bus::Music;voice.loop=true;
                     music_voice=mixer.Play(std::move(voice));play_sound(menu.transition.Sound(),0.8f);menu_started=true; }
                 menu.seconds+=elapsed;menu.transition.Advance(elapsed,menu.title.rate);
+                if(menu.level_view) {
+                    menu.level_view->Poll();
+                    if(menu.level_view->Failed()) {
+                        const auto error=menu.level_view->Error();std::fprintf(stderr,"level preview: %s\n",error.c_str());
+                        if(validate_level_preview) {result=1;break;}
+                        leave_level();const auto message=engine::gui::w3d::DecodeEditText(error);
+                        profile_popup(210,u"Unable to load mission",message ? *message : u"Mission content error");
+                    }
+                    if(menu.level_view && menu.level_view->Ready()) {
+                        if(!player_input) {
+                            player_input=std::make_unique<renegade::presentation::PlayerInput>(menu.controls_settings->Configuration());
+                            const auto& simulation=menu.level_view->Simulation();const auto player=simulation.World().Resource<renegade::SceneState>().player;
+                            player_input->Reset(simulation.World().Get<engine::gameplay::Transform>(player)->facing);
+                        }
+                        player_input->SetControlAllowed(menu.level_view->InputAllowed());
+                        menu.level_view->Advance(frame_elapsed,renegade::presentation::LevelInput{
+                            [&] {player_input->SetControlAllowed(menu.level_view->InputAllowed());return player_input->Sample();},[&] {return player_input->Orientation();},
+                            [&](Engine::Math::LookAngles angles) {player_input->SetOrientation(angles);},[&] {return player_input->SampleWeapon();}});
+                        ++menu.level_ready_frames;
+                    }
+                    else if(validate_level_preview && menu.level_view && !menu.loading_captured && menu.level_view->LoadingScreenReady() && menu.loading_frames>=2) menu.capture_loading=true;
+                    if(validate_level_preview && !validate_level_cancel && !menu.level_view->Ready() && menu.loading_captured &&
+                        !menu.loading_progress_captured && menu.level_view->Loading().progress.Get()>=70) menu.capture_loading_progress=true;
+                }
                 if(menu.pending_dialog && menu.transition.Done()) { menu.displayed_dialog=*menu.pending_dialog;menu.pending_dialog.reset(); }
                 if(validate_intro_skip && !skip_validation_complete && menu.transition.Done()) {
                     skip_validation_complete=true;frames=menu.frames+3;
@@ -2440,7 +3172,12 @@ int main(int argc,char** argv) {
                         accepted_skips,blocked_skips,menu.displayed_dialog);
                 }
             }
-            menu.capture_next=(!capture.empty() || validate_menu) && menu.frames+1==frames;
+            menu.capture_next=(!capture.empty() || validate_menu) && ((menu.frames+1==frames && (!validate_level_preview || level_return_posted)) ||
+				(validate_level_preview && pause_probe==2 && !menu.captured) ||
+				(validate_mission_cinematic && cinematic_capture_pending && !menu.captured) ||
+                (validate_tutorial_intro && tutorial_complete && !menu.captured && menu.level_view && !menu.pause->active.Get()) ||
+                (validate_tutorial_course && course_help_captured && !menu.captured && menu.level_view && !menu.pause->active.Get()) ||
+				(validate_level_preview && !validate_mission_cinematic && !level_return_posted && menu.level_view && menu.level_view->Ready() && (menu.level_ready_frames==3 || validate_player_motion && (motion_complete || motion_phase==5 || walk_capture_pending) && !menu.captured)));
             if(!menu.movie_visible && !menu.pending_dialog && ActiveScrollLayout(menu))
                 if(auto* list=ActiveList(menu)) {
                     list->scrollbar.AdvanceRender();
@@ -2451,6 +3188,15 @@ int main(int argc,char** argv) {
                         }
                     }
                 }
+            if(!validate_level_preview || validate_frame_timing) {
+                const bool desired=menu.level_view && menu.level_view->Ready() && player_input && window->has_focus() && !menu.movie_visible && !menu.pause->active.Get();
+                if(platform.input().relative_mouse_mode(window->id())!=desired) {
+                    if(platform.input().set_relative_mouse_mode(window->id(),desired)) {
+                        platform.input().show_cursor(!desired);
+                        std::printf("SDL3 relative pointer ownership: window=%u active=%u\n",window->id(),unsigned(desired));
+                    }
+                }
+            }
             Graphics::Get_Renderer2D().Begin(float(drawable.width),float(drawable.height));
             if(menu.movie_visible) if(const auto* picture=movie.Current_Frame()) {
                 menu.movie_frame=*picture;menu.movie_name=menu.gallery.playing.Get() ? "gallery" : std::filesystem::path(intro.Movie()).stem().string();
@@ -2462,8 +3208,58 @@ int main(int argc,char** argv) {
             }
             if(!Graphics::Graphics_Begin_Frame() || !Graphics::Graphics_Execute_Queued_Draws() ||
                 !Graphics::Graphics_End_Frame() || !Graphics::Graphics_Present()) { std::fprintf(stderr,"frame failed at %u\n",menu.frames);result=1;break; }
-            if(realtime || !frames) std::this_thread::sleep_until(clock_start+std::chrono::microseconds(std::uint64_t(menu.frames)*1000000/60));
+            if(validate_frame_timing && menu.level_view && menu.level_view->Ready() && !frame_timing_complete && menu.captured) {
+                const auto end=std::chrono::steady_clock::now();
+                if(!frame_timing_started && menu.level_view->Simulation().Tick()>=61) {
+                    frame_timing_started=true;frame_timing_start=end;frame_timing_tick=menu.level_view->Simulation().Tick();
+                } else if(frame_timing_started) {
+                    frame_durations.push_back(std::chrono::duration<double,std::milli>(end-frame_start).count());
+                    timing_drawn+=menu.level_view->ObjectsDrawn();timing_culled+=menu.level_view->ObjectsCulled();
+                    const auto seconds=std::chrono::duration<double>(end-frame_timing_start).count();
+                    if(seconds>=8) {
+                        const auto ticks=menu.level_view->Simulation().Tick()-frame_timing_tick;
+                        std::ranges::sort(frame_durations);
+                        const bool captured=platform.input().relative_mouse_mode(window->id());
+                        std::printf("SDL3 retail frame timing: frames=%zu seconds=%.6f render_fps=%.3f fixed_ticks=%llu logic_hz=%.3f median_ms=%.3f p99_ms=%.3f drawn=%.1f culled=%.1f pending_ticks=%llu relative_capture=%u focused=%u\n",
+                            frame_durations.size(),seconds,frame_durations.size()/seconds,static_cast<unsigned long long>(ticks),ticks/seconds,
+                            frame_durations[frame_durations.size()/2],frame_durations[(frame_durations.size()-1)*99/100],
+                            double(timing_drawn)/frame_durations.size(),double(timing_culled)/frame_durations.size(),
+                            static_cast<unsigned long long>(menu.level_view->PendingTicks()),unsigned(captured),unsigned(window->has_focus()));
+                        if(std::abs(double(ticks)-seconds*renegade::Session::TicksPerSecond)>3 || menu.level_view->PendingTicks() ||
+                            !timing_culled || window->has_focus() && !captured) {
+                            std::fprintf(stderr,"independent render/fixed simulation timing or SDL3 pointer ownership failed\n");result=1;break;
+                        }
+                        frame_timing_complete=true;
+                    }
+                }
+            }
+            // Only finite automated playback requests a paced frame clock.
+            // Interactive rendering runs independently of the fixed simulation.
+            if(realtime && frames && !interactive_clock) std::this_thread::sleep_until(frame_start+std::chrono::nanoseconds{16'666'667});
         }
+		if(validate_level_preview) {
+            if(validate_mission_cinematic && !cinematic_complete) {std::fprintf(stderr,"retail cinematic playback validation incomplete\n");result=1;}
+            if(validate_tutorial_intro && !tutorial_complete) {std::fprintf(stderr,"retail tutorial speech validation incomplete\n");result=1;}
+            if(validate_tutorial_course && !course_complete) {std::fprintf(stderr,"retail tutorial course validation incomplete\n");result=1;}
+            if(validate_frame_timing && !frame_timing_complete) {std::fprintf(stderr,"retail frame timing validation incomplete\n");result=1;}
+            if(validate_player_motion && !motion_complete) {std::fprintf(stderr,"retail player motion validation incomplete\n");result=1;}
+            if(!validate_single_player_menu.empty()) {
+                if(single_player_menu_step!=(validate_single_player_menu=="tutorial" ? 2u : 3u)) {
+                    std::fprintf(stderr,"single-player menu launch route incomplete\n");result=1;
+                } else if(!result && level_return_posted && !menu.level_view && menu.captured && menu.displayed_dialog==128)
+                    std::printf("SDL3 single-player menu launch passed: %s, retail buttons, level rendering and main menu return\n",validate_single_player_menu.c_str());
+            }
+			if(!level_return_posted || menu.level_view || !menu.captured || menu.displayed_dialog!=128 || !menu.transition.Done() ||
+                menu.loading_frames<5 || !menu.loading_events || !menu.loading_captured || (!validate_level_cancel && !menu.loading_progress_captured)) {
+				std::fprintf(stderr,"level preview return validation incomplete\n");result=1;
+			} else {
+                std::printf("SDL3 asynchronous loading: %u rendered loading frames, %u input events serviced, maximum frame gap %.3f ms\n",menu.loading_frames,menu.loading_events,maximum_loading_gap_ms);
+                if(validate_level_cancel) {
+                    if(menu.level_ready_frames) {std::fprintf(stderr,"loading cancellation arrived after scene publication\n");result=1;}
+                    else std::printf("SDL3 level loading cancellation passed: menu returned before scene publication\n");
+                } else std::printf("SDL3 level preview passed: rendered scene, Escape teardown, GPU menu labels and return\n");
+            }
+		}
         if(validate_menu && !playback_complete) { std::fprintf(stderr,"menu playback incomplete at step %zu of %zu (dialog %u)\n",playback_step,playback.size(),menu.displayed_dialog);result=1; }
         if(validate_gallery) {
             const auto presented=menu.presented_movie_frames["gallery"].size(),expected=menu.expected_movie_frames["gallery"];
@@ -2552,9 +3348,12 @@ int main(int argc,char** argv) {
         if(text_input_active) platform.text_input().stop(window->id());
         save_settings();
         std::printf("rendered %u frames; capture %s\n",menu.frames,menu.captured ? "saved" : "none");
+        if(menu.level_view) menu.level_view->Cancel();
+        Graphics::Get_Resource_Load_Queue().Drain();
         Graphics::Detach_Frame_Draw_Executor();scene=nullptr;
     }
     movie.Close();mixer.Stop(music_voice);audio.reset();
+    Graphics::Get_Render_Services().Shutdown();
     Assets::Shutdown_Asset_Runtime();Graphics::Shutdown_Scene_Renderers();Graphics::Graphics_Shutdown_Shared_Frame();
     return result;
 }

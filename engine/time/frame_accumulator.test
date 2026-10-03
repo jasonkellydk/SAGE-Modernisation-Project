@@ -1,0 +1,38 @@
+#include <boost/test/unit_test.hpp>
+#include <chrono>
+#include <cstdint>
+#include <initializer_list>
+#include <stdexcept>
+import engine.time.frame_accumulator;
+import engine.time.simulation_clock;
+using namespace engine::time;
+using namespace std::chrono_literals;
+
+BOOST_AUTO_TEST_CASE(render_frequency_does_not_change_fixed_simulation_time_or_integrated_speed) {
+    for(unsigned renders:{30u,60u,144u,240u,1000u}) {
+        FrameAccumulator frames{FixedStep{60}};SimulationClock clock{FixedStep{60}};
+        std::chrono::nanoseconds previous{};Engine::Math::Fixed position;
+        for(unsigned render=1;render<=renders*10;++render) {
+            const auto now=std::chrono::nanoseconds{std::int64_t(render)*1'000'000'000/renders};
+            frames.AddElapsed(now-previous);previous=now;
+            while(frames.StepDue()) {position+=clock.Current().PerTick(Engine::Math::Fixed::FromInt(6));clock.Advance();frames.ConsumeStep();}
+        }
+        BOOST_TEST(clock.Current().Tick()==600u);
+        BOOST_TEST(position.Raw()==FixedStep{60}.PerTick(Engine::Math::Fixed::FromInt(6)).Raw()*600);
+        BOOST_TEST(frames.Interpolation().Raw()==0);
+    }
+}
+BOOST_AUTO_TEST_CASE(catch_up_budget_preserves_debt_and_sub_tick_fraction_after_a_stall) {
+    FrameAccumulator frames{FixedStep{60}};
+    frames.AddElapsed(5ms);frames.AddElapsed(3ms);frames.AddElapsed(50ms);frames.AddElapsed(957ms);
+    BOOST_TEST(frames.PendingSteps()==60u);
+    for(unsigned step=0;step<8;++step) frames.ConsumeStep();
+    BOOST_TEST(frames.PendingSteps()==52u);BOOST_TEST(frames.Interpolation().Raw()==Engine::Math::Fixed::OneRaw);
+    frames.AddElapsed(0ns);unsigned recovered{};
+    while(frames.StepDue()) {frames.ConsumeStep();++recovered;}
+    BOOST_TEST(recovered==52u);BOOST_TEST(frames.Interpolation().Raw()==Engine::Math::Fixed::FromRatio(9,10).Raw());
+    BOOST_CHECK_THROW(frames.AddElapsed(-1ns),std::invalid_argument);
+    BOOST_CHECK_THROW(frames.ConsumeStep(),std::logic_error);
+    BOOST_TEST(frames.Interpolation().Raw()==Engine::Math::Fixed::FromRatio(9,10).Raw());
+    frames.AddElapsed(985ms);BOOST_TEST(frames.PendingSteps()==60u);
+}

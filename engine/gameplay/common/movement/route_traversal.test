@@ -1,0 +1,54 @@
+#define BOOST_TEST_MODULE RouteTraversal
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.movement.systems.route_traversal_system;
+namespace {
+using namespace Engine::Math; using namespace engine::gameplay;
+FixedVector3 P(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+struct Fixture {
+	ecs::World world{ecs::WorldConfig{7}}; ecs::SystemRegistry registry; RouteTraversalSystem traversal;
+	std::unique_ptr<ecs::Scheduler> scheduler; std::vector<ecs::Entity> actors;
+	Fixture(unsigned workers, unsigned count) {
+		world.RegisterComponent<Transform>(); world.RegisterComponent<RouteTraversal>(); world.RegisterComponent<RouteSteering>(); world.FinalizeComponents();
+		auto &curves = world.EmplaceResource<RouteCurves>(); const std::array points{P(0,0,0), P(6,0,6)};
+		const auto curve = engine::level::BuildCardinalPathCurve3(points, Fixed::One()); BOOST_REQUIRE(curve); curves.curves.push_back(*curve);
+		ecs::CommandBuffer commands; std::vector<ecs::DeferredEntity> pending;
+		for (unsigned i=0; i<count; ++i) {
+			const auto actor=commands.Create(); pending.push_back(actor); commands.Add<Transform>(actor);
+			RouteTraversal state; state.curve=1; state.axes=3; state.enabled=1; state.advance=Fixed::FromRatio(1,4); state.reach_distance=Fixed::Half();
+			commands.Add<RouteTraversal>(actor,state); commands.Add<RouteSteering>(actor);
+		}
+		world.Commit(commands); for (const auto actor:pending) actors.push_back(commands.Resolve(actor));
+		registry.Register(traversal); registry.Finalize(world.Components());
+		scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers}); scheduler->Finalize(engine::time::FixedStep{60});
+	}
+	void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(route_advances_from_actual_position_and_preserves_blocked_and_disabled_actors)
+{
+	Fixture fixture(4,1); const auto actor=fixture.actors[0]; fixture.Step(1);
+	auto &route=*fixture.world.Get<RouteTraversal>(actor); auto &target=*fixture.world.Get<RouteSteering>(actor);
+	BOOST_TEST(route.parameter.Raw()==Fixed::FromRatio(1,4).Raw()); BOOST_TEST(target.valid==1u);
+	BOOST_TEST(target.target.z.Raw()==Fixed::FromRatio(15,16).Raw());
+	fixture.Step(2); BOOST_TEST(route.parameter.Raw()==Fixed::FromRatio(1,4).Raw()); // blocked, no timer advance
+	fixture.world.Get<Transform>(actor)->position=target.target; fixture.world.Get<Transform>(actor)->position.z=Fixed::FromInt(-10);
+	fixture.Step(3); BOOST_TEST(route.parameter.Raw()==Fixed::Half().Raw()); // planar movement ignores authored Z
+	route.enabled=0; fixture.Step(4); BOOST_TEST(target.valid==0u); BOOST_TEST(route.parameter.Raw()==Fixed::Half().Raw());
+	route.enabled=1;
+	for (unsigned tick=5; tick<=8; ++tick) {fixture.world.Get<Transform>(actor)->position=route.complete ? P(6,0,0) : fixture.world.Resource<RouteCurves>().curves[0].Sample(route.parameter); fixture.Step(tick);}
+	BOOST_TEST(route.complete==1u); BOOST_TEST(target.complete==1u); BOOST_CHECK(target.target==P(6,0,6));
+	route.looping=1; route.complete=0; fixture.Step(9); BOOST_TEST(route.parameter.Raw()==0); BOOST_TEST(route.complete==0u);
+}
+BOOST_AUTO_TEST_CASE(route_parallel_chunks_publish_identical_components_and_checkpoints)
+{
+	Fixture serial(1,513), parallel(4,513);
+	for (unsigned tick=1; tick<=8; ++tick) {
+		if (tick>1) for (unsigned i=0; i<513; ++i) {
+			serial.world.Get<Transform>(serial.actors[i])->position=serial.world.Get<RouteSteering>(serial.actors[i])->target;
+			parallel.world.Get<Transform>(parallel.actors[i])->position=parallel.world.Get<RouteSteering>(parallel.actors[i])->target;
+		}
+		serial.Step(tick); parallel.Step(tick); BOOST_TEST(serial.world.StateHash()==parallel.world.StateHash());
+	}
+}

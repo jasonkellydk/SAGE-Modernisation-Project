@@ -1,0 +1,29 @@
+#define BOOST_TEST_MODULE Suspension
+#include <boost/test/included/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.physics.systems.suspension_system;
+namespace {
+using namespace Engine::Math;using namespace engine::gameplay;
+FixedVector3 Point(int x,int y,int z) {return {Fixed::FromInt(x),Fixed::FromInt(y),Fixed::FromInt(z)};}
+}
+BOOST_AUTO_TEST_CASE(wheels_contact_terrain_roll_by_distance_extend_in_air_and_remove_with_parent) {
+    const auto run=[](unsigned workers) {
+        ecs::World world{ecs::WorldConfig{7}};world.RegisterComponent<AffinePose>();world.RegisterComponent<Suspension>();world.RegisterComponent<SuspensionState>();world.RegisterComponent<SampledPose>();world.RegisterComponent<TimelinePlayback>();world.FinalizeComponents();world.EmplaceResource<PoseTrackLibrary>();
+        auto geometry=std::make_shared<engine::level::CollisionScene3>();geometry->AddTriangle(Point(-64,-64,0),Point(64,-64,0),Point(0,64,0),1,4);geometry->Prepare();world.EmplaceResource<CollisionGeometry>().scene=geometry;
+        world.EmplaceResource<SuspensionSnapshots>();SuspensionSystem system;SuspensionSnapshotSystem snapshot;PoseTrackSystem pose_tracks;ecs::SystemRegistry registry;registry.Register(pose_tracks);registry.Register(system);registry.Register(snapshot);registry.Finalize(world.Components());
+        ecs::Scheduler scheduler(world,registry,engine::jobs::JobSystemConfig{workers});scheduler.Finalize(engine::time::FixedStep{60});
+        ecs::CommandBuffer parent_command;const auto pending=parent_command.Create();parent_command.Add<AffinePose>(pending,AffinePose{FixedAffineTransform3::From_Translation(Point(0,0,1))});world.Commit(parent_command);const auto parent=parent_command.Resolve(pending);
+        ecs::CommandBuffer wheels;std::vector<ecs::DeferredEntity> pending_wheels;
+        for(unsigned i=0;i<513;++i) {const auto wheel=wheels.Create();pending_wheels.push_back(wheel);Suspension binding;binding.parent=parent;binding.travel=Fixed::FromInt(2);binding.radius=Fixed::One();binding.categories=4;binding.position_bone=1;binding.rotation_bone=2;wheels.Add<Suspension>(wheel,binding);wheels.Add<SuspensionState>(wheel);}
+        world.Commit(wheels);const auto first=wheels.Resolve(pending_wheels.front());
+        const auto step=[&](unsigned tick) {scheduler.Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});};step(1);
+        BOOST_TEST(world.Get<SuspensionState>(first)->contact==1u);BOOST_TEST(world.Get<SuspensionState>(first)->displacement.Raw()==-Fixed::OneRaw);BOOST_TEST(world.Get<SuspensionState>(first)->rotation.Raw()==0);
+        world.Get<AffinePose>(parent)->transform=FixedAffineTransform3::From_Translation(Point(1,0,1));step(2);
+        const auto period=Radians(TurnFromDegrees(180))*Fixed::FromInt(2);BOOST_TEST(Abs(world.Get<SuspensionState>(first)->rotation-(period-Fixed::One())).Raw()<4);
+        world.Get<AffinePose>(parent)->transform=FixedAffineTransform3::From_Translation(Point(1,0,5));step(3);
+        BOOST_TEST(world.Get<SuspensionState>(first)->contact==0u);BOOST_TEST(world.Get<SuspensionState>(first)->displacement.Raw()==-2*Fixed::OneRaw);
+        const auto hash=world.StateHash();ecs::CommandBuffer remove;remove.Destroy(parent);world.Commit(remove);step(4);BOOST_TEST(world.EntityCount()==0u);return hash;
+    };
+    BOOST_TEST(run(1)==run(4));
+}

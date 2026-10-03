@@ -6,6 +6,7 @@
 #include <vector>
 import engine.camera.model.rts_camera;
 import engine.camera.motion.camera_motion;
+import engine.camera.motion.anchor_transition;
 
 using namespace engine::camera;
 using Engine::Math::AffineTransform3;
@@ -59,6 +60,33 @@ void RunUntilFinished(RtsCamera &camera, float stepMilliseconds, int limit = 100
 		camera.Update(Step(stepMilliseconds));
 }
 } // namespace
+
+BOOST_AUTO_TEST_CASE(anchor_transition_uses_live_destination_linear_time_and_shortest_heading) {
+    AnchorTransition motion;motion.Begin({1,2,3},179*Pi/180,.5f);
+    BOOST_TEST(Near(motion.Anchor({10,20,30}),{1,2,3},1e-6f));
+    motion.Advance(.25f);BOOST_TEST(Near(motion.Anchor({11,22,33}),{6,12,18},1e-6f));
+    BOOST_TEST(Near(NormalizeAngle(motion.Heading(-179*Pi/180)),-Pi,1e-5f));
+    motion.Advance(0);BOOST_TEST(motion.PreviousWeight()==.5f);
+    motion.Advance(.25f);BOOST_TEST(!motion.Active());BOOST_TEST(Near(motion.Anchor({11,22,33}),{11,22,33},1e-6f));
+    motion.Begin({6,12,18},0,0);BOOST_TEST(!motion.Active());BOOST_TEST(motion.PreviousWeight()==0);
+    BOOST_CHECK_THROW(motion.Advance(-.1f),std::invalid_argument);
+    BOOST_CHECK_THROW(motion.Begin({},0,-1),std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(anchor_transition_matches_independent_source_remaining_over_total_and_can_retarget) {
+    for(const auto step:{1.f/30,1.f/60,1.f/144}) {
+        AnchorTransition motion;motion.Begin({0,0,0},0,1);float remaining=1;
+        for(unsigned frame=0;frame<200;++frame) {
+            const Vector3 target{float(frame),2,3};
+            const auto expected=target.z*(1-std::clamp(remaining,0.f,1.f));
+            BOOST_TEST(Near(motion.Anchor(target).z,expected,1e-5f));
+            motion.Advance(step);remaining=(std::max)(0.f,remaining-step);
+        }
+    }
+    AnchorTransition motion;motion.Begin({},0,1);motion.Advance(.5f);
+    const auto current=motion.Anchor({8,10,12});motion.Begin(current,motion.Heading(1),.5f);
+    BOOST_TEST(Near(motion.Anchor({100,100,100}),current,1e-6f));
+}
 
 BOOST_AUTO_TEST_CASE(defaults_follow_retail_game_data)
 {

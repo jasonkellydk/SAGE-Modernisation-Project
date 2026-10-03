@@ -7,10 +7,15 @@ engine_add_module_library(engine_level
 	MODULES
 		model/properties.cppm
 		model/level.cppm
+		model/timeline.cppm
+		model/pose_track.cppm
+		model/path_curve.cppm
+		model/collision_mesh.cppm
+		collision/collision_scene.cppm
 		adapters/generals_map/chunks/chunk_file.cppm
 		adapters/generals_map/map_reader.cppm
 	DEPENDS engine_core_math_fixed engine_compression
-	TESTS adapters/generals_map/map_reader.test
+	TESTS adapters/generals_map/map_reader.test model/level.test model/path_curve.test collision/collision_scene.test
 	TESTS_OPTION ENGINE_LEVEL_BUILD_TESTS)
 
 # Client-side presentation bridge: level terrain -> renderable data (floats allowed).

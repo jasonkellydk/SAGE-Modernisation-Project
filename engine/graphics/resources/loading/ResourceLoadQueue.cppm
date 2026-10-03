@@ -10,6 +10,8 @@ public:
     virtual bool Prepare() = 0;
     virtual bool Decode() = 0;
     virtual void Complete(bool decoded) noexcept = 0;
+    // Cooperative cancellation; no waiting or destruction of worker-owned data.
+    virtual void Cancel() noexcept {}
 };
 
 // The source owner and its factory are destroyed on the queue's owning thread.
@@ -84,9 +86,18 @@ public:
 
     void Update(void (*progress)() = nullptr)
     {
-        if (!Is_Owner_Thread()) return;
+        Update_Until(std::chrono::steady_clock::time_point::max(), (std::numeric_limits<std::size_t>::max)(), progress);
+    }
+
+    // A frame retires a bounded number of jobs and checks its deadline between
+    // jobs. Prepare/Complete must themselves be short owner-thread operations.
+    std::size_t Update_Until(std::chrono::steady_clock::time_point deadline, std::size_t maximum_jobs,
+        void (*progress)() = nullptr)
+    {
+        if (!Is_Owner_Thread()) return 0;
         auto last_progress=std::chrono::steady_clock::now();
-        for (;;) {
+        std::size_t processed=0;
+        while (processed<maximum_jobs && std::chrono::steady_clock::now()<deadline) {
             std::shared_ptr<Entry> entry;
             {
                 std::lock_guard lock(m_mutex);
@@ -94,12 +105,36 @@ public:
                 else if (!m_ready.empty()) { entry=m_ready.front(); m_ready.pop_front(); }
                 else break;
             }
+            Process(entry,false);
+            ++processed;
             const auto now=std::chrono::steady_clock::now();
             if (progress && now-last_progress>std::chrono::milliseconds(20)) {
                 progress(); last_progress=now;
             }
-            Process(entry,false);
         }
+        return processed;
+    }
+
+    bool Cancel(const std::shared_ptr<const ResourceLoadSource>& source)
+    {
+        if (!Is_Owner_Thread()) return false;
+        ResourceLoadJob* job=nullptr;
+        {
+            std::lock_guard lock(m_mutex);
+            const auto found=m_entries.find(source);
+            if (found==m_entries.end()) return false;
+            auto& entry=*found->second;
+            entry.cancelled=true;
+            job=entry.job.get();
+            if (entry.phase==Phase::Queued || entry.phase==Phase::Prepared) {
+                entry.phase=Phase::Ready;
+                m_ready.push_back(found->second);
+            }
+        }
+        // Only the owner publishes/destroys jobs, so this pointer stays alive.
+        if (job) job->Cancel();
+        m_changed.notify_all();
+        return true;
     }
 
     bool Drain(void (*progress)() = nullptr)
@@ -143,6 +178,7 @@ private:
         Phase phase=Phase::Queued;
         bool immediate=false;
         bool decoded=false;
+        bool cancelled=false;
     };
 
     void Process(const std::shared_ptr<Entry>& entry, bool immediate)
@@ -190,7 +226,7 @@ private:
             if (entry->phase!=Phase::Ready) return;
             entry->phase=Phase::Completing;
         }
-        if (entry->job) entry->job->Complete(entry->decoded);
+        if (entry->job) entry->job->Complete(entry->decoded && !entry->cancelled);
         entry->job.reset();
         {
             std::lock_guard lock(m_mutex);

@@ -1,0 +1,50 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import games.renegade.content.campaign.behavior_programs;
+import engine.filesystem.adapters.directory.directory_source;
+namespace {
+struct ScriptFiles {
+    std::filesystem::path root=std::filesystem::temp_directory_path()/("renegade-script-preparation-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    engine::filesystem::VirtualFileSystem files;
+    ScriptFiles() {std::filesystem::create_directories(root);}
+    ~ScriptFiles() {std::error_code error;std::filesystem::remove_all(root,error);}
+    void Write(std::string_view name,std::string_view text) {
+        {std::ofstream file(root/(std::string(name)+".lua"));file<<text;}
+        files.Mount(std::make_unique<engine::filesystem::DirectorySource>(root));
+    }
+};
+}
+BOOST_AUTO_TEST_CASE(mission_preparation_loads_saved_player_startup_dependencies_once_without_running_callbacks) {
+    using namespace renegade::content;ScriptFiles fixture;
+    fixture.Write("Startup","return { Scripts={'Child'},Created=function(self,obj) emit('Attach_Script',obj,'Child','') end }");
+    fixture.Write("Child","return { Conversations={'speech'},Animations={'rig.clip'},Created=function(self,obj) emit('unexpected',obj) end }");
+    engine::level::Level level;level.behaviors.push_back({10,100,"Child","first"});level.behaviors.push_back({11,101,"Child","second"});
+    const auto prepared=LoadBehaviorPrograms(fixture.files,level,0,"Startup");BOOST_REQUIRE_MESSAGE(prepared,(prepared ? "" : prepared.error()));
+    BOOST_REQUIRE(prepared->bindings.size()==3u);BOOST_REQUIRE(prepared->library.programs.size()==2u);
+    BOOST_TEST(prepared->bindings[0].definition==prepared->bindings[1].definition);
+    BOOST_TEST(prepared->bindings[2].subject==1u);BOOST_TEST(prepared->bindings[2].order==2u);
+    BOOST_REQUIRE(prepared->bindings[0].arguments);BOOST_REQUIRE(prepared->bindings[1].arguments);
+    BOOST_TEST(std::get<std::string>((*prepared->bindings[0].arguments)[1])=="first");BOOST_TEST(std::get<std::string>((*prepared->bindings[1].arguments)[1])=="second");
+    BOOST_REQUIRE(prepared->conversations.size()==1u);BOOST_TEST(prepared->conversations[0]=="speech");
+    BOOST_REQUIRE(prepared->animations.size()==1u);BOOST_TEST(prepared->animations[0]=="rig.clip");
+    BOOST_TEST(prepared->unported.empty());
+}
+BOOST_AUTO_TEST_CASE(timeline_conversation_parameters_prepare_dependencies_without_starting_observers) {
+    using namespace renegade::content;ScriptFiles fixture;engine::level::Level level;
+    fixture.Write("Generic","return {ConversationParameters={'ConvName'},Created=function(self,obj,name) emit('unexpected',name) end}");
+    const std::array<engine::level::BehaviorBinding,3> scripts{{{0,8,"Generic","intro"},{1,9,"Generic","other"},{2,10,"Generic","intro"}}};
+    const auto prepared=LoadBehaviorPrograms(fixture.files,level,0,{},scripts);BOOST_REQUIRE(prepared);BOOST_TEST(prepared->bindings.empty());BOOST_TEST(prepared->library.programs.size()==1u);
+    BOOST_REQUIRE(prepared->conversations.size()==2u);BOOST_TEST(prepared->conversations[0]=="intro");BOOST_TEST(prepared->conversations[1]=="other");
+}
+BOOST_AUTO_TEST_CASE(mission_dependency_preparation_rejects_cycles_missing_children_bad_metadata_and_path_names) {
+    using namespace renegade::content;ScriptFiles fixture;engine::level::Level level;
+    fixture.Write("Startup","return { Scripts={'Child'} }");fixture.Write("Child","return { Scripts={'Startup'} }");
+    auto prepared=LoadBehaviorPrograms(fixture.files,level,0,"Startup");BOOST_REQUIRE(!prepared);BOOST_TEST(prepared.error().find("cyclic")!=std::string::npos);
+    fixture.Write("Child","return { Scripts={'Missing'} }");prepared=LoadBehaviorPrograms(fixture.files,level,0,"Startup");BOOST_REQUIRE(!prepared);BOOST_TEST(prepared.error().find("required script")!=std::string::npos);
+    fixture.Write("Child","return { Scripts={12} }");BOOST_TEST(!LoadBehaviorPrograms(fixture.files,level,0,"Startup"));
+    fixture.Write("Child","return { Scripts={'../outside'} }");BOOST_TEST(!LoadBehaviorPrograms(fixture.files,level,0,"Startup"));
+    // An unported saved startup remains inventory evidence; it is not silently
+    // substituted with another mission's startup or marked as implemented.
+    const auto missing=LoadBehaviorPrograms(fixture.files,level,0,"Unported");BOOST_REQUIRE(missing);BOOST_TEST(missing->bindings.empty());
+    BOOST_REQUIRE(missing->unported.size()==1u);BOOST_TEST(missing->unported[0]=="Unported");
+}

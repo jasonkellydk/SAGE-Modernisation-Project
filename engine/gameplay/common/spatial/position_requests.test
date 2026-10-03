@@ -1,0 +1,49 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.spatial.systems.position_request_system;
+import engine.core.serialization.byte_stream;
+namespace {
+using namespace engine::gameplay;using namespace Engine::Math;
+struct PositionedEntities {
+    ecs::World world{ecs::WorldConfig{7}};PositionRequestSystem system;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    PositionedEntities(unsigned workers,bool create=true) {
+        world.RegisterComponent<Transform>();world.RegisterComponent<AffinePose>();world.FinalizeComponents();world.EmplaceResource<PositionRequests>();
+        registry.Register(system);registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        if(!create) return;
+        ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) {
+            const auto entity=commands.Create();pending.push_back(entity);commands.Add<Transform>(entity,Transform{{},TurnFromDegrees(90)});
+            if(i%2==0) {AffinePose pose;pose.transform.elements[0]=Fixed::FromInt(2);pose.transform.elements[1]=Fixed::FromInt(3);pose.transform.elements[6]=Fixed::FromInt(4);commands.Add<AffinePose>(entity,pose);}
+        }
+        world.Commit(commands);for(const auto entity:pending) entities.push_back(commands.Resolve(entity));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(position_requests_preserve_rotation_basis_and_sync_optional_render_translation_in_authored_order) {
+    const auto run=[](unsigned workers) {
+        PositionedEntities f(workers);auto& requests=f.world.Resource<PositionRequests>();requests.Reset(2);
+        const FixedVector3 expected{Fixed::FromRatio(-53697,1000),Fixed::FromRatio(-5334,1000),Fixed::FromInt(2)};
+        for(const auto entity:f.entities) {requests.SlotAt(0).push_back({entity,expected,9});requests.SlotAt(1).push_back({entity,{},1});}
+        f.Step(1);
+        for(unsigned i=0;i<f.entities.size();++i) {
+            const auto& pose=*f.world.Get<Transform>(f.entities[i]);BOOST_CHECK(pose.position==expected);BOOST_TEST(pose.facing.units==TurnFromDegrees(90).units);
+            const auto* matrix=f.world.Get<AffinePose>(f.entities[i]);if(i%2) {BOOST_TEST(!matrix);continue;}
+            BOOST_REQUIRE(matrix);const auto& m=matrix->transform.elements;BOOST_TEST(m[0].Raw()==Fixed::FromInt(2).Raw());BOOST_TEST(m[1].Raw()==Fixed::FromInt(3).Raw());BOOST_TEST(m[6].Raw()==Fixed::FromInt(4).Raw());
+            BOOST_TEST(m[3].Raw()==expected.x.Raw());BOOST_TEST(m[7].Raw()==expected.y.Raw());BOOST_TEST(m[11].Raw()==expected.z.Raw());
+        }
+        requests.Reset(0);engine::core::serialization::ByteWriter checkpoint;f.world.SaveCheckpoint(checkpoint);
+        PositionedEntities restored(workers,false);engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+        f.Step(2);restored.Step(2);BOOST_TEST(f.world.StateHash()==restored.world.StateHash());return f.world.StateHash();
+    };
+    BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(position_requests_cannot_relocate_a_reused_entity_generation) {
+    PositionedEntities f(4);const auto removed=f.entities.front();ecs::CommandBuffer deletion;deletion.Destroy(removed);f.world.Commit(deletion);
+    ecs::CommandBuffer creation;const auto pending=creation.Create();creation.Add<Transform>(pending);f.world.Commit(creation);const auto replacement=creation.Resolve(pending);
+    BOOST_TEST(replacement.index==removed.index);BOOST_TEST(replacement.generation!=removed.generation);
+    auto& requests=f.world.Resource<PositionRequests>();requests.Reset(1);requests.SlotAt(0).push_back({removed,{Fixed::FromInt(9),{},{}},1});f.Step(1);
+    BOOST_TEST(f.world.Get<Transform>(replacement)->position.x.Raw()==0);
+}

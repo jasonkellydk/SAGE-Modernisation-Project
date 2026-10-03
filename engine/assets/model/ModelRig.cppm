@@ -71,10 +71,15 @@ export bool Validate_Pose_Animation(const ModelPoseAnimationDesc& animation,std:
     error.clear();return true;
 }
 export struct ModelRigDesc final {
+    struct AttachedRig {
+        std::string name,skeleton_name;
+        std::uint32_t first_bone{},bone_count{};
+    };
     std::string skeleton_name;
     std::vector<ModelBoneDesc> bones;
     std::vector<ModelAttachmentDesc> attachments;
     std::vector<ModelAnimationDesc> animations;
+    std::vector<AttachedRig> attached_rigs;
 };
 
 export bool Validate_Model_Rig(const ModelRigDesc& rig,std::string& error) {
@@ -97,6 +102,11 @@ export bool Validate_Model_Rig(const ModelRigDesc& rig,std::string& error) {
         if(attachment.object_name.empty() || (!rig.bones.empty() && attachment.bone>=rig.bones.size())
             || !std::isfinite(attachment.maximum_screen_size) || attachment.maximum_screen_size<0)
             return fail("invalid rig attachment");
+    }
+    for(const auto& child:rig.attached_rigs) {
+        if(child.name.empty() || child.skeleton_name.empty() || !child.bone_count
+            || child.first_bone>=rig.bones.size() || child.bone_count>rig.bones.size()-child.first_bone)
+            return fail("invalid attached skeleton range");
     }
     for(const auto& animation:rig.animations) {
         if(animation.name.empty() || animation.skeleton_name.empty() || !animation.frame_count

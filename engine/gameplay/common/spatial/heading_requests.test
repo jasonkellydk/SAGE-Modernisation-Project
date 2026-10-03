@@ -1,0 +1,62 @@
+#include <boost/test/unit_test.hpp>
+import std;
+import engine.ecs;
+import engine.gameplay.common.spatial.systems.rigid_heading_system;
+import engine.gameplay.common.spatial.systems.position_request_system;
+import engine.core.serialization.byte_stream;
+namespace {
+using namespace engine::gameplay;using namespace Engine::Math;
+struct HeadingFixture {
+    ecs::World world{ecs::WorldConfig{7}};HeadingTargetSystem resolve;RigidHeadingSystem apply;PositionRequestSystem position;ecs::SystemRegistry registry;
+    std::unique_ptr<ecs::Scheduler> scheduler;std::vector<ecs::Entity> entities;
+    HeadingFixture(unsigned workers,bool create=true) {
+        world.RegisterComponent<Transform>();world.RegisterComponent<AffinePose>();world.FinalizeComponents();
+        world.EmplaceResource<HeadingTargets>();world.EmplaceResource<HeadingRequests>();world.EmplaceResource<PositionRequests>();
+        registry.Register(resolve);registry.Register(apply);registry.Register(position);registry.OrderBefore<PositionRequestSystem,HeadingTargetSystem>();
+        registry.Finalize(world.Components());scheduler=std::make_unique<ecs::Scheduler>(world,registry,engine::jobs::JobSystemConfig{workers});scheduler->Finalize(engine::time::FixedStep{60});
+        if(!create) return;ecs::CommandBuffer commands;std::vector<ecs::DeferredEntity> pending;
+        for(unsigned i=0;i<513;++i) {
+            const auto actor=commands.Create();pending.push_back(actor);commands.Add<Transform>(actor,Transform{{Fixed::FromInt(i),Fixed::FromInt(3),Fixed::FromInt(2)},TurnFromDegrees(180)});
+            if(i%2==0) {AffinePose matrix;matrix.transform.elements[0]=Fixed::FromInt(4);matrix.transform.elements[6]=Fixed::One();commands.Add<AffinePose>(actor,matrix);}
+        }
+        world.Commit(commands);for(const auto actor:pending) entities.push_back(commands.Resolve(actor));
+    }
+    void Step(unsigned tick) {scheduler->Execute(engine::time::SimulationTime{tick,engine::time::FixedStep{60}});}
+};
+}
+BOOST_AUTO_TEST_CASE(heading_targets_resolve_cross_chunk_actors_after_position_changes_then_publish_rigid_poses) {
+    const auto run=[](unsigned workers) {
+        HeadingFixture f(workers);auto& positions=f.world.Resource<PositionRequests>();auto& requests=f.world.Resource<HeadingTargets>();positions.Reset(1);requests.Reset(2);
+        for(unsigned i=0;i<f.entities.size();++i) {
+            const auto subject=f.entities[i],target=f.entities[(i+127)%f.entities.size()];
+            positions.SlotAt(0).push_back({subject,{Fixed::FromInt(i),Fixed::FromInt(i%5),Fixed::FromInt(7)},1});
+            HeadingTargetRequest early;early.subject=subject;early.entity_target=false;early.point={Fixed::FromInt(-200),{}, {}};early.order=1;requests.SlotAt(1).push_back(early);
+            HeadingTargetRequest late;late.subject=subject;late.target=target;late.order=7;requests.SlotAt(0).push_back(late);
+        }
+        f.Step(1);
+        for(unsigned i=0;i<f.entities.size();++i) {
+            const auto& pose=*f.world.Get<Transform>(f.entities[i]);const auto& target=*f.world.Get<Transform>(f.entities[(i+127)%f.entities.size()]);
+            const auto delta=target.position-pose.position;BOOST_TEST(pose.facing.units==Atan2(delta.y,delta.x).units);BOOST_TEST(pose.position.z.Raw()==Fixed::FromInt(7).Raw());
+            if(const auto* matrix=f.world.Get<AffinePose>(f.entities[i])) {
+                const auto& m=matrix->transform.elements;BOOST_TEST(m[0].Raw()==Cos(pose.facing).Raw());BOOST_TEST(m[1].Raw()==-Sin(pose.facing).Raw());BOOST_TEST(m[4].Raw()==Sin(pose.facing).Raw());
+                BOOST_TEST(m[2].Raw()==0);BOOST_TEST(m[6].Raw()==0);BOOST_TEST(m[10].Raw()==Fixed::OneRaw);
+                BOOST_TEST(m[3].Raw()==pose.position.x.Raw());BOOST_TEST(m[7].Raw()==pose.position.y.Raw());BOOST_TEST(m[11].Raw()==pose.position.z.Raw());
+            }
+        }
+        requests.Reset(0);positions.Reset(0);engine::core::serialization::ByteWriter checkpoint;f.world.SaveCheckpoint(checkpoint);
+        HeadingFixture restored(workers,false);engine::core::serialization::ByteReader reader(checkpoint.Bytes());BOOST_REQUIRE(restored.world.LoadCheckpoint(reader));BOOST_TEST(reader.AtEnd());
+        f.Step(2);restored.Step(2);BOOST_TEST(f.world.StateHash()==restored.world.StateHash());return f.world.StateHash();
+    };BOOST_TEST(run(1)==run(4));
+}
+BOOST_AUTO_TEST_CASE(heading_requests_skip_stale_targets_and_support_explicit_coincident_policy) {
+    HeadingFixture f(4);const auto subject=f.entities[0],target=f.entities[1];
+    ecs::CommandBuffer destroy;destroy.Destroy(target);f.world.Commit(destroy);
+    ecs::CommandBuffer create;const auto pending=create.Create();create.Add<Transform>(pending);f.world.Commit(create);const auto replacement=create.Resolve(pending);
+    BOOST_TEST(replacement.index==target.index);BOOST_TEST(replacement.generation!=target.generation);
+    auto& requests=f.world.Resource<HeadingTargets>();requests.Reset(1);HeadingTargetRequest good;good.subject=subject;good.entity_target=false;good.point={Fixed{},Fixed::FromInt(8),Fixed{}};good.order=1;requests.SlotAt(0).push_back(good);
+    auto stale=good;stale.target=target;stale.entity_target=true;stale.order=8;requests.SlotAt(0).push_back(stale);
+    auto coincident=good;coincident.point=f.world.Get<Transform>(subject)->position;coincident.order=9;requests.SlotAt(0).push_back(coincident);
+    f.Step(1);BOOST_TEST(f.world.Get<Transform>(subject)->facing.units==TurnFromDegrees(90).units); // invalid later requests cannot cancel the valid earlier one
+    requests.Reset(1);coincident.apply_coincident=true;coincident.coincident_heading=TurnFromDegrees(-90);requests.SlotAt(0).push_back(coincident);f.Step(2);
+    BOOST_TEST(f.world.Get<Transform>(subject)->facing.units==TurnFromDegrees(-90).units);
+}
